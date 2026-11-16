@@ -22,6 +22,7 @@ import logging
 import math
 import os
 import re
+import threading
 import time
 from types import SimpleNamespace
 
@@ -140,6 +141,7 @@ import craft_supply
 import dungeonpace
 import dungeonprogression
 import dungeonstall
+import enchantfor
 import equipscore
 import item_plan
 import jev
@@ -14322,6 +14324,11 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("guild equip pass failed; retrying next cycle")
             await self._for_other_families("guild equip", self._guild_equip_once)
+            try:
+                await self._enchant_for_once()
+            except Exception:
+                log.exception("enchant-for pass failed; retrying next cycle")
+            await self._for_other_families("enchant-for", self._enchant_for_once)
             await self._for_other_families("guild share", self._guild_share_once)
             try:
                 await self._gear_routing_once()
@@ -15840,6 +15847,53 @@ class Bridge(discord.Client):
         current = bag_pressure.since_level_change(history, changed)
         await self._write_equips(wanted, current, label="guild ", holders=members,
                                  online=set(members))
+
+    async def _enchant_for_once(self, cohort=None) -> None:
+        """Ask the guild's enchanters to enchant a member's worn piece (enchantfor.py).
+
+        Inert until the module says it answers the verb (its `enchant_for`
+        build fact), and off with ENCHANT_FOR=off. Both parties must be online,
+        in one guild and standing together; the module checks it all again.
+        """
+        if not enchantfor.enabled():
+            return
+        names = await asyncio.to_thread(_names_of, cohort)
+        if not names:
+            return
+        try:
+            if await asyncio.to_thread(_fetch_module_enchant_for) != enchantfor.CAPABILITY:
+                return
+            members, enchanters = await asyncio.to_thread(
+                _fetch_enchant_for_facts, list(names))
+            if not enchanters:
+                return
+            near = sorted({
+                m.name for m in members.values()
+                for e in enchanters
+                if m.name != e.name and m.guild == e.guild
+                and enchantfor.together(members[e.name], m)
+            })
+            if not near:
+                return
+            wearers = await asyncio.to_thread(_fetch_wearers, near)
+            worn = await asyncio.to_thread(_fetch_scored_gear, near)
+            tanks = await asyncio.to_thread(_fetch_shield_tanks, near)
+            seats = {n for g in {m.guild for m in members.values()}
+                     for s in raidteams.seats(g) for n in (s.name, s.was) if n}
+            jobs = enchantfor.plan(
+                enchanters, members, wearers, worn, book=_jev_item_book(),
+                seat_names=frozenset(seats), tanks=tanks,
+                fire_targets=enchantfor.fire_targets(
+                    {m.guild for m in members.values()}))
+            if not jobs:
+                return
+            wrote = await asyncio.to_thread(_carry_out_enchant_for, jobs)
+            for line in enchantfor.lines(jobs):
+                log.info("%s", line)
+            log.info("%s %d of %d queued", enchantfor.PREFIX, wrote, len(jobs))
+        except (OSError, pymysql.err.MySQLError):
+            log.exception("enchant-for: the pass could not read the world; "
+                          "retrying next cycle")
 
     async def _jev_items_plan(self, gear_rows: list, worn: list, names: list):
         """This family's Jev pass, and what it changes this cycle (#95).
@@ -32745,6 +32799,8 @@ def _itemplan_reads(names, family, rows, gear_rows, worn_rows):
         names, family, rows, gear_rows, worn_rows, connect=_connect,
         bank_rows=_fetch_bank_items, guild_setup=_fetch_guild_bank_setup,
         roster=_fetch_guild_roster)
+    # The plan asks the guild loot policy, so it and the writers cannot differ.
+    extras = dataclasses.replace(extras, loot_route=_loot_route)
     try:
         roster = set(_fetch_enabled_roster_names())
         drive = _drive_verdicts([n for n in names if n in roster])
@@ -33945,6 +34001,8 @@ _EPIC_FACTS_SQL = (
     "it.InventoryType AS inventory_type, it.AllowableClass AS allowable_class, "
     "it.ItemLevel AS item_level, ii.flags AS instance_flags, "
     "it.DisenchantID AS disenchant_id, "
+    "it.RequiredDisenchantSkill AS disenchant_skill, "
+    "it.SellPrice AS sell_price, "
     "it.bonding AS bonding, c.class AS holder_class "
     "FROM item_instance ii "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -34052,6 +34110,60 @@ def _rare_wanted_by(holder: str, row: dict):
         return None
 
 
+def _expected_auction_copper(holder: str, row: dict):
+    """What one unit of this item would fetch at the holder's auction house, net
+    of the cut: the plan's own price read (`itemplan_reads._prices`, live
+    buyouts then history) through `itemplan.expected_auction_copper`. None when
+    the read fails, which keeps the piece shelved rather than called trash."""
+    try:
+        entry = int(row.get("entry") or 0)
+        with _connect() as conn, conn.cursor() as cur:
+            prices, _absent = itemplan_reads._prices(cur, [holder], [entry])
+        return itemplan.expected_auction_copper(
+            (prices or {}).get(entry), int(row.get("sell_price") or 0))
+    except (pymysql.err.MySQLError, OSError):
+        log.exception("loot policy: cannot price %s for %s, so it is shelved",
+                      row.get("name") or row.get("item_guid"), holder)
+        return None
+
+
+def _policy_verdict(holder: str, row: dict, classes) -> "lootpolicy.Verdict":
+    """The guild loot policy's verdict for one carried item: the single call
+    both the writers (`_loot_policy_blocks`) and the item plan make."""
+    enchanters: dict = {}
+
+    def guild_enchanters():
+        if not enchanters:
+            try:
+                enchanters.update(_family_enchanters(holder))
+            except (pymysql.err.MySQLError, OSError):
+                log.exception("loot policy: cannot read the guild enchanters "
+                              "for %s, so nothing is called trash", holder)
+        return enchanters
+
+    return lootpolicy.decide(
+        dict(row, holder=holder),
+        classes,
+        upgrade=lambda item: _rare_wanted_by(holder, item),
+        auction_value=lambda item: _expected_auction_copper(holder, item),
+        enchanters=guild_enchanters,
+    )
+
+
+def _loot_route(holder: str, item_guid: int):
+    """The policy's route name for one carried item, for the item plan; None
+    when its facts cannot be read (the plan then breaks nothing down)."""
+    try:
+        rows = _fetch_epic_facts([int(item_guid)])
+        if not rows:
+            return None
+        return _policy_verdict(holder, rows[0], _guild_classes()).route
+    except Exception:
+        log.exception("loot policy: cannot judge item %s for %s's plan",
+                      item_guid, holder)
+        return None
+
+
 def _loot_policy_blocks(holder: str, command: str, kind: str = "sell"):
     """The `lootpolicy.Verdict` that refuses this row, or None to write it.
 
@@ -34078,11 +34190,7 @@ def _loot_policy_blocks(holder: str, command: str, kind: str = "sell"):
         return lootpolicy.Verdict(lootpolicy.HOLD, "its facts could not be read")
     classes = _guild_classes() if rows else frozenset()
     for row in rows:
-        verdict = lootpolicy.decide(
-            dict(row, holder=holder),
-            classes,
-            upgrade=lambda item: _rare_wanted_by(holder, item),
-        )
+        verdict = _policy_verdict(holder, row, classes)
         if not lootpolicy.allowed(verdict, kind):
             log.info("%s", lootpolicy.kept_line(row, holder, verdict, kind))
             return verdict
@@ -34184,15 +34292,23 @@ def _disenchant_instead(holder: str, item_guid: int):
                 DISENCHANT_ROUTE_SOURCE, holder, command, DISENCHANT_ROUTE_HOURS))
             if int((cur.fetchone() or {}).get("n") or 0):
                 return 0
-            cur.execute(
-                "INSERT INTO overseer_command "
-                "(target_name, command, kind, target_arg, source) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (holder, command, kind,
-                 enchanter if kind == bag_pressure.GIVE_TO_ENCHANTER else "",
-                 DISENCHANT_ROUTE_SOURCE),
-            )
-            row_id = cur.lastrowid or 0
+            if kind == bag_pressure.GIVE_TO_ENCHANTER:
+                # One atomic check-and-insert: another writer (the plan's
+                # gift) may already be moving this copy, and then nothing is
+                # written here.
+                row_id = _insert_give_once(
+                    cur, item_guid, holder, command, kind, enchanter,
+                    DISENCHANT_ROUTE_SOURCE)
+                if not row_id:
+                    return 0
+            else:
+                cur.execute(
+                    "INSERT INTO overseer_command "
+                    "(target_name, command, kind, target_arg, source) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (holder, command, kind, "", DISENCHANT_ROUTE_SOURCE),
+                )
+                row_id = cur.lastrowid or 0
             if kind == bag_pressure.GIVE_TO_ENCHANTER and row_id:
                 # The enchanter's half, written now: the module holds a named
                 # disenchant standing ("not owned") until the give lands, and
@@ -34254,6 +34370,144 @@ def _carry_out_itemplan_disenchant(jobs) -> int:
         except (pymysql.err.MySQLError, OSError):
             log.exception("itemplan disenchant: cannot queue %s's item %d",
                           job.holder, int(job.item_guid))
+    return wrote
+
+
+# THE TRADE-WINDOW ENCHANT'S CALLER (enchantfor.py). The module answers the
+# `enchant-for` row on kind='trade' only when its build report says so, so the
+# pass reads that fact first and writes nothing without it: against a world
+# that lacks the verb the row would be answered as a malformed trade.
+_ENCHANT_FOR_CAPABILITY_SQL = (
+    "SELECT value FROM overseer_build WHERE name = '%s'" % enchantfor.CAPABILITY_FACT
+)
+# Everyone in the world (a fresh snapshot row, never `characters.online`, which
+# reads 0 for bots) in a guild any of `names` belongs to, and where they stand:
+# the snapshot's own map and coordinates, which are as fresh as the presence
+# test, and not the persisted `characters` position, which lags by minutes.
+_ENCHANT_FOR_MEMBERS_SQL = (
+    "SELECT c.guid AS guid, c.name AS name, g.name AS guild, s.map_id AS map_id, "
+    "s.pos_x AS x, s.pos_y AS y, s.pos_z AS z "
+    "FROM guild_member gm JOIN guild g ON g.guildid = gm.guildid "
+    "JOIN characters c ON c.guid = gm.guid "
+    "JOIN overseer_snapshot s ON s.name = c.name "
+    "AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+    "WHERE gm.guildid IN ("
+    "SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN (%s))"
+)
+_ENCHANT_FOR_SKILLED_SQL = (
+    "SELECT c.name AS name FROM characters c "
+    "JOIN character_skills s ON s.guid = c.guid AND s.skill = 333 AND s.value > 0 "
+    "WHERE c.name IN (%s)"
+)
+# A `character_spell` row is positive evidence a recipe is known; its absence
+# proves nothing (see craft.py), so an absent row is simply not asked for.
+_ENCHANT_FOR_SPELLS_SQL = (
+    "SELECT c.name AS name, sp.spell AS spell FROM character_spell sp "
+    "JOIN characters c ON c.guid = sp.guid WHERE c.name IN (%s) AND sp.spell IN (%s)"
+)
+_ENCHANT_FOR_BAGS_SQL = (
+    "SELECT c.name AS name, ii.itemEntry AS entry, SUM(ii.count) AS n "
+    "FROM character_inventory ci JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE c.name IN (%s) AND ii.itemEntry IN (%s) "
+    "AND ((ci.bag = 0 AND ci.slot BETWEEN 19 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "GROUP BY c.name, ii.itemEntry"
+)
+# The same ask written in the last hours, or still open, is its answer: a row
+# the module refused is not written again every pass.
+ENCHANT_FOR_HOLD_HOURS = 6
+_ENCHANT_FOR_ROUTED_SQL = (
+    "SELECT COUNT(*) AS n FROM overseer_command WHERE kind = 'trade' AND source = %s "
+    "AND ((target_name = %s AND status IN ('pending', 'claimed', 'verifying')) "
+    "OR (target_name = %s AND command = %s "
+    "AND created_at > NOW() - INTERVAL %s HOUR))"
+)
+
+
+def _fetch_module_enchant_for() -> str:
+    """The module's `enchant_for` build fact, or "" with no row or no table."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_ENCHANT_FOR_CAPABILITY_SQL)
+            row = cur.fetchone()
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return ""
+        raise
+    return str((row or {}).get("value") or "")
+
+
+def _fetch_enchant_for_facts(names: list) -> tuple:
+    """(members {name: enchantfor.Member}, enchanters [enchantfor.Enchanter])
+    for the guilds `names` belong to. Blocking. No enchanter: no jobs."""
+    marks = ",".join(["%s"] * len(names))
+    recipes = enchantfor.catalogue()
+    spells = sorted({r.spell for r in recipes})
+    items = sorted({i for r in recipes for i, _ in r.reagents} | set(enchantfor.ROD_ITEMS))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_ENCHANT_FOR_MEMBERS_SQL % marks, list(names))
+        members = {
+            str(r["name"]): enchantfor.Member(
+                str(r["name"]), int(r["guid"]), str(r["guild"] or ""), True,
+                int(r["map_id"] or 0), float(r["x"] or 0), float(r["y"] or 0),
+                float(r["z"] or 0))
+            for r in cur.fetchall()
+        }
+        if not members:
+            return {}, []
+        called = sorted(members)
+        cmarks = ",".join(["%s"] * len(called))
+        cur.execute(_ENCHANT_FOR_SKILLED_SQL % cmarks, called)
+        skilled = [str(r["name"]) for r in cur.fetchall()]
+        if not skilled:
+            return members, []
+        smarks = ",".join(["%s"] * len(skilled))
+        known: dict = {}
+        cur.execute(_ENCHANT_FOR_SPELLS_SQL % (
+            smarks, ",".join(["%s"] * len(spells))), skilled + spells)
+        for r in cur.fetchall():
+            known.setdefault(str(r["name"]), set()).add(int(r["spell"]))
+        bags: dict = {}
+        cur.execute(_ENCHANT_FOR_BAGS_SQL % (
+            smarks, ",".join(["%s"] * len(items))), skilled + items)
+        for r in cur.fetchall():
+            bags.setdefault(str(r["name"]), {})[int(r["entry"])] = int(r["n"] or 0)
+    enchanters = [
+        enchantfor.Enchanter(n, members[n].guild, frozenset(known.get(n, ())),
+                             bags.get(n, {}))
+        for n in skilled if known.get(n)
+    ]
+    return members, enchanters
+
+
+def _carry_out_enchant_for(jobs) -> int:
+    """Write one `enchant-for` row per job (the count). Blocking. A row for the
+    same ask standing, or written in the last ENCHANT_FOR_HOLD_HOURS, or any
+    row still open for the same enchanter, is the answer; a database fault
+    skips the job and is logged."""
+    wrote = 0
+    for job in jobs:
+        command = enchantfor.command(job)
+        if _KEEP.blocks(job.member, command):
+            continue
+        try:
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute(_ENCHANT_FOR_ROUTED_SQL, (
+                    enchantfor.SOURCE, job.enchanter, job.enchanter, command,
+                    ENCHANT_FOR_HOLD_HOURS))
+                if int((cur.fetchone() or {}).get("n") or 0):
+                    continue
+                cur.execute(
+                    "INSERT INTO overseer_command "
+                    "(target_name, command, kind, target_arg, source) "
+                    "VALUES (%s, %s, 'trade', %s, %s)",
+                    (job.enchanter, command, job.member, enchantfor.SOURCE))
+                wrote += 1
+        except (pymysql.err.MySQLError, OSError):
+            log.exception("enchant-for: cannot queue %s for %s", job.enchanter, job.member)
     return wrote
 
 
@@ -34782,6 +35036,41 @@ def _recently_given_guids(hours: int) -> frozenset:
         return frozenset(out)
 
 
+# ONE GIVE PER ITEM COPY. The item plan's gift writer (`_insert_guild_gift`) and
+# the sale path's give-to-enchanter (`_disenchant_instead`) can both name the
+# same item instance, and each runs on a worker thread. A check followed by an
+# insert would let both pass the check, so the two are ONE statement, an
+# INSERT ... SELECT ... WHERE NOT EXISTS over any pending or claimed give or
+# letter naming the instance guid (`guid:N` for a give, `send item:N ...` for a
+# letter), whatever the taker; and the statement runs under one process lock,
+# because under autocommit two concurrent copies of it could still both read
+# "none" before either row is visible. The schema is the module's, so there is
+# no unique key to lean on here. MySQL refuses to select the insert target in a
+# plain subquery (error 1093), so the pending-row check sits in a derived table
+# (the LIMIT keeps the optimizer from merging it back into the insert).
+_GIVE_WRITE_LOCK = threading.Lock()
+_INSERT_GIVE_ONCE_SQL = (
+    "INSERT INTO overseer_command "
+    "(target_name, command, kind, target_arg, source) "
+    "SELECT %s, %s, %s, %s, %s FROM (SELECT 1) AS one WHERE NOT EXISTS ("
+    "SELECT 1 FROM (SELECT id FROM overseer_command "
+    "WHERE kind IN ('give', 'mail') AND status IN ('pending', 'claimed') "
+    "AND (command = %s OR command LIKE %s OR command LIKE %s) LIMIT 1) "
+    "AS pending)"
+)
+
+
+def _insert_give_once(cur, item_guid: int, holder, command, kind, taker, source):
+    """Row id of the give written, or 0 when one is already pending for this
+    item instance (nothing is written then)."""
+    guid = int(item_guid)
+    with _GIVE_WRITE_LOCK:
+        cur.execute(_INSERT_GIVE_ONCE_SQL, (
+            holder, command, kind, taker, source,
+            "guid:%d" % guid, "guid:%d %%" % guid, "send item:%d %%" % guid))
+        return (cur.lastrowid or 0) if cur.rowcount else 0
+
+
 def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
     """One overseer_command row handing one stack to a guildmate (infra#3908).
 
@@ -34804,12 +35093,14 @@ def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
         return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(
-                "INSERT INTO overseer_command "
-                "(target_name, command, kind, target_arg, source) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (gift.holder, command, verb, gift.taker, "guildshare"),
-            )
+            row_id = _insert_give_once(
+                cur, gift.guid, gift.holder, command, verb, gift.taker,
+                "guildshare")
+            if not row_id:
+                log.info("guildshare: item %s already has a give pending, so "
+                         "%s's gift to %s is not written", gift.guid,
+                         gift.holder, gift.taker)
+            return row_id
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] == 1265:
                 log.warning(
@@ -34819,7 +35110,6 @@ def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
                 )
                 return 0
             raise
-        return cur.lastrowid or 0
 
 
 # Carried weapons and armour of the guild's OTHER members (#174): the same
