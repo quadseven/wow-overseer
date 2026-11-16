@@ -494,7 +494,9 @@ class RunnerCommands(unittest.TestCase):
             backup_dir=pathlib.Path("/b"),
             workdir=pathlib.Path("/w"),
         )
-        return build.SubprocessRunner(cfg, run=fake_run), calls
+        runner = build.SubprocessRunner(cfg, run=fake_run)
+        runner.server_verified = True
+        return runner, calls
 
     def test_sql_goes_through_a_loopback_client_with_no_password_on_argv(self) -> None:
         runner, calls = self.runner({"SELECT COUNT": Done(out="3\n")})
@@ -540,6 +542,189 @@ class RunnerCommands(unittest.TestCase):
                 "r.example.invalid/x/wow-eph-template:lean-20261112T051000Z",
             ],
         )
+
+
+class FakeProcess:
+    """Stands in for the mysqld the forge spawned."""
+
+    def __init__(self, exit_code: int | None = None) -> None:
+        self.exit_code = exit_code
+        self.pid = 4242
+        self.terminated = False
+
+    def poll(self) -> int | None:
+        return self.exit_code
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+
+DATADIR = "/var/lib/forge/work/datadir"
+OURS = "77\t" + DATADIR + "/\n"
+
+
+class ServerIdentity(unittest.TestCase):
+    """The forge only ever runs statements against the server it started."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.workdir = pathlib.Path(tmp.name) / "work"
+        self.cfg = build.Config(
+            template_class="full",
+            backup_dir=pathlib.Path("/b"),
+            workdir=self.workdir,
+            server_id=77,
+        )
+        self.start = build.Step(
+            "start-mysql",
+            argv=("sh", "-c", "true"),
+            background=True,
+            identity=(77, DATADIR),
+        )
+        self.calls: list[list[str]] = []
+        self.spawned: list[FakeProcess] = []
+
+    def runner(
+        self, answer: str, process: FakeProcess | None = None, in_use: bool = False
+    ):
+        def fake_run(argv, **kw):
+            self.calls.append(list(argv))
+            if "@@server_id" in " ".join(argv):
+                return Done(out=answer)
+            return Done()
+
+        def fake_popen(argv, **kw):
+            proc = process or FakeProcess()
+            self.spawned.append(proc)
+            return proc
+
+        return build.SubprocessRunner(
+            self.cfg,
+            run=fake_run,
+            popen=fake_popen,
+            port_in_use=lambda host, port: in_use,
+        )
+
+    def test_the_server_with_our_id_and_datadir_is_accepted(self) -> None:
+        runner = self.runner(OURS)
+        self.assertEqual(runner.argv(self.start), 0)
+        runner.sql(build.Step("audit", sql=("SELECT 1",)))
+        self.assertGreater(len(self.calls), 1)
+
+    def test_a_foreign_server_with_another_id_is_refused_and_nothing_runs(self) -> None:
+        runner = self.runner("1\t" + DATADIR + "/\n")
+        with self.assertRaises(build.ForeignServer):
+            runner.argv(self.start)
+        self.assertEqual(len(self.calls), 1, "only the identity query ran")
+        runner.close()
+        self.assertTrue(self.spawned[0].terminated)
+
+    def test_a_server_with_our_id_but_another_datadir_is_refused(self) -> None:
+        runner = self.runner("77\t/var/lib/mysql/\n")
+        with self.assertRaises(build.ForeignServer):
+            runner.argv(self.start)
+
+    def test_a_listener_already_on_the_port_stops_the_launch(self) -> None:
+        runner = self.runner(OURS, in_use=True)
+        with self.assertRaises(build.ForeignServer):
+            runner.argv(self.start)
+        self.assertEqual(self.spawned, [], "mysqld was never started")
+        self.assertEqual(self.calls, [])
+
+    def test_a_real_listening_socket_is_seen_as_in_use(self) -> None:
+        import socket
+
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            port = listener.getsockname()[1]
+            cfg = build.Config(
+                template_class="full",
+                backup_dir=pathlib.Path("/b"),
+                workdir=self.workdir,
+                mysql_port=port,
+                server_id=77,
+            )
+            launched: list[int] = []
+            runner = build.SubprocessRunner(
+                cfg,
+                run=lambda *a, **k: Done(),
+                popen=lambda *a, **k: launched.append(1),
+            )
+            with self.assertRaises(build.ForeignServer):
+                runner.argv(self.start)
+            self.assertEqual(launched, [])
+
+    def test_a_spawned_server_that_exits_is_a_failure_not_a_wait(self) -> None:
+        runner = self.runner(OURS, process=FakeProcess(exit_code=1))
+        with self.assertRaises(build.StepFailed):
+            runner.argv(self.start)
+        self.assertEqual(self.calls, [], "no query reaches whatever owns the port")
+
+    def test_no_statement_runs_before_the_identity_is_verified(self) -> None:
+        runner = self.runner(OURS)
+        with self.assertRaises(build.ForeignServer):
+            runner.sql(build.Step("state-scrub", sql=("DELETE FROM t",)))
+        restore = build.Step("restore", argv=("sh", "-c", "true"), needs_server=True)
+        with self.assertRaises(build.ForeignServer):
+            runner.argv(restore)
+        self.assertEqual(self.calls, [])
+
+    def test_a_refused_identity_stops_the_whole_build_before_the_restore(self) -> None:
+        class Closing(build.SubprocessRunner):
+            closed = 0
+
+            def close(self) -> None:
+                self.closed += 1
+                super().close()
+
+        def fake_run(argv, **kw):
+            self.calls.append(list(argv))
+            return Done(out="1\t" + DATADIR + "/\n")
+
+        runner = Closing(
+            self.cfg,
+            run=fake_run,
+            popen=lambda *a, **k: FakeProcess(),
+            port_in_use=lambda host, port: False,
+        )
+        steps = [
+            self.start,
+            build.Step("restore", argv=("sh", "-c", "true"), needs_server=True),
+        ]
+        with self.assertRaises(build.ForeignServer):
+            build.execute(steps, runner)
+        self.assertEqual(runner.closed, 1)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_each_run_gets_its_own_server_id_and_the_plan_checks_it(self) -> None:
+        def config(**kw) -> build.Config:
+            return build.Config(
+                template_class="full",
+                backup_dir=pathlib.Path(tmp),
+                workdir=pathlib.PurePosixPath("/var/lib/forge/work"),
+                registry="registry.example.invalid/eph",
+                **kw,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            write_dump(pathlib.Path(tmp), NEW)
+            ids = {config().server_id for _ in range(5)}
+            self.assertTrue(all(1 <= i < 2**31 for i in ids))
+            self.assertGreater(len(ids), 1)
+            steps = {
+                s.name: s
+                for s in build.plan(config(server_id=77), classes.load_classes())
+            }
+        start = steps["start-mysql"]
+        self.assertEqual(start.identity, (77, DATADIR))
+        self.assertEqual(start.argv[2].count("--server-id=77"), 2)
+        for name in ("restore", "db-import"):
+            self.assertTrue(steps[name].needs_server, name)
 
 
 class Cli(unittest.TestCase):

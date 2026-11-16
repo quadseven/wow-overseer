@@ -17,7 +17,9 @@ from __future__ import annotations
 import os
 import pathlib
 import re
+import secrets
 import shlex
+import socket
 import subprocess
 import time
 from collections.abc import Callable, Sequence
@@ -45,6 +47,10 @@ MYSQL_FLAGS = (
 
 class StepFailed(RuntimeError):
     pass
+
+
+class ForeignServer(StepFailed):
+    """Something other than the forge's own throwaway MySQL is in the way."""
 
 
 class CredentialLeft(StepFailed):
@@ -76,6 +82,9 @@ class Config:
     auth_dump: pathlib.Path | None = None
     db_import_cmd: tuple[str, ...] = ("dbimport",)
     keep: int = KEEP_STAMPS
+    # A per-run nonce: the throwaway server is started with this --server-id and
+    # the runner refuses any server that does not report it back.
+    server_id: int = field(default_factory=lambda: secrets.randbelow(2**31 - 1) + 1)
 
     def __post_init__(self) -> None:
         if self.template_class not in CLASSES:
@@ -95,6 +104,10 @@ class Step:
     env: tuple[tuple[str, str], ...] = ()
     background: bool = False
     keep: int = 0
+    # (server id, datadir) the background server must report before anything runs.
+    identity: tuple[int, str] | None = None
+    # True when the step reaches MySQL through its own command (a restore pipe).
+    needs_server: bool = False
 
 
 def image_tag(template_class: str, stamp: str) -> str:
@@ -150,7 +163,7 @@ def plan(cfg: Config, classes: dict[str, TableClass]) -> list[Step]:
     layer = cfg.workdir / "layer.tar"
     tag = image_tag(cfg.template_class, backup.stamp)
     port = str(cfg.mysql_port)
-    flags = " ".join(MYSQL_FLAGS)
+    flags = " ".join([*MYSQL_FLAGS, f"--server-id={int(cfg.server_id)}"])
     datadir_flag = shlex.quote(f"--datadir={datadir.as_posix()}")
     start = (
         f"mysqld {flags} --initialize-insecure {datadir_flag} && "
@@ -168,16 +181,26 @@ def plan(cfg: Config, classes: dict[str, TableClass]) -> list[Step]:
 
     steps = [
         Step("verify-backup", fn=lambda: restore.verify_dump_complete(backup.path)),
-        Step("start-mysql", argv=("sh", "-c", start), background=True),
+        Step(
+            "start-mysql",
+            argv=("sh", "-c", start),
+            background=True,
+            identity=(cfg.server_id, datadir.as_posix()),
+        ),
         Step(
             "restore",
             argv=tuple(restore.restore_command(backup, cfg.mysql_port, cfg.mysql_host)),
+            needs_server=True,
         ),
-        Step("db-import", argv=cfg.db_import_cmd, env=db_env),
+        Step("db-import", argv=cfg.db_import_cmd, env=db_env, needs_server=True),
     ]
 
     if cfg.auth_dump is not None:
-        steps.append(Step("auth-restore", argv=_mysql_pipe(cfg.auth_dump, cfg)))
+        steps.append(
+            Step(
+                "auth-restore", argv=_mysql_pipe(cfg.auth_dump, cfg), needs_server=True
+            )
+        )
         auth_sql = scrub.auth_scrub_statements(
             "mysql"
         ) + scrub.auth_synthesis_statements("mysql")
@@ -235,6 +258,15 @@ def plan(cfg: Config, classes: dict[str, TableClass]) -> list[Step]:
     return steps
 
 
+def _port_in_use(host: str, port: int) -> bool:
+    """True when something accepts a connection on host:port."""
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
 class Runner:
     """What `execute()` needs. Subclassed by the real runner and by test doubles."""
 
@@ -288,11 +320,15 @@ class SubprocessRunner(Runner):
         cfg: Config,
         run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
         popen: Callable[..., subprocess.Popen] = subprocess.Popen,
+        port_in_use: Callable[[str, int], bool] | None = None,
     ) -> None:
         self.cfg = cfg
         self._run = run
         self._popen = popen
+        self._port_in_use = port_in_use or _port_in_use
         self._server: subprocess.Popen | None = None
+        # Set only once the server answering on the port has proved it is ours.
+        self.server_verified = False
 
     def close(self) -> None:
         server, self._server = self._server, None
@@ -318,20 +354,64 @@ class SubprocessRunner(Runner):
             statement,
         ]
 
+    def _require_verified(self, step: Step) -> None:
+        if not self.server_verified:
+            raise ForeignServer(
+                f"{step.name}: refusing to reach MySQL before the server's identity is verified"
+            )
+
     def argv(self, step: Step) -> int:
         env = {**os.environ, **dict(step.env)}
         if step.background:
-            self.cfg.workdir.mkdir(parents=True, exist_ok=True)
-            self._server = self._popen(list(step.argv), env=env)
-            return self._wait_for_server()
+            return self._start_server(step, env)
+        if step.needs_server:
+            self._require_verified(step)
         if step.keep:
             return self._prune(step)
         return self._run(list(step.argv), env=env).returncode
 
-    def _wait_for_server(self, attempts: int = 120) -> int:
+    def _start_server(self, step: Step, env: dict[str, str]) -> int:
+        if step.identity is None:
+            raise ForeignServer(
+                f"{step.name}: no identity to verify the server against"
+            )
+        if self._port_in_use(self.cfg.mysql_host, self.cfg.mysql_port):
+            raise ForeignServer(
+                f"something already listens on {self.cfg.mysql_host}:{self.cfg.mysql_port};"
+                " refusing to start next to it"
+            )
+        self.cfg.workdir.mkdir(parents=True, exist_ok=True)
+        self._server = self._popen(list(step.argv), env=env)
+        return self._wait_for_server(step.identity)
+
+    def _wait_for_server(self, identity: tuple[int, str], attempts: int = 120) -> int:
+        """Wait for the server we spawned, and only for it.
+
+        A server that answers must report our per-run server id and our datadir.
+        Anything else is a foreign server on the port: stop at once, run nothing.
+        """
+        want_id, want_datadir = identity
         for _ in range(attempts):
-            if self._run(self._mysql("SELECT 1")).returncode == 0:
-                return 0
+            if self._server is not None and self._server.poll() is not None:
+                raise StepFailed("the spawned mysqld exited before it became ready")
+            done = self._run(
+                self._mysql("SELECT @@server_id, @@datadir"),
+                capture_output=True,
+                text=True,
+            )
+            if done.returncode == 0:
+                reported = done.stdout.strip().split("\t")
+                if (
+                    len(reported) == 2
+                    and reported[0] == str(want_id)
+                    and reported[1].rstrip("/") == want_datadir.rstrip("/")
+                ):
+                    self.server_verified = True
+                    return 0
+                raise ForeignServer(
+                    "the server on the port is not the one the forge started"
+                    f" (reported {done.stdout.strip()!r})"
+                )
             time.sleep(2)
         return 1
 
@@ -347,6 +427,7 @@ class SubprocessRunner(Runner):
         return 0
 
     def sql(self, step: Step) -> list[list[int]]:
+        self._require_verified(step)
         results: list[list[int]] = []
 
         def execute_one(statement: str) -> list[list[int]]:
