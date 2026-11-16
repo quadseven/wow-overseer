@@ -93,7 +93,7 @@ def run(decree_path, env, dry_run=False, anchors_path=None, connect=None, out=pr
     except Exception as exc:  # noqa: BLE001 - any driver or socket failure is INVALID, not a traceback
         out(f"INVALID: could not reach the world database ({type(exc).__name__})")
         return 3
-    rc = _seed_and_report(g, decree, anchors, dry_run, out)
+    rc = _seed_and_report(g, decree, anchors, dry_run, out, env.get("EPH_VARS_FILE"))
     try:
         g.close()
     except Exception as exc:  # noqa: BLE001 - a failed close must not turn into a traceback or a success
@@ -104,7 +104,7 @@ def run(decree_path, env, dry_run=False, anchors_path=None, connect=None, out=pr
     return rc
 
 
-def _seed_and_report(g, decree, anchors, dry_run, out):
+def _seed_and_report(g, decree, anchors, dry_run, out, handoff_path=None):
     """Compile and apply on an open guarded connection; 0 on success, 3 when INVALID."""
     try:
         live = dbschema.Schema.from_rows(g.query(LIVE_SCHEMA_SQL))
@@ -113,8 +113,8 @@ def _seed_and_report(g, decree, anchors, dry_run, out):
         out(plan.render())
         if not dry_run:
             out(f"applied {guard.apply_plan(plan, g)} statements")
-            if env.get("EPH_VARS_FILE"):
-                write_handoff(env["EPH_VARS_FILE"], plan)
+            if handoff_path:
+                write_handoff(handoff_path, plan)
         return 0
     except SeedError as exc:
         out(f"INVALID: {exc}")

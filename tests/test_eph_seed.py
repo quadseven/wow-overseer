@@ -1004,6 +1004,26 @@ class SeedRunTest(unittest.TestCase):
         self.assertEqual(len(conn.executed), 1)
         self.assertEqual(conn.commits, 1)
 
+    def test_a_real_run_leaves_the_judge_its_handoff(self):
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "handoff.json"
+            rc, _, _, text = self.run_seed({**self.ENV, "EPH_VARS_FILE": str(path)})
+            self.assertEqual(rc, 0, text)
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        self.assertIn("cast", doc["variables"])
+        self.assertEqual(doc["members"][0]["name"], "Grug")
+
+    def test_a_dry_run_leaves_no_handoff(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "handoff.json"
+            self.run_seed({**self.ENV, "EPH_VARS_FILE": str(path)}, dry_run=True)
+            self.assertFalse(path.exists())
+
     def test_dry_run_applies_nothing(self):
         rc, conn, _, _ = self.run_seed(self.ENV, dry_run=True)
         self.assertEqual((rc, conn.executed, conn.commits), (0, [], 0))

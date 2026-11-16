@@ -353,27 +353,22 @@ class ScalarAndCreditTest(unittest.TestCase):
             self.assertIn("this run", " ".join(r["reasons"]), sql)
 
     def test_bounds_that_do_not_apply_to_every_row_are_refused(self):
-        head = "SELECT COUNT(*) FROM log_encounter "
         widened = (
-            head + "WHERE map = 230 OR time >= @t0",
-            head + "WHERE time >= @t0 OR map = 230",
-            head + "WHERE (map = 230 OR 1 = 1) AND time >= @t0",
-            head + "WHERE map = 230 AND time >= @t0 OR difficulty = 0",
-            head + "WHERE NOT (map = 230 AND time >= @t0)",
-            head + "WHERE NOT map = 230 AND time >= @t0",
-            head + "WHERE map = 230 AND NOT time >= @t0",
-            head + "WHERE map = 230 XOR time >= @t0",
-            head + "WHERE (map = 230) AND (time >= @t0)",
-            head + "WHERE map = 230 AND time BETWEEN @t0 AND @t0",
-            head + "WHERE map = 230 AND time >= @t0 || 1",
-            head,
-            head
-            + "WHERE map = 230 AND time >= @t0 AND guid IN (SELECT guid FROM characters)",
-            head
-            + "WHERE map = 230 AND time >= @t0 UNION ALL "
-            + head
-            + "WHERE map = 230",
-            head + "WHERE map = 230 AND time >= @t0 UNION SELECT 9 FROM log_encounter",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 OR time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE time >= @t0 OR map = 230",
+            "SELECT COUNT(*) FROM log_encounter WHERE (map = 230 OR 1 = 1) AND time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0 OR difficulty = 0",
+            "SELECT COUNT(*) FROM log_encounter WHERE NOT (map = 230 AND time >= @t0)",
+            "SELECT COUNT(*) FROM log_encounter WHERE NOT map = 230 AND time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND NOT time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 XOR time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE (map = 230) AND (time >= @t0)",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time BETWEEN @t0 AND @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0 || 1",
+            "SELECT COUNT(*) FROM log_encounter ",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0 AND guid IN (SELECT guid FROM characters)",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0 UNION ALL SELECT COUNT(*) FROM log_encounter WHERE map = 230",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0 UNION SELECT 9 FROM log_encounter",
         )
         for sql in widened:
             r = self.credit_run(sql, {"scalar": ">= 1"})
@@ -381,12 +376,11 @@ class ScalarAndCreditTest(unittest.TestCase):
             self.assertIn("encounter credit", " ".join(r["reasons"]), sql)
 
     def test_a_plain_and_chain_with_both_bounds_passes(self):
-        head = "SELECT COUNT(*) FROM log_encounter "
         chains = (
-            head + "WHERE map = 230 AND time >= @t0",
-            head + "WHERE time > @t0 AND map = 230",
-            head + "WHERE map = 230 AND difficulty = 0 AND time >= @t0",
-            head + "e WHERE e.map = 230 AND e.time >= @t0 ORDER BY e.time",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE time > @t0 AND map = 230",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND difficulty = 0 AND time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter e WHERE e.map = 230 AND e.time >= @t0 ORDER BY e.time",
         )
         for sql in chains:
             r = self.credit_run(sql, {"scalar": ">= 1"})
@@ -766,7 +760,7 @@ class ConfigMapStoreTest(unittest.TestCase):
         with self.assertRaises(judge.JudgeError):
             s.write(self.cm("eph-harness"))
         other = self.cm()
-        other["metadata"]["namespace"] = "wow-dev"
+        other["metadata"]["namespace"] = "another-ns"
         with self.assertRaises(judge.JudgeError):
             s.write(other)
         with self.assertRaises(judge.JudgeError):
