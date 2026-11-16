@@ -6,8 +6,8 @@ holding the decree and the merged config files the pod mounts, owned by its
 Job so the Job's TTL removes both.
 
 Refusals (an error, never a quiet downgrade): a decree that does not lint, an
-image other than `follow-dev`, a bridge-on decree (the template has no bridge
-sidecar yet), a fix that is wrongly present or absent in an arm's image, a
+image other than `follow-dev`, a bridge-on decree whose template has no
+bridge sidecar (or whose sidecar could reach a secret or the API), a fix that is wrongly present or absent in an arm's image, a
 template whose tokens this code does not know.
 """
 
@@ -24,6 +24,12 @@ from .miniyaml import YamlError, loads
 
 REALM_RANGE = range(100, 200)
 BASE_DEADLINE_PAD = 15 * 60
+BRIDGE = "bridge"  # the sidecar's container name in the template
+BRIDGE_PULL_SECRET = "ghcr"  # the bridge image is a private package
+BRIDGE_DEPLOYMENT = "wow-overseer"  # the base realm's bridge, where the live digest is read
+BRIDGE_CONTAINER = "overseer"
+# What fills {{BRIDGE_IMAGE}} on a bridge-off run, where the container is then removed.
+BRIDGE_OFF_IMAGE = "bridge-off.invalid/not-run@sha256:" + "0" * 64
 CM_LIMIT_BYTES = 900 * 1024
 _TOKEN = re.compile(r"\{\{([A-Z_]+)\}\}")
 _DURATION = re.compile(r"^(\d+)([smh])$")
@@ -114,6 +120,20 @@ def read_live(cfg, kube):
     return images, pins, files
 
 
+def read_bridge_image(cfg, kube):
+    """The base realm's running bridge image, by digest (the treatment arm's default)."""
+    dep = kube.get(
+        "deployments", BRIDGE_DEPLOYMENT, namespace=cfg.source_namespace, missing_ok=True
+    )
+    if dep is None:
+        raise SubmitError("the base realm has no bridge Deployment to read the image from")
+    spec = dep["spec"]["template"]["spec"]
+    c = next((c for c in spec.get("containers", []) if c["name"] == BRIDGE_CONTAINER), None)
+    if not c or not _DIGEST_REF.match(c.get("image", "")):
+        raise SubmitError("the base realm's bridge image is not pinned by digest")
+    return c["image"]
+
+
 # -- fix presence ------------------------------------------------------------------
 
 
@@ -133,21 +153,62 @@ def fix_presence(gh, fix, pin):
 # -- rendering ---------------------------------------------------------------------
 
 
-def _images_for(arm, live_images, args):
+def _images_for(arm, live_images, args, live_bridge=None):
+    """Each arm's images. A bridge image is present only when the decree turns the bridge on."""
     if arm == "treatment":
-        return live_images
-    if not (args.get("control_worldserver") and args.get("control_dbimport")):
-        raise SubmitError(
-            "a control arm needs --control-worldserver and --control-dbimport (by digest)"
-        )
-    img = {
-        "worldserver": args["control_worldserver"],
-        "dbimport": args["control_dbimport"],
-    }
+        img = dict(live_images)
+        if live_bridge is not None:
+            img["bridge"] = args.get("treatment_bridge") or live_bridge
+    else:
+        if not (args.get("control_worldserver") and args.get("control_dbimport")):
+            raise SubmitError(
+                "a control arm needs --control-worldserver and --control-dbimport (by digest)"
+            )
+        img = {
+            "worldserver": args["control_worldserver"],
+            "dbimport": args["control_dbimport"],
+        }
+        if live_bridge is not None:
+            if not args.get("control_bridge"):
+                raise SubmitError(
+                    "a control arm with bridge: on needs --control-bridge (the image before the fix, by digest)"
+                )
+            img["bridge"] = args["control_bridge"]
     for k, ref in img.items():
         if not _DIGEST_REF.match(ref):
-            raise SubmitError(f"control {k} image must be name@sha256:<64 hex>")
+            raise SubmitError(f"{arm} {k} image must be name@sha256:<64 hex>")
     return img
+
+
+def _apply_bridge(job, image):
+    """Keep the template's bridge sidecar and its pull secret (image set) or remove both (None)."""
+    spec = job.get("spec", {}).get("template", {}).get("spec", {})
+    inits = spec.get("initContainers", [])
+    mine = [c for c in inits if c.get("name") == BRIDGE]
+    if image is None:
+        spec["initContainers"] = [c for c in inits if c.get("name") != BRIDGE]
+        if "imagePullSecrets" in spec:
+            spec["imagePullSecrets"] = [
+                p for p in spec["imagePullSecrets"] if p.get("name") != BRIDGE_PULL_SECRET
+            ]
+        if BRIDGE_OFF_IMAGE in json.dumps(job):
+            raise SubmitError("the bridge placeholder image is outside the bridge sidecar")
+        return
+    if len(mine) != 1:
+        raise SubmitError("the world template has no bridge sidecar")
+    c = mine[0]
+    text = json.dumps(c)
+    if (
+        c.get("image") != image
+        or c.get("restartPolicy") != "Always"
+        or "secretKeyRef" in text
+        or "serviceaccount" in text
+        or "api-token" in text
+        or c.get("ports")
+    ):
+        raise SubmitError(
+            "the bridge sidecar must be a native sidecar at the arm's image with no secret, API token or port"
+        )
 
 
 def _render(template, values, used):
@@ -193,10 +254,7 @@ def submit(cfg, kube, gh, decree_path, args=None, clock=time.time, out=print):
         raise SubmitError(
             "only image: follow-dev can be submitted yet (PR images are not built)"
         )
-    if world["bridge"] == "on":
-        raise SubmitError(
-            "bridge: on cannot run yet: the world template has no bridge sidecar"
-        )
+    bridge_on = world["bridge"] == "on"
     decree_id = decree["id"]
     if not _LABEL.match(decree_id):
         raise SubmitError("decree id is not a label-safe name")
@@ -206,7 +264,8 @@ def submit(cfg, kube, gh, decree_path, args=None, clock=time.time, out=print):
     if klass not in classes:
         raise SubmitError(f"the template has no numbers for class {klass}")
     live_images, pins, base_files = read_live(cfg, kube)
-    files, deltas = _config_for(world, base_files)
+    live_bridge = read_bridge_image(cfg, kube) if bridge_on else None
+    files, deltas = _config_for(world, base_files, bridge_on)
     arms = ["control", "treatment"] if arm_arg == "both" else [arm_arg]
     presence = _presence(cfg, gh, decree, arms, args, pins)
 
@@ -225,7 +284,7 @@ def submit(cfg, kube, gh, decree_path, args=None, clock=time.time, out=print):
     runs, pending = [], []
     for (arm, n), realm in zip(plan, free, strict=False):
         rid = runids.run_id(batch, arm, n)
-        img = _images_for(arm, live_images, args)
+        img = _images_for(arm, live_images, args, live_bridge)
         values = {
             "RUN_ID": rid, "DECREE_ID": decree_id, "ARM": arm, "CLASS": klass,
             "BATCH": batch, "REALM_ID": realm,
@@ -233,8 +292,10 @@ def submit(cfg, kube, gh, decree_path, args=None, clock=time.time, out=print):
             "WORLDSERVER_IMAGE": img["worldserver"], "DBIMPORT_IMAGE": img["dbimport"],
             "TOOLS_IMAGE": cfg.tools_image, "TEMPLATE_IMAGE": cfg.template_images[klass],
             "CLIENT_DATA_CLAIM": nodecfg.claim, **classes[klass],
+            "BRIDGE_IMAGE": img.get("bridge", BRIDGE_OFF_IMAGE),
         }  # fmt: skip
         job = kube.dry_run_json(_render(template, values, used))
+        _apply_bridge(job, img.get("bridge"))
         _check_job(job, rid, nodecfg.claim, cfg.namespace)
         runs.append(
             {
@@ -266,7 +327,7 @@ def submit(cfg, kube, gh, decree_path, args=None, clock=time.time, out=print):
     return record
 
 
-def _config_for(world, base_files):
+def _config_for(world, base_files, bridge_on=False):
     changes = dict(BASELINE)
     bots = int(world.get("random_bots", 0))
     changes["Playerbots.MinRandomBots"] = bots
@@ -277,7 +338,11 @@ def _config_for(world, base_files):
     except confmerge.ConfError as exc:
         raise SubmitError(str(exc)) from exc
     deltas += [
-        "bridge: off (the base realm runs it)",
+        (
+            "bridge: on (headless sidecar on the world's loopback, no Discord)"
+            if bridge_on
+            else "bridge: off (the base realm runs it)"
+        ),
         f"random bots: {bots}",
         "clients: none (every character is headless)",
     ]
