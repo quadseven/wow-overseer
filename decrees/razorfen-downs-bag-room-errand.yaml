@@ -1,0 +1,50 @@
+# A family whose campaign door is Razorfen Downs with the head at zero free bag slots runs the bag-room
+# errand to a hub on its own continent (a Kalimdor aim), not across the sea to the capital on map 0, and
+# the errand ends in time (wow-overseer issues 1420 and 1451). The head starts inside Razorfen Downs.
+# Zero free slots is a state a decree cannot set; the family is cast with no seeded bags and the
+# precondition reads the template's bag state, so a template with room is INVALID.
+# Fix: wow-overseer pull 1474 (the capital is looked up on the instance's continent).
+decree: v1
+id: razorfen-downs-bag-room-errand
+proves:
+  - {repo: quadseven/wow-overseer, issue: 1420, criterion: "a bag-room errand from a Razorfen Downs door picks a hub on its own continent and the family is back at the door within the hour"}
+  - {repo: quadseven/wow-overseer, issue: 1451, criterion: "the errand logs a hub on map 1 and no aim at map 0 for the Razorfen Downs family and ends within GO_SECONDS"}
+fix: {repo: quadseven/wow-overseer, commit: "fd3983d27f79c6bffba3bb22844345a19f518829"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 90m
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, at: {creature: "Amnennar the Coldbringer"}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+  - instance: {map: "Razorfen Downs", as: rfd, bind: family:grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:razorfen-downs"}
+observe:
+  - name: head-is-in-razorfen-downs
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE name = 'Grug' AND map_id = 129
+    expect: {scalar: "= 1"}
+  - name: head-has-no-free-bag-slot
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_inventory i JOIN characters c ON c.guid = i.guid WHERE c.name = 'Grug' AND i.bag = 0 AND i.slot BETWEEN 23 AND 38
+    expect: {scalar: ">= 16"}
+  - name: errand-never-aimed-at-map-0
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE kind = 'quest' AND created_at >= @t0 AND command LIKE 'at:0:%'
+    expect: {scalar: "= 0"}
+  - name: family-back-in-kalimdor-or-the-door
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND map_id IN (1, 129)
+    expect: {scalar: "= 5"}
