@@ -1,11 +1,15 @@
 # A follower stops behind a travelling leader across a zone border and the catch-up walk closes the gap
 # (mod-overseer issue 70). The leader walks on a quest aim across the Elwynn to Westfall border; the family
 # starts together at Stormwind and the followers must keep following after the border.
+# Scope: whether a catch-up walk was released by the travel backstop is bridge log text a decree can only
+# forbid, so the backstop box is not claimed. The follow order surviving the border is shown by rows: every
+# follower ends on the leader's map within 100 yards of the leader (a follower left behind at the border, in the
+# same zone or not, fails), and the leader crossed a zone border in the window.
 # Fix: mod-overseer pull 139 (far followers walk to the leader).
 decree: v1
 id: follower-crosses-zone-border-behind-leader
 proves:
-  - {repo: quadseven/mod-overseer, issue: 70, criterion: "a catch-up walk is not released by the backstop and the follow order survives a zone transition"}
+  - {repo: quadseven/mod-overseer, issue: 70, criterion: "the follow order survives a zone transition: every follower ends within 100 yards of the leader after the leader crossed a border (the backstop line is not asserted here)"}
 fix: {repo: quadseven/mod-overseer, commit: "008abb3adba38f9e511d11fccf45146b1f2c7e58"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -37,4 +41,12 @@ observe:
     when: end
     sql: |
       SELECT COUNT(*) FROM overseer_snapshot s JOIN overseer_snapshot l ON l.name = 'Grug' WHERE s.guid IN (@cast) AND s.map_id = l.map_id AND s.zone_id = l.zone_id
+    expect: {scalar: "= 5"}
+  - name: followers-are-close-behind-the-leader
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot s JOIN overseer_snapshot l ON l.name = 'Grug'
+      WHERE s.guid IN (@cast) AND s.map_id = l.map_id
+        AND POW(s.pos_x - l.pos_x, 2) + POW(s.pos_y - l.pos_y, 2) <= 10000
     expect: {scalar: "= 5"}
