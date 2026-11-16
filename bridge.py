@@ -22,6 +22,7 @@ import logging
 import math
 import os
 import re
+import threading
 import time
 from types import SimpleNamespace
 
@@ -32798,6 +32799,8 @@ def _itemplan_reads(names, family, rows, gear_rows, worn_rows):
         names, family, rows, gear_rows, worn_rows, connect=_connect,
         bank_rows=_fetch_bank_items, guild_setup=_fetch_guild_bank_setup,
         roster=_fetch_guild_roster)
+    # The plan asks the guild loot policy, so it and the writers cannot differ.
+    extras = dataclasses.replace(extras, loot_route=_loot_route)
     try:
         roster = set(_fetch_enabled_roster_names())
         drive = _drive_verdicts([n for n in names if n in roster])
@@ -33998,6 +34001,8 @@ _EPIC_FACTS_SQL = (
     "it.InventoryType AS inventory_type, it.AllowableClass AS allowable_class, "
     "it.ItemLevel AS item_level, ii.flags AS instance_flags, "
     "it.DisenchantID AS disenchant_id, "
+    "it.RequiredDisenchantSkill AS disenchant_skill, "
+    "it.SellPrice AS sell_price, "
     "it.bonding AS bonding, c.class AS holder_class "
     "FROM item_instance ii "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -34105,6 +34110,60 @@ def _rare_wanted_by(holder: str, row: dict):
         return None
 
 
+def _expected_auction_copper(holder: str, row: dict):
+    """What one unit of this item would fetch at the holder's auction house, net
+    of the cut: the plan's own price read (`itemplan_reads._prices`, live
+    buyouts then history) through `itemplan.expected_auction_copper`. None when
+    the read fails, which keeps the piece shelved rather than called trash."""
+    try:
+        entry = int(row.get("entry") or 0)
+        with _connect() as conn, conn.cursor() as cur:
+            prices, _absent = itemplan_reads._prices(cur, [holder], [entry])
+        return itemplan.expected_auction_copper(
+            (prices or {}).get(entry), int(row.get("sell_price") or 0))
+    except (pymysql.err.MySQLError, OSError):
+        log.exception("loot policy: cannot price %s for %s, so it is shelved",
+                      row.get("name") or row.get("item_guid"), holder)
+        return None
+
+
+def _policy_verdict(holder: str, row: dict, classes) -> "lootpolicy.Verdict":
+    """The guild loot policy's verdict for one carried item: the single call
+    both the writers (`_loot_policy_blocks`) and the item plan make."""
+    enchanters: dict = {}
+
+    def guild_enchanters():
+        if not enchanters:
+            try:
+                enchanters.update(_family_enchanters(holder))
+            except (pymysql.err.MySQLError, OSError):
+                log.exception("loot policy: cannot read the guild enchanters "
+                              "for %s, so nothing is called trash", holder)
+        return enchanters
+
+    return lootpolicy.decide(
+        dict(row, holder=holder),
+        classes,
+        upgrade=lambda item: _rare_wanted_by(holder, item),
+        auction_value=lambda item: _expected_auction_copper(holder, item),
+        enchanters=guild_enchanters,
+    )
+
+
+def _loot_route(holder: str, item_guid: int):
+    """The policy's route name for one carried item, for the item plan; None
+    when its facts cannot be read (the plan then breaks nothing down)."""
+    try:
+        rows = _fetch_epic_facts([int(item_guid)])
+        if not rows:
+            return None
+        return _policy_verdict(holder, rows[0], _guild_classes()).route
+    except Exception:
+        log.exception("loot policy: cannot judge item %s for %s's plan",
+                      item_guid, holder)
+        return None
+
+
 def _loot_policy_blocks(holder: str, command: str, kind: str = "sell"):
     """The `lootpolicy.Verdict` that refuses this row, or None to write it.
 
@@ -34131,11 +34190,7 @@ def _loot_policy_blocks(holder: str, command: str, kind: str = "sell"):
         return lootpolicy.Verdict(lootpolicy.HOLD, "its facts could not be read")
     classes = _guild_classes() if rows else frozenset()
     for row in rows:
-        verdict = lootpolicy.decide(
-            dict(row, holder=holder),
-            classes,
-            upgrade=lambda item: _rare_wanted_by(holder, item),
-        )
+        verdict = _policy_verdict(holder, row, classes)
         if not lootpolicy.allowed(verdict, kind):
             log.info("%s", lootpolicy.kept_line(row, holder, verdict, kind))
             return verdict
@@ -34237,15 +34292,23 @@ def _disenchant_instead(holder: str, item_guid: int):
                 DISENCHANT_ROUTE_SOURCE, holder, command, DISENCHANT_ROUTE_HOURS))
             if int((cur.fetchone() or {}).get("n") or 0):
                 return 0
-            cur.execute(
-                "INSERT INTO overseer_command "
-                "(target_name, command, kind, target_arg, source) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (holder, command, kind,
-                 enchanter if kind == bag_pressure.GIVE_TO_ENCHANTER else "",
-                 DISENCHANT_ROUTE_SOURCE),
-            )
-            row_id = cur.lastrowid or 0
+            if kind == bag_pressure.GIVE_TO_ENCHANTER:
+                # One atomic check-and-insert: another writer (the plan's
+                # gift) may already be moving this copy, and then nothing is
+                # written here.
+                row_id = _insert_give_once(
+                    cur, item_guid, holder, command, kind, enchanter,
+                    DISENCHANT_ROUTE_SOURCE)
+                if not row_id:
+                    return 0
+            else:
+                cur.execute(
+                    "INSERT INTO overseer_command "
+                    "(target_name, command, kind, target_arg, source) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (holder, command, kind, "", DISENCHANT_ROUTE_SOURCE),
+                )
+                row_id = cur.lastrowid or 0
             if kind == bag_pressure.GIVE_TO_ENCHANTER and row_id:
                 # The enchanter's half, written now: the module holds a named
                 # disenchant standing ("not owned") until the give lands, and
@@ -34973,6 +35036,41 @@ def _recently_given_guids(hours: int) -> frozenset:
         return frozenset(out)
 
 
+# ONE GIVE PER ITEM COPY. The item plan's gift writer (`_insert_guild_gift`) and
+# the sale path's give-to-enchanter (`_disenchant_instead`) can both name the
+# same item instance, and each runs on a worker thread. A check followed by an
+# insert would let both pass the check, so the two are ONE statement, an
+# INSERT ... SELECT ... WHERE NOT EXISTS over any pending or claimed give or
+# letter naming the instance guid (`guid:N` for a give, `send item:N ...` for a
+# letter), whatever the taker; and the statement runs under one process lock,
+# because under autocommit two concurrent copies of it could still both read
+# "none" before either row is visible. The schema is the module's, so there is
+# no unique key to lean on here. MySQL refuses to select the insert target in a
+# plain subquery (error 1093), so the pending-row check sits in a derived table
+# (the LIMIT keeps the optimizer from merging it back into the insert).
+_GIVE_WRITE_LOCK = threading.Lock()
+_INSERT_GIVE_ONCE_SQL = (
+    "INSERT INTO overseer_command "
+    "(target_name, command, kind, target_arg, source) "
+    "SELECT %s, %s, %s, %s, %s FROM (SELECT 1) AS one WHERE NOT EXISTS ("
+    "SELECT 1 FROM (SELECT id FROM overseer_command "
+    "WHERE kind IN ('give', 'mail') AND status IN ('pending', 'claimed') "
+    "AND (command = %s OR command LIKE %s OR command LIKE %s) LIMIT 1) "
+    "AS pending)"
+)
+
+
+def _insert_give_once(cur, item_guid: int, holder, command, kind, taker, source):
+    """Row id of the give written, or 0 when one is already pending for this
+    item instance (nothing is written then)."""
+    guid = int(item_guid)
+    with _GIVE_WRITE_LOCK:
+        cur.execute(_INSERT_GIVE_ONCE_SQL, (
+            holder, command, kind, taker, source,
+            "guid:%d" % guid, "guid:%d %%" % guid, "send item:%d %%" % guid))
+        return (cur.lastrowid or 0) if cur.rowcount else 0
+
+
 def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
     """One overseer_command row handing one stack to a guildmate (infra#3908).
 
@@ -34995,12 +35093,14 @@ def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
         return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(
-                "INSERT INTO overseer_command "
-                "(target_name, command, kind, target_arg, source) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (gift.holder, command, verb, gift.taker, "guildshare"),
-            )
+            row_id = _insert_give_once(
+                cur, gift.guid, gift.holder, command, verb, gift.taker,
+                "guildshare")
+            if not row_id:
+                log.info("guildshare: item %s already has a give pending, so "
+                         "%s's gift to %s is not written", gift.guid,
+                         gift.holder, gift.taker)
+            return row_id
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] == 1265:
                 log.warning(
@@ -35010,7 +35110,6 @@ def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
                 )
                 return 0
             raise
-        return cur.lastrowid or 0
 
 
 # Carried weapons and armour of the guild's OTHER members (#174): the same
