@@ -273,6 +273,24 @@ class LavaCondemnsTheLiquidNotTheCity(unittest.TestCase):
     def test_the_spawn_lookup_reads_the_holders_height(self):
         self.assertIn("cr.position_z AS z FROM overseer_snapshot s", BRIDGE)
 
+    def test_a_non_finite_aim_height_keeps_the_disc(self):
+        discs = dc.discs(FORGE)
+        for z in ("inf", "-inf", "nan", "1e999"):
+            aim = "at:0:-4896.0,-1005.0,%s" % z
+            self.assertIsNone(dc._aim_z(aim), z)
+            self.assertIn("lava", dc.aim_refusal(discs, IF_WALKER, aim), z)
+
+    def test_a_fall_beside_slime_keeps_its_own_ledge_rule(self):
+        # The replacement for the old mixed-disc case: kinds no longer share a
+        # disc, so the fall pair still gets #2773's floor exemption and the
+        # slime stays refused at any walker height it is judged by.
+        discs = dc.discs(LEDGE + [row(1570.0, 200.0, liquid="slime")] * 2)
+        by_kind = {d.kind: d for d in discs}
+        self.assertEqual(set(by_kind), {"fall", "slime"})
+        self.assertIsNotNone(by_kind["fall"].top_z)
+        self.assertIsNone(dc.crossing([by_kind["fall"]], CITY_FLOOR, VENDOR_PAST))
+        self.assertIsNotNone(dc.crossing([by_kind["slime"]], CITY_FLOOR, VENDOR_PAST))
+
 
 class PickingAQuest(unittest.TestCase):
     def setUp(self):

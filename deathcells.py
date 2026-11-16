@@ -288,11 +288,13 @@ def crossing(all_discs, start, goal):
 
 
 def _aim_z(aim):
-    """The z of an `at:<map>:<x>,<y>,<z>` aim, or None."""
+    """The finite z of an `at:<map>:<x>,<y>,<z>` aim, or None (inf and nan are
+    not heights: the disc then stands)."""
     try:
-        return float(str(aim).split(":", 2)[2].split(",")[2])
+        z = float(str(aim).split(":", 2)[2].split(",")[2])
     except (IndexError, ValueError):
         return None
+    return z if math.isfinite(z) else None
 
 
 def aim_refusal(all_discs, here, aim, spawn=None) -> str:
