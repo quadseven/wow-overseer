@@ -308,6 +308,12 @@ class TheBridgeAsksForTheRoutes(unittest.TestCase):
         ]
         self.assertIn("_policy_verdict", body)
 
+    def test_the_dry_run_is_logged_by_the_bridge_pass(self):
+        start = self.SOURCE.split("def _itemplan_bank_routes(", 1)[1]
+        self.assertIn(
+            "itemplan_route.dry_run(routed)", start.split("def _plan_bank(", 1)[0]
+        )
+
     def test_the_deposit_rows_still_pass_the_quest_log_hold(self):
         self.assertTrue(
             re.search(r"_quest_log_holds\(move\.character, command\)", self.SOURCE)

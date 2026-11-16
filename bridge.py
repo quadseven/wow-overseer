@@ -39162,8 +39162,14 @@ def _itemplan_bank_routes(names: list) -> "itemplan_route.Routed":
                     lootpolicy.HOLD, "its facts could not be read")
             return _policy_verdict(holder, fact, classes)
 
-        return itemplan_route.routes_for(
+        routed = itemplan_route.routes_for(
             report.plan, pairs, judge, keep_names=OWNER_KEEPS)
+        # THE DRY RUN, LOGGED: what the bank routes will move, one line per
+        # move, before the bank pass writes a row for it.
+        for holder, item, guid, where, command in itemplan_route.dry_run(routed):
+            log.info("%s %s would put %s (guid %d) in %s: %s",
+                     itemplan_route.PREFIX, holder, item, guid, where, command)
+        return routed
     except Exception:
         log.exception("bank: the item plan's bank routes could not be read; "
                       "nothing is added to the bank plan this pass")
