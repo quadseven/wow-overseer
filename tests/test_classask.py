@@ -21,6 +21,7 @@ with stub_modules(pymysql=PYMYSQL):
     import classask
     import classparty
     import classquest
+    import deathparty
     import guildjobs
     import guildrun
     import guildsocial as gs
@@ -36,6 +37,7 @@ with stub_modules(pymysql=PYMYSQL):
     )
     from test_classquest_use import WARLOCK, tome_book
     from test_classquest_use import who as use_who
+    from test_deathask import loop_of
     from test_guildsocial import NOW, ask, mate, yes
     from test_guildsocial_bridge import _Self, bridge, facts
 
@@ -920,7 +922,9 @@ class TheDungeonPasses(unittest.TestCase):
         this.started = []
         this._begin_class_parties = this.started.extend
         this.death_started = []
-        this._begin_death_parties = this.death_started.extend
+        this._begin_death_parties = lambda starts, loops=None, free=None: (
+            this.death_started.extend(starts)
+        )
         data = facts()
         data["asks"] = list(data["asks"]) + list(asks)
         data["answers"] = list(data["answers"]) + list(answers)
@@ -1090,6 +1094,33 @@ class TheDungeonPasses(unittest.TestCase):
         ):
             asyncio.run(bridge.Bridge._guild_run_once(this))
         self.assertGreaterEqual(seen["busy"], {"Zappy", "Locky", "Idle"})
+
+
+class TheDeathPartyBook(unittest.TestCase):
+    """The social pass seats a death party start once and drops a seated
+    start the newest reads no longer prove (deathparty.start_still_valid)."""
+
+    def start(self):
+        return deathparty.PartyStart(
+            ask_id=9,
+            leader="Looper",
+            helpers=("Helper",),
+            place=loop_of().place,
+            answers={"Helper": 31},
+        )
+
+    def begin(self, this, starts, loops, free):
+        bridge.Bridge._begin_death_parties(this, starts, loops, free)
+
+    def test_a_start_seats_once_and_is_released_when_its_loop_ends(self):
+        this = _Self()
+        loops = {"Looper": loop_of()}
+        free = {"Looper", "Helper"}
+        self.begin(this, (self.start(),), loops, free)
+        self.begin(this, (self.start(),), loops, free)
+        self.assertEqual([s.ask_id for s in this._death_book.seated()], [9])
+        self.begin(this, (), {}, free)
+        self.assertEqual(this._death_book.seated(), ())
 
 
 class TheSkippedCohort(unittest.TestCase):

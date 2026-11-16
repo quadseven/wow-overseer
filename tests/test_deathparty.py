@@ -199,6 +199,26 @@ class DeathPartyBook(unittest.TestCase):
             )
         )
 
+    def test_refresh_drops_a_start_that_is_no_longer_valid(self):
+        book = deathparty.StartBook()
+        book.seat(self.start())
+        gone = book.refresh({}, free={"Looper", "Helper"})
+        self.assertEqual([s.ask_id for s in gone], [9])
+        self.assertEqual(book.seated(), ())
+
+    def test_refresh_keeps_a_start_that_is_still_valid(self):
+        book = deathparty.StartBook()
+        book.seat(self.start())
+        gone = book.refresh({"Looper": loop_of()}, free={"Looper", "Helper"})
+        self.assertEqual(gone, ())
+        self.assertEqual([s.ask_id for s in book.seated()], [9])
+
+    def test_a_start_refreshed_away_can_seat_again(self):
+        book = deathparty.StartBook()
+        book.seat(self.start())
+        book.refresh({}, free=set())
+        self.assertTrue(book.seat(self.start()))
+
 
 if __name__ == "__main__":
     unittest.main()

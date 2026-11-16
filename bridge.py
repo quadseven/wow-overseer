@@ -24428,7 +24428,9 @@ class Bridge(discord.Client):
             facts["asks"], facts.get("answers") or (), facts.get("death_loops") or {},
             free={m.name for m in mates if m.name not in held},
             taken=seated_names)
-        self._begin_death_parties(death_starts)
+        self._begin_death_parties(
+            death_starts, facts.get("death_loops") or {},
+            {m.name for m in mates if m.name not in held})
         await _say_class_escalation(escalation)
         await _say_guild_pugs(pug_pass)
         if run_id:
@@ -24471,8 +24473,13 @@ class Bridge(discord.Client):
         if meter is not None:
             await meter(bounds, facts, mates, held, doors, lent)
 
-    def _begin_death_parties(self, starts) -> None:
+    def _begin_death_parties(self, starts, loops=None, free=None) -> None:
         """Seat each new death party start on the book and log it once.
+
+        A start already seated that the pass's reads no longer prove (its
+        asker left the loop or moved, or a member is no longer free) is
+        released first (StartBook.refresh), so the book never holds a
+        party the runner would act on stale.
 
         The planner re-plans a filled ask on every social pass until the
         runner consumes it; the book (deathparty.StartBook) is what keeps
@@ -24485,6 +24492,9 @@ class Bridge(discord.Client):
         book = getattr(self, "_death_book", None)
         if book is None:
             book = self._death_book = deathparty.StartBook()
+        for start in book.refresh(loops, free):
+            log.info("death party: ask %d released, its start no longer holds",
+                     start.ask_id)
         for start in starts:
             if book.seat(start):
                 log.info("death party: ask %d seats a start: %s leads, %s helps, "

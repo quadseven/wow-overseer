@@ -133,6 +133,14 @@ class StartBook:
     def seated(self) -> tuple:
         return tuple(self._by_ask[k] for k in sorted(self._by_ask))
 
+    def refresh(self, loops, free) -> tuple:
+        """Release each seated start the newest reads no longer prove
+        (start_still_valid) and return the ones released, in ask order."""
+        gone = tuple(s for s in self.seated() if not start_still_valid(s, loops, free))
+        for start in gone:
+            self.release(start.ask_id)
+        return gone
+
 
 def start_still_valid(start, loops, free) -> bool:
     """The act-time re-check: a seated start may be acted on only while
