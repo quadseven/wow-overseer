@@ -6719,13 +6719,14 @@ _HELD_FETCH_SINCE: dict = {}
 
 def _vendor_seller_fetch_blocks_trip(
     names: list, leader: str, free_slots: dict, sellable_counts: dict,
-    in_run: bool, since=None, now=None,
+    in_run: bool, since=None, now=None, waited_seconds: float = 0.0,
 ):
     """Leave travel to the module while a sellable follower needs fetching.
 
     For at most vendor_stall.HELD_FETCH_BOUND_SECONDS per hold (#1983): a
     follower held past it is left behind, named once, and the trip is judged
-    for the members standing with the leader. Returns a vendor_stall.HeldFetch
+    for the members standing with the leader. `waited_seconds` is the sellers'
+    vendor wait from the step store, which a restart does not reset. Returns a vendor_stall.HeldFetch
     (truthy while the trip is blocked), or False when nothing is held.
     """
     if in_run or not (
@@ -6738,7 +6739,8 @@ def _vendor_seller_fetch_blocks_trip(
         return False
     since = _HELD_FETCH_SINCE if since is None else since
     now = time.monotonic() if now is None else now
-    result = vendor_stall.held_fetch_bound(leader, held, since, now)
+    result = vendor_stall.held_fetch_bound(
+        leader, held, since, now, waited_seconds=waited_seconds)
     for name in result.newly_left:
         member = held[name]
         log.info(
@@ -15283,6 +15285,8 @@ class Bridge(discord.Client):
         held_seller_for_leader = await asyncio.to_thread(
             _vendor_seller_fetch_blocks_trip, names, leader, free_slots,
             sellable_counts, in_run,
+            waited_seconds=await asyncio.to_thread(
+                _fetch_vendor_wait_seconds, names),
         )
         # A FOLLOWER HELD PAST THE BOUND IS LEFT BEHIND (#1983): the trip is
         # judged on the goods of the members who walk with the leader, so it
