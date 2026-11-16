@@ -1,6 +1,6 @@
 """The operator routes obey the deployment's switch on the server (#1842).
 
-POST /api/chat, /api/decree and /api/watch queue orders, start a game client
+POST /api/chat, /api/decree, /api/watch and /api/spectate queue orders, start a game client
 or hold a thread on the model gateway. The app draws them locked unless
 OVERSEER_OPERATOR_ACTIONS is on (apiv2/operator.py); before #1842 the server
 obeyed a post from anywhere on the network regardless. These tests pin the
@@ -26,7 +26,7 @@ with stub_modules(pymysql=PYMYSQL):
 map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())
 
-GATED = ("/api/chat", "/api/decree", "/api/watch")
+GATED = ("/api/chat", "/api/decree", "/api/watch", "/api/spectate")
 ON = {"OVERSEER_OPERATOR_ACTIONS": "1"}
 
 

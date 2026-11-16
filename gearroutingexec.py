@@ -37,7 +37,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import bag_pressure
+import bankforecast
 import gearrouting
+import guildbank
 import keep
 
 WRITTEN = "written"
@@ -55,6 +57,10 @@ _BANK_WAIT = (
     "the guild bank is not a character: it cannot trade or post, so a bank "
     "piece waits for a member to withdraw it"
 )
+
+# The `overseer_command.source` of a withdrawal for a routed piece (#2504).
+# Not stock for sale: `bankforecast.WITHDRAWN_SQL` leaves it out.
+BANK_SOURCE = "guildbank-gear"
 
 
 @dataclass(frozen=True)
@@ -219,6 +225,124 @@ def execute(
     return Result(
         steps=tuple(steps[i] for i in range(len(report.routes))), dry_run=dry_run
     )
+
+
+# --- taking a routed piece out of the guild bank (#2504) -----------------------
+
+
+@dataclass(frozen=True)
+class BankWithdrawal:
+    """One routed vault piece a member takes out, shaped like
+    `bankforecast.Withdrawal` so the guild bank pass queues it the same way."""
+
+    character: str
+    stack: bankforecast.Stack
+    item: str
+    wearer: str
+    source: str = BANK_SOURCE
+
+    @property
+    def command(self) -> str:
+        return guildbank.format_item_withdraw(
+            item_guid=int(self.stack.guid), tab=int(self.stack.tab)
+        )
+
+    @property
+    def line(self) -> str:
+        if self.character == self.wearer:
+            who = "to wear"
+        else:
+            who = "to hand on to %s" % self.wearer
+        return "%s takes %s (guid %d) from tab %d %s" % (
+            self.character,
+            self.item,
+            self.stack.guid,
+            self.stack.tab,
+            who,
+        )
+
+
+def bank_routes(report, bank_rows) -> tuple:
+    """((route, tab, guild), ...) for the report's routes held by the guild
+    bank, in report order. A route whose row names no tab is left out: the
+    withdraw verb needs one and a guess would take a different stack."""
+    found = {}
+    for row in bank_rows or ():
+        guid = gearrouting._int(row.get("item_guid"))
+        if guid > 0 and row.get("tab") is not None:
+            found[guid] = (
+                gearrouting._int(row.get("tab")),
+                str(row.get("guild") or ""),
+            )
+    out = []
+    for route in report.routes:
+        if route.holder == gearrouting.BANK_HOLDER and int(route.guid) in found:
+            tab, guild = found[int(route.guid)]
+            out.append((route, tab, guild))
+    return tuple(out)
+
+
+def bank_withdrawals(
+    routes,
+    takers,
+    *,
+    kept=keep.Reservations(),
+    planned=(),
+    visit=bankforecast.WITHDRAW_VISIT_STACKS,
+    keep_free=bankforecast.WITHDRAW_KEEP_FREE,
+) -> tuple:
+    """(withdrawals, notes) taking each routed vault piece out of the bank.
+
+    `routes` is `bank_routes`' (route, tab, guild) rows, already limited to
+    the guild whose vault the `takers` (`bankforecast.Withdrawer`) may open.
+    The wearer takes its own piece when its rank allows it, a bag slot is free
+    past `keep_free` and the visit has room, so the route ends there; else the
+    first member in rank order who may takes it and the next pass hands it
+    over from that member's bags like any other route. A piece an
+    overseer_keep reservation covers is never taken, and a stack named
+    already in `planned` is not named twice. Nothing is granted: the piece is
+    the guild's own, moved by a member's rank right and daily allowance.
+    """
+    order = sorted(takers or (), key=lambda w: (w.rank, w.name))
+    room, used = bankforecast.room_after(order, planned, visit, keep_free)
+    taken = {int(w.stack.guid) for w in planned}
+    out, notes = [], []
+    for route, tab, _guild in routes:
+        if int(route.guid) in taken:
+            continue
+        if _kept(route, kept):
+            notes.append(
+                "%s stays in the guild bank: kept (overseer_keep)" % route.item
+            )
+            continue
+        # The wearer first, then everybody else who may.
+        ranked = sorted(order, key=lambda w: (w.name != route.wearer,))
+        chosen = None
+        for who in ranked:
+            left = who.left(tab)
+            if room.get(who.name, 0) <= 0:
+                continue
+            if left is not None and used.get((who.name, tab), 0) >= left:
+                continue
+            chosen = who
+            break
+        if chosen is None:
+            notes.append(
+                "%s stays in the guild bank: nobody who may take it from tab %d "
+                "has a free bag slot and a withdrawal left today" % (route.item, tab)
+            )
+            continue
+        room[chosen.name] -= 1
+        used[(chosen.name, tab)] = used.get((chosen.name, tab), 0) + 1
+        out.append(
+            BankWithdrawal(
+                chosen.name,
+                bankforecast.Stack(int(route.guid), int(route.entry), 1, tab),
+                route.item,
+                route.wearer,
+            )
+        )
+    return tuple(out), tuple(notes)
 
 
 # --- walking a waiting holder to a mailbox (#2503) ------------------------------

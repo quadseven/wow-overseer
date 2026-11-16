@@ -120,6 +120,10 @@ class TheSelf:
             forget=lambda claimant: self.forgotten_claims.append(claimant)
         )
 
+    def _gear_bank_for(self, names):
+        """No routed gear piece waits in the vault here (#2504)."""
+        return ()
+
     def _guild_walk_cap(self):
         # The near cap, which is what these fixtures' mailboxes are inside.
         return 600.0
@@ -536,7 +540,7 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
                     for x in n
                 ],
                 "_plan_bank": lambda n: types.SimpleNamespace(guild=[]),
-                "_plan_guild_withdrawals": lambda n: (),
+                "_plan_guild_withdrawals": lambda n, gear=(): (),
                 "natural": natural,
                 "_natural_contributors": lambda candidates, family: frozenset(
                     candidates if natural_names is None else natural_names
@@ -561,6 +565,7 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
         ns = _load(
             [
                 "_guild_bank_once",
+                "_queue_remote_setup",
                 "_plan_guild_setup",
                 "_setup_buyer",
                 "_guild_master",

@@ -143,6 +143,7 @@ import raidrun
 import raidteams
 import recipebook
 import restsupply
+import classreagents
 import situation
 import standstill
 import vendorsale
@@ -505,6 +506,8 @@ COOLDOWN_MINUTES = {
     # Food and drink bought with its own gold (restsupply.py): bought, the bags
     # show it; refused, the trip waits an hour.
     restsupply.ACTION: 60,
+    # Class reagents bought with its own gold (classreagents.py, #2622).
+    classreagents.ACTION: classreagents.COOLDOWN_MINUTES,
     # A hunter's walk to a beast and its Tame Beast (hunterpet.py).
     hunterpet.ACTION: hunterpet.COOLDOWN_MINUTES,
 }
@@ -719,6 +722,9 @@ class Member:
     # The member's purchase order (purse.Order), None when unread: gear and
     # food then spend as they did before it existed.
     purse: object = None
+    # The low rung this member is sent back to farm (lowrung.Feed), None when
+    # its guild is short of none it can work.
+    feed: object = None
     # Somebody else leads the group it is in (the snapshot's group leader is
     # not its own guid): it stands where its leader stands, so its standing
     # still says nothing of it (stood_still_step).
@@ -732,6 +738,9 @@ class Member:
     banker: object = None  # a Spot
     # Quest-class stacks the plan destroys as certainly useless (#2607).
     plan_destroy: tuple = ()  # Carried
+    # Class reagent item entries used by known spells (classreagents.py, #2622),
+    # kept out of vendor sales alongside SOUL_SHARD.
+    reagent_entries: frozenset = frozenset()
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -1138,9 +1147,15 @@ def _densest_field(mobs, origin, low, high, name, noun) -> Spot | None:
     )
 
 
-def skinning_field(beasts, origin, level, value) -> Spot | None:
-    """The beast spawn a skinner is sent to, or None (see `_densest_field`)."""
-    low, high = skin_band(level, value)
+def skinning_field(beasts, origin, level, value, band=None) -> Spot | None:
+    """The beast spawn a skinner is sent to, or None (see `_densest_field`).
+
+    `band` (lowrung.py) replaces the level band with the one a starved
+    material drops in, still capped at what the skill can skin."""
+    if band is None:
+        low, high = skin_band(level, value)
+    else:
+        low, high = _int(band[0]), min(_int(band[1]), skinnable_level(value))
     return _densest_field(
         beasts, origin, low, high, "a pack of beasts", "skinnable beasts"
     )
@@ -1176,13 +1191,13 @@ def farms_cloth(member, has_field) -> bool:
     return member.holds(TAILORING) or not has_field
 
 
-def cloth_field(mobs, origin, level) -> Spot | None:
+def cloth_field(mobs, origin, level, band=None) -> Spot | None:
     """The humanoid spawn a cloth farmer is sent to, or None.
 
     `mobs` are (Spot, level) for the world's creature spawns whose loot holds
     cloth (`CLOTH_ENTRIES`), already limited to the farmer's map.
     """
-    low, high = cloth_band(level)
+    low, high = cloth_band(level) if band is None else band
     return _densest_field(
         mobs, origin, low, high, "a pack of humanoids", "cloth-dropping humanoids"
     )
@@ -1408,15 +1423,13 @@ def ranks_due(level: int, money: int, skills, wanted=()) -> tuple:
 
 # The purse a recipe purchase never spends below, in copper: mod-overseer's
 # RECIPE_PURSE_FLOOR_COPPER, so an errand written here is one the trainer
-# visit can complete. It is the floor at level 1; `recipe_purse_floor` grows
-# it with level, as mod-overseer's RecipePurseFloor does.
-RECIPE_PURSE_FLOOR = 100
+# visit can complete. Canonical definition lives in purse.py to avoid import
+# cycles with raidsupply.
+RECIPE_PURSE_FLOOR = purse.RECIPE_PURSE_FLOOR
 
 # THE REPAIR RESERVE, in copper per level squared: 40 silver at 20 and 3g 60s
-# at 60. A repair bill grows with the item level of what is worn, and one
-# silver (the floor alone) does not pay for a level 60 member's repair after a
-# death. mod-overseer's RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ, the same number.
-RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ = 10
+# at 60. mod-overseer's RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ, the same number.
+RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ = purse.RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ
 
 # A trainer visit for a trade that bought no due recipe is not repeated inside
 # this window. mod-overseer records each visit ('trainer-visit', the trade's
@@ -1428,10 +1441,7 @@ RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ = 10
 RECIPE_VISIT_RETRY_HOURS = 6
 
 
-def recipe_purse_floor(level: int) -> int:
-    """The copper a recipe purchase leaves in the purse at `level`."""
-    level = max(0, int(level or 0))
-    return max(RECIPE_PURSE_FLOOR, RECIPE_REPAIR_RESERVE_PER_LEVEL_SQ * level * level)
+recipe_purse_floor = purse.recipe_purse_floor
 
 
 def _rungs_ahead(skill: int, value: int) -> tuple:
@@ -1464,6 +1474,12 @@ def _rungs_ahead(skill: int, value: int) -> tuple:
     return tuple(out)
 
 
+# Secondary trades whose craft ladders qualify for trainer recipe visits
+# regardless of the roster's `professions` column (#2264). Fishing has no
+# crafting ladder and stays excluded.
+SECONDARY_RECIPE_SKILLS = frozenset({FIRST_AID, COOKING})
+
+
 def recipes_due(level: int, money: int, skills, known, wanted=(), visited=()) -> tuple:
     """The held trades whose next trainer recipe this character may buy now.
 
@@ -1480,10 +1496,11 @@ def recipes_due(level: int, money: int, skills, known, wanted=(), visited=()) ->
     `recipe_purse_floor(level)`. `known` is every recipe the bridge can show
     the member holds: character_spell, and the worldserver's own 'learn',
     'craft' and 'recipe-known' events. `skills` is {skill id: (value, max)};
-    a held primary the roster names in `wanted` is asked, and First Aid
-    always, as `ranks_due` asks it, since it takes no primary slot. A trade in
-    `visited` (a trainer visit for it inside RECIPE_VISIT_RETRY_HOURS) is not
-    due again yet. Cheapest first.
+    a held primary the roster names in `wanted` is asked, and First Aid and
+    Cooking always (`SECONDARY_RECIPE_SKILLS`, #2264), since secondary trades
+    take no primary slot. Fishing stays out. A trade in `visited` (a trainer
+    visit for it inside RECIPE_VISIT_RETRY_HOURS) is not due again yet.
+    Cheapest first.
     """
     known = frozenset(int(s) for s in known or ())
     wanted = tuple(int(s) for s in wanted or ())
@@ -1494,7 +1511,7 @@ def recipes_due(level: int, money: int, skills, known, wanted=(), visited=()) ->
         skill, value, ceiling = int(skill), int(value or 0), int(ceiling or 0)
         if ceiling <= 0 or skill in visited:
             continue
-        if skill != FIRST_AID and skill not in wanted:
+        if skill not in SECONDARY_RECIPE_SKILLS and skill not in wanted:
             continue
         cost = _recipe_cost_due(skill, value, int(money or 0), known, floor)
         if cost is not None:
@@ -1711,6 +1728,7 @@ TOWN_STOP_ACTIONS = frozenset(
         "riding",
         "weapon",
         restsupply.ACTION,
+        classreagents.ACTION,
         mountbuy.ACTION,
         guildlevel.INN_ACTION,
     }
@@ -2572,6 +2590,8 @@ def vendor_judge(member, protected=frozenset()) -> vendorsale.Judge:
     guard = {e for tools in TOOL_ENTRIES.values() for e in tools} | {SOUL_SHARD}
     if member.role == MAINTENANCE:
         guard |= craft_entries(member)
+    if member.reagent_entries:
+        guard |= frozenset(int(e) for e in member.reagent_entries)
     return vendorsale.Judge(
         level=int(member.level),
         worn=member.worn,
@@ -2861,6 +2881,43 @@ def family_riding_step(m, recent):
         ),
         "",
     )
+
+
+def family_mount_step(m, facts, recent, kept=None, book=None, crafters=None, master=""):
+    """(step or None, a note) for a roster family member with Riding and no
+    mount (#2642), planned only in the gap between runs after Riding is held.
+
+    Keeps `FAMILY_RIDING_FLOAT` over the price in place of a guild member's
+    purchase order, bounds every walk to `familyclass.WALK_YARDS`, and holds a
+    follower's walk or any unread ground the same way `family_riding_step`
+    does."""
+    if m.role != FAMILY or not m.eligible:
+        return None, ""
+    if not m.online or not m.alive or m.in_combat:
+        return None, ""
+    if m.map_id is None or m.x is None or m.y is None:
+        return None, ""
+    if m.purse is None:
+        order = purse.Order(
+            m.name,
+            m.level,
+            int(m.money or 0),
+            (purse.Want(purse.SPELLS, FAMILY_RIDING_FLOAT, "float"),),
+        )
+        m = replace(m, purse=order)
+    step, note = mount_step(
+        m,
+        facts,
+        recent,
+        familyclass.WALK_YARDS,
+        kept=kept,
+        book=book,
+        crafters=crafters,
+        master=master,
+    )
+    if getattr(m, "follows", False) and (step is None or step.walk is not None):
+        return None, ""
+    return step, note
 
 
 def _newest_buy(name, action, recent):
@@ -3554,6 +3611,92 @@ def _supply_first(m, offer, recent, cap, kept=None, book=None):
     if step is None:
         return None, "", why
     return step, step.said, ""
+
+
+def _unpack_reagent_offer(offer):
+    if isinstance(offer, classreagents.Offer):
+        return offer.rows, offer.sold
+    return offer or (), None
+
+
+def _lead_reagent_buy(rows, buys):
+    nearest = {}
+    for r in rows:
+        entry = int(r.get("entry") or 0)
+        yards = float(r.get("yards") or 0.0)
+        if entry not in nearest or yards < nearest[entry][0]:
+            nearest[entry] = (yards, int(r.get("vendor") or 0))
+    return next(
+        (b for b in buys if nearest.get(b.entry, (0, 0))[1] == b.vendor), buys[0]
+    )
+
+
+def class_reagents_step(member, offer, cap, kept=None, spell_reagents=None):
+    """(step or None, note): a member short of class reagents for known
+    spells walks to a friendly vendor in reach, sells its junk there and buys
+    a small stock with its own gold above class spells, riding and food
+    (classreagents.py, #2622)."""
+    if member.map_id is None or not spell_reagents:
+        return None, ""
+    offer_rows, sold = _unpack_reagent_offer(offer)
+    rows = friendly_vendor_rows(member, offer_rows)
+    junk = junk_value(member, kept)
+    room = (
+        int(member.free_slots) + len(_junk(member, kept))
+        if member.free_slots is not None
+        else None
+    )
+    left = spendable(member, purse.REAGENTS, int(member.money) + junk)
+    buys, why = classreagents.plan(
+        replace(member, money=left),
+        spell_reagents,
+        rows,
+        sold_entries=sold,
+        room=room,
+        craft=CRAFT_SPELLS,
+    )
+    if not buys:
+        if offer_rows and not rows and not why:
+            why = "no vendor in reach will sell %s class reagents" % member.name
+        return None, why
+    lead = _lead_reagent_buy(rows, buys)
+    return (
+        guildcorps.Step(
+            member.name,
+            classreagents.ACTION,
+            lead.entry,
+            classreagents.said(member, buys),
+            rows=junk_sales(member, kept, classreagents.ACTION)
+            + tuple(
+                guildcorps.Row(
+                    "buy", b.command, "", source_for(classreagents.ACTION, member.name)
+                )
+                for b in buys
+            ),
+            walk=guildcorps.Row(
+                "buy",
+                "walk-to-vendor item:%d%s" % (lead.entry, _cap_word(cap)),
+                "",
+                source_for(classreagents.ACTION, member.name),
+            ),
+            sales=junk_notes(member, kept),
+        ),
+        why,
+    )
+
+
+def _class_reagent_first(m, offer, recent, cap, kept=None, spell_reagents=None):
+    """Class reagents bought after riding and food, ahead of vendor gear."""
+    if not offer or not m.online or not m.alive or m.in_combat:
+        return None, "", ""
+    if not spell_reagents or _cooling(m, classreagents.ACTION, recent):
+        return None, "", ""
+    if not classreagents.wanted(m, spell_reagents, CRAFT_SPELLS):
+        return None, "", ""
+    step, why = class_reagents_step(m, offer, cap, kept, spell_reagents)
+    if step is None:
+        return None, "", why
+    return step, step.said, why
 
 
 # A CRAFTER IS POSTED ONLY WHAT IT CAN WORK NOW (#373). Holding a trade is not
@@ -4521,6 +4664,8 @@ def plan(
     owing=None,
     still=None,
     supply=None,
+    class_reagents=None,
+    spell_reagents=None,
     pets=None,
     asks=(),
     weapons=None,
@@ -4601,7 +4746,16 @@ def plan(
     # the member so a new craft path staged CORPS reaches only them.
     pigs = guineapig.pick(members)
     members = [
-        replace(m, pig_skills=guineapig.skills_of(pigs, m.guild, m.name))
+        replace(
+            m,
+            pig_skills=guineapig.skills_of(pigs, m.guild, m.name),
+            reagent_entries=(
+                m.reagent_entries
+                | classreagents.entries_for_known(m.known, spell_reagents, CRAFT_SPELLS)
+                if spell_reagents
+                else m.reagent_entries
+            ),
+        )
         for m in members
     ]
     inputs = _PlanInputs(
@@ -4633,6 +4787,8 @@ def plan(
         owing=owing,
         still=still,
         supply=supply,
+        class_reagents=class_reagents,
+        spell_reagents=spell_reagents,
         pets=pets,
         asks=asks,
         weapons=weapons,
@@ -4687,6 +4843,8 @@ class _PlanInputs:
     owing: Any
     still: Any
     supply: Any
+    class_reagents: Any
+    spell_reagents: Any
     pets: Any
     asks: Any
     weapons: Any
@@ -4732,6 +4890,7 @@ def _plan_counters():
             "classquest",
             "room",
             "supply",
+            "classreagents",
             "inn",
             "pet",
         )
@@ -4826,6 +4985,7 @@ def _plan_ordered_member(member, inputs, state):
             state.notes,
             state.class_holds,
             inputs.family_danger,
+            mounts=inputs.mounts,
         )
         return
     if member.role in (MAINTENANCE, SUMMONER, RAIDER):
@@ -4874,6 +5034,8 @@ def _plan_roster_member(member, inputs, state):
         assigned=state.assigned,
         risk=_offer_for(inputs.risks, member.name),
         avoided_zones=_member_value(inputs.avoided, member.name, ()),
+        class_reagents=_offer_for(inputs.class_reagents, member.name),
+        spell_reagents=inputs.spell_reagents,
     )
     asked, yielded = class_asking(
         member, inputs.classes, inputs.hunts, inputs.now, inputs.recent, inputs.asks
@@ -4999,7 +5161,7 @@ def _finish_plan(inputs, state):
 
 
 def _plan_family_class_member(
-    m, reads, limits, steps, lines, notes, class_holds, danger=None
+    m, reads, limits, steps, lines, notes, class_holds, danger=None, mounts=None
 ) -> None:
     """Plan an idle family member's class step in the shared fair order.
 
@@ -5010,6 +5172,7 @@ def _plan_family_class_member(
     counters, busy, per_guild = limits
     if not familyclass.enabled() or m.role != FAMILY:
         return
+    master = str(masters.get(m.guild) or "")
     step, doing, note = class_step(
         m,
         classes,
@@ -5020,7 +5183,7 @@ def _plan_family_class_member(
         far,
         kept,
         crafters,
-        str(masters.get(m.guild) or ""),
+        master,
     )
     if note:
         notes.append(note)
@@ -5031,7 +5194,20 @@ def _plan_family_class_member(
                 return
         if class_owed(m, classes, recent, now=now) is not None and note:
             class_holds[m.name] = _class_hold_reason(m.name, note)
-        _plan_family_riding(m, recent, counters, busy, per_guild, steps, notes)
+        _plan_family_riding(
+            m,
+            recent,
+            counters,
+            busy,
+            per_guild,
+            steps,
+            notes,
+            mounts=mounts,
+            kept=kept,
+            book=classes,
+            crafters=crafters,
+            master=master,
+        )
         return
     gap_hold = familyclass.holds(m, step.move, recent)
     if gap_hold:
@@ -5054,24 +5230,62 @@ def _plan_family_class_member(
     steps.append(step)
 
 
-def _plan_family_riding(m, recent, counters, busy, per_guild, steps, notes) -> None:
-    """Plan an idle family member the riding walk when its class step has
-    nothing for it (family_riding_step, ticket 2625), on the shared allowance."""
-    step, note = family_riding_step(m, recent)
+def _commit_family_step(
+    m, step, note, recent, counters, busy, per_guild, steps, notes
+) -> bool:
+    """Verify allowances and walk holds for one family idle step and commit it."""
     if note:
         notes.append(note)
     if step is None:
-        return
+        return False
     started, allowance = _allowance(step, counters, per_guild)
     why = _step_refusal(m, busy, started, allowance, step) or job_walk_held(
         m, step, recent
     )
     if why:
         notes.append(why)
-        return
+        return False
     started[m.guild] = started.get(m.guild, 0) + 1
     busy.add(m.name)
     steps.append(step)
+    return True
+
+
+def _plan_family_riding(
+    m,
+    recent,
+    counters,
+    busy,
+    per_guild,
+    steps,
+    notes,
+    mounts=None,
+    kept=None,
+    book=None,
+    crafters=None,
+    master="",
+) -> None:
+    """Plan an idle family member the riding walk, or the mount step once
+    riding is held, when its class step has nothing for it (#2625, #2642)."""
+    step, note = family_riding_step(m, recent)
+    if _commit_family_step(
+        m, step, note, recent, counters, busy, per_guild, steps, notes
+    ):
+        return
+    if step is not None and (not m.online or m.in_combat or m.name in busy):
+        return
+    mount_step_row, mount_note = family_mount_step(
+        m,
+        _offer_for(mounts, m.name),
+        recent,
+        kept=kept,
+        book=book,
+        crafters=crafters,
+        master=master,
+    )
+    _commit_family_step(
+        m, mount_step_row, mount_note, recent, counters, busy, per_guild, steps, notes
+    )
 
 
 def _offer_for(offers, name):
@@ -5337,6 +5551,8 @@ def _allowance(step, counters, per_guild):
         return counters["room"], ROOM_STEPS_PER_GUILD
     if step.action == restsupply.ACTION:
         return counters["supply"], restsupply.STEPS_PER_GUILD
+    if step.action == classreagents.ACTION:
+        return counters["classreagents"], classreagents.STEPS_PER_GUILD
     if step.action == hunterpet.ACTION:
         return counters["pet"], hunterpet.STEPS_PER_GUILD
     if step.action == guildlevel.INN_ACTION:
@@ -5610,6 +5826,8 @@ def _upkeep_first(
     crafters=None,
     master="",
     levelling=False,
+    class_reagents=None,
+    spell_reagents=None,
 ):
     """(the member's step as _member_step returns it, or None; the supply
     note; the gear note): food for a member with nothing to eat or drink, then
@@ -5649,6 +5867,16 @@ def _upkeep_first(
         step, doing, supply_note = _supply_first(m, supply, recent, cap, kept, book)
         if step is not None:
             return (step, doing, quest_note, ""), supply_note, ""
+    step, doing, reagent_note = _class_reagent_first(
+        m, class_reagents, recent, cap, kept, spell_reagents
+    )
+    if step is not None:
+        return (
+            (step, doing, _join(quest_note, reagent_note), ""),
+            _join(supply_note, riding_note),
+            "",
+        )
+    riding_note = _join(riding_note, reagent_note)
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
     if step is not None:
         return (step, doing, "", ""), supply_note, gear_note
@@ -5829,6 +6057,8 @@ def _member_step(
     assigned=None,
     risk=None,
     avoided_zones=(),
+    class_reagents=None,
+    spell_reagents=None,
 ):
     """A death loop's way out of its zone first (death_loop_first, #1464),
     then a class quest, then a hunter's first pet, then a hearth out of a
@@ -5940,6 +6170,8 @@ def _member_step(
         crafters,
         master,
         levelling,
+        class_reagents=class_reagents,
+        spell_reagents=spell_reagents,
     )
     if found is not None:
         return found
@@ -7841,11 +8073,13 @@ def class_ask_held(name, asks) -> frozenset:
 # more; a class quest's crossing does not wait on its clock
 # (class_crossing_cooling, #1921).
 QUESTER_CROSS_ACTION = "quester-cross"
+TRAIN_CROSS_ACTION = "train-cross"
 CROSS_ACTIONS = frozenset(
     {
         classquest.CROSS_ACTION,
         guildlevel.CROSS_ACTION,
         QUESTER_CROSS_ACTION,
+        TRAIN_CROSS_ACTION,
         WEAPON_CROSS_ACTION,
         pvpgear.CROSS_ACTION,
     }
@@ -8366,6 +8600,18 @@ def class_step(
         # orders beside the rows (steps.py, shadow mode).
         step = replace(step, move=move)
     return step, doing, note
+
+
+def class_move_spot(m, book, recent, now=0.0):
+    """The Spot class_step would walk `m` to, or None: the move chosen with the
+    walls and avoids the walk uses (_class_move), read-only (no hunts clock). A
+    caller that judges the ground of a walk reads this, not the plain next
+    move."""
+    m = with_recent_takes(m, recent)
+    move, _blocked = _class_move(m, book, recent, None, now)
+    if move is None or move.spot is None:
+        return None
+    return _class_spot(move)
 
 
 def _class_move_step(
@@ -9041,9 +9287,30 @@ def _recalled_lately(m, recent) -> bool:
     return any(
         r.name == m.name
         and r.action == "hearth"
-        and r.status not in TRAIN_FAILED
-        and int(r.age_minutes) < minutes
+        and (
+            (r.status not in TRAIN_FAILED and int(r.age_minutes) < minutes)
+            or _stoneless_recall_held(r)
+        )
         for r in recent or ()
+    )
+
+
+# A RECALL WITHOUT A STONE IS NOT ASKED AGAIN FOR HOURS. The module refuses a
+# `hearth recall` from a character that carries no hearthstone and says it is
+# retryable, but only an innkeeper hands out a new stone, and nothing in the
+# recall step goes to one. Asking again on every pass was the same refusal: three
+# death knights were refused 99, 53 and 25 times in a day.
+NO_STONE_WORDS = "without the stone"
+NO_STONE_BACKOFF_MINUTES = 6 * 60
+
+
+def _stoneless_recall_held(r) -> bool:
+    """Whether this refused hearth row is a recall refused for the missing stone
+    and still younger than NO_STONE_BACKOFF_MINUTES."""
+    return (
+        r.status in TRAIN_FAILED
+        and NO_STONE_WORDS in (r.reason or r.refusal or "")
+        and int(r.age_minutes) < NO_STONE_BACKOFF_MINUTES
     )
 
 

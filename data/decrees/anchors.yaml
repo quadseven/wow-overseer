@@ -1,0 +1,55 @@
+# Captured anchors: the only place literal coordinates may appear.
+#
+# Rule: an entry is a position a real character stood at, copied from a row the
+# game itself wrote (a death row, a character row, a corpse row), with where it
+# came from. Never type a position by hand: a guessed z has no navmesh and has
+# already killed a character. A decree names an anchor with
+# `at: {captured: <key>}` and never carries x, y or z itself.
+#
+# A captured entry:
+#   some-key:
+#     map: 0
+#     zone: 0
+#     x: 0.0
+#     y: 0.0
+#     z: 0.0
+#     o: 0.0
+#     provenance: {source: <table the row is in>, ref: <row id or guid>, observed: <date>, note: <optional>}
+#
+# An entry whose row has not been copied yet is `pending`. Lint warns when a
+# decree uses one and the seed step refuses it, so a pending anchor can never
+# reach a world by accident.
+anchors:
+  mo270-party-position:
+    pending: true
+    todo: "copy the party member position from the death row cited by the void-death issue"
+  mo270-corpse-position:
+    pending: true
+    todo: "copy the below-world corpse position from the same death row"
+  # Copied from game-written rows on 2026-11-15; provenance on each entry.
+  brm-meeting-stone:
+    map: 0
+    zone: 46
+    x: -7590.69
+    y: -1139.77
+    z: 260.68
+    o: -2.766
+    provenance: {source: acore_world.gameobject, ref: "guid 427 (Meeting Stone, entry 179584)", observed: "2026-11-15", note: "the Blackrock Mountain stone beside Franclorn Forgewright"}
+  # Copied from game-written rows on 2026-11-15; provenance on each entry.
+  theramore-pier-guard:
+    map: 1
+    zone: 15
+    x: -3932.3
+    y: -4735.9
+    z: 5.1
+    o: 0.0
+    provenance: {source: acore_world.creature, ref: "guid 30521 (Theramore Guard)", observed: "2026-11-15", note: "a guard on the Theramore pier approach; the berth itself is read by the module at run time"}
+  # Copied from a game-written row on 2026-11-16; provenance on the entry.
+  undercity-floor-by-the-mailbox:
+    map: 0
+    zone: 1497
+    x: 1306.78
+    y: 356.366
+    z: -67.2965
+    o: 0.0
+    provenance: {source: overseer_snapshot, ref: "row for Zug, 2026-11-16", observed: "2026-11-16", note: "the lower Undercity floor where the family's town errand was held; orientation not recorded"}

@@ -225,3 +225,29 @@ class TheBridgeUsesIt(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AWalledHubGivesWayToAVendor(unittest.TestCase):
+    """wow-overseer#2619: the family sat for hours on a mailbox hub the town
+    slot refused on every ask (the hub lay inside ground the family died on),
+    holding the one traveller while the sale trip waited behind it."""
+
+    HUB = {"map_id": 0, "x": -4910.0, "y": -976.0, "place": "the mailbox"}
+    HEAD = {"map_id": 0, "pos_x": -5347.0, "pos_y": -953.0}
+    VENDOR = {"map_id": 0, "x": -5600.0, "y": -530.0, "name": "Kharanos Vendor"}
+
+    def test_a_walled_hub_gives_way_to_a_vendor_that_is_not_walled(self):
+        stops = te.vendor_stops([self.VENDOR])
+        pick = te.choose_aim(
+            self.HUB, stops, self.HEAD, WHY, walled=lambda spot: spot["x"] > -5000
+        )
+        self.assertEqual(-5600.0, pick["x"])
+
+    def test_without_a_walled_check_the_near_hub_stays(self):
+        stops = te.vendor_stops([self.VENDOR])
+        self.assertEqual(self.HUB, te.choose_aim(self.HUB, stops, self.HEAD, WHY))
+
+    def test_a_walled_vendor_is_never_chosen(self):
+        stops = te.vendor_stops([self.VENDOR])
+        pick = te.choose_aim(self.HUB, stops, self.HEAD, WHY, walled=lambda spot: True)
+        self.assertEqual(self.HUB, pick)

@@ -654,6 +654,7 @@ def choose_aim(
     now: float = 0.0,
     deaths=(),
     hearth_reaches: bool = False,
+    walled=None,
 ) -> dict:
     """The errand's aim: `hub` (choose_hub), or a nearer vendor stop.
 
@@ -671,6 +672,14 @@ def choose_aim(
     journey: on 2026-11-12 the head stood 9,000 yards from the bind hub, the
     nearest vendor was chosen, and four members walked across the continent
     to it for an hour while the family's run waited.
+
+    A SPOT THE WALK TO IS REFUSED IS NOT A COUNTER (wow-overseer#2619).
+    `walled(spot)` says the town slot would refuse the walk to `spot` (it lies
+    in, or across, ground the family died on twice). A walled hub is treated
+    like a released one and gives way to the nearest vendor that is not
+    walled. Without this the errand took the family's one travel column,
+    asked for a walled hub on every pass for 1200 seconds, never moved, and
+    starved the sale trip behind it.
     """
     hub = dict(hub or {})
     if why != BAG_PRESSURE_WHY or not leader_at:
@@ -680,7 +689,8 @@ def choose_aim(
         "x": leader_at.get("pos_x"),
         "y": leader_at.get("pos_y"),
     }
-    hub_used = bool(hub) and _was_released(hub, released, now)
+    walled = walled or (lambda _spot: False)
+    hub_used = bool(hub) and (_was_released(hub, released, now) or bool(walled(hub)))
     hub_far = (
         bool(hub)
         and not (hearth_reaches and hub.get("bind"))
@@ -695,6 +705,7 @@ def choose_aim(
         if _same_map(s, leader_at)
         and not _was_released(s, released, now)
         and not lethal_stop(s, here, deaths)
+        and not walled(s)
     ]
     if not near:
         return hub

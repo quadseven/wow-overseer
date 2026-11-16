@@ -202,12 +202,12 @@ class VerdictTest(unittest.TestCase):
                 },
             )
         )
-        self.assertEqual(d.route, itemplan.SELL_VENDOR)
+        self.assertNotEqual(d.route, itemplan.SELL_VENDOR)  # a green is banked
         self.assertIn("equipped gear verdicts", rep.missing)
 
     def test_a_worse_piece_gets_no_verdict_and_the_plan_decides(self):
         d, _ = self.cloak(self.extras(worn_level=70))
-        self.assertEqual(d.route, itemplan.SELL_VENDOR)
+        self.assertNotEqual(d.route, itemplan.SELL_VENDOR)  # a green is banked
 
 
 class BindingTest(unittest.TestCase):
@@ -577,6 +577,108 @@ class ReadTest(unittest.TestCase):
         self.assertTrue(
             all(sql.lstrip().upper().startswith("SELECT") for sql, _ in cur.executed)
         )
+
+    def test_reads_family_skills_guild_classes_and_known_spells(self):
+        rows = [
+            {
+                "holder": "Oz",
+                "item_guid": 501,
+                "entry": 16245,
+                "name": "Formula: Enchant Boots - Greater Agility",
+                "item_class": 9,
+                "quality": 2,
+                "count": 1,
+                "sell_price": 500,
+            },
+            {
+                "holder": "Grug",
+                "item_guid": 502,
+                "entry": 17682,
+                "name": "Book: Gift of the Wild",
+                "item_class": 9,
+                "quality": 2,
+                "count": 1,
+                "sell_price": 2500,
+            },
+        ]
+        worn = [
+            {"name": "Oz", "class_id": 8, "level": 60},
+            {"name": "Grug", "class_id": 1, "level": 60},
+        ]
+        cur = FakeCursor(
+            tables={
+                "SELECT it.entry AS entry": [
+                    {
+                        "entry": 16245,
+                        "item_class": 9,
+                        "subclass": 8,
+                        "bonding": 0,
+                        "inventory_type": 0,
+                        "item_level": 59,
+                        "req_level": 0,
+                        "required_skill": 333,
+                        "required_skill_rank": 295,
+                        "allowable_class": -1,
+                        "spell_id": 20023,
+                        "container_slots": 0,
+                        "fire_res": 0,
+                    },
+                    {
+                        "entry": 17682,
+                        "item_class": 9,
+                        "subclass": 0,
+                        "bonding": 0,
+                        "inventory_type": 0,
+                        "item_level": 50,
+                        "req_level": 50,
+                        "required_skill": 0,
+                        "required_skill_rank": 0,
+                        "allowable_class": 1024,
+                        "spell_id": 21849,
+                        "container_slots": 0,
+                        "fire_res": 0,
+                    },
+                ],
+                "SELECT DISTINCT c.name AS member, cs.spell AS spell": [
+                    {"member": "Oz", "spell": 20023},
+                ],
+            }
+        )
+        ench = reads.itemplan.guildshare.SKILL_LINES["enchanting"]
+        roster = [
+            SimpleNamespace(
+                name="Oz",
+                family=True,
+                online=True,
+                class_id=8,
+                level=60,
+                rank_in=lambda skill: 15 if skill == ench else 0,
+            ),
+            SimpleNamespace(
+                name="Glob",
+                family=False,
+                online=False,
+                class_id=11,
+                level=53,
+                rank_in=lambda _skill: 0,
+            ),
+        ]
+        extras = reads.read(
+            ["Oz", "Grug"],
+            "Oz",
+            rows,
+            [],
+            worn,
+            connect=lambda: FakeConn(cur),
+            bank_rows=lambda _names: [],
+            guild_setup=lambda _names: None,
+            roster=lambda _names: roster,
+        )
+        self.assertEqual(extras.family_skills, {"Oz": ((ench, 15, 15),)})
+        self.assertEqual(extras.guild_class_members, (("Glob", 11, 53, False),))
+        self.assertEqual(extras.known_spells, {"Oz": frozenset({20023})})
+        self.assertEqual(extras.templates[16245]["spell_id"], 20023)
+        self.assertEqual(extras.templates[17682]["spell_id"], 21849)
 
     def test_failed_instance_flag_read_keeps_item_untradable(self):
         rows, gear, worn, _free = fixture()

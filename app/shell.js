@@ -5,6 +5,7 @@
 import { html, raw, ago } from "./ui.js";
 import { families, guilds } from "./families.js";
 import { marker } from "./deploy.js";
+import { realmLine } from "./realmstate.js";
 
 const NAV = [
   { key: "now", label: "Now", icon: "pulse", href: "#/now" },
@@ -34,11 +35,13 @@ const badges = {};
 let realmTag = "";
 let deployInfo;
 let operatorOn = false;
+let realmState;
 
 export function setBadge(section, badge) { badges[section] = badge || null; }
 export function setRealmTag(tag) { realmTag = tag || ""; }
 export function setDeploy(d) { deployInfo = d || undefined; }
 export function setOperator(on) { operatorOn = !!on; }
+export function setRealmState(s) { realmState = s || undefined; }
 
 function hrefFor(n) {
   const b = badges[n.key];
@@ -81,8 +84,14 @@ export function mount(root) {
   </div>
 </aside>
 <div class="column">
+  <div class="realm-state" data-slot="realm-state" role="status" hidden></div>
   <!-- Now's stage on a phone (views/now/stage.js). Drawn once, outside <main>, so a redraw never touches it; first in the column, so the picture is at the top edge at load. -->
   <section class="stage" id="stage" aria-label="Live picture" hidden>
+    <div class="stage-strip" data-stage-strip>
+      <span class="stage-strip-dot" aria-hidden="true"></span>
+      <span class="stage-msg">Checking live picture</span>
+      <button type="button" class="stage-retry" data-stage-retry hidden>Retry</button>
+    </div>
     <div class="st-slot stage-slot" data-stream=""></div>
     <div class="stage-switch" role="group" aria-label="Family on stage" hidden></div>
   </section>
@@ -107,6 +116,7 @@ export function update(root, opts) {
   root.querySelectorAll('[data-slot="realm"]').forEach((el) => { el.textContent = realmTag; el.hidden = !realmTag; });
   updateAge(root, health);
   updateDeploy(root, health);
+  updateRealmState(root);
   const themeLabel = theme === "light" ? "Dark theme" : "Light theme";
   const themeIcon = theme === "light" ? "ph ph-moon" : "ph ph-sun";
   root.querySelectorAll('[data-action="theme"]').forEach((b) => {
@@ -130,6 +140,15 @@ export function updateAge(root, health) {
   if (a) a.innerHTML = html`${dot}<span>${long}</span>`.s;
   if (b) b.innerHTML = html`${dot}<span>${short}</span>`.s;
   sayAgeState(root, h.state);
+}
+
+export function updateRealmState(root) {
+  const el = root.querySelector('[data-slot="realm-state"]');
+  if (!el) return;
+  const line = realmLine(realmState);
+  el.hidden = !line.show;
+  el.setAttribute("data-tone", line.tone);
+  el.textContent = line.text;
 }
 
 export function updateDeploy(root, health) {

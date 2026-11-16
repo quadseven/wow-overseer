@@ -21,6 +21,13 @@ MAIL = gear.MAIL
 spots_from_rows = gear.spots_from_rows
 within_trade_range = gear._within_trade_range
 
+# Armor material classification, re-exported for equipscore and gearup so gear keeps its single importer.
+ARMOR_CLOTH = gear.ARMOR_CLOTH
+ITEM_CLASS_ARMOR = gear.ITEM_CLASS_ARMOR
+ARMOR_MATERIAL_INVTYPES = gear.ARMOR_MATERIAL_INVTYPES
+preferred_armor_subclass = gear.preferred_armor_subclass
+armor_material_tier = gear.armor_material_tier
+
 # The two item classes that are worn: weapons and armour. A bag is class 1 and
 # is deliberately not here, because an empty bag is still slots.
 EQUIPMENT_CLASSES = frozenset({2, 4})
@@ -93,6 +100,22 @@ STACK_QUEST_NEEDED_SQL = (
     "(SELECT ch.race FROM characters ch WHERE ch.guid = ci.guid) - 1))) <> 0)))"
 )
 QUEST_NEEDED_SQL = "(it.class = 12 AND " + STACK_QUEST_NEEDED_SQL + ")"
+
+# A QUEST IN THE HOLDER'S OWN LOG NAMES THE ITEM, OF ANY CLASS. The loot policy
+# asks this of every carried stack it is about to sell, destroy or disenchant:
+# a quest the holder is on (a character_queststatus row whose status is not 0)
+# that requires the item, drops it, or hands it out at the start. It is the
+# log half of STACK_QUEST_NEEDED_SQL without its class gate, because a common
+# trade good (a bomb, a bar, a cloth) is quest-named too. Expects the aliases
+# `it` (item_template) and `ii` (item_instance); the holder is ii.owner_guid.
+LOG_QUEST_NEEDED_SQL = (
+    "EXISTS (SELECT 1 FROM character_queststatus qs "
+    "JOIN acore_world.quest_template qt ON qt.ID = qs.quest "
+    "WHERE qs.guid = ii.owner_guid AND qs.status <> 0 AND ii.itemEntry IN ("
+    "qt.RequiredItemId1, qt.RequiredItemId2, qt.RequiredItemId3, "
+    "qt.RequiredItemId4, qt.RequiredItemId5, qt.RequiredItemId6, "
+    "qt.ItemDrop1, qt.ItemDrop2, qt.ItemDrop3, qt.ItemDrop4, qt.StartItem))"
+)
 
 
 # THE DARKMOON DECK CARDS (#2607). A card is "<Ace to Eight> of <Beasts,
@@ -699,11 +722,50 @@ CAMPAIGN_ADMIT_FREE_SLOTS = TOWN_RUN_FREE_SLOTS + 1
 CAMPAIGN_RESUME_CEILING_SECONDS = 45 * 60
 
 
+# ONE BOUNDED VENDOR STOP BEFORE A RUN, WHEN IT WOULD MAKE A RUN'S ROOM. The
+# admission floor above lets a family in at four free slots each, and a run
+# fills that in the first fight: on wow-dev 2026-11-15 two families went into
+# Blackrock Depths at 4 to 5 free slots each carrying 11 to 19 stacks a vendor
+# would buy, reached none free inside, and left every blue drop on the corpse
+# for hours (the module only destroys grey stacks inside a run, and walks out
+# only for a drop that stays stranded for ten minutes). The module cannot make
+# the room once the party is inside, so the bridge makes it before the door: a
+# member below the run's room (CAMPAIGN_RESUME_FREE_SLOTS) who carries at least
+# STOCK_UP_MIN_SELLABLE stacks a vendor will buy holds the run for ONE trip.
+# The wait is bounded by its own short ceiling, not the 45 minute one #2116
+# measured, and it asks nothing of a member nobody can lift.
+STOCK_UP_MIN_SELLABLE = 4
+STOCK_UP_CEILING_SECONDS = 15 * 60
+
+
+def stock_up_short(
+    free_slots: dict,
+    sellable: dict | None,
+    held_seconds: float = 0.0,
+) -> tuple:
+    """Members a sale would lift to a run's room, sorted; () when none or late."""
+    if not sellable or held_seconds >= STOCK_UP_CEILING_SECONDS:
+        return ()
+    short = []
+    for name, free in (free_slots or {}).items():
+        offered = sellable.get(name)
+        if not isinstance(free, int) or not isinstance(offered, int):
+            continue
+        if (
+            free >= 0
+            and free < CAMPAIGN_RESUME_FREE_SLOTS
+            and offered >= STOCK_UP_MIN_SELLABLE
+        ):
+            short.append(str(name))
+    return tuple(sorted(short))
+
+
 def campaign_resume_short(
     free_slots: dict,
     held_seconds: float = 0.0,
     resume: int = CAMPAIGN_ADMIT_FREE_SLOTS,
     ceiling: float = CAMPAIGN_RESUME_CEILING_SECONDS,
+    sellable: dict | None = None,
 ) -> tuple:
     """Members still short of the resume floor, sorted; () when the run may go.
 
@@ -713,19 +775,22 @@ def campaign_resume_short(
     An unknown or negative reading blocks nothing, the same fail-open rule
     `family_town_run_needed` keeps for the same reason: a broken read must not
     hold a campaign in town. Past `ceiling` seconds in town nothing is short.
+
+    With `sellable` (the last vendor read), members a sale would lift to a
+    run's room are short too, for STOCK_UP_CEILING_SECONDS only.
     """
     if held_seconds >= ceiling:
         return ()
-    return tuple(
-        sorted(
-            str(name)
-            for name, free in (free_slots or {}).items()
-            if isinstance(free, int) and 0 <= free < resume
-        )
-    )
+    below = {
+        str(name)
+        for name, free in (free_slots or {}).items()
+        if isinstance(free, int) and 0 <= free < resume
+    }
+    below.update(stock_up_short(free_slots, sellable, held_seconds))
+    return tuple(sorted(below))
 
 
-def bag_room_made(free_slots: dict) -> bool:
+def bag_room_made(free_slots: dict, sellable: dict | None = None) -> bool:
     """Whether the family has the bag room a waiting campaign asks for (#2116).
 
     The two questions the admission gate asks, at once: nobody at or below
@@ -736,7 +801,7 @@ def bag_room_made(free_slots: dict) -> bool:
     return (
         bool(free_slots)
         and not family_town_run_needed(free_slots)
-        and not campaign_resume_short(free_slots)
+        and not campaign_resume_short(free_slots, sellable=sellable)
     )
 
 
@@ -748,6 +813,7 @@ def town_first_trip_worth(
     free_slots: dict,
     sellable: dict | None,
     resume: int = CAMPAIGN_ADMIT_FREE_SLOTS,
+    stock_up: bool = False,
 ) -> bool:
     """Whether a family held in town for bag room should walk to a vendor.
 
@@ -761,10 +827,11 @@ def town_first_trip_worth(
 
     While the hold lasts the trigger is the resume floor: a trip is worth
     taking when selling lifts a member short of it to at least `resume`.
+    `stock_up` adds the stop the run is held for (stock_up_short).
     """
     return family_town_run_needed(
         free_slots, minimum_free=resume - 1, sellable=sellable
-    )
+    ) or (stock_up and bool(stock_up_short(free_slots, sellable)))
 
 
 # THE HOLD AT THE FLOOR HAS A WAY OUT. A member at or below
@@ -2960,7 +3027,7 @@ class GearReach:
 def _wears_at(holding, character, level) -> bool:
     """Class, armour, weapon skill and level at `level`; never an upgrade test."""
     bare = replace(character, equipped={}, level=level)
-    return bool(gear.would_wear(holding, bare)[0])
+    return bool(gear.can_wear(holding, bare)[0])
 
 
 def gear_reach(gear_rows, equipped_rows, family_names) -> dict:

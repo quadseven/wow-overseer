@@ -32,12 +32,17 @@ WHERE EACH INPUT COMES FROM.
 
 from __future__ import annotations
 
+import logging
+
 import auction
 import bank
 import bankforecast
+import guildbank
+import guildledger
 import itemplan
 import itemplan_data
 import itemplan_shadow as shadow
+import raidteams
 
 
 def _marks(values) -> str:
@@ -159,33 +164,97 @@ def _bank_free(names, bank_rows) -> dict:
     return {m.name: m.bank_free for m in members}
 
 
+log = logging.getLogger("wow-overseer.itemplan")
+_TAB_SAID: dict = {}
+
+
+def _say_tabs(family, guild, names) -> None:
+    """Log the guild bank's tab numbers when they change, never when they do not."""
+    lines = guildbank.tab_report(guild, names)
+    if lines and _TAB_SAID.get(family) != lines:
+        _TAB_SAID[family] = lines
+        for line in lines:
+            log.info("itemplan: %s: %s", family, line)
+
+
 def _guild_free(names, family, guild_setup):
     """(family, tab) -> free slots, or None when there is no guild bank setup."""
     guild = guild_setup(list(names))
     if not guild:
         return None
+    _say_tabs(family, guild, names)
     depositors, tabs = bank._guild_tabs(guild)
     may = bool(depositors & set(names))
     return {(family, tab): (free if may else 0) for tab, free in tabs.items()}
 
 
+def _banker_room(names, family, bank_rows, roster):
+    """family -> stacks its guild's bankers can take, or None with no banker.
+
+    A banker counts only once it is in the guild roster: a name with no rows
+    reads as an empty character with a full backpack, which would be phantom
+    room for a character that does not exist yet.
+    """
+    guild = raidteams.guild_of(names)
+    wanted = raidteams.banker_names(guild) if guild else set()
+    present = sorted(wanted & {m.name for m in roster(list(names))})
+    if not present:
+        return None
+    bankers = bank.members_from_rows(bank_rows(present), present)
+    ledger = guildledger.build((), bankers=bankers)
+    return {family: ledger.banker_room()}
+
+
+def _known_spells(cur, names, spell_ids):
+    if not names or not spell_ids:
+        return {}
+    sql = itemplan_data.KNOWN_SPELLS_SQL % (
+        _marks(spell_ids),
+        _marks(names),
+        _marks(names),
+    )
+    rows = _fetch(cur, sql, list(spell_ids) + list(names) + list(names))
+    return itemplan_data.known_spells_by_member(rows)
+
+
 def _roster_and_crafters(names, roster) -> tuple | None:
-    """Return all outside roster skills/presence and online usable crafters."""
+    """Return outside roster skills, usable crafters, family skills, and guild classes."""
     members = list(roster(list(names)))
     if not members:
         return None
     all_skills = []
     available = []
+    family_skills: dict = {}
+    guild_classes = []
     for m in members:
         if m.family or m.name in names:
+            mine = tuple(
+                sorted(
+                    (line, value, value)
+                    for line in itemplan.TRADE_OF_SKILL
+                    if line != itemplan.FISHING
+                    for value in (m.rank_in(line),)
+                    if value > 0
+                )
+            )
+            family_skills[m.name] = mine
             continue
+        cls_id = _int(getattr(m, "class_id", 0), 0)
+        lvl = _int(getattr(m, "level", 0), 0)
+        if cls_id > 0 and lvl > 0:
+            guild_classes.append((m.name, cls_id, lvl, bool(m.online)))
         for line, trade in itemplan.TRADE_OF_SKILL.items():
             value = m.rank_in(line)
             if value > 0 and line != itemplan.FISHING:
                 all_skills.append((m.name, trade, value, bool(m.online)))
                 if m.online:
                     available.append((m.name, trade, value))
-    return tuple(sorted(all_skills)), tuple(sorted(available))
+    return (
+        tuple(sorted(all_skills)),
+        tuple(sorted(available)),
+        family_skills,
+        tuple(sorted(guild_classes)),
+    )
 
 
 def _read_cursor_inputs(connect, names, entries, rows):
@@ -224,6 +293,21 @@ def _read_cursor_inputs(connect, names, entries, rows):
             # is the safe answer (nothing is vendored on a guess).
             got["listings"] = reads.attempt(
                 "listing history", lambda: _failed_listings(cur, rows)
+            )
+            spell_ids = sorted(
+                {
+                    _int(item.get("spell_id"), 0)
+                    for item in (got[shadow.BINDING] or {}).values()
+                    if item.get("item_class") == itemplan.C_RECIPE
+                    and _int(item.get("spell_id"), 0) > 0
+                }
+            )
+            got["known_spells"] = (
+                reads.attempt(
+                    "known spells", lambda: _known_spells(cur, names, spell_ids)
+                )
+                if got[shadow.BINDING] is not None
+                else None
             )
     except Exception as exc:
         for name in cursor_inputs:
@@ -289,10 +373,17 @@ def _side_inputs(names, family, bank_rows, guild_setup, roster, reads):
     )
     if roster_data is None:
         reads.unread.setdefault(shadow.GUILD_ROSTER, "no guild roster rows were read")
-        guild_roster = guild_crafters = None
+        guild_roster = guild_crafters = family_skills = guild_classes = None
     else:
-        guild_roster, guild_crafters = roster_data
-    return bank_free, guild_free, guild_roster, guild_crafters
+        guild_roster, guild_crafters, family_skills, guild_classes = roster_data
+    return (
+        bank_free,
+        guild_free,
+        guild_roster,
+        guild_crafters,
+        family_skills,
+        guild_classes,
+    )
 
 
 def read(
@@ -324,8 +415,17 @@ def read(
             shadow.WORN_GEAR, "needs the binding read, which failed"
         )
     fire_gear = _template_fire_gear(entries, templates, reads)
-    bank_free, guild_free, guild_roster, guild_crafters = _side_inputs(
-        names, family, bank_rows, guild_setup, roster, reads
+    (
+        bank_free,
+        guild_free,
+        guild_roster,
+        guild_crafters,
+        family_skills,
+        guild_classes,
+    ) = _side_inputs(names, family, bank_rows, guild_setup, roster, reads)
+    # No banker in the roster is not a failed read: no route is offered.
+    banker_free = reads.attempt(
+        "banker room", lambda: _banker_room(names, family, bank_rows, roster)
     )
     return shadow.Extras(
         open_quest_items=quest,
@@ -334,10 +434,14 @@ def read(
         guild_free=guild_free,
         guild_crafters=guild_crafters,
         guild_roster=guild_roster,
+        family_skills=family_skills,
+        guild_class_members=guild_classes,
         templates=templates,
         bank_free=bank_free,
+        banker_free=banker_free,
         instance_soulbound=got.get(shadow.INSTANCE_SOULBOUND),
         fire_gear=fire_gear,
         failed_listings=got.get("listings"),
+        known_spells=got.get("known_spells"),
         unread=dict(reads.unread),
     )

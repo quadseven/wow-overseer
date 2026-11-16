@@ -20,6 +20,7 @@ import {
   upgradesHead, upgradesControls, upgradesBody, upgradesFoot, bindUpgrades, coins,
 } from "./_members.js";
 import { mountModels } from "./_model.js";
+import { charButton, notice as watchNotice, bind as bindWatch, CSS as WATCH_CSS, READ as WATCH_READ, OPERATOR as WATCH_OPERATOR } from "./_spectate.js";
 import { byName, stuckFor } from "../models/roster.js";
 import { nowSeconds } from "../models/time.js";
 import { guildSlug } from "../families.js";
@@ -54,10 +55,10 @@ function raceIcon(m) {
   return "achievement_character_" + m.race.toLowerCase().replace(/[^a-z]/g, "") + "_" + (m.gender === "female" ? "female" : "male");
 }
 
-function header(m, checkedAt) {
+function header(m, checkedAt, cam) {
   const icon = raceIcon(m);
   return html`<a class="mb-back" href="#/members"><i class="ph ph-caret-left" aria-hidden="true"></i>Members</a>
-<div class="pf-head">${icon ? html`<img class="pf-race" src="${iconUrl(icon)}" alt="${m.race}" width="48" height="48">` : ""}<div class="pf-id"><h1 style="color:${classVar(m.class)}">${m.name}</h1><span class="row muted"><span class="pf-line">L${m.level} ${m.race} ${m.class} | ${m.guild || "no guild"} | ${m.zone || "zone not measured"}</span>${stateLabel(m, checkedAt)}</span></div></div>`;
+<div class="pf-head">${icon ? html`<img class="pf-race" src="${iconUrl(icon)}" alt="${m.race}" width="48" height="48">` : ""}<div class="pf-id"><h1 style="color:${classVar(m.class)}">${m.name}</h1><span class="row muted"><span class="pf-line">L${m.level} ${m.race} ${m.class} | ${m.guild || "no guild"} | ${m.zone || "zone not measured"}</span>${stateLabel(m, checkedAt)}</span></div>${cam ? charButton(m.name, cam.sp, cam.op) : ""}</div>${cam ? watchNotice() : ""}`;
 }
 
 function tabRow(name, tab) {
@@ -280,14 +281,14 @@ function body(ctx, m, roster) {
 }
 
 export default {
-  css: ["views/members.css", "views/gearchanges.css", ACH_CSS],
+  css: ["views/members.css", "views/gearchanges.css", ACH_CSS, WATCH_CSS],
   // The roster first: a name it does not hold is not a guild member, and that
   // member's own reads would only be refused. Once the roster is in and holds
   // the name, main.js widens the reads to the tab's.
   reads: (ctx) => {
     const roster = ctx.get("/api/v2/roster").data;
     if (!roster || !byName(roster.members).has(ctx.params.name)) return ["/api/v2/roster"];
-    return ["/api/v2/roster"].concat(readsFor(ctx.params.name, ctx.params.tab));
+    return ["/api/v2/roster", WATCH_READ, WATCH_OPERATOR].concat(readsFor(ctx.params.name, ctx.params.tab));
   },
   every: 30000,
   title: (ctx) => ctx.params.name,
@@ -297,9 +298,10 @@ export default {
     if (wait) return html`<a class="mb-back" href="#/members">Members</a><h1>${ctx.params.name}</h1>${wait}`;
     const m = byName(roster.data.members).get(ctx.params.name);
     if (!m) return html`<a class="mb-back" href="#/members"><i class="ph ph-caret-left" aria-hidden="true"></i>Members</a><h1>${ctx.params.name}</h1>${state("empty", "No member is called " + ctx.params.name, "Names come from the roster the server reports: the families and the guilds they are in.")}`;
-    return html`${header(m, roster.data.checked_at)}${tabRow(m.name, ctx.params.tab)}${body(ctx, m, roster.data)}`;
+    return html`${header(m, roster.data.checked_at, { sp: ctx.get(WATCH_READ), op: ctx.get(WATCH_OPERATOR) })}${tabRow(m.name, ctx.params.tab)}${body(ctx, m, roster.data)}`;
   },
   after(main, ctx) {
+    bindWatch(main);
     bindTrees(main);
     mountModels(main);
     main.querySelectorAll("[data-mark-seen]").forEach((button) => button.addEventListener("click", () => {

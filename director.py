@@ -50,7 +50,7 @@ import math
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Mapping, Sequence, TypedDict
 
 WATCHER_NAME = os.environ.get("OVERSEER_WATCHER_NAME", "Watcher").strip() or "Watcher"
 
@@ -400,6 +400,213 @@ def parse_watch(text: str) -> Spec | SpecError:
     if not rest and _NAME_RE.match(words[0]):
         return Spec("character", words[0])
     return SpecError(f"I do not know how to watch '{text.strip()}'. {USAGE}")
+
+
+# ------------------------------------------------------------ the page's order --
+
+# The dashboard's Watch button sends a run id and nothing else. It never sends
+# a sentence for the grammar above to interpret, and it shares one camera with
+# whoever else is looking: a click on a DIFFERENT group inside this many seconds
+# of the last order is refused with the wait, so two viewers cannot flip the
+# picture back and forth under each other. The same group renews at once.
+SPECTATE_DWELL = 90.0
+_MAX_RUN_ID = 999_999_999  # what _arg_run's nine digits can carry
+
+
+def spectate_spec(run) -> Spec | SpecError:
+    """`run <id>` for an integer id; anything else, a string included, is refused."""
+    if isinstance(run, bool) or not isinstance(run, int) or not 1 <= run <= _MAX_RUN_ID:
+        return SpecError("the run to watch must be a positive whole number")
+    return parse_watch(f"run {run}")
+
+
+def order_run(spec: str) -> int | None:
+    """The run id an order names, or None when it names anything else."""
+    parsed = parse_watch(spec or "")
+    if isinstance(parsed, SpecError) or parsed.kind != "run":
+        return None
+    return int(parsed.arg)
+
+
+def spectate_character(name) -> Spec | SpecError:
+    """`character <name>` for a plain name string, through parse_watch's grammar.
+
+    Only a string of the grammar's name shape gets that far; the Watcher itself
+    is refused here, before anything is written, as the bridge would refuse it
+    later with the same reason."""
+    if not isinstance(name, str) or not _NAME_RE.fullmatch(name):
+        return SpecError("the character to watch must be a name of 2 to 12 letters")
+    if is_watcher(name):
+        return SpecError(REFUSALS[R_SELF])
+    return parse_watch(f"character {name}")
+
+
+def spectate_stop() -> Spec:
+    """The order that ends the watch."""
+    return Spec("off")
+
+
+def order_character(spec: str) -> str:
+    """The character an order names, or '' when it names anything else."""
+    parsed = parse_watch(spec or "")
+    if isinstance(parsed, SpecError) or parsed.kind != "character":
+        return ""
+    return parsed.arg
+
+
+@dataclass(frozen=True)
+class Verdict:
+    allowed: bool
+    switch_in: int = 0
+    reason: str = ""
+
+
+def _order_age(row: Mapping) -> float:
+    """Seconds since the order was given. Each order lives MANDATE_TTL seconds
+    from the moment it is written, so the time left says how old it is."""
+    return max(0.0, MANDATE_TTL - float(row.get("ttl") or 0))
+
+
+def spectate_verdict(row: Mapping | None, spec_text: str) -> Verdict:
+    """May this order replace the one the camera is on?"""
+    if not mandate_active(row):
+        return Verdict(True)
+    if str(row.get("spec") or "") == spec_text:
+        return Verdict(True)
+    age = _order_age(row)
+    if age >= SPECTATE_DWELL:
+        return Verdict(True)
+    wait = max(1, math.ceil(SPECTATE_DWELL - age))
+    on = str(row.get("spec") or "something else")
+    return Verdict(
+        False,
+        wait,
+        f"The camera is on {on}, pointed there {int(age)} seconds ago. "
+        f"It can be switched in {wait} seconds.",
+    )
+
+
+def spectate_state(row: Mapping | None) -> dict:
+    """What the page draws its "now watching" state from."""
+    if not mandate_active(row):
+        return {
+            "active": False,
+            "run": None,
+            "character": "",
+            "spec": "",
+            "target": "",
+            "note": str(row.get("note") or "") if row else "",
+            "expires_in": 0,
+            "switch_in": 0,
+        }
+    spec = str(row.get("spec") or "")
+    wait = max(0, math.ceil(SPECTATE_DWELL - _order_age(row)))
+    return {
+        "active": True,
+        "run": order_run(spec),
+        "character": order_character(spec),
+        "spec": spec,
+        "target": str(row.get("target") or ""),
+        "note": str(row.get("note") or ""),
+        "expires_in": int(row.get("ttl") or 0),
+        "switch_in": wait,
+    }
+
+
+# ------------------------------------------------------------------ live now --
+
+
+class LiveNow(TypedDict):
+    """GET /api/live: each list holds one group per live dungeon run, raid or
+    battleground, every group with an `order` the POST on /api/spectate takes."""
+
+    dungeons: list[dict]
+    raids: list[dict]
+    battlegrounds: list[dict]
+
+
+MIN_CROWD = 2  # a raid or battleground needs this many to be worth a camera
+
+
+def _seat_words(seat: Mapping) -> dict:
+    return {"name": str(seat.get("name") or ""), "seat": str(seat.get("seat") or "")}
+
+
+def _run_progress(run: Mapping) -> str:
+    total = int(run.get("bosses_total") or 0)
+    done = int(run.get("bosses_done") or 0)
+    deaths = int(run.get("deaths") or 0)
+    bosses = f"{done} of {total} bosses down" if total else "bosses not measured"
+    out = f"{bosses}, {deaths} death{'' if deaths == 1 else 's'}"
+    secs = int(run.get("seconds_inside") or 0)
+    if secs:
+        out += f", {max(1, secs // 60)} min inside"
+    return out
+
+
+def _crowd_groups(spots, maps, seats, place_name, kind):
+    roles = {n: r for n, r in seats}
+    places: dict = {}
+    for s in spots:
+        if s.map_id in maps and s.instance_id and not is_watcher(s.name):
+            places.setdefault(s.place, []).append(s)
+    out = []
+    for (map_id, instance_id), group in places.items():
+        if len(group) < MIN_CROWD:
+            continue
+        names = sorted(s.name for s in group)
+        tanks = [n for n in names if roles.get(n) == "tank"]
+        healers = [n for n in names if roles.get(n) == "healer"]
+        pick = tanks[0] if tanks else _fight_centre(group).name
+        fighting = sum(1 for s in group if s.in_combat)
+        out.append(
+            {
+                "kind": kind,
+                "map_id": map_id,
+                "instance_id": instance_id,
+                "place": place_name(map_id),
+                "count": len(group),
+                "fighting": fighting,
+                "tanks": len(tanks),
+                "healers": len(healers),
+                "members": names[:40],
+                "progress": f"{len(group)} inside, {fighting} fighting",
+                "order": {"character": pick},
+            }
+        )
+    out.sort(key=lambda g: (-g["count"], g["map_id"], g["instance_id"]))
+    return out
+
+
+def live_now(spots, runs, seats, place_name) -> LiveNow:
+    """Every active dungeon run, raid and battleground, each with the order
+    that jumps the Watcher into it. `runs` are the site's run views; a run is
+    live only while it is inside. Raids and battlegrounds come from the fresh
+    snapshot, one group per (map, instance), and are jumped into by a seated
+    tank when there is one, else the middle of the fight. The Watcher itself
+    is never counted."""
+    dungeons = [
+        {
+            "kind": "dungeon",
+            "run": int(r["id"]),
+            "guild": str(r.get("guild") or ""),
+            "title": str(r.get("title") or ""),
+            "place": str(r.get("place") or ""),
+            "seats": [_seat_words(m) for m in (r.get("members") or [])],
+            "progress": _run_progress(r),
+            "order": {"run": int(r["id"])},
+        }
+        for r in runs
+        if str(r.get("state") or "") == "inside"
+    ]
+    dungeons.sort(key=lambda g: g["run"])
+    return {
+        "dungeons": dungeons,
+        "raids": _crowd_groups(spots, RAID_MAPS, seats, place_name, "raid"),
+        "battlegrounds": _crowd_groups(
+            spots, BATTLEGROUND_MAPS, seats, place_name, "battleground"
+        ),
+    }
 
 
 def parse_watch_message(text: str):

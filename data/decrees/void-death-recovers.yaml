@@ -1,0 +1,41 @@
+# A member who died below the world is alive again and does not die there twice.
+# The two captured anchors are still pending in anchors.yaml: lint warns, and
+# the seed step refuses until their positions are copied from the cited row.
+decree: v1
+id: void-death-recovers
+proves:
+  - {repo: quadseven/mod-overseer, issue: 270, criterion: "a member who died below the world is alive again and does not die there twice"}
+fix: {repo: quadseven/mod-overseer, commit: TODO}
+world: {class: lean, image: follow-dev, bridge: off, random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 15m
+cast:
+  - who: family:zug
+    set: {alive: true, at: {captured: mo270-party-position}}
+    ceiling: "nothing granted but position"
+  - who: Zork
+    set: {alive: false, corpse_at: {captured: mo270-corpse-position}, at: {graveyard: nearest}}
+    ceiling: "nothing granted; the death is the scenario"
+act:
+  - at: 0s
+    roster: {who: family:zug, job: "quest"}
+observe:
+  - name: started-dead
+    role: precondition
+    when: start                       # sampled once, right after the world reports ready
+    sql: "SELECT COUNT(*) FROM corpse WHERE guid = @Zork"
+    expect: {scalar: "= 1"}
+  - name: alive-again
+    role: check
+    when: end
+    sql: "SELECT name FROM characters WHERE guid = @Zork AND health = 0"
+    expect: {rows: 0}
+  - name: no-second-death
+    role: check
+    when: continuous
+    sql: |
+      SELECT character_name, created_at FROM overseer_death WHERE created_at >= @t0
+    expect: {rows: 0}
+  - name: no-ghost-loop-in-log
+    role: check
+    log: {pattern: "module\\.overseer.*ghost.*(retry|stuck)", expect: {count: 0}}

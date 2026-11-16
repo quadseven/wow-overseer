@@ -1,0 +1,53 @@
+# A whole family crosses by boat and every member lands together on the far map, with no family death on
+# the way and no 'on another map' line naming a member afterwards (mod-overseer issue 274). The Grug family
+# starts at the Booty Bay dock on map 0 and its campaign door is on Kalimdor, so the crossing is the only
+# way. Ratchet is the far berth.
+# Scope: 'on another map' is a bridge log line a log assertion can only forbid. The assertion covers the
+# whole run, which is stricter than the 30 minutes after the crossing, never looser. Together-ness is proven by
+# rows: all five sit on one map, and that map is the far continent or its dungeon instance, never the start.
+# Fix: mod-overseer pull 280 (the crossing refuses to leave anybody behind).
+decree: v1
+id: family-boat-crossing
+proves:
+  - {repo: quadseven/mod-overseer, issue: 274, criterion: "one family crosses in either direction, every member ashore on the far map, no family death, and no 'on another map' line naming a member within 30 minutes"}
+fix: {repo: quadseven/mod-overseer, commit: "65dd21c1f604a443dbfe51adefbdc2b563533e57"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 1h
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, at: {creature: "Dockmaster Baren"}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:wailing"}
+observe:
+  - name: family-starts-on-map-0
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND map_id = 0
+    expect: {scalar: "= 5"}
+  - name: all-five-ashore-on-the-far-continent
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND map_id IN (1, 43)
+    expect: {scalar: "= 5"}
+  - name: all-five-are-on-the-same-map
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(DISTINCT map_id) FROM overseer_snapshot WHERE guid IN (@cast)
+    expect: {scalar: "= 1"}
+  - name: no-family-death-on-the-way
+    role: check
+    when: end
+    sql: |
+      SELECT character_name, created_at FROM overseer_death WHERE created_at >= @t0 AND character_guid IN (@cast)
+    expect: {rows: 0}
+  - name: no-family-member-on-another-map
+    role: check
+    log: {pattern: "family member.*on another map", expect: {count: 0}}

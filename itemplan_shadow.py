@@ -38,11 +38,12 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Callable, Mapping
 
 import bag_pressure
 import itemplan
 import itemplan_data
+import itemplan_vendor
 
 log = logging.getLogger("wow-overseer.itemplan")
 
@@ -115,6 +116,23 @@ def auction_enabled(environ=None) -> bool:
     return raw in ("on", "1", "true", "yes")
 
 
+def carried_out_routes(environ=None) -> frozenset:
+    """The plan routes something in this process actually carries out.
+
+    SELL_VENDOR when ITEMPLAN_SELL_VENDOR is on, GIVE when ITEMPLAN_GIVE is,
+    AUCTION when ITEMPLAN_AUCTION is. A route with no executor is only a
+    log line, and the bank pass must not give up a stack on its word.
+    """
+    out = set()
+    if itemplan_vendor.enabled(environ):
+        out.add(itemplan.SELL_VENDOR)
+    if give_enabled(environ):
+        out.add(itemplan.GIVE)
+    if auction_enabled(environ):
+        out.add(itemplan.AUCTION)
+    return frozenset(out)
+
+
 @dataclass(frozen=True)
 class Extras:
     """Facts the plan can use that the economy pass's rows do not hold (#1973).
@@ -141,8 +159,13 @@ class Extras:
     worn: Mapping[str, dict] | None = None
     market: Mapping[int, tuple] | None = None
     guild_free: Mapping[tuple, int] | None = None
+    # family -> stacks its guild's bankers can take (guildledger); None is unread,
+    # which offers no banker route.
+    banker_free: Mapping[str, int] | None = None
     guild_crafters: tuple | None = None
     guild_roster: tuple | None = None
+    family_skills: Mapping[str, tuple] | None = None
+    guild_class_members: tuple | None = None
     templates: Mapping[int, dict] | None = None
     bank_free: Mapping[str, int] | None = None
     instance_soulbound: Mapping[int, bool] | None = None
@@ -150,6 +173,10 @@ class Extras:
     # (holder, entry) -> applied listings of a stack still carried (#2605);
     # None is unread, which vendors nothing.
     failed_listings: Mapping[tuple, int] | None = None
+    known_spells: Mapping[str, frozenset] | None = None
+    # (holder, item guid) -> the guild loot policy's route, or None; see
+    # itemplan.Context.loot_route. None means no policy is wired in.
+    loot_route: Callable | None = None
     unread: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -180,8 +207,62 @@ def characters_from_worn(worn_rows) -> dict:
     return out
 
 
-def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) -> list:
-    """One itemplan.Stack per carried row, in row order within the holder.
+# Inventory types a member can wear two of: finger, trinket, one-hand weapon.
+PAIRED_INVENTORY_TYPES = frozenset({11, 12, 13})
+_GEAR_CLASSES = frozenset({2, 4})  # weapon, armor
+
+
+def vet_gifts(gifts, *, carried, templates, recent, free_slots) -> tuple:
+    """Split the plan's GIVE gifts into `(kept, held)`; `held` is `(gift, why)`.
+
+    THE GIVE ROUTE CHURNED (wow-dev, 2026-11-15): 14 of 64 gives errored, and
+    the same pieces moved between the same few members, because the plan is
+    judged per holder on each pass and has no memory of what it just moved.
+    Three rules, each pure and each saying why it held a gift:
+
+    - a guid in `recent` (moved by a guild gift inside the window) stays put;
+    - a member does not get a second copy of gear it already carries, or that
+      an earlier kept gift in this pass already sends it, unless the piece is
+      one a member wears two of (`PAIRED_INVENTORY_TYPES`); stackables never
+      count as a copy;
+    - a family receiver with no free slot left, counting the gifts kept so
+      far, gets nothing. A taker the free-slot map does not name (a guildmate)
+      is not judged on room: its gift travels by post.
+    """
+    holds = {}
+    for row in carried or ():
+        holds.setdefault(str(row.get("holder")), set()).add(_int(row.get("entry")))
+    incoming: dict = {}
+    kept, held = [], []
+    for gift in gifts:
+        taker = str(gift.taker)
+        template = (templates or {}).get(int(gift.entry), {})
+        is_gear = _int(template.get("item_class")) in _GEAR_CLASSES
+        paired = _int(template.get("inventory_type")) in PAIRED_INVENTORY_TYPES
+        if int(gift.guid) in recent:
+            held.append((gift, "moved recently, left where it is"))
+        elif is_gear and not paired and int(gift.entry) in holds.get(taker, set()):
+            held.append((gift, "%s already carries one" % taker))
+        elif taker in (free_slots or {}) and (
+            _int(free_slots[taker]) - incoming.get(taker, 0) <= 0
+        ):
+            held.append((gift, "%s has no room" % taker))
+        else:
+            kept.append(gift)
+            incoming[taker] = incoming.get(taker, 0) + 1
+            if is_gear and not paired:
+                holds.setdefault(taker, set()).add(int(gift.entry))
+    return kept, held
+
+
+def build_stacks(
+    rows,
+    gear_rows=(),
+    templates=None,
+    instance_soulbound=None,
+    loc=itemplan.CARRIED_BAG,
+) -> list:
+    """One itemplan.Stack per carried row (`loc` BANK for banked ones), in row order within the holder.
 
     The surplus gear row (by item guid) wins; `templates` (by entry) fills in
     what it lacks, so a bind-on-pickup recipe reads as bound.
@@ -216,7 +297,7 @@ def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) ->
         out.append(
             itemplan.Stack(
                 holder=holder,
-                loc=itemplan.CARRIED_BAG,
+                loc=loc,
                 entry=_int(row.get("entry")),
                 name=str(row.get("name") or ""),
                 item_class=_int(
@@ -230,6 +311,7 @@ def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) ->
                 req_level=_int(raw_required_level),
                 item_level=_int(raw_item_level, 1),
                 index=index,
+                guid=guid,
                 required_skill_rank=t.get("required_skill_rank"),
                 container_slots=t.get("container_slots"),
                 fire_res=t.get("fire_res"),
@@ -238,14 +320,200 @@ def build_stacks(rows, gear_rows=(), templates=None, instance_soulbound=None) ->
                 soulbound=soulbound,
                 required_skill=_int(t.get("required_skill"), 0),
                 allowable_class=_int(t.get("allowable_class"), -1),
+                spell_id=_int(t.get("spell_id"), 0),
                 quest_needed=(bool(row["quest_item"]) if "quest_item" in row else None),
             )
         )
     return out
 
 
+def _context(extras: Extras, verdicts) -> itemplan.Context:
+    return itemplan.Context(
+        open_quest_items=extras.open_quest_items,
+        gear_verdict=verdicts or {},
+        market=extras.market or {},
+        guild_free=extras.guild_free or {},
+        guild_crafters=extras.guild_crafters or (),
+        guild_class_members=extras.guild_class_members,
+        fire_gear=extras.fire_gear,
+        failed_listings=extras.failed_listings or {},
+        known_spells=extras.known_spells,
+        banker_free=extras.banker_free or {},
+        loot_route=extras.loot_route,
+    )
+
+
+def banked_plan(
+    names,
+    family,
+    banked_rows,
+    carried_rows,
+    free_slots,
+    extras,
+    gear_rows=(),
+    worn_rows=(),
+):
+    """(plan, (stack, row) pairs) for the stacks sitting in the banks (#2603).
+
+    Planned on their own, beside the carried plan, so the carried decisions
+    do not move: each member's bank capacity is its free room plus what it
+    holds, so a stack that stays is never refused for lack of the slot it is
+    already in. A banked stack that would be carried stays banked
+    (`itemplan._banked_stays`); only a route out of the bank matters here.
+    """
+    stacks = build_stacks(
+        banked_rows,
+        gear_rows,
+        extras.templates,
+        extras.instance_soulbound,
+        loc=itemplan.BANK,
+    )
+    carried = build_stacks(
+        carried_rows, gear_rows, extras.templates, extras.instance_soulbound
+    )
+    characters = characters_from_worn(worn_rows)
+    held = {}
+    for stack in stacks:
+        held[stack.holder] = held.get(stack.holder, 0) + 1
+    room = {
+        name: _int((extras.bank_free or {}).get(name)) + held.get(name, 0)
+        for name in names
+    }
+    members = build_members(
+        names,
+        family,
+        carried,
+        free_slots,
+        characters,
+        room if extras.bank_free is not None else None,
+        skills=extras.family_skills,
+    )
+    ctx = _context(extras, _verdicts(extras, stacks, characters))
+    plan_ = itemplan.plan(stacks, members, ctx)
+    return plan_, list(zip(stacks, banked_rows, strict=True))
+
+
+# Classes whose banked stacks the sale fetch leaves to their own passes: gear
+# (the bank policy's spare copies), recipes (their own route) and bags.
+_FETCH_SKIPS = frozenset(
+    {itemplan.C_WEAPON, itemplan.C_ARMOR, itemplan.C_RECIPE, itemplan.C_CONTAINER}
+)
+
+
+def sold_from_bank(plan_, stack_rows) -> dict:
+    """item guid -> why, for banked stacks the plan sells to a vendor now.
+
+    Only a first-choice SELL_VENDOR the vendor route would carry out without
+    a release: placed, not a `confirm` row (1 gold or more, or quality 3 or
+    better), not a bag or tool, not gear and not a recipe.
+    """
+    by_key = {stack.key: (stack, row) for stack, row in stack_rows}
+    out: dict = {}
+    for decision in plan_.decisions:
+        if decision.route != itemplan.SELL_VENDOR or decision.confirm:
+            continue
+        if decision.stuck or decision.reason.startswith(itemplan.NO_ROOM):
+            continue
+        stack, row = by_key.get(decision.key, (None, None))
+        if stack is None or stack.item_class in _FETCH_SKIPS:
+            continue
+        if itemplan_vendor.held_reason(decision, stack, row):
+            continue
+        if not itemplan_vendor.chosen_first(decision):
+            continue
+        guid = _int(row.get("item_guid"))
+        if guid > 0:
+            out[guid] = "the item plan sells %s to a vendor (%s)" % (
+                decision.name,
+                decision.reason,
+            )
+    return out
+
+
+def _learnable_class9(decision, stack) -> bool:
+    return (
+        stack is not None
+        and stack.item_class == itemplan.C_RECIPE
+        and (
+            decision.goal == itemplan.TRADE_NOW
+            or decision.reason.startswith("class book for ")
+        )
+    )
+
+
+def class9_from_bank(plan_, stack_rows, routes) -> dict:
+    """item guid -> why, for banked class-9 stacks the plan routes or learns now."""
+    by_key = {stack.key: (stack, row) for stack, row in stack_rows}
+    out: dict = {}
+    for decision in plan_.decisions:
+        if decision.stuck or decision.reason.startswith(itemplan.NO_ROOM):
+            continue
+        if not itemplan_vendor.chosen_first(decision):
+            continue
+        stack, row = by_key.get(decision.key, (None, None))
+        if stack is None or stack.item_class != itemplan.C_RECIPE:
+            continue
+        learn_now = (
+            decision.route == itemplan.BANK_PERSONAL
+            and decision.reason.endswith("; stays banked")
+            and _learnable_class9(decision, stack)
+        )
+        active_route = decision.route in routes and (
+            decision.route != itemplan.GIVE or bool(decision.target)
+        )
+        if not learn_now and not active_route:
+            continue
+        if decision.route == itemplan.SELL_VENDOR and itemplan_vendor.held_reason(
+            decision, stack, row
+        ):
+            continue
+        guid = _int((row or {}).get("item_guid"))
+        if guid > 0:
+            out[guid] = "the item plan routes %s out of bank (%s)" % (
+                decision.name,
+                decision.reason,
+            )
+    return out
+
+
+def leaving(plan_, stack_rows, routes, family_names=(), guild_names=()) -> dict:
+    """item guid -> why, for every stack the plan sends somewhere or learns now.
+
+    `stack_rows` is (stack, row) pairs in the shape `build_stacks` produces,
+    `routes` the routes something carries out (`carried_out_routes`). A
+    decision counts only when it is the plan's first choice, placed (no
+    `NO_ROOM`, not stuck), and for GIVE when the taker is in `family_names`
+    or `guild_names`. Learnable carried class-9 stacks also leave the bank
+    queue so the bank pass does not store them before recipebook learns them.
+    """
+    rows_by_key = {stack.key: (stack, row) for stack, row in stack_rows}
+    takers = set(family_names or ()) | set(guild_names or ())
+    out: dict = {}
+    for decision in plan_.decisions:
+        if decision.stuck or decision.reason.startswith(itemplan.NO_ROOM):
+            continue
+        if not itemplan_vendor.chosen_first(decision):
+            continue
+        stack, row = rows_by_key.get(decision.key, (None, None))
+        keep_to_learn = decision.route == itemplan.KEEP_CARRY and _learnable_class9(
+            decision, stack
+        )
+        if decision.route not in routes and not keep_to_learn:
+            continue
+        if decision.route == itemplan.GIVE and decision.target not in takers:
+            continue
+        guid = _int((row or {}).get("item_guid"))
+        if guid > 0:
+            out[guid] = "the item plan routes %s to %s (%s)" % (
+                decision.name,
+                decision.route,
+                decision.reason,
+            )
+    return out
+
+
 def build_members(
-    names, family, stacks, free_slots, characters, bank_free=None
+    names, family, stacks, free_slots, characters, bank_free=None, skills=None
 ) -> list:
     """One itemplan.Member per name. Carried slots are free plus carried.
 
@@ -271,6 +539,7 @@ def build_members(
                 family=family,
                 level=level,
                 class_id=class_id,
+                skills=tuple((skills or {}).get(name, ())),
                 carried_slots=max(1, carried + max(0, free)),
                 **bank,
             )
@@ -464,19 +733,16 @@ def shadow(
     )
     characters = characters_from_worn(worn_rows)
     members = build_members(
-        names, family, stacks, free_slots, characters, extras.bank_free
+        names,
+        family,
+        stacks,
+        free_slots,
+        characters,
+        extras.bank_free,
+        skills=extras.family_skills,
     )
     verdicts = _verdicts(extras, stacks, characters)
-    quest = extras.open_quest_items
-    ctx = itemplan.Context(
-        open_quest_items=quest,
-        gear_verdict=verdicts or {},
-        market=extras.market or {},
-        guild_free=extras.guild_free or {},
-        guild_crafters=extras.guild_crafters or (),
-        fire_gear=extras.fire_gear,
-        failed_listings=extras.failed_listings or {},
-    )
+    ctx = _context(extras, verdicts)
     plan_ = itemplan.plan(stacks, members, ctx)
     rows_by_key = {s.key: r for s, r in zip(stacks, rows, strict=True)}
     opinions = _opinions(rows, sales, keep_names, bank_keeps, clear)

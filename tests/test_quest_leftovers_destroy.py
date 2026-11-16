@@ -203,3 +203,23 @@ class ASeatDestroysItsLeftovers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ANeededQuestItemIsNeverASaleWhenTheBankIsFull(unittest.TestCase):
+    """Measured on the dev realm on 2026-11-15: with the personal bank full, a
+    stack a quest could still take fell through to the vendor as a fallback
+    ("quest-class leftover with a price"), and the pressure release sold the
+    cheapest first. The owner's rule is that a quest item is never sold."""
+
+    FULL_BANK = dict(bank_slots=itemplan.BANK_RESERVE)
+
+    def test_a_priced_needed_stack_is_not_sold_listed_or_destroyed(self):
+        s = quest_stack(entry=702, name="Scrap", sell=200, needed=True)
+        d = one([s], [member(**self.FULL_BANK)], s, LOG_READ)
+        self.assertNotIn(d.route, (SELL_VENDOR, AUCTION, DESTROY))
+        self.assertNotIn(SELL_VENDOR, d.options)
+
+    def test_a_leftover_no_quest_names_may_still_go_to_the_vendor(self):
+        s = quest_stack(entry=703, name="Dead Page", sell=200, needed=False)
+        d = one([s], [member(**self.FULL_BANK)], s, LOG_READ)
+        self.assertEqual(d.route, SELL_VENDOR)

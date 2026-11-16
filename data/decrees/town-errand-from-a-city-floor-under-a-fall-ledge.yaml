@@ -1,0 +1,57 @@
+# A family at the bag floor stands on the Undercity floor, a few steps from a mailbox, and the week's
+# fall deaths all began at the entrance ledge far above it. The town errand must start. Before the fix
+# the death-disc check judged only the map plane: the family's own hub, mailbox and vendors lay inside
+# or across the ledge's disc, so every ask was refused ("the walk ... crosses ground the family died on:
+# 2 fall deaths within 100 yards of ...") and the bag-floor hold waited for a vendor stop that never came
+# (wow-overseer issue 1261). The check now reads the height: a fall disc condemns walkers near the
+# ledge the fall began from, not the floor beneath it.
+# Scope and limit: the seed step has no shape that writes overseer_death rows, so the two fall deaths
+# are NOT seeded here. They must already be in the template, and the first precondition makes a template
+# without them INVALID, never a pass. The check is a bridge log assertion plus the errand starting; it
+# does not assert that a sale lands. The bound that releases an errand which cannot finish is not touched.
+decree: v1
+id: town-errand-from-a-city-floor-under-a-fall-ledge
+proves:
+  - {repo: quadseven/wow-overseer, issue: 1261, criterion: "a family at the bag floor standing on a city floor under a ledge that killed it by falls is given its town errand and not refused for ground it is not on"}
+fix: {repo: quadseven/wow-overseer, commit: "TODO"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 45m
+cast:
+  - who: family:zug
+    set: {alive: true, at: {captured: undercity-floor-by-the-mailbox}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:zug, leader: Zug}
+act:
+  - at: 0s
+    roster: {who: family:zug, job: "quest"}
+observe:
+  - name: template-carries-two-sampled-falls-onto-the-city-floor
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(DISTINCT d.id) FROM overseer_death d
+      JOIN acore_world.gameobject g ON g.map = d.map
+      JOIN acore_world.gameobject_template t ON t.entry = g.id
+      WHERE d.zone = 1497 AND d.killer_type = 'self' AND d.liquid_type <> 'water'
+        AND d.yards_fallen >= 20 AND d.pos_z IS NOT NULL
+        AND d.created_at > NOW() - INTERVAL 7 DAY
+        AND t.name = 'Mailbox' AND t.type = 19
+        AND SQRT(POW(d.pos_x - g.position_x, 2) + POW(d.pos_y - g.position_y, 2)) <= 100
+    expect: {scalar: ">= 2"}
+  - name: head-has-no-free-bag-slot
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_inventory i JOIN characters c ON c.guid = i.guid WHERE c.name = 'Zug' AND i.bag = 0 AND i.slot BETWEEN 23 AND 38
+    expect: {scalar: ">= 16"}
+  - name: no-town-walk-is-refused-for-fall-ground
+    role: check
+    log: {pattern: "refused: the walk to .* crosses ground the family died on: [0-9]+ fall deaths?", expect: {count: 0}}
+  - name: the-town-errand-reaches-a-counter
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE source = 'towntrip' AND created_at >= @t0
+    expect: {scalar: ">= 1"}

@@ -7,8 +7,12 @@
 // also kept for this tab (sessionStorage), so a reload paints at once from it,
 // marked "saved" until the world answers again (see the end of this file).
 
+// A page has a document; a view rendered to text under node (the tests, which
+// import views that import this) does not, and must still be able to load it.
+const HAS_DOM = typeof document !== "undefined";
+
 const BASE = (function () {
-  const meta = document.querySelector('meta[name="overseer-base"]');
+  const meta = HAS_DOM && document.querySelector('meta[name="overseer-base"]');
   const raw = meta ? meta.getAttribute("content") || "" : "";
   return raw.charAt(0) === "/" ? raw.replace(/\/+$/, "") : "";
 })();
@@ -20,7 +24,7 @@ export function u(path) { return BASE + path; }
 // for good and relative imports stay inside one build. Without a stamped
 // build (a test, an old page) the plain path is used.
 const BUILD = (function () {
-  const meta = document.querySelector('meta[name="overseer-build"]');
+  const meta = HAS_DOM && document.querySelector('meta[name="overseer-build"]');
   const raw = meta ? meta.getAttribute("content") || "" : "";
   return /^[0-9a-f]{12}$/.test(raw) ? raw : "";
 })();
@@ -169,10 +173,12 @@ function readNow(paths) {
 // Back on screen: read at once rather than at the next tick, so a page left
 // in a pocket for an hour does not show an hour's data. main.js does the same
 // when the network comes back.
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) stop();
-  else refreshNow();
-});
+if (HAS_DOM) {
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stop();
+    else refreshNow();
+  });
+}
 
 // The age and health of what the screen shows: the oldest successful read
 // among the view's reads, and how many reads in a row failed. "stale" means a

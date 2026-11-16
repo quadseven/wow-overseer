@@ -329,8 +329,9 @@ class TheBankAndTheVaultAreToldWhatToFetch(unittest.TestCase):
             self.assertIn("Rough Stone", notes[0])
 
     def test_a_craft_withdrawal_is_never_read_as_one_for_the_house(self):
-        self.assertIn(
-            "source <> '%s'" % reagentplan.VAULT_SOURCE, bankforecast.WITHDRAWN_SQL
+        self.assertRegex(
+            bankforecast.WITHDRAWN_SQL,
+            r"source NOT IN \([^)]*'%s'" % reagentplan.VAULT_SOURCE,
         )
 
     def test_the_withdrawal_quacks_like_the_queue_expects(self):
