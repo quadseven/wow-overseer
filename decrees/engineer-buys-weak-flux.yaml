@@ -1,0 +1,38 @@
+# A family engineer at Engineering 105 or more on job craft, with a vendor that stocks Weak Flux (item
+# 2880) in reach, buys it and still buys food and drink in the same window (wow-overseer issue 39). Grog's
+# Engineering is 25 in the template, so the rank is a bounded grant for this scenario only. No merged pull
+# references this issue, so the fix commit is TODO.
+decree: v1
+id: engineer-buys-weak-flux
+proves:
+  - {repo: quadseven/wow-overseer, issue: 39, criterion: "a delivered buy of Weak Flux (entry 2880) from a town trip once Engineering reaches 105, with food and drink buys in the same window"}
+fix: {repo: quadseven/wow-overseer, commit: "TODO"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 1h
+cast:
+  - who: Grog
+    set: {alive: true, skills: {Engineering: {value: 105, max: 150}}, money: 5000, at: {creature: "Karen Taylor"}}
+    ceiling: "the Engineering rank the issue needs and gold for one stack of flux; no level or gear"
+act:
+  - at: 0s
+    roster: {who: Grog, job: "craft"}
+observe:
+  - name: grog-is-at-105
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_skills WHERE guid = @Grog AND skill = @skill_engineering AND value >= 105
+    expect: {scalar: "= 1"}
+  - name: flux-buy-delivered
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE kind = 'buy' AND target_name = 'Grog' AND target_arg = '2880' AND status = 'delivered' AND created_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: food-and-drink-still-bought
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_event WHERE character_name = 'Grog' AND last_seen >= @t0 AND kind = 'vendor_buy'
+    expect: {scalar: ">= 2"}

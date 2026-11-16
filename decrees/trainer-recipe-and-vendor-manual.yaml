@@ -1,0 +1,58 @@
+# A roster character at its trade trainer with a named recipe it lacks, can afford and the trainer
+# teaches ends the errand holding the recipe (mod-overseer issue 1094); and a vendor manual the character
+# can afford is bought and learned, while an unaffordable one is refused (issue 1098). Grug lacks Runed
+# Copper Belt (spell 2666, cited by the craft issue) and stands at a blacksmithing trainer. Ugga stands at the
+# alchemy trainer with the Fire Protection Potion manual (item 6055) in reach and gold for it; Uzza has none.
+# Fixes: mod-overseer pulls 1120 (trainer recipe) and 1184 (vendor manual); the commit is 1184.
+decree: v1
+id: trainer-recipe-and-vendor-manual
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1094, criterion: "a character that arrives at its trade trainer with a named recipe it lacks and can afford ends the errand holding it, with a worldserver line naming it"}
+  - {repo: quadseven/mod-overseer, issue: 1098, criterion: "a roster character buys an affordable vendor manual and learns it; an unaffordable one is refused"}
+fix: {repo: quadseven/mod-overseer, commit: "c27b21858af194c8f145a10e9e783f5623e5a014"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 40m
+cast:
+  - who: Grug
+    set: {alive: true, spells_remove: [2666], money: 2000, at: {creature: "Therum Deepforge"}}
+    ceiling: "one recipe removed and gold for the trainer fee; no level or gear"
+  - who: Ugga
+    set: {alive: true, skills: {Alchemy: {value: 140, max: 150}}, money: 5000, at: {creature: "Alchemist Mallory"}}
+    ceiling: "a rank for the manual and gold to buy it; no level or gear"
+act:
+  - at: 0s
+    command: {who: Grug, kind: buy, text: "recipe 2666"}
+  - at: 0s
+    command: {who: Ugga, kind: buy, text: "recipe 6055"}
+observe:
+  - name: grug-lacks-the-recipe
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_spell WHERE guid = @Grug AND spell = 2666
+    expect: {scalar: "= 0"}
+  - name: grug-holds-the-recipe
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM character_spell WHERE guid = @Grug AND spell = 2666
+    expect: {scalar: "= 1"}
+  - name: grug-paid-the-trainer
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid = @Grug AND money < 2000
+    expect: {scalar: "= 1"}
+  - name: ugga-bought-the-manual
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Ugga' AND kind = 'buy' AND created_at >= @t0 AND status IN ('delivered', 'applied')
+    expect: {scalar: ">= 1"}
+  - name: ugga-paid-for-it
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid = @Ugga AND money < 5000
+    expect: {scalar: "= 1"}

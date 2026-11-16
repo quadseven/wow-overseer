@@ -1,0 +1,38 @@
+# An aimed council quest that reaches COMPLETE on a family member is handed in and the rewarded row
+# appears within 30 minutes (mod-overseer issue 180). Ugga holds 'A Threat Within' (quest 783) as complete
+# beside the quest's turn-in NPC; the drive must hand it in.
+# Fix: mod-overseer pull 1103 (the hand-in and aim stability check).
+decree: v1
+id: aimed-quest-complete-handin
+proves:
+  - {repo: quadseven/mod-overseer, issue: 180, criterion: "an aimed quest that reaches COMPLETE is handed in and a rewarded row follows within 30 minutes"}
+fix: {repo: quadseven/mod-overseer, commit: "c1aef8cd489f78fb768a420166086909006ef4ed"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 35m
+cast:
+  - who: Ugga
+    set: {alive: true, quests: {783: complete}, at: {creature: "Lord Grayson Shadowbreaker"}}
+    ceiling: "one quest state the issue describes; no level, item or gold"
+act:
+  - at: 0s
+    roster: {who: Ugga, job: "quest"}
+observe:
+  - name: quest-is-complete-at-the-start
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_queststatus WHERE guid = @Ugga AND quest = 783 AND status = 1
+    expect: {scalar: "= 1"}
+  - name: quest-was-handed-in
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM character_queststatus_rewarded WHERE guid = @Ugga AND quest = 783
+    expect: {scalar: "= 1"}
+  - name: reward-event-written
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_event WHERE character_name = 'Ugga' AND last_seen >= @t0 AND kind = 'quest_reward'
+    expect: {scalar: ">= 1"}

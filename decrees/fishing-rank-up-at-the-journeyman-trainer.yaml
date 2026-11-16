@@ -1,0 +1,38 @@
+# A family member with Fishing at 50 or more visits the Journeyman trainer and the pure maximum skill
+# rises (mod-overseer issue 447). The read is the maximum in character_skills before (75) and after, not a
+# command status. Ugga's Fishing is a bounded grant: the organic best is 49.
+# Fix: mod-overseer pull 1110.
+decree: v1
+id: fishing-rank-up-at-the-journeyman-trainer
+proves:
+  - {repo: quadseven/mod-overseer, issue: 447, criterion: "after a trainer visit past Apprentice, the skill maximum for Fishing reflects the new cap"}
+fix: {repo: quadseven/mod-overseer, commit: "f03e59ec87c2cee6b17a25e3b52ca1dd499a3049"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 30m
+cast:
+  - who: Ugga
+    set: {alive: true, skills: {Fishing: {value: 50, max: 75}}, money: 5000, at: {creature: "Lee Brown"}}
+    ceiling: "a Fishing value the issue reports as the gate and gold for the trainer; no level or gear"
+act:
+  - at: 0s
+    roster: {who: Ugga, job: "train"}
+observe:
+  - name: fishing-starts-at-50-of-75
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_skills WHERE guid = @Ugga AND skill = @skill_fishing AND value >= 50 AND max = 75
+    expect: {scalar: "= 1"}
+  - name: fishing-maximum-rose
+    role: check
+    when: end
+    sql: |
+      SELECT max FROM character_skills WHERE guid = @Ugga AND skill = @skill_fishing
+    expect: {scalar: "> 75"}
+  - name: trainer-fee-was-paid
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid = @Ugga AND money < 5000
+    expect: {scalar: "= 1"}
