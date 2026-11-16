@@ -1,6 +1,6 @@
 {
   "namespace": "wow-ephemeral",
-  "source_namespace": "wow-dev",
+  "source_namespace": "your-base-realm-namespace",
   "source_deployment": "worldserver",
   "kubeconfig": "",
   "results_dir": "/path/to/ephemeral-results",

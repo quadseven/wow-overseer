@@ -9,6 +9,7 @@ import json
 import pathlib
 import tempfile
 import unittest
+import uuid
 
 from ephemeral import dbschema, guard, judge
 from ephemeral.miniyaml import loads
@@ -277,9 +278,10 @@ class ScalarAndCreditTest(unittest.TestCase):
 
     def test_a_real_read_or_join_of_the_table_counts(self):
         reads = (
-            "SELECT COUNT(*) FROM acore_characters.log_encounter WHERE map = 230",
-            "SELECT COUNT(*) FROM characters c JOIN log_encounter e ON e.map = c.map",
-            "SELECT COUNT(*) FROM `log_encounter` WHERE map = 230",
+            "SELECT COUNT(*) FROM acore_characters.log_encounter WHERE map = 230 AND time >= @t0",
+            "SELECT COUNT(*) FROM characters c JOIN log_encounter e ON e.map = c.map "
+            "WHERE e.map = 230 AND e.time >= @t0",
+            "SELECT COUNT(*) FROM `log_encounter` WHERE map = 230 AND time > @t0",
         )
         for sql in reads:
             d = copy.deepcopy(GUZZLER)
@@ -289,6 +291,147 @@ class ScalarAndCreditTest(unittest.TestCase):
             clock = Clock()
             r = run(d, guzzler_world(clock), clock)
             self.assertEqual(r["verdict"], "PASS", (sql, r["reasons"]))
+
+    def credit_run(self, sql, expect, credited=True):
+        d = copy.deepcopy(GUZZLER)
+        for o in d["observe"]:
+            if o["name"] == "encounter-credited":
+                o["sql"], o["expect"] = sql, expect
+        clock = Clock()
+        return run(d, guzzler_world(clock, credited=credited), clock)
+
+    BOUNDED = "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0"
+
+    def test_an_expectation_that_holds_at_zero_is_not_credit(self):
+        for expect in (
+            {"scalar": ">= 0"},
+            {"scalar": "<= 5"},
+            {"scalar": "!= 7"},
+            {"scalar": "= 0"},
+            {"rows": ">= 0"},
+            {"rows": "<= 1"},
+        ):
+            # no credits were earned, and the expectation holds anyway
+            r = self.credit_run(self.BOUNDED, expect, credited=False)
+            self.assertEqual(r["verdict"], "INVALID", expect)
+            self.assertIn("positive", " ".join(r["reasons"]), expect)
+
+    def test_a_positive_bounded_expectation_passes(self):
+        for expect in ({"scalar": ">= 1"}, {"scalar": "> 0"}):
+            r = self.credit_run(self.BOUNDED, expect)
+            self.assertEqual(r["verdict"], "PASS", (expect, r["reasons"]))
+
+    def test_rows_over_a_count_is_vacuous_and_refused(self):
+        # COUNT(*) returns one row even at zero credits, so these always hold
+        for expect in ({"rows": ">= 1"}, {"rows": "= 1"}):
+            r = self.credit_run(self.BOUNDED, expect, credited=False)
+            self.assertEqual(r["verdict"], "INVALID", expect)
+            self.assertIn("positive", " ".join(r["reasons"]), expect)
+        # and these can never hold over an aggregate, so the run is INVALID anyway
+        for expect in ({"rows": 0}, {"rows": "<= 0"}):
+            r = self.credit_run(self.BOUNDED, expect, credited=False)
+            self.assertEqual(r["verdict"], "INVALID", expect)
+
+    def test_a_row_list_query_with_rows_at_least_one_passes(self):
+        sql = "SELECT creditEntry FROM log_encounter WHERE map = 230 AND time >= @t0"
+        r = self.credit_run(sql, {"rows": ">= 1"})
+        self.assertEqual(r["verdict"], "PASS", r["reasons"])
+        for expect in ({"rows": ">= 0"}, {"rows": 0}, {"rows": "<= 3"}):
+            r = self.credit_run(sql, expect)
+            self.assertEqual(r["verdict"], "INVALID", expect)
+
+    def test_a_query_not_bounded_to_this_run_is_not_credit(self):
+        unbounded = (
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230",
+            "SELECT COUNT(*) FROM log_encounter WHERE time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 409 AND time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= '2000-01-01'",
+            "SELECT COUNT(*) FROM log_encounter WHERE map <> 230 AND time >= @t0",
+        )
+        for sql in unbounded:
+            r = self.credit_run(sql, {"scalar": ">= 1"})
+            self.assertEqual(r["verdict"], "INVALID", sql)
+            self.assertIn("this run", " ".join(r["reasons"]), sql)
+
+    def test_bounds_that_do_not_apply_to_every_row_are_refused(self):
+        widened = (
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 OR time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE time >= @t0 OR map = 230",
+            "SELECT COUNT(*) FROM log_encounter WHERE (map = 230 OR 1 = 1) AND time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0 OR difficulty = 0",
+            "SELECT COUNT(*) FROM log_encounter WHERE NOT (map = 230 AND time >= @t0)",
+            "SELECT COUNT(*) FROM log_encounter WHERE NOT map = 230 AND time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND NOT time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 XOR time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE (map = 230) AND (time >= @t0)",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time BETWEEN @t0 AND @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0 || 1",
+            "SELECT COUNT(*) FROM log_encounter ",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0 AND guid IN (SELECT guid FROM characters)",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0 UNION ALL SELECT COUNT(*) FROM log_encounter WHERE map = 230",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0 UNION SELECT 9 FROM log_encounter",
+        )
+        for sql in widened:
+            r = self.credit_run(sql, {"scalar": ">= 1"})
+            self.assertEqual(r["verdict"], "INVALID", sql)
+            self.assertIn("encounter credit", " ".join(r["reasons"]), sql)
+
+    def test_a_self_join_or_mismatched_alias_is_not_one_bounded_read(self):
+        bad = (
+            "SELECT COUNT(*) FROM log_encounter e JOIN log_encounter n ON n.map = e.map WHERE e.map = 230 AND n.time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter JOIN log_encounter ON 1 = 1 WHERE map = 230 AND time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter e JOIN log_encounter n ON n.map = e.map WHERE e.map = 230 AND e.time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter e JOIN characters c ON c.guid = e.map WHERE c.map = 230 AND e.time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter e JOIN characters c ON c.guid = e.map WHERE e.map = 230 AND c.guid >= @t0",
+            "SELECT COUNT(*) FROM log_encounter e JOIN characters c ON c.guid = e.map WHERE map = 230 AND e.time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter e WHERE x.map = 230 AND e.time >= @t0",
+        )
+        for sql in bad:
+            r = self.credit_run(sql, {"scalar": ">= 1"})
+            self.assertEqual(r["verdict"], "INVALID", sql)
+
+    def test_both_bounds_on_the_one_alias_pass_qualified_or_unqualified(self):
+        good = (
+            "SELECT COUNT(*) FROM log_encounter e WHERE e.map = 230 AND e.time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter AS e WHERE e.time >= @t0 AND e.map = 230",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE log_encounter.map = 230 AND log_encounter.time >= @t0",
+            "SELECT COUNT(*) FROM characters c JOIN log_encounter e ON e.map = c.map WHERE e.map = 230 AND e.time >= @t0",
+        )
+        for sql in good:
+            r = self.credit_run(sql, {"scalar": ">= 1"})
+            self.assertEqual(r["verdict"], "PASS", (sql, r["reasons"]))
+
+    def test_a_plain_and_chain_with_both_bounds_passes(self):
+        chains = (
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE time > @t0 AND map = 230",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND difficulty = 0 AND time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter e WHERE e.map = 230 AND e.time >= @t0 ORDER BY e.time",
+        )
+        for sql in chains:
+            r = self.credit_run(sql, {"scalar": ">= 1"})
+            self.assertEqual(r["verdict"], "PASS", (sql, r["reasons"]))
+
+    def test_a_bounded_positive_check_with_no_credit_is_invalid(self):
+        r = self.credit_run(self.BOUNDED, {"scalar": ">= 1"}, credited=False)
+        self.assertEqual(r["verdict"], "INVALID")
+        self.assertEqual(named(r, "encounter-credited")["status"], "violated")
+
+    def test_the_shipped_decree_credit_observation_meets_the_rule(self):
+        r = self.credit_run(
+            next(
+                o["sql"]
+                for o in GUZZLER["observe"]
+                if o["name"] == "encounter-credited"
+            ),
+            next(
+                o["expect"]
+                for o in GUZZLER["observe"]
+                if o["name"] == "encounter-credited"
+            ),
+        )
+        self.assertEqual(r["verdict"], "PASS", r["reasons"])
 
     def test_the_credit_must_come_from_the_core_log_not_a_run_flag(self):
         d = copy.deepcopy(GUZZLER)
@@ -613,10 +756,18 @@ class FakeHttp:
         return self.status, b"{}"
 
 
+def fresh_marker():
+    """A unique throwaway string made at run time, so no fixed value sits in the file."""
+    return uuid.uuid4().hex
+
+
 class ConfigMapStoreTest(unittest.TestCase):
+    def setUp(self):
+        self.marker = fresh_marker()
+
     def store(self, http):
         return judge.ConfigMapStore(
-            "https://api.example.invalid", "tok", "eph-ns", http
+            "https://api.example.invalid", self.marker, "eph-ns", http
         )
 
     def cm(self, name="eph-result-run-1"):
@@ -635,7 +786,8 @@ class ConfigMapStoreTest(unittest.TestCase):
         self.assertEqual(
             url, "https://api.example.invalid/api/v1/namespaces/eph-ns/configmaps"
         )
-        self.assertEqual(headers["Authorization"], "Bearer tok")
+        # built from whatever the store was given, and nothing else
+        self.assertEqual(headers["Authorization"], "Bearer " + self.marker)
         self.assertEqual(json.loads(body)["metadata"]["name"], "eph-result-run-1")
 
     def test_refuses_any_other_name_or_namespace(self):
@@ -644,7 +796,7 @@ class ConfigMapStoreTest(unittest.TestCase):
         with self.assertRaises(judge.JudgeError):
             s.write(self.cm("eph-harness"))
         other = self.cm()
-        other["metadata"]["namespace"] = "wow-dev"
+        other["metadata"]["namespace"] = "another-ns"
         with self.assertRaises(judge.JudgeError):
             s.write(other)
         with self.assertRaises(judge.JudgeError):
@@ -655,12 +807,21 @@ class ConfigMapStoreTest(unittest.TestCase):
         with self.assertRaises(judge.JudgeError):
             self.store(FakeHttp(status=403)).write(self.cm())
 
+    def test_the_marker_never_reaches_an_error_or_the_body(self):
+        http = FakeHttp(status=403)
+        with self.assertRaises(judge.JudgeError) as cm:
+            self.store(http).write(self.cm())
+        self.assertNotIn(self.marker, str(cm.exception))
+        self.assertNotIn(self.marker, http.calls[0][3].decode("utf-8"))
+        self.assertNotIn(self.marker, repr(self.store(http).namespace))
+
 
 class InClusterTest(unittest.TestCase):
     def test_the_api_server_address_comes_from_the_pod_environment(self):
         with tempfile.TemporaryDirectory() as tmp:
             d = pathlib.Path(tmp)
-            (d / "token").write_text("tok", encoding="utf-8")
+            marker = fresh_marker()
+            (d / "token").write_text(marker + chr(10), encoding="utf-8")
             store = judge.ConfigMapStore.in_cluster(
                 "eph-ns",
                 {
@@ -670,11 +831,12 @@ class InClusterTest(unittest.TestCase):
                 sa_dir=d,
             )
         self.assertEqual(store.base_url, "https://192.0.2.1:443")
+        self.assertEqual(store.token, marker)  # read from the token file, trimmed
 
     def test_an_ipv6_host_is_bracketed(self):
         with tempfile.TemporaryDirectory() as tmp:
             d = pathlib.Path(tmp)
-            (d / "token").write_text("tok", encoding="utf-8")
+            (d / "token").write_text(fresh_marker(), encoding="utf-8")
             store = judge.ConfigMapStore.in_cluster(
                 "n",
                 {

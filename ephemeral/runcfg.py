@@ -32,7 +32,7 @@ class Node:
 @dataclass
 class Config:
     namespace: str = "wow-ephemeral"
-    source_namespace: str = "wow-dev"
+    source_namespace: str = ""
     source_deployment: str = "worldserver"
     kubeconfig: str = ""
     results_dir: str = ""
@@ -85,6 +85,8 @@ def _check(cfg):
         raise ConfigError("tools_image must be pinned by digest (name@sha256:...)")
     if set(cfg.template_images) != {"lean", "full"}:
         raise ConfigError("template_images needs both lean and full")
+    if not cfg.source_namespace:
+        raise ConfigError("source_namespace (the base realm's namespace) is required")
     if not cfg.results_dir:
         raise ConfigError("results_dir is required")
     if not 1 <= int(cfg.min_free_percent) <= 90:

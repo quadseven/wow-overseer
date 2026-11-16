@@ -39,6 +39,8 @@ observe:
   # The verdict needs the core's own credited-encounter record, never the run's
   # completion flag: the core writes log_encounter when an encounter is credited.
   # A run that clears nothing credited never reached the scenario, so it is INVALID.
+  # The judge requires the expectation to reject zero and the query to be bounded to
+  # this run: time >= @t0 and the arranged instance's map (230).
   - name: encounter-credited
     role: precondition
     when: end

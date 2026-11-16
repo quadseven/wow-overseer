@@ -129,6 +129,7 @@ def make_cfg(results_dir):
     return runcfg.from_dict(
         {
             "results_dir": str(results_dir),
+            "source_namespace": "base-realm",
             "tools_image": TOOLS,
             "template_images": {"lean": "registry.example.com/t:lean-1", "full": "registry.example.com/t:full-1"},
             "nodes": {
@@ -167,7 +168,7 @@ class FakeCluster:
         ):
             self.put(
                 "configmaps",
-                "wow-dev",
+                "base-realm",
                 f"{g}-overrides-h1",
                 {"data": {f"{g}.overrides.conf": text}},
             )
@@ -175,7 +176,7 @@ class FakeCluster:
             {"name": f"{g}-overrides", "configMap": {"name": f"{g}-overrides-h1"}}
             for g in ("playerbots", "overseer", "worldserver")
         ]
-        self.put("deployments", "wow-dev", "worldserver", {"spec": {"template": {"spec": {
+        self.put("deployments", "base-realm", "worldserver", {"spec": {"template": {"spec": {
             "initContainers": [{"name": "db-upgrade", "image": DB}],
             "containers": [{"name": "worldserver", "image": WS, "env": [
                 {"name": "OVERSEER_PIN_OVERSEER", "value": SHA},

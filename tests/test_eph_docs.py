@@ -31,9 +31,7 @@ class EphemeralDocsTest(unittest.TestCase):
 
     def test_states_what_does_not_ship(self):
         self.assertIn("Not shipped", PAGE)
-        self.assertRegex(
-            PAGE, r"never been run end to end|has not\s+been run end to end"
-        )
+        self.assertRegex(PAGE, r"has not\s+been run end to end")
 
     def test_does_not_claim_a_world_refuses_anything_yet(self):
         self.assertNotRegex(PAGE, r"a world refuses")

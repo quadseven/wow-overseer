@@ -48,7 +48,7 @@ class CliTest(unittest.TestCase):
         from ephemeral import runcfg
 
         base = {
-            "results_dir": "r", "tools_image": "x@sha256:" + "0" * 64,
+            "results_dir": "r", "source_namespace": "b", "tools_image": "x@sha256:" + "0" * 64,
             "template_images": {"lean": "a:1", "full": "b:1"},
             "nodes": {"n": {"claim": "c", "max_worlds": 1}},
         }  # fmt: skip

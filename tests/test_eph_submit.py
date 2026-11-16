@@ -177,7 +177,7 @@ class SubmitTest(Base):
         self.assertEqual(self.cluster.of("jobs"), [])
 
     def test_base_image_must_be_a_digest(self):
-        dep = self.cluster.objs[("deployments", "wow-dev", "worldserver")]
+        dep = self.cluster.objs[("deployments", "base-realm", "worldserver")]
         dep["spec"]["template"]["spec"]["containers"][0]["image"] = (
             "registry.example.com/ws:latest"
         )

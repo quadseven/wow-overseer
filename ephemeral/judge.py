@@ -30,7 +30,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import acts, dbschema, guard, lint
+from . import acts, dbschema, gamedata, guard, lint
 from . import anchors as anchors_mod
 from .miniyaml import YamlError, loads
 from .seedrun import LIVE_SCHEMA_SQL, inputs_from_env
@@ -173,6 +173,61 @@ def _sample(rows):
 
 
 # -- the judge -------------------------------------------------------------------
+
+
+_TIME_BOUND = re.compile(r"^(?:(\w+)\.)?time\s*>=?\s*@t0$", re.I)
+_MAP_BOUND = re.compile(r"^(?:(\w+)\.)?map\s*=\s*(\d+)$", re.I)
+_WHERE_END = re.compile(r"\b(?:group\s+by|order\s+by|having|limit)\b", re.I)
+
+
+def _run_bound_problems(bare, maps, alias=None, sole=True):
+    """Why the WHERE clause may not bound every counted row to this run.
+
+    Accepts one shape only: a single SELECT whose WHERE is a flat AND chain with
+    no parentheses, OR, NOT, XOR, BETWEEN, UNION or subquery, and in which one
+    conjunct is `time >= @t0` (or `>`) and one is `map = <the arranged map>`.
+    Anything else could let a row from an earlier run satisfy the check.
+    """
+    flat = re.sub(r"\s+", " ", bare)
+    if len(re.findall(r"\bselect\b", flat, re.I)) != 1 or re.search(
+        r"\b(?:union|intersect|except)\b", flat, re.I
+    ):
+        return ["is not a single plain SELECT, so its bounds may be skipped"]
+    parts = re.split(r"\bwhere\b", flat, flags=re.I)
+    if len(parts) != 2:
+        return ["has no single WHERE clause bounding it to this run"]
+    where = _WHERE_END.split(parts[1], maxsplit=1)[0].strip()
+    if re.search(r"[()]|\|\||&&|\b(?:or|not|xor|between)\b", where, re.I):
+        return [
+            "has a WHERE clause that is not a flat AND chain "
+            "(no parentheses, OR, NOT, XOR or BETWEEN), so the bounds may not apply"
+        ]
+    conjuncts = [c.strip() for c in re.split(r"\band\b", where, flags=re.I)]
+    problems = []
+
+    def on_the_credit_table(qualifier):
+        # unqualified only when it is the only table; otherwise the one alias
+        if qualifier is None:
+            return sole
+        return alias is not None and qualifier.lower() == alias.lower()
+
+    if not any(
+        (m := _TIME_BOUND.match(c)) and on_the_credit_table(m.group(1))
+        for c in conjuncts
+    ):
+        problems.append(
+            "is not bounded to this run (needs time >= @t0 in its AND chain)"
+        )
+    found = {
+        int(m.group(2))
+        for c in conjuncts
+        if (m := _MAP_BOUND.match(c)) and on_the_credit_table(m.group(1))
+    }
+    if not found or (maps and not found & maps):
+        problems.append(
+            "is not bounded to this run's instance map (needs map = <id> in its AND chain)"
+        )
+    return problems
 
 
 class Judge:
@@ -322,23 +377,68 @@ class Judge:
 
         The evidence is a held precondition that reads `log_encounter` (the core
         writes it when an encounter is credited), never a run's own completion
-        flag. A decree that arranges an instance without one cannot PASS.
+        flag, and the observation must be POSITIVE and bounded to THIS run:
+        an expectation that holds at zero credits, or a query that could count
+        an earlier run's credits, proves nothing. A decree that arranges an
+        instance without such an observation cannot PASS.
         """
+        maps = {
+            gamedata.INSTANCE_MAPS[step["instance"]["map"]]
+            for step in self.decree.get("arrange") or []
+            if "instance" in step
+            and step["instance"].get("map") in gamedata.INSTANCE_MAPS
+        }
         if not any("instance" in step for step in self.decree.get("arrange") or []):
             return []
+        problems = []
         for name, sql in self.rendered.items():
             rec = self.records.get(name)
-            if (
-                (CREDIT_DB, CREDIT_TABLE) in dbschema.tables_read(sql, self.schema)
-                and rec
-                and rec["role"] == "precondition"
-                and rec["status"] == "held"
-            ):
+            if (CREDIT_DB, CREDIT_TABLE) not in dbschema.tables_read(sql, self.schema):
+                continue
+            if not rec or rec["role"] != "precondition":
+                problems.append(
+                    f"{name} reads {CREDIT_TABLE} but is not a precondition"
+                )
+                continue
+            if rec["status"] != "held":
+                continue  # its own failure is already reported
+            bad = self._credit_shape_problems(
+                self.observes[name], maps, self.rendered[name]
+            )
+            if not bad:
                 return []
+            problems.append(f"{name} {'; '.join(bad)}")
+        if problems:
+            return ["no encounter credit evidence: " + "; ".join(problems)]
         return [
             "no encounter credit evidence: a precondition reading log_encounter "
             "must hold before an instance run can pass"
         ]
+
+    def _credit_shape_problems(self, obs, maps, rendered):
+        """Why this observation could hold without a credit earned in this run."""
+        bad = []
+        bare = _STR.sub("''", obs["sql"])
+        # What the query returns when no credit was earned: an aggregate with no
+        # GROUP BY still returns ONE row (holding 0), a row list returns none.
+        aggregate = re.search(
+            r"\b(?:count|sum|min|max|avg)\s*\(", bare, re.I
+        ) and not re.search(r"\bgroup\s+by\b", bare, re.I)
+        zero = [(0,)] if aggregate else []
+        try:
+            if expectation_holds(obs["expect"], zero)[0]:
+                bad.append("holds at zero credits, so it needs a positive expectation")
+        except JudgeError:
+            bad.append("has an expectation the judge cannot evaluate")
+        refs = dbschema.table_refs(rendered, self.schema)
+        mine = [r for r in refs if (r[1], r[2]) == (CREDIT_DB, CREDIT_TABLE)]
+        if len(mine) != 1:
+            bad.append(
+                f"reads {CREDIT_TABLE} {len(mine)} times; a credit observation reads it exactly once, with no self-join"
+            )
+            return bad
+        bad.extend(_run_bound_problems(bare, maps, mine[0][0], len(refs) == 1))
+        return bad
 
     @staticmethod
     def _phrase(r):

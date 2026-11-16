@@ -235,7 +235,14 @@ was written, whatever it was; exit 2 means the harness could not write one.
 Two rules keep a PASS honest. A scalar expectation needs exactly one row and one
 column; any other shape is INVALID, so row order can never hide a failing value.
 And a decree that arranges an instance cannot PASS without a held precondition
-that reads `log_encounter`, the core's own credited-encounter record; a run's
+that reads `log_encounter` (a real FROM or JOIN, not a name in a string), the
+core's own credited-encounter record. That observation must reject zero credits
+(an expectation like `>= 0` is refused) and be bounded to this run, with
+`time >= @t0` and the arranged instance's map as conjuncts of a flat AND chain in
+a single plain SELECT (no OR, NOT, XOR, BETWEEN, parentheses, UNION or subquery,
+so no row from an earlier run can satisfy it). The observation reads
+`log_encounter` exactly once (no self-join) and both bounds apply to that one
+alias, or are unqualified when it is the only table; a run's
 completion flag is never evidence, and a run with no credit is INVALID. The
 judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`; without them it prints an INVALID verdict and exits 2,
