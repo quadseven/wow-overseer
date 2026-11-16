@@ -24,6 +24,7 @@ import re
 import weakref
 from dataclasses import dataclass
 
+from . import gamedata
 from .sqlgen import SeedError, verify_statement
 
 LOOPBACK = "127.0.0.1"
@@ -34,6 +35,18 @@ WORLD_LABEL_VALUE = "ephemeral"
 GRANTS_ENABLED = "grants: enabled"
 MARKER_TABLE = "ephemeral_world"
 MARKER_SQL = "SELECT COUNT(*) FROM `acore_characters`.`ephemeral_world`"
+
+# The judge's one write: an operator's order, as the bridge writes it. A fixed
+# statement with bound parameters, so nothing in a decree can reshape it.
+COMMAND_TABLE = "overseer_command"
+COMMAND_COLUMNS = ("target_name", "command", "kind", "source")
+COMMAND_SQL = (
+    "INSERT INTO `acore_characters`.`overseer_command` "
+    "(`target_name`, `command`, `kind`, `source`) VALUES (%s, %s, %s, %s)"
+)
+COMMAND_SOURCE = "eph-judge"
+COMMAND_KINDS = tuple(k for k in gamedata.COMMAND_KINDS if k != "gm")
+_SAFE_COMMAND_TEXT = re.compile(r"^[A-Za-z0-9 _.,:\-]{1,250}$")
 
 
 class GuardError(SeedError):
@@ -101,8 +114,47 @@ class GuardedConnection:
             raise GuardError("query() runs one plain SELECT only")
         cur = self._conn.cursor()
         try:
-            cur.execute(sql, params)
+            cur.execute(sql, params or None)  # no params: a literal % stays a %
             return list(cur.fetchall())
+        finally:
+            cur.close()
+
+    def set_query_timeout(self, seconds):
+        """Cap every later SELECT on this session (the server kills it past the cap)."""
+        ms = int(seconds * 1000)
+        if ms <= 0:
+            raise GuardError("a query timeout must be positive")
+        self._require_opened()
+        cur = self._conn.cursor()
+        try:
+            cur.execute(f"SET SESSION max_execution_time = {ms}")
+        finally:
+            cur.close()
+
+    def insert_command(self, target, kind, text, source=COMMAND_SOURCE):
+        """Queue one operator order (an overseer_command row); the judge's only write.
+
+        Never kind `gm` (bot sessions ignore it), only a kind the live schema
+        and the module know, and only plain text, so a decree cannot smuggle
+        anything else through the one path that writes.
+        """
+        self._require_opened()
+        if kind not in COMMAND_KINDS:
+            raise GuardError(f"command kind {kind!r} is not one a judge may queue")
+        cols = self._schema.columns(COMMAND_TABLE, "acore_characters")
+        if cols is None or any(c not in cols for c in COMMAND_COLUMNS):
+            raise GuardError(f"{COMMAND_TABLE} lacks a column the judge writes")
+        for label, value in (("target", target), ("text", text), ("source", source)):
+            if not isinstance(value, str) or not _SAFE_COMMAND_TEXT.match(value):
+                raise GuardError(f"command {label} {value!r} is not plain text")
+        cur = self._conn.cursor()
+        try:
+            cur.execute(COMMAND_SQL, (target, text, kind, source))
+            self._conn.commit()
+            return cur.lastrowid
+        except Exception:
+            self._conn.rollback()
+            raise
         finally:
             cur.close()
 

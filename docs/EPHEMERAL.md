@@ -17,13 +17,15 @@ Shipped in this repository now:
   command rows it becomes;
 - `python3 -m ephemeral seed`, which compiles `cast` and `arrange` to SQL behind a
   loopback-only guard (see Seed below);
+- `python3 -m ephemeral judge`, which runs a decree's `act` timeline, evaluates
+  its `observe` assertions and writes a PASS, FAIL or INVALID verdict as a result
+  ConfigMap (see Judge below);
 - three worked example decrees in `data/decrees/`.
 
-Not shipped: the world itself. There is no runner, no judge that samples a
-world and gives a verdict, no template build and no cluster objects in this
-repository yet. Nothing here starts a world or produces a PASS, FAIL or INVALID.
-The seed step has only been run against a fake connection in unit tests, never
-against a real database.
+Not shipped: the world itself. There is no runner, no template build and no
+cluster objects in this repository yet, so nothing starts a world. The seed step
+and the judge have only been run against fake connections in unit tests, never
+against a real database or cluster.
 
 ## Requesting a proving run
 
@@ -193,3 +195,54 @@ in `cast` overrides the same character inside a `family:` entry.
 What the seed writes follows how the core stores each thing. Whether the core
 then plays the scenario as intended is shown by the first end-to-end run, and a
 failed precondition makes that run INVALID, never a pass.
+
+## Judge: act timeline, observations, verdict
+
+    python3 -m ephemeral judge data/decrees/<name>.yaml --log <worldserver log>
+
+Meant to run as the world pod's last step, after the seed (no pod runs it yet).
+It reads the variables and resolved cast the seed left in `EPH_VARS_FILE`, runs
+the `act` steps (by time, or when a named observation first holds), samples the
+`observe` entries and decides one of three verdicts:
+
+- PASS: every precondition held and every check held.
+- FAIL: every precondition held and at least one check was violated. A real
+  defect sighting.
+- INVALID: the scenario was never reached. This covers a precondition that did
+  not hold, an act step that never fired (for example a `when:` observation that
+  never came true), a query that timed out or errored, a log that could not be
+  read, a guard refusal, a missing seed handoff and a decree that does not lint.
+  INVALID beats FAIL, never counts as a pass and never closes an issue.
+
+Observations are `when: start` (once, before any order; a failing precondition
+ends the run early), `continuous` (every ten seconds) or `end` (after the
+window). Log assertions count regex matches in the worldserver log and are
+checked at the end. Across repeated looks the worst one wins and never improves:
+a timeout or error is sticky and makes the run INVALID even if a later look
+violates or passes; a violation outranks a later clean look.
+
+What the judge may write, in total: `overseer_command` rows in the world's own
+database (through the same guard as the seed, and never kind `gm`), and one
+ConfigMap, `eph-result-<run-id>`, created in its own namespace. Every
+observation is re-checked as a single SELECT against the live schema before it
+runs. Settings come from the pod environment: the seed's variables plus
+`EPH_RUN_ID`, `EPH_ARM` and `EPH_NAMESPACE`. The ConfigMap holds the verdict, the
+reasons, the rendered SQL and observed values per assertion, sample rows and
+matched log lines (cut to fit 256 KB, never the verdict). Exit 0 means a verdict
+was written, whatever it was; exit 2 means the harness could not write one.
+
+Two rules keep a PASS honest. A scalar expectation needs exactly one row and one
+column; any other shape is INVALID, so row order can never hide a failing value.
+And a decree that arranges an instance cannot PASS without a held precondition
+that reads `log_encounter` (a real FROM or JOIN, not a name in a string), the
+core's own credited-encounter record. That observation must reject zero credits
+(an expectation like `>= 0` is refused) and be bounded to this run, with
+`time >= @t0` and the arranged instance's map as conjuncts of a flat AND chain in
+a single plain SELECT (no OR, NOT, XOR, BETWEEN, parentheses, UNION or subquery,
+so no row from an earlier run can satisfy it). The observation reads
+`log_encounter` exactly once (no self-join) and both bounds apply to that one
+alias, or are unqualified when it is the only table; a run's
+completion flag is never evidence, and a run with no credit is INVALID. The
+judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
+`KUBERNETES_SERVICE_PORT`; without them it prints an INVALID verdict and exits 2,
+because there is nowhere to write the result.

@@ -14,6 +14,12 @@ class EphemeralDocsTest(unittest.TestCase):
         self.assertIn("## Requesting a proving run", PAGE)
         self.assertRegex(PAGE, r"runner is out of scope")
 
+    def test_describes_the_judge_and_its_three_verdicts(self):
+        self.assertIn("## Judge:", PAGE)
+        for word in ("PASS", "FAIL", "INVALID", "eph-result-<run-id>"):
+            self.assertIn(word, PAGE)
+        self.assertNotRegex(PAGE, r"no judge")
+
     def test_says_what_a_run_can_and_cannot_prove(self):
         self.assertIn("## What a run can and cannot prove", PAGE)
         self.assertIn("It cannot prove", PAGE)

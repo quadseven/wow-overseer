@@ -1,4 +1,4 @@
-"""`python3 -m ephemeral <lint|acts|seed> ...`: the `eph` command line."""
+"""`python3 -m ephemeral <lint|acts|seed|judge> ...`: the `eph` command line."""
 
 import argparse
 import json
@@ -58,6 +58,17 @@ def _seed(args):
     )
 
 
+def _judge(args):
+    from . import judge
+
+    return judge.run(
+        args.decree,
+        os.environ,
+        log_path=args.log,
+        anchors_path=args.anchors,
+    )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="eph")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -86,6 +97,14 @@ def main(argv=None):
         "--dry-run", action="store_true", help="print the SQL, apply nothing"
     )
     q.set_defaults(func=_seed)
+    j = sub.add_parser(
+        "judge",
+        help="in a world pod: run the act timeline, decide PASS/FAIL/INVALID, write the result",
+    )
+    j.add_argument("decree")
+    j.add_argument("--anchors", help="anchors.yaml (default: decrees/anchors.yaml)")
+    j.add_argument("--log", help="the worldserver log file log assertions read")
+    j.set_defaults(func=_judge)
     args = parser.parse_args(argv)
     return args.func(args)
 
