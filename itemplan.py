@@ -81,7 +81,7 @@ needed `AUCTION_BEATS_VENDOR_BY` to start.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 
 import bag_pressure
 import craft
@@ -363,6 +363,9 @@ class Stack:
     # Whether a quest the holder is on or could still take names the stack
     # (`bag_pressure.QUEST_NEEDED_SQL`, the row's `quest_item`); None is unread.
     quest_needed: bool | None = None
+    # item_instance.guid, so the guild loot policy can be asked about this very
+    # copy (0 when the row carried none).
+    guid: int = 0
 
     @property
     def key(self) -> tuple:
@@ -454,6 +457,12 @@ class Context:
     # family -> stacks the guild's bankers can take by mail (guildledger). Absent
     # or zero means no banker route is offered.
     banker_free: Mapping[str, int] = field(default_factory=dict)
+    # The guild loot policy's route for one carried copy, `(holder, guid) ->
+    # lootpolicy route` (None when it could not be judged). When set, a stack
+    # is broken down only if the policy says DISENCHANT: the plan asks the one
+    # policy instead of judging "nobody wants it" on its own. None means the
+    # policy is not wired in (a pure test), and the plan judges alone.
+    loot_route: Callable | None = None
 
 
 @dataclass(frozen=True)
@@ -1284,8 +1293,25 @@ def _gear_surplus(w: _World, s: Stack, me: Member, why: str) -> list:
     return out
 
 
+def expected_auction_copper(quote, sell: int) -> int:
+    """What one unit would fetch at auction, net of the house cut: the market
+    quote `(copper per unit, live listings)` when there is one, else the least
+    the plan wants before it lists at all (the vendor price times
+    AUCTION_BEATS_VENDOR_BY). The one price the loot policy judges "trash" by."""
+    if quote:
+        return int(quote[0]) * (100 - AUCTION_CUT_PERCENT) // 100
+    return max(0, int(sell or 0)) * AUCTION_BEATS_VENDOR_BY
+
+
 def _disenchant_option(w: _World, s: Stack, me: Member):
     if s.quality < 2 or s.quality > 4 or not s.gear:
+        return None
+    if (
+        w.ctx.loot_route is not None
+        and w.ctx.loot_route(s.holder, s.guid) != DISENCHANT
+    ):
+        # The guild loot policy decides what is trash: an upgrade for a
+        # guildmate, or a piece worth shelving, is not broken down here.
         return None
     need = disenchant_need(s)
     if need is None:

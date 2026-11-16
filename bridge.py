@@ -32745,6 +32745,8 @@ def _itemplan_reads(names, family, rows, gear_rows, worn_rows):
         names, family, rows, gear_rows, worn_rows, connect=_connect,
         bank_rows=_fetch_bank_items, guild_setup=_fetch_guild_bank_setup,
         roster=_fetch_guild_roster)
+    # The plan asks the guild loot policy, so it and the writers cannot differ.
+    extras = dataclasses.replace(extras, loot_route=_loot_route)
     try:
         roster = set(_fetch_enabled_roster_names())
         drive = _drive_verdicts([n for n in names if n in roster])
@@ -33945,6 +33947,8 @@ _EPIC_FACTS_SQL = (
     "it.InventoryType AS inventory_type, it.AllowableClass AS allowable_class, "
     "it.ItemLevel AS item_level, ii.flags AS instance_flags, "
     "it.DisenchantID AS disenchant_id, "
+    "it.RequiredDisenchantSkill AS disenchant_skill, "
+    "it.SellPrice AS sell_price, "
     "it.bonding AS bonding, c.class AS holder_class "
     "FROM item_instance ii "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -34052,6 +34056,56 @@ def _rare_wanted_by(holder: str, row: dict):
         return None
 
 
+def _expected_auction_copper(holder: str, row: dict):
+    """What one unit of this item would fetch at the holder's auction house, net
+    of the cut: the plan's own price read (`itemplan_reads._prices`, live
+    buyouts then history) through `itemplan.expected_auction_copper`. None when
+    the read fails, which keeps the piece shelved rather than called trash."""
+    try:
+        entry = int(row.get("entry") or 0)
+        with _connect() as conn, conn.cursor() as cur:
+            prices, _absent = itemplan_reads._prices(cur, [holder], [entry])
+        return itemplan.expected_auction_copper(
+            (prices or {}).get(entry), int(row.get("sell_price") or 0))
+    except Exception:
+        log.exception("loot policy: cannot price %s for %s, so it is shelved",
+                      row.get("name") or row.get("item_guid"), holder)
+        return None
+
+
+def _policy_verdict(holder: str, row: dict, classes) -> "lootpolicy.Verdict":
+    """The guild loot policy's verdict for one carried item: the single call
+    both the writers (`_loot_policy_blocks`) and the item plan make."""
+    enchanters: dict = {}
+
+    def guild_enchanters():
+        if not enchanters:
+            enchanters.update(_family_enchanters(holder))
+        return enchanters
+
+    return lootpolicy.decide(
+        dict(row, holder=holder),
+        classes,
+        upgrade=lambda item: _rare_wanted_by(holder, item),
+        auction_value=lambda item: _expected_auction_copper(holder, item),
+        enchanters=guild_enchanters,
+    )
+
+
+def _loot_route(holder: str, item_guid: int):
+    """The policy's route name for one carried item, for the item plan; None
+    when its facts cannot be read (the plan then breaks nothing down)."""
+    try:
+        rows = _fetch_epic_facts([int(item_guid)])
+        if not rows:
+            return None
+        return _policy_verdict(holder, rows[0], _guild_classes()).route
+    except Exception:
+        log.exception("loot policy: cannot judge item %s for %s's plan",
+                      item_guid, holder)
+        return None
+
+
 def _loot_policy_blocks(holder: str, command: str, kind: str = "sell"):
     """The `lootpolicy.Verdict` that refuses this row, or None to write it.
 
@@ -34078,11 +34132,7 @@ def _loot_policy_blocks(holder: str, command: str, kind: str = "sell"):
         return lootpolicy.Verdict(lootpolicy.HOLD, "its facts could not be read")
     classes = _guild_classes() if rows else frozenset()
     for row in rows:
-        verdict = lootpolicy.decide(
-            dict(row, holder=holder),
-            classes,
-            upgrade=lambda item: _rare_wanted_by(holder, item),
-        )
+        verdict = _policy_verdict(holder, row, classes)
         if not lootpolicy.allowed(verdict, kind):
             log.info("%s", lootpolicy.kept_line(row, holder, verdict, kind))
             return verdict
