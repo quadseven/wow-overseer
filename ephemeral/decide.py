@@ -63,6 +63,17 @@ def wanted_runs(rec):
     return dict(rec["runs_wanted"])
 
 
+def _small(rec, runs):
+    """A decree without exactly 3 runs per arm: evidence only, once every arm's first run is in."""
+    firsts = [v for r, v in runs if r["n"] == 1]
+    if not firsts or any(v is None for v in firsts):
+        return "pending", "the first run of each arm is still missing"
+    return (
+        "underpowered",
+        "a close needs exactly 3 runs per arm (3 of 3 control FAIL, 3 of 3 treatment PASS)",
+    )
+
+
 def _early(pres, treat, ctrl):
     """Outcomes a single valid run settles: a treatment FAIL or a control PASS."""
     if "FAIL" in treat:
@@ -97,11 +108,6 @@ def _settled(rec, pres, treat, ctrl, runs):
         return "pending", "runs are still missing"
     if pres.get("treatment") != "present" or pres.get("control") != "absent":
         return "unclear", "fix presence was not verified in both images"
-    if wanted_runs(rec) != REQUIRED_RUNS:
-        return (
-            "underpowered",
-            "a close needs exactly 3 runs per arm (3 of 3 control FAIL, 3 of 3 treatment PASS)",
-        )
     return "proven", "control FAILed and treatment PASSed on every run"
 
 
@@ -112,9 +118,12 @@ def decide(rec, res):
     pres = {a: p.get("state") for a, p in rec["presence"].items()}
     treat = [v for a, v in verdicts if a == "treatment"]
     ctrl = [v for a, v in verdicts if a == "control"]
-    outcome, reason = _early(pres, treat, ctrl) or _settled(
-        rec, pres, treat, ctrl, runs
-    )
+    if wanted_runs(rec) != REQUIRED_RUNS:
+        outcome, reason = _small(rec, runs)
+    else:
+        outcome, reason = _early(pres, treat, ctrl) or _settled(
+            rec, pres, treat, ctrl, runs
+        )
     return {
         "outcome": outcome,
         "reason": reason,

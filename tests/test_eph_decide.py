@@ -87,10 +87,10 @@ class DecideTest(unittest.TestCase):
         )
         self.assertEqual(self.outcome(rec, res), "unclear")
 
-    def test_treatment_only_pass_is_uncontrolled_and_never_proven(self):
+    def test_treatment_only_pass_is_underpowered_and_never_proven(self):
         rec = record(control=0)
         self.assertEqual(
-            self.outcome(rec, results(rec, treatment="PASS")), "pass-uncontrolled"
+            self.outcome(rec, results(rec, treatment="PASS")), "underpowered"
         )
 
     def test_pass_with_every_control_invalid_is_uncontrolled(self):
@@ -179,9 +179,37 @@ class ExactlyThreeTest(unittest.TestCase):
         d = decide.decide(rec, results(rec, control="FAIL", treatment="PASS"))
         self.assertEqual(d["outcome"], "underpowered")
 
-    def test_a_small_decree_still_disproves_on_a_treatment_fail(self):
+    def test_a_small_decree_with_a_treatment_fail_is_underpowered_not_disproven(self):
         rec = record(control=1, treatment=1)
         d = decide.decide(rec, results(rec, control="FAIL", treatment="FAIL"))
+        self.assertEqual(d["outcome"], "underpowered")
+
+    def test_a_small_decree_with_a_control_pass_is_underpowered_not_non_discriminating(
+        self,
+    ):
+        rec = record(control=1, treatment=1)
+        d = decide.decide(rec, results(rec, control="PASS", treatment="PASS"))
+        self.assertEqual(d["outcome"], "underpowered")
+
+    def test_two_of_two_mixed_is_underpowered(self):
+        rec = record(control=2, treatment=2)
+        for ctrl, treat in (
+            (["FAIL", "PASS"], ["PASS", "FAIL"]),
+            (["FAIL", "FAIL"], ["PASS", "FAIL"]),
+            (["PASS", "FAIL"], ["PASS", "PASS"]),
+        ):
+            d = decide.decide(rec, results(rec, control=ctrl, treatment=treat))
+            self.assertEqual(d["outcome"], "underpowered", (ctrl, treat))
+
+    def test_a_small_decree_with_no_results_yet_is_pending(self):
+        rec = record(control=1, treatment=1)
+        self.assertEqual(decide.decide(rec, {})["outcome"], "pending")
+
+    def test_a_three_of_three_decree_still_disproves(self):
+        rec = record()
+        d = decide.decide(
+            rec, results(rec, control="FAIL", treatment=["PASS", "FAIL", "PASS"])
+        )
         self.assertEqual(d["outcome"], "disproven")
 
 
