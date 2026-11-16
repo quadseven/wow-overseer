@@ -100,5 +100,35 @@ class AnOrphanSaleTripIsNotCutDownAtOnce(unittest.TestCase):
         self.assertTrue(townslot.urgency_cuts("mail", ground, False))
 
 
+class AReservingErrandDoesNotCutAnOrphanSaleTripEither(unittest.TestCase):
+    """wow-dev 2026-11-16 22:44: the errand had reserved the traveller, and a
+    reservation made `urgency_cuts` return True before the orphan's rank was
+    read, so the grace of #2771 never applied on that path."""
+
+    def test_a_reserved_town_errand_waits_behind_an_orphan_vendor_aim(self):
+        slot = townslot.Slot(releasable=economy)
+        slot.reserve("town errand", 99.0, "bag room")
+        d = ask(
+            slot, "town errand", "at:0:1644.8,276.2,-62.3", "vendor", 100.0, urgent=True
+        )
+        self.assertEqual(townslot.SLOT_WAIT, d.verdict, d.reason)
+
+    def test_a_reserved_errand_still_cuts_the_orphan_after_the_grace(self):
+        slot = townslot.Slot(releasable=economy)
+        slot.reserve("town errand", 99.0, "bag room")
+        ask(slot, "town errand", "at:0:1,2,3", "vendor", 100.0, urgent=True)
+        d = ask(
+            slot, "town errand", "at:0:1,2,3", "vendor", 100.0 + ORPHAN_LEASE + 1,
+            urgent=True,
+        )
+        self.assertEqual(townslot.SLOT_PREEMPT, d.verdict, d.reason)
+
+    def test_a_reservation_still_cuts_any_other_holder(self):
+        ground = townslot.Holder(
+            claimant="", character=LEADER, aim="at:0:1,2,3", since=0.0
+        )
+        self.assertTrue(townslot.urgency_cuts("town errand", ground, True))
+
+
 if __name__ == "__main__":
     unittest.main()
