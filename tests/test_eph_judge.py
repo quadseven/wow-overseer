@@ -245,6 +245,48 @@ class TimeoutTest(unittest.TestCase):
         self.assertEqual(row["status"], "timeout")
         self.assertIn("timed out", " ".join(r["reasons"]))
 
+    def continuous_check(self, answers):
+        d = copy.deepcopy(GUZZLER)
+        d["observe"].append(
+            {
+                "name": "no-death-ever",
+                "role": "check",
+                "when": "continuous",
+                "sql": "SELECT character_name FROM overseer_death WHERE created_at >= @t0",
+                "expect": {"rows": 0},
+            }
+        )
+        clock = Clock()
+        world = guzzler_world(clock)
+        world.answers.insert(0, ("character_name FROM", lambda now: answers(now)))
+        return run(d, world, clock)
+
+    def test_a_timeout_is_sticky_and_a_later_violation_cannot_make_it_a_fail(self):
+        def answers(now):
+            if now == 100:
+                return judge.QueryTimeout("30s")
+            return [("Ugga",)] if now >= 300 else []
+
+        r = self.continuous_check(answers)
+        self.assertEqual(r["verdict"], "INVALID")
+        self.assertEqual(named(r, "no-death-ever")["status"], "timeout")
+
+    def test_a_timeout_after_a_violation_is_still_invalid(self):
+        def answers(now):
+            if now == 200:
+                return judge.QueryTimeout("30s")
+            return [("Ugga",)] if now >= 100 else []
+
+        r = self.continuous_check(answers)
+        self.assertEqual(r["verdict"], "INVALID")
+        self.assertEqual(named(r, "no-death-ever")["status"], "timeout")
+
+    def test_a_timeout_followed_by_clean_samples_stays_invalid(self):
+        r = self.continuous_check(
+            lambda now: judge.QueryTimeout("30s") if now == 100 else []
+        )
+        self.assertEqual(r["verdict"], "INVALID")
+
     def test_a_precondition_that_times_out_is_invalid(self):
         clock = Clock()
         world = guzzler_world(clock)

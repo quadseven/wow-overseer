@@ -410,25 +410,25 @@ class Judge:
             rec["status"], rec["detail"] = "error", repr(exc)[:MAX_CELL_CHARS]
         return rec
 
+    _SEVERITY = {"held": 0, "violated": 1, "timeout": 2, "error": 2}
+
     def _observe(self, name, started):
-        """Look, and fold the look into the observation's running record."""
+        """Look, and fold the look into the observation's running record.
+
+        The worst look wins and never improves: a timeout or error is sticky
+        (it outranks a later violation or a clean sample, so the run is
+        INVALID, never a FAIL or PASS on partial evidence), and a violation
+        outranks a later clean sample.
+        """
         rec = self._evaluate(name)
         old = self.records.get(name)
-        elapsed = int(self.clock() - started)
         rec["samples"] = (old["samples"] if old else 0) + 1
-        if old:
-            if old["status"] == "violated":
-                return self._keep(old, rec)
-            if old["status"] in ("timeout", "error") and rec["status"] != "violated":
-                return self._keep(old, rec)
+        if old and self._SEVERITY[old["status"]] >= self._SEVERITY[rec["status"]]:
+            old["samples"] = rec["samples"]
+            return
         if rec["status"] == "violated":
-            rec["first_violation_s"] = elapsed
+            rec["first_violation_s"] = int(self.clock() - started)
         self.records[name] = rec
-        return None
-
-    def _keep(self, old, rec):
-        old["samples"] = rec["samples"]
-        return None
 
 
 # -- the result ------------------------------------------------------------------
