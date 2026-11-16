@@ -11688,19 +11688,22 @@ class Bridge(discord.Client):
         # short, which sends the family out for it.
         stands = craft_rhythm.requested_stands(
             stands, await self._material_routes(names))
+        # A FAMILY IN THE PROFESSION LOOP (#2419): the loop owns its job, so
+        # this pass writes none, individual or not (#2498: the individual
+        # path below is asked only AFTER the loop, or it wrote per-member jobs
+        # into a family whose phase order the loop owns). Looked up: the
+        # adapter tests load this method in isolation.
+        looped_by = globals().get("_prof_loop_family")
+        loop_key = (await asyncio.to_thread(looped_by, getattr(cohort, "key", None))
+                    if looped_by is not None else "")
         # INDIVIDUAL MODE (#2395): each member alternates on its own reagents.
-        if individual.active(
+        if not loop_key and individual.active(
                 standing_jobs, await asyncio.to_thread(_individual_family, cohort)):
             await self._individual_rhythm_moves(cohort, stands, standing_jobs)
             return
         plan = craft_rhythm.rhythm(stands, standing)
-        # A FAMILY IN THE PROFESSION LOOP (#2419): the loop owns its job, so
-        # this pass writes none; its gathering walk still runs, but only
-        # while the loop has the family gathering.
-        # Looked up: the adapter tests load this method in isolation.
-        looped_by = globals().get("_prof_loop_family")
-        loop_key = (await asyncio.to_thread(looped_by, getattr(cohort, "key", None))
-                    if looped_by is not None else "")
+        # The loop's gathering walk still runs, but only while the loop has
+        # the family gathering.
         if loop_key:
             log.info("craft_rhythm: family %s is in the profession loop, which "
                      "owns its job; %s", loop_key, craft_rhythm.report(plan))
@@ -11910,7 +11913,14 @@ class Bridge(discord.Client):
             _PROF_LOOP_TOWN.pop(town_key, None)
         await self._prof_loop_say(key, step, on_job, gather_why)
         if step.job:
-            await self._prof_loop_write(key, running, step.job)
+            # AN INDIVIDUAL FAMILY GATHERS PER MEMBER (#2498): the loop still
+            # owns the phase and its order, but its GATHER job is each
+            # member's own farm target, not one family-wide order.
+            targets = None
+            if step.state.phase == profloop.GATHER:
+                targets = individual.gather_targets(
+                    on_job, skills, key, step.job, exempt=_standin_out())
+            await self._prof_loop_write(key, running, step.job, targets)
         await asyncio.to_thread(_record_production, names, skills)
 
     async def _prof_loop_facts(self, key: str, names: list, skills: dict,
@@ -11971,9 +11981,12 @@ class Bridge(discord.Client):
         log.info("%s", said)
         _PROF_LOOP_SAID[("loop", key)] = step.line
 
-    async def _prof_loop_write(self, key: str, names: list, mode: str) -> int:
+    async def _prof_loop_write(self, key: str, names: list, mode: str,
+                               targets: dict | None = None) -> int:
         """The loop's job on every member not sitting out; `jobs.why_not`
-        first, as every job writer asks."""
+        first, as every job writer asks. `targets` (#2498) is name -> job for
+        an individual family's gather phase; a member it does not name gets
+        `mode`."""
         refusal = jobs.why_not(mode)
         if refusal:
             log.warning("profession loop: %s: job %s not written - %s", key,
@@ -11981,13 +11994,22 @@ class Bridge(discord.Client):
             return 0
         written = 0
         for name in names:
+            job = (targets or {}).get(name) or mode
+            if job != mode and jobs.why_not(job):
+                job = mode
             try:
-                await asyncio.to_thread(_insert_job, name, mode, profloop.SOURCE)
+                await asyncio.to_thread(_insert_job, name, job, profloop.SOURCE)
                 written += 1
             except Exception:
                 log.exception("profession loop: job insert failed for %s", name)
-        log.info("job: family %s told %s by %s (%d/%d)", key, mode,
-                 profloop.SOURCE, written, len(names))
+        if targets and set(targets.values()) - {mode}:
+            log.info("job: family %s told %s by %s (%d/%d)", key,
+                     ", ".join("%s=%s" % (n, targets.get(n) or mode)
+                               for n in names),
+                     profloop.SOURCE, written, len(names))
+        else:
+            log.info("job: family %s told %s by %s (%d/%d)", key, mode,
+                     profloop.SOURCE, written, len(names))
         return written
 
     async def _set_family_job(self, cohort, mode: str, source: str) -> int:
@@ -27381,7 +27403,8 @@ class Bridge(discord.Client):
 
         False hands the family back to the family-wide pass: the family is not
         named in the setting, is linked by a dungeon or raid, or is in the
-        profession loop, which owns its job.
+        profession loop outside its GATHER phase (the loop owns the phase
+        order; in GATHER the members farm on their own targets, #2498).
 
         Each member on a farm job is run through the ordinary farm pass as a
         family of one (individual.Solo): it reads its own skills, is walked to
@@ -27402,8 +27425,14 @@ class Bridge(discord.Client):
         rows = await asyncio.to_thread(_standing_jobs, key)
         if not individual.active(rows, family):
             return False
+        # A FAMILY IN THE PROFESSION LOOP keeps its phase order: the member
+        # pass runs only while the loop has the family gathering, and there
+        # it retargets and walks each member (the loop wrote their targets).
         looped_by = globals().get("_prof_loop_family")
-        if looped_by is not None and await asyncio.to_thread(looped_by, key):
+        loop_key = (await asyncio.to_thread(looped_by, key)
+                    if looped_by is not None else "")
+        if loop_key and _PROF_LOOPS.get(
+                loop_key, profloop.State()).phase != profloop.GATHER:
             return False
         farmers = individual.farm_members(rows, family, exempt=_standin_out())
         for name in sorted(rows):
@@ -27597,7 +27626,9 @@ class Bridge(discord.Client):
         state = self._farm_state.setdefault(slot, {"job": job})
         state["job"], state["ended"] = job, True
         key = slot or await asyncio.to_thread(_cohort_of, bonds.head_of_family())
-        write = _farm_end_write(job, profloop.enabled_for(key), renew)
+        # A SOLO MEMBER is in the loop when its family is (#2498).
+        loop_of = getattr(cohort, "family", "") if getattr(cohort, "solo", False) else key
+        write = _farm_end_write(job, profloop.enabled_for(loop_of), renew)
         if write is None:
             log.info("farm: family %s is in the profession loop, which owns its "
                      "job, so the job stays %s", key, job)

@@ -1341,11 +1341,34 @@ def walk_rank(claimant: str) -> int:
     return 0 if claimant in BAG_ROOM_CLAIMANTS else 1
 
 
+# THE AIMS A BAG-ROOM PASS WRITES, WHOEVER THE LEDGER BELIEVES WROTE THEM (#1261).
+#
+# `walk_rank` ranks a holder by its claimant, and an orphan has none, so a
+# sale trip the ledger did not record (a bridge restart, a write that went
+# round the door) ranked behind every named pass. Measured on wow-dev
+# 2026-11-16: the leader stood at a vendor carrying `vendor`, the ledger read
+# it as an orphan first seen that instant, and `mail` and then `town errand`
+# each took it at "0s, past its 0s lease" - an urgent ask zeroes the orphan
+# lease - so the sale trip never sold and the family sat at the bag floor.
+# The aim says whose errand it is when the claimant cannot, so an orphan
+# carrying one ranks as the bag-room pass it is. It is a RANK and not an
+# exemption: it still runs the ordinary orphan lease,
+# so an unrecorded trip that cannot finish is released within the orphan grace (ORPHAN_GROUND_GRACE_SECONDS).
+BAG_ROOM_AIMS = frozenset({"vendor", "banker", "auctioneer"})
+
+
+def holder_rank(holder) -> int:
+    """`walk_rank` of a holder, reading an orphan's rank from its aim."""
+    if not holder.claimant and holder.aim in BAG_ROOM_AIMS:
+        return 0
+    return walk_rank(holder.claimant)
+
+
 def urgency_cuts(claimant: str, holder, reserved: bool) -> bool:
     """Whether an urgent ask by `claimant` may preempt `holder` (#1375)."""
     if holder is None or reserved or holder.claimant == claimant:
         return True
-    return walk_rank(claimant) < walk_rank(holder.claimant)
+    return walk_rank(claimant) < holder_rank(holder)
 
 
 def reserve_rank(claimant: str) -> int:

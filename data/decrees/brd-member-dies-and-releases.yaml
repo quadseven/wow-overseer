@@ -10,6 +10,9 @@
 # event, so a decree cannot order release, STAGED_INSIDE, CLEARING and a later boss (wow-overseer#2767).
 # The boss-after-reassembly check stays as supporting evidence for issue 1472 only.
 # Fixes: mod-overseer pulls 1473 (walk back) and 1501 (re-arm); the commit below is 1501, the later.
+# Og is cast on his own (a different position or state), and a decree can seat only a WHOLE cast entry in an
+# arranged group, so he is not in the seeded group. He is given the same dungeon job by his own order, so the
+# run's job reaches him; a decree cannot seat him in the party itself (wow-overseer#2767 for the log side).
 decree: v1
 id: brd-member-dies-and-releases
 proves:
@@ -31,6 +34,8 @@ arrange:
 act:
   - at: 0s
     roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+  - at: 0s
+    roster: {who: Og, job: "dungeon:blackrock-depths"}
 observe:
   - name: og-started-dead
     role: precondition

@@ -5,6 +5,9 @@
 # line, so the naming is NOT asserted. What the rows prove: the others arrived (all five on the dungeon map),
 # the run reached CLEARING, a credited encounter followed, and the run was not held at the barrier.
 # Fix: mod-overseer pull 166.
+# Og is cast on his own (a different position or state), and a decree can seat only a WHOLE cast entry in an
+# arranged group, so he is not in the seeded group. He is given the same dungeon job by his own order, so the
+# run's job reaches him; a decree cannot seat him in the party itself (wow-overseer#2767 for the log side).
 decree: v1
 id: dungeon-early-entrant-barrier
 proves:
@@ -26,6 +29,8 @@ arrange:
 act:
   - at: 0s
     roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+  - at: 0s
+    roster: {who: Og, job: "dungeon:blackrock-depths"}
 observe:
   - name: one-member-starts-inside
     role: precondition
