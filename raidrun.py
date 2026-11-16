@@ -21,10 +21,16 @@ nothing that talks to MySQL. bridge.py runs the statements named here.
 
 from __future__ import annotations
 
+import logging
 import math
+import os
+import re
+from dataclasses import dataclass
 
 import jobs
 import raidroles
+
+log = logging.getLogger("raidrun")
 
 # The raid doors mod-overseer has (RaidDoorFor in overseer_decisions).
 MOLTEN_CORE = "moltencore"
@@ -48,6 +54,19 @@ MIN_LEVEL = {MOLTEN_CORE: 50, UPPER_SPIRE: 56}
 QUORUM_SEATS = 36
 QUORUM_TANKS = 3
 QUORUM_HEALERS = 8
+
+# THE FIRST-KILL ORDER (#2570): an explicit order mode that forms the raid
+# from the eligible approved seats only. Its quorum is the bridge's own refusal
+# line and must match the module's Overseer.Raid.Quorum* keys on the realm
+# that runs it, so both are set together. The bridge reads these env values.
+FIRST_KILL_QUORUM = (30, 3, 8)
+FIRST_KILL_ENV = (
+    "RAID_FIRST_KILL_QUORUM_SEATS",
+    "RAID_FIRST_KILL_QUORUM_TANKS",
+    "RAID_FIRST_KILL_QUORUM_HEALERS",
+)
+# Words in an order sentence that ask for it, folded the way campaignqueue folds.
+FIRST_KILL_WORDS = ("first-kill", "firstkill", "first kill")
 
 # ONE NIGHT PER ORDER. The queue counts an entry done off the leader's
 # `dungeon_runs_done`, which only the dungeon coordinator writes, so a raid
@@ -75,11 +94,11 @@ ENTERS = True  # assembles at the door and walks the raid in, head last
 # deployed module): inside, the raid rests, then the dungeon brain is armed on
 # the head, and a wipe is released and run back.
 CLEARS = True
-# ASSEMBLE walks the head alone (StepRaidRun's aimStaging). A seated raider
-# who is not already near the door when the raid forms is not walked there,
-# not ferried across a sea and not summoned, and after the assemble wait the
-# raid goes in with whoever has arrived.
-GATHERS = False
+# ASSEMBLE walks every seat to the door (mod-overseer#1132) and summons the
+# stragglers at the Blackrock Mountain stone (summonStragglers), so a raider
+# who is not near the door when the raid forms is brought there. After the
+# assemble wait the raid still goes in with whoever has arrived.
+GATHERS = True
 
 # --- how a raider comes to the door --------------------------------------------
 #
@@ -91,8 +110,8 @@ GATHERS = False
 # with fewer than forty and be re-seated, and releasing raiders early to walk
 # (c) is the fallback for anybody a raid warlock cannot bring: the warlock
 # itself, and every raider when the raid has no warlock that knows the ritual.
-# The module (mod-overseer) does not carry the order out yet (GATHERS), so the
-# bridge states it in its log and the Raid tab states what is not done.
+# The module carries the walk out (GATHERS); the bridge states its plan in its
+# log so the Raid tab can say how each raider is to arrive.
 
 THERE = "there"
 SUMMON = "summon"
@@ -378,12 +397,166 @@ def seat_eligibility_refusal(keyword: str, lineup: dict, current_rows: list) -> 
             unavailable.append("%s (%s)" % (name, ", ".join(reasons)))
     if not unavailable:
         return ""
-    return "%s refused: %d of %d approved members unavailable: %s" % (
-        place(keyword),
-        len(unavailable),
-        len(selected),
-        "; ".join(unavailable),
+    return (
+        "%s refused: %d of %d approved members unavailable: %s. "
+        "Order it as a first kill (queue <family>: moltencore first kill 1) to "
+        "form the raid from the eligible seats alone."
+        % (
+            place(keyword),
+            len(unavailable),
+            len(selected),
+            "; ".join(unavailable),
+        )
     )
+
+
+_QUORUM_SAID: set = set()
+
+
+def _positive_quorum(want: tuple) -> tuple:
+    """`want` with every value below 1 replaced by its default: a zero quorum
+    would form a raid from nobody. Said once per bad value, not per order."""
+    out = []
+    for value, default, key in zip(
+        want, FIRST_KILL_QUORUM, FIRST_KILL_ENV, strict=True
+    ):
+        if int(value) < 1:
+            if key not in _QUORUM_SAID:
+                _QUORUM_SAID.add(key)
+                log.warning(
+                    "first-kill quorum: %s is %s, which is not positive; using %d",
+                    key,
+                    value,
+                    default,
+                )
+            out.append(default)
+        else:
+            out.append(int(value))
+    return tuple(out)
+
+
+def first_kill_quorum(environ=None) -> tuple:
+    """(seats, tanks, healers) a first-kill order needs, from the bridge's env,
+    each falling back to FIRST_KILL_QUORUM when unset, unreadable or negative."""
+    env = os.environ if environ is None else environ
+    out = []
+    for key, default in zip(FIRST_KILL_ENV, FIRST_KILL_QUORUM, strict=True):
+        try:
+            value = int(str(env.get(key, "")).strip())
+        except ValueError:
+            value = default
+        out.append(value)
+    return _positive_quorum(tuple(out))
+
+
+def strip_first_kill(words: list) -> tuple:
+    """(words without the first-kill phrase, whether it was said)."""
+    text = " ".join(words)
+    said = False
+    for phrase in FIRST_KILL_WORDS:
+        # Whole words only: "firstkiller" or "first killing" are not the phrase.
+        pattern = r"(?<![\w-])" + re.escape(phrase) + r"(?![\w-])"
+        if re.search(pattern, text):
+            text = " ".join(re.sub(pattern, " ", text).split())
+            said = True
+    return text.split(), said
+
+
+@dataclass(frozen=True)
+class FirstKillRoster:
+    """What a first-kill order forms: the reduced lineup, who is in, who is
+    left out and why, and the refusal (empty when the quorum is met)."""
+
+    lineup: dict
+    seats: tuple
+    left_out: list
+    refusal: str
+    line: str
+
+
+def _unavailable_reason(row, floor: int) -> str:
+    if row is None:
+        return "no current character row"
+    reasons = []
+    level = int(row.get("level") or 0)
+    if level < floor:
+        reasons.append("level %d; needs %d" % (level, floor))
+    if int(row.get("online") or 0) != 1:
+        reasons.append("offline")
+    return ", ".join(reasons)
+
+
+def first_kill_roster(
+    keyword: str, lineup: dict, current_rows: list, quorum: tuple | None = None
+) -> FirstKillRoster:
+    """Form a first-kill raid from the approved lineup's eligible seats.
+
+    A seat is eligible when its character is online at the raid's level floor.
+    Eligible seats keep their group and role; nobody outside the lineup is
+    brought in. Below `quorum` (seats, tanks, healers; FIRST_KILL_QUORUM when
+    None) the order is refused and `lineup` holds the eligible seats anyway.
+    """
+    if keyword != MOLTEN_CORE:
+        return FirstKillRoster(
+            lineup, (), [], "a first kill is an order for Molten Core only", ""
+        )
+    want = _positive_quorum(quorum) if quorum is not None else FIRST_KILL_QUORUM
+    floor = MIN_LEVEL.get(keyword, 0)
+    by_name = {str(r.get("name") or "").casefold(): r for r in current_rows or []}
+    groups, kept, left_out, roles = [], [], [], []
+    total = 0
+    for group in lineup.get("groups") or []:
+        members = []
+        for member in group.get("members") or []:
+            total += 1
+            name = str(member["name"])
+            why = _unavailable_reason(by_name.get(name.casefold()), floor)
+            if why:
+                left_out.append((name, why))
+                continue
+            members.append(member)
+            kept.append(name)
+            roles.append(member.get("role"))
+        if members:
+            groups.append(dict(group, members=members))
+    reduced = dict(lineup, groups=groups)
+    tanks, healers = roles.count("tank"), roles.count("healer")
+    left = "; ".join("%s (%s)" % pair for pair in left_out)
+    if len(kept) < want[0] or tanks < want[1] or healers < want[2]:
+        refusal = (
+            "%s first kill refused: it needs %d seats, %d tanks and %d healers "
+            "online at level %d or more; %d seats, %d tanks and %d healers "
+            "are. Left out: %s"
+            % (
+                place(keyword),
+                want[0],
+                want[1],
+                want[2],
+                floor,
+                len(kept),
+                tanks,
+                healers,
+                left or "nobody",
+            )
+        )
+        return FirstKillRoster(reduced, tuple(kept), left_out, refusal, "")
+    line = (
+        "%s first kill: %d of %d approved seats form the raid (%d tanks, %d "
+        "healers; quorum %d, %d, %d); %d left out: %s"
+        % (
+            place(keyword),
+            len(kept),
+            total,
+            tanks,
+            healers,
+            want[0],
+            want[1],
+            want[2],
+            len(left_out),
+            left or "nobody",
+        )
+    )
+    return FirstKillRoster(reduced, tuple(kept), left_out, "", line)
 
 
 # --- the attunement ------------------------------------------------------------
@@ -522,7 +695,14 @@ def run_line() -> str:
         )
     else:
         head += " It does not clear: inside, the raid holds at the entrance."
-    if not GATHERS:
+    if GATHERS:
+        head += (
+            " Every seat is walked to the door, and a straggler is summoned at "
+            "the Blackrock Mountain stone; after the wait the raid goes in with "
+            "whoever has arrived. The bridge logs how each raider away from the "
+            "door is to arrive (summoned by a raid warlock, or on foot)."
+        )
+    else:
         head += (
             " Only the head is walked to the door: a raider who is not near it "
             "when the raid forms is not brought there, and after the wait the "

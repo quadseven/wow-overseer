@@ -69,6 +69,7 @@ CREATE_SQL = (
     " runs_wanted SMALLINT UNSIGNED NOT NULL,"
     " goal_item INT UNSIGNED NOT NULL DEFAULT 0,"
     " goal_notice_pending TINYINT UNSIGNED NOT NULL DEFAULT 0,"
+    " first_kill TINYINT UNSIGNED NOT NULL DEFAULT 0,"
     " status ENUM('queued','active','done','cancelled') NOT NULL"
     " DEFAULT 'queued',"
     " source VARCHAR(64) NOT NULL DEFAULT '',"
@@ -82,7 +83,7 @@ CREATE_SQL = (
 # `source` rides along so the planner (campaignplan.py) can tell its own
 # entries from an operator's order.
 SELECT_PENDING_SQL = (
-    "SELECT id, family, position, keyword, runs_wanted, status, source, goal_item "
+    "SELECT id, family, position, keyword, runs_wanted, status, source, goal_item, first_kill "
     "FROM overseer_dungeon_queue WHERE status IN ('queued', 'active') "
     "ORDER BY family, position, id"
 )
@@ -105,6 +106,12 @@ ITEM_INSERT_SQL = (
     "INSERT INTO overseer_dungeon_queue "
     "(family, position, keyword, runs_wanted, source, goal_item) "
     "VALUES (%s, %s, %s, %s, %s, %s)"
+)
+
+FIRST_KILL_INSERT_SQL = (
+    "INSERT INTO overseer_dungeon_queue "
+    "(family, position, keyword, runs_wanted, source, first_kill) "
+    "VALUES (%s, %s, %s, %s, %s, 1)"
 )
 
 # Guarded on the status it moves FROM, so a queue replaced between the read
@@ -196,6 +203,9 @@ class Entry:
     # on the same keyword).
     goal_item: int = 0
     item_name: str = ""
+    # A Molten Core order that forms the raid from the eligible seats only
+    # (raidrun.first_kill_roster).
+    first_kill: bool = False
 
 
 @dataclass(frozen=True)
@@ -232,6 +242,7 @@ class Move:
     reset: bool = False
     quest: bool = False
     why: str = ""
+    first_kill: bool = False
 
     @property
     def writes(self) -> bool:
@@ -375,6 +386,8 @@ def parse_entries(text: str) -> tuple:
         name = " ".join(
             w for w in words if w not in _FILLER and not _COUNT.fullmatch(w)
         )
+        name_words, first_kill = raidrun.strip_first_kill(name.split())
+        name = " ".join(name_words)
         keyword = keyword_for(name)
         if keyword is None:
             return (), (
@@ -385,7 +398,9 @@ def parse_entries(text: str) -> tuple:
                     ", ".join(sorted(jobs.PORTAL_KEYWORDS | jobs.RAID_KEYWORDS)),
                 )
             )
-        entries.append(Entry(keyword, runs))
+        if first_kill and keyword != raidrun.MOLTEN_CORE:
+            return (), ('"%s": a first kill is an order for Molten Core only.' % part)
+        entries.append(Entry(keyword, runs, first_kill=first_kill))
     return tuple(entries), ""
 
 
@@ -558,7 +573,8 @@ def _plain(entries) -> str:
             % (_place(e.keyword), e.keyword, e.item_name, e.goal_item, e.runs)
         )
         if e.goal_item
-        else "%s %d" % (_place(e.keyword), e.runs)
+        else "%s %d%s"
+        % (_place(e.keyword), e.runs, " (first kill)" if e.first_kill else "")
         for e in entries
     )
 
@@ -706,6 +722,7 @@ def step(rows: list, leader: dict | None, owned_items: set | None = None) -> Mov
             start=int(head["id"]),
             keyword=keyword,
             wanted=runs,
+            first_kill=bool(head.get("first_kill")),
             reset=True,
             why="starting %s, %d runs" % (place, runs),
         )
@@ -725,6 +742,7 @@ def step(rows: list, leader: dict | None, owned_items: set | None = None) -> Mov
                 start=int(nxt["id"]),
                 keyword=str(nxt["keyword"]),
                 wanted=int(nxt["runs_wanted"]),
+                first_kill=bool(nxt.get("first_kill")),
                 reset=True,
                 why=("item %d is owned; " % target if acquired else "")
                 + "%s is done at %d of %d; moving on to %s, %d runs"
@@ -749,6 +767,7 @@ def step(rows: list, leader: dict | None, owned_items: set | None = None) -> Mov
         return Move(
             keyword=keyword,
             wanted=runs,
+            first_kill=bool(head.get("first_kill")),
             why="%s is at %d of %d but the leader is on job=%s; re-asserting %s"
             % (place, done, runs, leader.get("job") or "(none)", want),
         )

@@ -357,6 +357,44 @@ def _eligible_counts(raiders: list, min_level) -> dict:
     }
 
 
+def first_kill_card(raiders: list, min_level) -> dict:
+    """What a first-kill order (raidrun.first_kill_roster) would form from
+    these placed raiders by level alone (the card does not know who is online;
+    the order reads that), and the seats it would leave out, named."""
+    have = _eligible_counts(raiders, min_level)
+    want = raidrun.first_kill_quorum()
+    got = (have["seats"], have["tanks"], have["healers"])
+    can_form = all(h >= w for h, w in zip(got, want, strict=True))
+    left = have["left_out"]
+    shown = ", ".join(left)
+    line = (
+        "A first-kill order forms %d of %d seats at level %d or more (%d tanks, "
+        "%d healers; it needs %d seats, %d tanks and %d healers online)%s. "
+        "Left out: %s."
+        % (
+            have["seats"],
+            len(raiders),
+            have["gate"],
+            have["tanks"],
+            have["healers"],
+            want[0],
+            want[1],
+            want[2],
+            "" if can_form else ", so it would refuse today",
+            shown or "nobody",
+        )
+    )
+    return {
+        "seats": have["seats"],
+        "tanks": have["tanks"],
+        "healers": have["healers"],
+        "quorum": list(want),
+        "left_out": left,
+        "can_form": can_form,
+        "line": line,
+    }
+
+
 def _quorum_blockers(raiders: list, min_level) -> list:
     """HARD: the module holds the raid at the door below its quorum. The
     numbers are raidrun's copy of the module's defaults."""
@@ -979,6 +1017,7 @@ def build_guild(
         "gear_line": _gear_line(raiders, gear),
         "blockers": blockers,
         "seats_below_level": _below_level_card(raiders, min_level),
+        "first_kill": first_kill_card(raiders, min_level),
         "blockers_line": (
             "Nothing stands between this guild and its first raid."
             if not blockers
