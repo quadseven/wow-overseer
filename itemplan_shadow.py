@@ -38,7 +38,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Callable, Mapping
 
 import bag_pressure
 import itemplan
@@ -174,6 +174,9 @@ class Extras:
     # None is unread, which vendors nothing.
     failed_listings: Mapping[tuple, int] | None = None
     known_spells: Mapping[str, frozenset] | None = None
+    # (holder, item guid) -> the guild loot policy's route, or None; see
+    # itemplan.Context.loot_route. None means no policy is wired in.
+    loot_route: Callable | None = None
     unread: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -308,6 +311,7 @@ def build_stacks(
                 req_level=_int(raw_required_level),
                 item_level=_int(raw_item_level, 1),
                 index=index,
+                guid=guid,
                 required_skill_rank=t.get("required_skill_rank"),
                 container_slots=t.get("container_slots"),
                 fire_res=t.get("fire_res"),
@@ -335,6 +339,7 @@ def _context(extras: Extras, verdicts) -> itemplan.Context:
         failed_listings=extras.failed_listings or {},
         known_spells=extras.known_spells,
         banker_free=extras.banker_free or {},
+        loot_route=extras.loot_route,
     )
 
 

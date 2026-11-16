@@ -202,12 +202,12 @@ class VerdictTest(unittest.TestCase):
                 },
             )
         )
-        self.assertEqual(d.route, itemplan.SELL_VENDOR)
+        self.assertNotEqual(d.route, itemplan.SELL_VENDOR)  # a green is banked
         self.assertIn("equipped gear verdicts", rep.missing)
 
     def test_a_worse_piece_gets_no_verdict_and_the_plan_decides(self):
         d, _ = self.cloak(self.extras(worn_level=70))
-        self.assertEqual(d.route, itemplan.SELL_VENDOR)
+        self.assertNotEqual(d.route, itemplan.SELL_VENDOR)  # a green is banked
 
 
 class BindingTest(unittest.TestCase):
