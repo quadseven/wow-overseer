@@ -48,6 +48,13 @@ class Quester(NamedTuple):
     zone: str  # the race's starting zone, where it starts and stays
 
 
+class Banker(NamedTuple):
+    name: str
+    class_id: int
+    race: str
+    zone: str  # the race's starting zone, where it starts before its walk
+
+
 GROUPS = {
     "Cave": (
         (  # group 1
@@ -276,6 +283,32 @@ QUESTERS = {
     ),
 }
 
+# The guild bankers, two per guild: logistics for what the vault cannot hold.
+# They join like any recruit, start over at level 1 with nothing, walk to their
+# faction's vault city and stand there. They never raid, level, quest, gather
+# or join a group, so, like the questers, they are in none of GROUPS,
+# SUMMONERS or MAINTENANCE and the lineup lists them apart.
+#
+# EACH PAIR SHARES ONE START, the shortest safe walk to a vault: Coldridge
+# Valley to Ironforge for the Alliance, Camp Narache to Thunder Bluff for the
+# Horde (a vault stands in each; the blood elf capital has none, and an orc
+# walks Durotar's road to Orgrimmar). The classes are the ones a rotating bot
+# of that race exists in on the realm, never a hunter (a pet walks too).
+# Names follow each guild's own style: short and grunted for Cave, a joke
+# about the race for Bonkers.
+# To add more: append a Banker to the guild's tuple, raise
+# teamsync.GUILD_SIZE and the realm's Overseer.Recruit.TargetSize together.
+BANKERS = {
+    "Cave": (
+        Banker("Hoarg", 5, "Dwarf", "Coldridge Valley"),
+        Banker("Stowk", 8, "Gnome", "Coldridge Valley"),
+    ),
+    "Bonkers": (
+        Banker("Hoardhoof", 11, "Tauren", "Camp Narache"),
+        Banker("Stashmoo", 7, "Tauren", "Camp Narache"),
+    ),
+}
+
 # Members who leave the guild to make room for the recruits.
 LEAVING = {
     "Cave": (
@@ -318,6 +351,7 @@ def names_of(guild: str) -> set:
             out.update((old, new))
     out.update(LEAVING.get(guild, ()))
     out.update(quester_names(guild))
+    out.update(banker_names(guild))
     return out
 
 
@@ -325,6 +359,12 @@ def quester_names(guild: str = "") -> set:
     """The questers' names in `guild`, or in every guild when none is named."""
     guilds = (guild,) if guild else tuple(QUESTERS)
     return {q.name for g in guilds for q in QUESTERS.get(g, ())}
+
+
+def banker_names(guild: str = "") -> set:
+    """The bankers' names in `guild`, or in every guild when none is named."""
+    guilds = (guild,) if guild else tuple(BANKERS)
+    return {b.name for g in guilds for b in BANKERS.get(g, ())}
 
 
 def renames(guild: str) -> list:

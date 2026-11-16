@@ -106,6 +106,20 @@ ASKS_READ_MINUTES = max(ASK_COOLDOWN_MINUTES, ASK_REPEAT_COOLDOWN_MINUTES)
 # the channel reading as a noticeboard.
 MAX_OPEN_ASKS_PER_GUILD = 3
 NEW_ASKS_PER_PASS = 2
+
+# LEVELLING SEATS ASK FIRST. A guild holds MAX_OPEN_ASKS_PER_GUILD asks and a
+# freed slot goes to whoever asks next. Ranked by gear need alone, a member at
+# level 50 or more (a pre-raid pick above all) took a slot it could seldom fill:
+# the order's seats at 50 and over have few partners in a door for 50 to 60, and
+# nobody under 50 can answer. Measured over 24 hours on the dev realm: the
+# guilds' open asks averaged 3.0 and 3.3 (every slot always taken); 337 of 883
+# asks came from members at 50 or more and formed 7 runs (2.1 percent), 297 came
+# from raid seats under 50 and formed 75 (25.3 percent). A seat that has levels
+# to gain is asked for first, any other member under the gate next, and the gear
+# need ranks within a tier as before. SEATS_LEVEL_FIRST=off restores the old order.
+SEATS_LEVEL_FIRST_ENV = "SEATS_LEVEL_FIRST"
+# The Molten Core order's gate: every seat at 50 or more.
+ORDER_LEVEL_GATE = 50
 ANSWERS_PER_PASS = 4
 
 # --- who may answer -----------------------------------------------------------
@@ -119,6 +133,8 @@ HELPER_LEVELS = 10
 NEED_UPGRADE = 3.0
 PRERAID_BONUS = 1.0
 NEED_QUEST = 2.5
+# A passenger for a rare node: over XP_BAND, under NEED_UPGRADE (memberloop.py).
+NEED_NODE = 2.5
 XP_BAND = 2.0
 HELP = 1.5
 CARRY = 2.0
@@ -394,6 +410,9 @@ class Need:
     preraid: bool = False
     slot: str = ""
     quest: int = 0
+    # A rare gathering node at the door (memberloop.py): the member rides along
+    # for it. It scores no gain; NEED_NODE is its worth.
+    node: bool = False
 
     @property
     def rank(self) -> tuple:
@@ -669,6 +688,11 @@ def stance_of(mate: Mate, door, asker_level: int, faction: str, needs: list) -> 
     """(stance, value, need) for this member and this door, or ("", 0, None)."""
     level = int(mate.member.level)
     if level > door.ceiling:
+        # LEVEL-MATCHED (guildrun.gray_cutoff): a member over the door's band who
+        # would make its mobs gray costs the group its experience, so it neither
+        # helps nor carries there.
+        if guildrun.kills_gray(level, door):
+            return "", 0.0, None
         if level <= door.ceiling + HELPER_LEVELS:
             return HELPS, HELP, None
         if guildrun.fitting_doors([asker_level], [door], faction):
@@ -683,6 +707,8 @@ def stance_of(mate: Mate, door, asker_level: int, faction: str, needs: list) -> 
         need = here[0]
         if need.quest:
             return NEED, NEED_QUEST, need
+        if need.node:
+            return NEED, NEED_NODE, need
         return NEED, NEED_UPGRADE + (PRERAID_BONUS if need.preraid else 0.0), need
     return NEED, XP_BAND, None
 
@@ -760,6 +786,10 @@ _ASK_QUEST = (
     "{place} for {item}? Need {roles}.",
     "LF{n}M {place}, need {roles}. Still on {item}.",
 )
+_ASK_NODE = (
+    "Anyone up for {place}? Need {roles}. I'm after the {item} in there.",
+    "LF{n}M {place}, need {roles}. I want to pick {item}.",
+)
 _ASK_CAMPAIGN = (
     "{place} tonight with the family. Wish us luck!",
     "Family's heading into {place}. Shout if you want anything from there.",
@@ -836,7 +866,9 @@ def _fit(text: str, limit: int) -> str:
 def ask_line(asker: str, door, roles, need: Need | None, vary: int = 0) -> str:
     n = len(roles)
     words = roles_words(roles)
-    if need is not None and need.quest:
+    if need is not None and need.node:
+        template = _pick(_ASK_NODE, asker, door.keyword, 0, vary=vary)
+    elif need is not None and need.quest:
         template = _pick(_ASK_QUEST, asker, door.keyword, need.quest, vary=vary)
     else:
         template = _pick(
@@ -859,6 +891,8 @@ def ask_reason(need: Need | None) -> str:
         return ""
     if need.quest:
         return _fit("the quest %s" % need.item, 160)
+    if need.node:
+        return _fit("%s to gather" % need.item, 160)
     if need.preraid:
         return _fit("%s, a pre-raid pick for my %s slot" % (need.item, need.slot), 160)
     return _fit("%s for my %s slot" % (need.item, need.slot or "gear"), 160)
@@ -1730,7 +1764,21 @@ def _best_askers(board: _Board, guild: str, barred: set, asked: set) -> list:
         choice = _asker_choice(board, name, mate, guild, asked)
         if choice:
             choices.append(choice)
-    return sorted(choices, key=lambda c: (c[0], c[1]))
+    return sorted(choices, key=lambda c: (_asker_tier(c[2].member), c[0], c[1]))
+
+
+def _asker_tier(member: guildrun.Member, environ=None) -> int:
+    """0 for an approved raid seat under ORDER_LEVEL_GATE, 1 for any other
+    member under it, 2 for the rest; always 0 with SEATS_LEVEL_FIRST off, so
+    the need alone ranks. An approved seat carries its plan tree
+    (guildrun.levelling_seats reads it the same way)."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get(SEATS_LEVEL_FIRST_ENV, "") or "").strip().lower()
+    if raw in ("off", "0", "false", "no"):
+        return 0
+    if int(member.level) >= ORDER_LEVEL_GATE:
+        return 2
+    return 0 if member.target_tree else 1
 
 
 def _turn_order(guilds, asks: list) -> list:

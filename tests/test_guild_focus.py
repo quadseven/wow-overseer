@@ -152,7 +152,9 @@ class ACraftGuild(unittest.TestCase):
 
     def test_a_raider_keeps_the_cloth_its_casts_eat(self):
         m = member("Rok", carried=(stack(1, LINEN, 25),))
-        self.assertEqual(guildjobs.postable(m, None), [m.carried[0]])
+        # A raid seat casts at its town stops (slice 3), so it keeps the batch
+        # whether or not its guild is on craft focus.
+        self.assertEqual(guildjobs.postable(m, None), [])
         self.assertEqual(guildjobs.postable(m, None, crafting=True), [])
 
     def test_a_member_in_a_guild_run_is_left_alone(self):
@@ -289,7 +291,21 @@ class EveryCraftingTrade(unittest.TestCase):
 
     def test_every_auto_learned_recipe_is_a_real_recipe(self):
         # craft.py's list of nine auto-learned first rungs.
-        learned = {3275, 2963, 3918, 2657, 2330, 2660, 2881, 2152, 9058, 2538, 2540}
+        # 7418 is Enchant Bracer - Minor Health (#2411).
+        learned = {
+            3275,
+            2963,
+            3918,
+            2657,
+            2330,
+            2660,
+            2881,
+            2152,
+            9058,
+            2538,
+            2540,
+            7418,
+        }
         self.assertEqual(guildjobs.AUTO_LEARNED, learned)
         self.assertLessEqual(guildjobs.AUTO_LEARNED, guildjobs.CRAFT_SPELLS)
         named = {r.spell_id for recipes in craft.RECIPES.values() for r in recipes}

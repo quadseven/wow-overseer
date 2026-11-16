@@ -203,7 +203,8 @@ class ASittingOutMembersStepIsNotTheFamilysTrip(unittest.TestCase):
 class ASittingOutMemberIsNotTheFamilySplit(unittest.TestCase):
     def test_the_split_clock_reads_only_the_members_on_the_campaign(self):
         run = _Run(item_moves=[_ugga_deposit()]).run()
-        self.assertEqual(run.split_names, [["Bork", "Grug", "Ugga"]])
+        # The trip's own party: the leader and the member with bank work.
+        self.assertEqual(run.split_names, [["Grug", "Ugga"]])
 
     def test_a_crafting_member_far_away_does_not_defer_the_familys_trip(self):
         """Live: 'not taking a banker trip while the family has remained split
@@ -234,8 +235,11 @@ class ASittingOutMemberIsNotTheFamilySplit(unittest.TestCase):
             steady_since=now - 1300.0,
             split_since=now - 1300.0,
         )
+        far_deposit = bank.Move("Bork", "deposit", 502, "Linen", 5, "kept in the bank")
         run = _Run(
-            positions=positions, item_moves=[_ugga_deposit()], previous_split=long_split
+            positions=positions,
+            item_moves=[_ugga_deposit(), far_deposit],
+            previous_split=long_split,
         ).run()
         self.assertEqual(run.steps, [bank.BANK_ERRAND_DEFER])
         self.assertEqual(run.aims, [])

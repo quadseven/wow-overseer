@@ -34,10 +34,11 @@ PURE MODULE: rows in, one command out. No MySQL and no clock.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-import guildcorps
 import disposition
+import guildcorps
+import purse
 
 SLOT_PRICES = (1000, 10000, 100000, 250000, 250000, 250000, 250000)
 BANK_BAG_SLOTS = len(SLOT_PRICES)
@@ -79,10 +80,34 @@ class Facts:
     worn: tuple = ()  # slots of each worn bag
     spare: tuple = ()  # Bag, carried and not worn
     crafter: bool = False  # holds tailoring: its ladder bags are the guild's
+    bank_full_of_kept: bool = False
+    purse_order: purse.Order | None = None
 
     @property
     def protected_entries(self) -> frozenset[int]:
         return frozenset(guildcorps.BAG_ITEMS) if self.crafter else frozenset()
+
+
+def with_kept_full(facts: list, names) -> list:
+    """Mark every member in `names` whose personal bank holds only kept stacks."""
+    if not names:
+        return list(facts)
+    return [replace(f, bank_full_of_kept=f.name in names) for f in facts]
+
+
+def with_purse_orders(facts: list, orders: dict) -> list:
+    """Attach each member's `purse.Order` so slot buys honor spells, riding, and food."""
+    if not orders:
+        return list(facts)
+    return [
+        replace(f, purse_order=orders[f.name]) if f.name in orders else f for f in facts
+    ]
+
+
+def _spendable(facts: Facts) -> int:
+    if facts.purse_order is None:
+        return facts.money
+    return facts.purse_order.spendable(purse.GEAR)
 
 
 @dataclass(frozen=True)
@@ -185,17 +210,19 @@ def step(facts: Facts, floor=None):
     if facts.bought >= BANK_BAG_SLOTS:
         return None, "%s has bought every bank bag slot" % facts.name
     price = SLOT_PRICES[facts.bought]
-    if facts.money < price * PURSE_SHARE:
+    available = _spendable(facts)
+    required = price if facts.bank_full_of_kept else price * PURSE_SHARE
+    if available < required:
         return (
             None,
             "%s waits to buy bank bag slot %d: %d copper of the %d it wants in hand"
-            % (facts.name, facts.bought + 1, facts.money, price * PURSE_SHARE),
+            % (facts.name, facts.bought + 1, available, required),
         )
     return Step(
         facts.name,
         BUY_SLOT,
         "%s buys bank bag slot %d for %d copper of its %d"
-        % (facts.name, facts.bought + 1, price, facts.money),
+        % (facts.name, facts.bought + 1, price, available),
     ), ""
 
 

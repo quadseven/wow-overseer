@@ -293,7 +293,7 @@ RUNS: tuple = (
     Run("zulfarrak", 978, 54),
     Run("maraudon-orange", 2100, 55),
     Run("maraudon-purple", 2100, 55),
-    Run("sunken-temple", 1417, LEVEL_CAP),
+    Run("sunken-temple", 1417, 55),
     Run("blackrock-depths", 1584, LEVEL_CAP),
     Run("lower-blackrock-spire", 1583, LEVEL_CAP),
     Run("dire-maul-east-east", 2557, LEVEL_CAP),
@@ -337,9 +337,21 @@ def _front_run(map_id: int) -> str:
 # of placeholders sized by the family, never a value.
 
 SUCCESS = "complete"
+# What the dungeon module says when it has killed every boss it can reach. On a
+# map two doors share (the Lower and Upper Spire, map 229) the ledger can never
+# close the row 'complete', because the other wing's encounters stay open, so a
+# finished clear is closed 'stalled' with this in its reason.
+CLEARED_REASON = "All bosses cleared!"
+
+
+def finished_clear(outcome, reason) -> bool:
+    """A run the ledger closed 'stalled' only because the module had nothing
+    left to kill: the door was cleared, not stuck."""
+    return str(outcome or "") == "stalled" and CLEARED_REASON in str(reason or "")
+
 
 RUNS_SQL = (
-    "SELECT leader_name, map_id, portal_keyword, outcome "
+    "SELECT leader_name, map_id, portal_keyword, outcome, ended_reason "
     "FROM overseer_dungeon_run WHERE state = 'ended' AND leader_name IN ({holes})"
 )
 # A realm whose ledger predates `portal_keyword` reads each run's door off its
@@ -349,13 +361,13 @@ RUNS_SQL_TIMELINE = (
     "SELECT r.leader_name, r.map_id, (SELECT e.portal FROM "
     "overseer_dungeon_run_event e WHERE e.run_id = r.id "
     "AND e.portal <> _utf8mb4'' COLLATE utf8mb4_unicode_ci "
-    "ORDER BY e.id LIMIT 1) AS portal_keyword, r.outcome "
+    "ORDER BY e.id LIMIT 1) AS portal_keyword, r.outcome, r.ended_reason "
     "FROM overseer_dungeon_run r WHERE r.state = 'ended' "
     "AND r.leader_name IN ({holes})"
 )
 # A realm with neither still counts by map.
 RUNS_SQL_OLD = (
-    "SELECT leader_name, map_id, outcome "
+    "SELECT leader_name, map_id, outcome, ended_reason "
     "FROM overseer_dungeon_run WHERE state = 'ended' AND leader_name IN ({holes})"
 )
 
@@ -486,7 +498,10 @@ def ledger(rows: list, names: list) -> tuple:
         )
         if not keyword:
             continue
-        bucket = done if str(row.get("outcome") or "") == SUCCESS else failed
+        won = str(row.get("outcome") or "") == SUCCESS or finished_clear(
+            row.get("outcome"), row.get("ended_reason")
+        )
+        bucket = done if won else failed
         bucket[keyword] = bucket.get(keyword, 0) + 1
     return done, failed
 

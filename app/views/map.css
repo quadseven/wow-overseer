@@ -5,3 +5,6 @@
 .where-who { display: flex; gap: 2px 10px; flex-wrap: wrap; font-size: var(--fs-2); }
 .where-who a { text-decoration: none; min-height: 44px; display: inline-flex; align-items: center; }
 .where-who a:hover { text-decoration: underline; }
+@media (pointer: coarse) {
+  .where-who a { min-width: 44px; justify-content: center; }
+}

@@ -866,5 +866,166 @@ class TheExecutorContractThisPassDependsOn(unittest.TestCase):
         self.assertNotIn('status = "delivered";', body)
 
 
+class TheClassNineTriage(unittest.TestCase):
+    def test_classify_class9_and_report_lists_three_groups_per_member(self):
+        held = [
+            recipebook.Held(
+                "Ugga", 1, 13493, "Recipe: Greater Arcane Elixir", 171, 285, 17573
+            ),
+            recipebook.Held("Ugga", 2, 12835, "Plans: Annihilator", 164, 300, 16991),
+            recipebook.Held(
+                "Grug",
+                3,
+                17682,
+                "Book: Gift of the Wild",
+                0,
+                0,
+                21849,
+                allowable_class=1024,
+                required_level=50,
+            ),
+            recipebook.Held("Grug", 4, 18334, "Libram of Protection", 0, 0, 0),
+        ]
+        skills = {"Ugga": {171: 150}, "Grug": {164: 200}}
+        summary = recipebook.classify_class9(held, skills)
+        self.assertEqual(
+            summary["Ugga"], {"own_trade": 1, "other_trade": 1, "book_or_libram": 0}
+        )
+        self.assertEqual(
+            summary["Grug"], {"own_trade": 0, "other_trade": 0, "book_or_libram": 2}
+        )
+        line = recipebook.class9_report(summary)
+        self.assertIn("Ugga", line)
+        self.assertIn("own=1", line)
+        self.assertIn("other=1", line)
+        self.assertIn("Grug", line)
+        self.assertIn("book=2", line)
+
+    def test_plan_learns_uses_class_book_for_matching_class_and_level(self):
+        held = [
+            recipebook.Held(
+                "Bork",
+                10,
+                17682,
+                "Book: Gift of the Wild",
+                0,
+                0,
+                21849,
+                allowable_class=1024,
+                required_level=50,
+            ),
+            recipebook.Held(
+                "Grug",
+                11,
+                17682,
+                "Book: Gift of the Wild",
+                0,
+                0,
+                21849,
+                allowable_class=1024,
+                required_level=50,
+            ),
+        ]
+        learns, skipped = recipebook.plan_learns(
+            held,
+            {"Bork": {}, "Grug": {}},
+            member_classes={"Bork": 11, "Grug": 1},
+            member_levels={"Bork": 60, "Grug": 60},
+        )
+        self.assertEqual([(x.holder, x.entry) for x in learns], [("Bork", 17682)])
+        self.assertEqual(len(skipped), 1)
+
+    def test_fetch_held_recipes_wires_class_level_and_libram_into_plan_learns(self):
+        import ast
+        from unittest import mock
+
+        source = (
+            pathlib.Path(__file__).resolve().parent.parent / "bridge.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        nodes = [
+            n
+            for n in tree.body
+            if (
+                isinstance(n, ast.Assign)
+                and any(
+                    isinstance(t, ast.Name) and t.id == "_RECIPE_HELD_SQL"
+                    for t in n.targets
+                )
+            )
+            or (isinstance(n, ast.FunctionDef) and n.name == "_fetch_held_recipes")
+        ]
+        rows = [
+            {
+                "holder": "Grug",
+                "item_guid": 1001,
+                "entry": 17682,
+                "label": "Book: Gift of the Wild",
+                "required_skill": 0,
+                "required_rank": 0,
+                "recipe_spell": 21849,
+                "allowable_class": 32256,
+                "required_level": 50,
+            },
+            {
+                "holder": "Bork",
+                "item_guid": 1002,
+                "entry": 17682,
+                "label": "Book: Gift of the Wild",
+                "required_skill": 0,
+                "required_rank": 0,
+                "recipe_spell": 21849,
+                "allowable_class": 32256,
+                "required_level": 50,
+            },
+            {
+                "holder": "Grug",
+                "item_guid": 1003,
+                "entry": 18334,
+                "label": "Libram of Protection",
+                "required_skill": 0,
+                "required_rank": 0,
+                "recipe_spell": 0,
+                "allowable_class": -1,
+                "required_level": 0,
+            },
+        ]
+        cur = mock.MagicMock()
+        cur.fetchall.return_value = rows
+        conn = mock.MagicMock()
+        conn.__enter__.return_value = conn
+        conn.cursor.return_value.__enter__.return_value = cur
+        ns = {
+            "recipebook": recipebook,
+            "pymysql": mock.MagicMock(err=mock.MagicMock(MySQLError=Exception)),
+            "log": mock.MagicMock(),
+            "_connect": mock.MagicMock(return_value=conn),
+        }
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+        held = ns["_fetch_held_recipes"](["Grug", "Bork"])
+        self.assertEqual(held[0].allowable_class, 32256)
+        self.assertEqual(held[0].required_level, 50)
+        self.assertEqual(held[2].allowable_class, -1)
+        self.assertNotIn("it.subclass = 0", ns["_RECIPE_HELD_SQL"])
+        self.assertIn("it.name LIKE %%s", ns["_RECIPE_HELD_SQL"])
+        cur.execute.assert_called_once()
+        sql_sent, params = cur.execute.call_args[0]
+        self.assertIn("it.name LIKE %s", sql_sent)
+        self.assertEqual(
+            params, ("Grug", "Bork", recipebook.RECIPE_ITEM_CLASS, "Libram of %")
+        )
+        learns, skipped = recipebook.plan_learns(
+            held,
+            {"Grug": {}, "Bork": {}},
+            member_classes={"Grug": 1, "Bork": 11},
+            member_levels={"Grug": 60, "Bork": 60},
+        )
+        self.assertEqual([(x.holder, x.entry) for x in learns], [("Bork", 17682)])
+        self.assertEqual(
+            [(x.character, x.entry) for x in skipped],
+            [("Grug", 17682), ("Grug", 18334)],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

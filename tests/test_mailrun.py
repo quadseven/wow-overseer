@@ -628,3 +628,58 @@ class AMailRowIsAnsweredWhereTheCharacterStandsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _refusal(holder, command, refused, logout):
+    return {
+        "holder": holder,
+        "command": command,
+        "refused": refused,
+        "logout_time": logout,
+    }
+
+
+class ALetterTheMailboxHasNotLoaded(unittest.TestCase):
+    """#2402. Measured on the dev realm 2026-11-13: eight letters written into
+    `mail` while their holders were online came back `no mail with that id`
+    on every take, and the town errand's mail step spun its whole window on
+    them. The core loads a mailbox at login, so a refusal newer than the
+    holder's last logout stands until the next login."""
+
+    def test_a_refused_letter_is_unloaded_until_the_next_login(self):
+        rows = [
+            _refusal("Uzza", "take-item mail:900004 item:200000009", 2000, 1000),
+            _refusal("Grug", "take-item mail:900001 item:200000001", 2000, 3000),
+            _refusal("Oz", "take-money mail:7", 2000, 2000),
+        ]
+        self.assertEqual(
+            mailrun.unloaded_letters(rows), frozenset({("Uzza", 900004), ("Oz", 7)})
+        )
+
+    def test_an_unreadable_refusal_row_is_not_guessed_at(self):
+        rows = [
+            _refusal("Uzza", "delete mail:5", 2000, 1000),
+            _refusal("Uzza", "take-item item:3", 2000, 1000),
+            _refusal("Uzza", "take-item mail:9 item:3", None, 1000),
+        ]
+        self.assertEqual(mailrun.unloaded_letters(rows), frozenset())
+
+    def test_an_unloaded_letter_is_never_planned_and_never_counts_as_gear(self):
+        rows = [
+            _gear("Uzza", 900004, 200000009),
+            _gear("Uzza", 12, 77),
+        ]
+        kept = mailrun.loaded_rows(rows, frozenset({("Uzza", 900004)}))
+        letters = mailrun.letters_from_rows(kept, ["Uzza"])
+        self.assertEqual([letter.mail_id for letter in letters], [12])
+        self.assertEqual(mailrun.gear_waiting(letters), {"Uzza": 1})
+        plan = mailrun.plan(letters, {"Uzza": 10})
+        self.assertEqual({t.mail_id for t in plan.takes}, {12})
+
+    def test_the_note_names_each_letter_and_its_holder(self):
+        self.assertEqual(
+            mailrun.unloaded_note(frozenset({("Zork", 900008), ("Uzza", 900004)})),
+            "2 letter(s) were written while their holder was online and wait "
+            "for its next login: Uzza mail 900004, Zork mail 900008",
+        )
+        self.assertEqual(mailrun.unloaded_note(frozenset()), "")

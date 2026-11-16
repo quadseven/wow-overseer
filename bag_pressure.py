@@ -21,6 +21,13 @@ MAIL = gear.MAIL
 spots_from_rows = gear.spots_from_rows
 within_trade_range = gear._within_trade_range
 
+# Armor material classification, re-exported for equipscore and gearup so gear keeps its single importer.
+ARMOR_CLOTH = gear.ARMOR_CLOTH
+ITEM_CLASS_ARMOR = gear.ITEM_CLASS_ARMOR
+ARMOR_MATERIAL_INVTYPES = gear.ARMOR_MATERIAL_INVTYPES
+preferred_armor_subclass = gear.preferred_armor_subclass
+armor_material_tier = gear.armor_material_tier
+
 # The two item classes that are worn: weapons and armour. A bag is class 1 and
 # is deliberately not here, because an empty bag is still slots.
 EQUIPMENT_CLASSES = frozenset({2, 4})
@@ -76,9 +83,43 @@ STACK_QUEST_NEEDED_SQL = (
     "WHERE qs.guid = ci.guid AND qs.status <> 0 AND ii.itemEntry IN ("
     "qt.RequiredItemId1, qt.RequiredItemId2, qt.RequiredItemId3, "
     "qt.RequiredItemId4, qt.RequiredItemId5, qt.RequiredItemId6, "
-    "qt.ItemDrop1, qt.ItemDrop2, qt.ItemDrop3, qt.ItemDrop4, qt.StartItem)))"
+    "qt.ItemDrop1, qt.ItemDrop2, qt.ItemDrop3, qt.ItemDrop4, qt.StartItem))"
+    # A QUEST THE HOLDER HAS NOT TAKEN YET (#2607): the item belongs to a quest
+    # it could still do, so the answer is to go and finish it, not to sell or
+    # destroy the item. Counts a quest not rewarded whose race gate lets the
+    # holder's race take it (AllowableRaces 0 is every race), at any level.
+    " OR EXISTS ("
+    "SELECT 1 FROM acore_world.quest_template qt2 "
+    "WHERE ii.itemEntry IN ("
+    "qt2.RequiredItemId1, qt2.RequiredItemId2, qt2.RequiredItemId3, "
+    "qt2.RequiredItemId4, qt2.RequiredItemId5, qt2.RequiredItemId6, "
+    "qt2.ItemDrop1, qt2.ItemDrop2, qt2.ItemDrop3, qt2.ItemDrop4, qt2.StartItem) "
+    "AND NOT EXISTS (SELECT 1 FROM character_queststatus_rewarded qr2 "
+    "WHERE qr2.guid = ci.guid AND qr2.quest = qt2.ID) "
+    "AND (qt2.AllowableRaces = 0 OR (qt2.AllowableRaces & (1 << ("
+    "(SELECT ch.race FROM characters ch WHERE ch.guid = ci.guid) - 1))) <> 0)))"
 )
 QUEST_NEEDED_SQL = "(it.class = 12 AND " + STACK_QUEST_NEEDED_SQL + ")"
+
+
+# THE DARKMOON DECK CARDS (#2607). A card is "<Ace to Eight> of <Beasts,
+# Elementals, Portals or Warlords>", a deck is "<suit> Deck", and a finished
+# deck turns in for a "Darkmoon Card:" trinket. The operator means to complete
+# the decks, so none is ever sold, listed or destroyed, whatever the plan or
+# the quest test says of it.
+_DARKMOON_RANKS = ("Ace", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight")
+_DARKMOON_SUITS = ("Beasts", "Elementals", "Portals", "Warlords")
+_DARKMOON_NAMES = frozenset(
+    {"%s of %s" % (r, s) for r in _DARKMOON_RANKS for s in _DARKMOON_SUITS}
+    | {"%s Deck" % s for s in _DARKMOON_SUITS}
+)
+KEPT_DARKMOON = "a Darkmoon deck card, kept for the deck"
+
+
+def is_darkmoon(name) -> bool:
+    """A Darkmoon card, deck or deck trinket by its name."""
+    text = str(name or "").strip()
+    return text in _DARKMOON_NAMES or text.startswith("Darkmoon Card:")
 
 
 def owner_keeps(name: str, keep_names) -> bool:
@@ -164,6 +205,8 @@ def _vendor_reading(row: dict, keep_names=()) -> tuple:
         return None, KEPT_UNREAD
     if owner_keeps(row.get("name", ""), keep_names):
         return None, KEPT_BY_OWNER
+    if is_darkmoon(row.get("name", "")):
+        return None, KEPT_DARKMOON
     try:
         item = ItemForSale(
             quality=int(row["quality"]),
@@ -322,7 +365,9 @@ def destroy_candidates(
     """
     out = []
     for row in rows:
-        if owner_keeps(row.get("name", ""), keep_names):
+        if owner_keeps(row.get("name", ""), keep_names) or is_darkmoon(
+            row.get("name", "")
+        ):
             continue
         try:
             if int(row["item_class"]) != QUEST_CLASS:
@@ -661,11 +706,50 @@ CAMPAIGN_ADMIT_FREE_SLOTS = TOWN_RUN_FREE_SLOTS + 1
 CAMPAIGN_RESUME_CEILING_SECONDS = 45 * 60
 
 
+# ONE BOUNDED VENDOR STOP BEFORE A RUN, WHEN IT WOULD MAKE A RUN'S ROOM. The
+# admission floor above lets a family in at four free slots each, and a run
+# fills that in the first fight: on wow-dev 2026-11-15 two families went into
+# Blackrock Depths at 4 to 5 free slots each carrying 11 to 19 stacks a vendor
+# would buy, reached none free inside, and left every blue drop on the corpse
+# for hours (the module only destroys grey stacks inside a run, and walks out
+# only for a drop that stays stranded for ten minutes). The module cannot make
+# the room once the party is inside, so the bridge makes it before the door: a
+# member below the run's room (CAMPAIGN_RESUME_FREE_SLOTS) who carries at least
+# STOCK_UP_MIN_SELLABLE stacks a vendor will buy holds the run for ONE trip.
+# The wait is bounded by its own short ceiling, not the 45 minute one #2116
+# measured, and it asks nothing of a member nobody can lift.
+STOCK_UP_MIN_SELLABLE = 4
+STOCK_UP_CEILING_SECONDS = 15 * 60
+
+
+def stock_up_short(
+    free_slots: dict,
+    sellable: dict | None,
+    held_seconds: float = 0.0,
+) -> tuple:
+    """Members a sale would lift to a run's room, sorted; () when none or late."""
+    if not sellable or held_seconds >= STOCK_UP_CEILING_SECONDS:
+        return ()
+    short = []
+    for name, free in (free_slots or {}).items():
+        offered = sellable.get(name)
+        if not isinstance(free, int) or not isinstance(offered, int):
+            continue
+        if (
+            free >= 0
+            and free < CAMPAIGN_RESUME_FREE_SLOTS
+            and offered >= STOCK_UP_MIN_SELLABLE
+        ):
+            short.append(str(name))
+    return tuple(sorted(short))
+
+
 def campaign_resume_short(
     free_slots: dict,
     held_seconds: float = 0.0,
     resume: int = CAMPAIGN_ADMIT_FREE_SLOTS,
     ceiling: float = CAMPAIGN_RESUME_CEILING_SECONDS,
+    sellable: dict | None = None,
 ) -> tuple:
     """Members still short of the resume floor, sorted; () when the run may go.
 
@@ -675,19 +759,22 @@ def campaign_resume_short(
     An unknown or negative reading blocks nothing, the same fail-open rule
     `family_town_run_needed` keeps for the same reason: a broken read must not
     hold a campaign in town. Past `ceiling` seconds in town nothing is short.
+
+    With `sellable` (the last vendor read), members a sale would lift to a
+    run's room are short too, for STOCK_UP_CEILING_SECONDS only.
     """
     if held_seconds >= ceiling:
         return ()
-    return tuple(
-        sorted(
-            str(name)
-            for name, free in (free_slots or {}).items()
-            if isinstance(free, int) and 0 <= free < resume
-        )
-    )
+    below = {
+        str(name)
+        for name, free in (free_slots or {}).items()
+        if isinstance(free, int) and 0 <= free < resume
+    }
+    below.update(stock_up_short(free_slots, sellable, held_seconds))
+    return tuple(sorted(below))
 
 
-def bag_room_made(free_slots: dict) -> bool:
+def bag_room_made(free_slots: dict, sellable: dict | None = None) -> bool:
     """Whether the family has the bag room a waiting campaign asks for (#2116).
 
     The two questions the admission gate asks, at once: nobody at or below
@@ -698,7 +785,7 @@ def bag_room_made(free_slots: dict) -> bool:
     return (
         bool(free_slots)
         and not family_town_run_needed(free_slots)
-        and not campaign_resume_short(free_slots)
+        and not campaign_resume_short(free_slots, sellable=sellable)
     )
 
 
@@ -710,6 +797,7 @@ def town_first_trip_worth(
     free_slots: dict,
     sellable: dict | None,
     resume: int = CAMPAIGN_ADMIT_FREE_SLOTS,
+    stock_up: bool = False,
 ) -> bool:
     """Whether a family held in town for bag room should walk to a vendor.
 
@@ -723,10 +811,11 @@ def town_first_trip_worth(
 
     While the hold lasts the trigger is the resume floor: a trip is worth
     taking when selling lifts a member short of it to at least `resume`.
+    `stock_up` adds the stop the run is held for (stock_up_short).
     """
     return family_town_run_needed(
         free_slots, minimum_free=resume - 1, sellable=sellable
-    )
+    ) or (stock_up and bool(stock_up_short(free_slots, sellable)))
 
 
 # THE HOLD AT THE FLOOR HAS A WAY OUT. A member at or below
@@ -874,11 +963,20 @@ VENDOR_WAIT_TRIP_SECONDS = 30 * 60
 
 
 def vendor_wait_trip(
-    wait_seconds: int, sellable_counts: dict[str, int], in_run: bool
+    wait_seconds: int,
+    sellable_counts: dict[str, int],
+    in_run: bool,
+    farming: bool = False,
 ) -> bool:
-    """Take a vendor turn after a sustained wait, unless a dungeon owns travel."""
+    """Take a vendor turn after a sustained wait, unless a dungeon owns travel.
+
+    A family on a farm order is left out: its own town phase takes the vendor
+    trip, and a seller that cannot finish (one held in a dungeon) would
+    otherwise take the leader's column again and again and split the family.
+    """
     return (
         not in_run
+        and not farming
         and wait_seconds >= VENDOR_WAIT_TRIP_SECONDS
         and any(count > 0 for count in sellable_counts.values())
     )
@@ -2052,6 +2150,160 @@ def bag_candidates(
 
 
 # ---------------------------------------------------------------------------
+# AN EPIC A GUILD MEMBER COULD WEAR IS NEVER SOLD OR DESTROYED (#2385)
+#
+# Read on the dev realm on 2026-11-13: the families sold 16 bind-on-equip
+# classic epics of required level 36 to 48 to vendors in ten days, because the
+# family-fit gate asks only the five members of a family, all at 60, and a
+# level 44 epic fits none of them. Both family guilds held every class, many
+# members below that level. The operator's rule: an epic or better is kept
+# while any member of either guild could EVER wear it (the class can use the
+# armour or weapon type at the level cap, and the required level is at most
+# the cap), and it is the gear routing's to place. Only an epic nobody in the
+# guilds could ever equip may be disenchanted or sold.
+#
+# A SOULBOUND EPIC CAN ONLY EVER BE ITS HOLDER'S, so for one the holder's
+# class is the question; the guilds' classes answer it when that was not read.
+#
+# FAIL CLOSED: an unread item fact, or no guild classes at all, keeps it.
+#
+# A BIND-ON-EQUIP RARE THAT IS SOMEBODY'S UPGRADE IS KEPT TOO (#2389). Read on
+# the dev realm on 2026-11-13: since 2026-10-30 the families sold 183
+# bind-on-equip rares of required level 60 or below, for the same reason the
+# epics went. The operator's rule: a quality 3 piece is kept when its copy is
+# still bind-on-equip (a soulbound rare keeps today's behaviour), a class in
+# either guild could wear it, AND some guild member would wear it over what
+# they wear now. That last question is the equip judge's (equipscore.choose,
+# which imports this module), so the caller hands it in as `upgrade`: a
+# callable from the row to the members who would wear it, () for nobody, or
+# None when it could not read, which keeps the rare. Without a judge a rare is
+# not this rule, as before.
+EPIC_QUALITY = 4
+RARE_QUALITY = 3
+GUILD_LEVEL_CAP = 60
+
+
+def _read_int(value):
+    """The integer `value` holds, or None when it holds none."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _epic_wearer_classes(row: dict, guild_classes) -> frozenset:
+    classes = frozenset(
+        c for c in (_read_int(v) for v in (guild_classes or ())) if c and c > 0
+    )
+    flags = _read_int(row.get("instance_flags")) or 0
+    holder_class = _read_int(row.get("holder_class")) or 0
+    if flags & _INSTANCE_SOULBOUND and holder_class > 0:
+        return frozenset({holder_class})
+    return classes
+
+
+def _class_could_ever_wear(holding, class_id: int) -> bool:
+    character = gear.CharacterState("", int(class_id), GUILD_LEVEL_CAP)
+    return bool(
+        gear.usable_by_class(holding, int(class_id))
+        and gear.wearable_armor(holding, character)
+        and gear.class_wields(holding, character)
+    )
+
+
+def _rare_in_question(row: dict, quality: int, upgrade) -> bool:
+    """Is this a quality 3 copy the rare rule asks about: a judge was given,
+    and the copy is still bind-on-equip? An unread binding is asked about."""
+    if quality != RARE_QUALITY or upgrade is None:
+        return False
+    flags = _read_int(row.get("instance_flags")) or 0
+    if flags & _INSTANCE_SOULBOUND:
+        return False
+    bonding = _read_int(row.get("bonding"))
+    return bonding is None or _BONDING.get(bonding) == disposition.BIND_ON_EQUIP
+
+
+def epic_kept(row: dict, guild_classes, upgrade=None) -> bool:
+    """Is this an epic or better that some guild member could ever wear, or
+    a bind-on-equip rare a guild member would wear over what they wear now?
+
+    `row` carries the item's `quality`, `required_level`, `item_class`,
+    `subclass`, `inventory_type` and `allowable_class`, and for the soulbound
+    case `instance_flags` and `holder_class`; a rare also `bonding`.
+    `guild_classes` is every class (item_template class id) among the roster
+    families and their guilds' members. `upgrade(row)` names the members who
+    would wear a rare (None when unread); it is asked only after every other
+    gate passes. True means the item must not be sold, destroyed or
+    disenchanted.
+    """
+    quality = _read_int(row.get("quality"))
+    if quality is None:
+        return True
+    rare = _rare_in_question(row, quality, upgrade)
+    if quality < EPIC_QUALITY and not rare:
+        return False
+    item_class = _read_int(row.get("item_class"))
+    inventory_type = _read_int(row.get("inventory_type"))
+    required_level = _read_int(row.get("required_level"))
+    if item_class is None or inventory_type is None or required_level is None:
+        return True
+    if item_class not in EQUIPMENT_CLASSES or inventory_type == 0:
+        return False
+    if required_level > GUILD_LEVEL_CAP:
+        return False
+    classes = _epic_wearer_classes(row, guild_classes)
+    if not classes:
+        return True
+    if not _could_be_worn(row, quality, item_class, inventory_type, classes):
+        return False
+    if rare:
+        wanted = upgrade(row)
+        return wanted is None or bool(wanted)
+    return True
+
+
+def _could_be_worn(row, quality, item_class, inventory_type, classes) -> bool:
+    """Could some class among `classes` ever wear this piece at the cap?"""
+    required_level = _read_int(row.get("required_level")) or 0
+    allowable = _read_int(row.get("allowable_class"))
+    subclass = _read_int(row.get("subclass"))
+    holding = gear.Holding(
+        holder="",
+        guid=0,
+        entry=_read_int(row.get("entry")) or 0,
+        name=str(row.get("name") or ""),
+        quality=quality,
+        item_level=_read_int(row.get("item_level")) or 0,
+        required_level=required_level,
+        allowable_class=-1 if allowable is None else allowable,
+        inventory_type=inventory_type,
+        item_class=item_class,
+        item_subclass=gear.SUBCLASS_UNSTATED if subclass is None else subclass,
+    )
+    return any(_class_could_ever_wear(holding, c) for c in classes)
+
+
+def epic_kept_line(row: dict, holder: str, wanted_by=None) -> str:
+    """The one log line a refused sale of a kept epic or rare writes.
+    `wanted_by` names who would wear a kept rare, when the judge said.
+
+    It says only what is true today: the gear routing executor
+    (gearroutingexec.py) runs as a dry run, so a kept piece stays where it is
+    until a hand-off pass moves it.
+    """
+    what = "an epic a guild member can wear"
+    if (_read_int(row.get("quality")) or 0) < EPIC_QUALITY:
+        what = "a bind-on-equip rare that is an upgrade for %s" % (
+            ", ".join(wanted_by) if wanted_by else "a guild member"
+        )
+    return "kept %s: %s; it stays in %s's bags until gear routing places it" % (
+        row.get("name") or "item %s" % row.get("item_guid"),
+        what,
+        holder,
+    )
+
+
+# ---------------------------------------------------------------------------
 # THE FAMILY-FIT GATE, TRANSLATED (infra#3449)
 #
 # gear.py answers in names because that is what a hand-off needs: WHO should
@@ -2759,7 +3011,7 @@ class GearReach:
 def _wears_at(holding, character, level) -> bool:
     """Class, armour, weapon skill and level at `level`; never an upgrade test."""
     bare = replace(character, equipped={}, level=level)
-    return bool(gear.would_wear(holding, bare)[0])
+    return bool(gear.can_wear(holding, bare)[0])
 
 
 def gear_reach(gear_rows, equipped_rows, family_names) -> dict:
@@ -3026,3 +3278,79 @@ def wear_reason(holding, character) -> tuple:
     if character.name == holding.holder:
         return gear.would_wear(holding, character)
     return gear.is_upgrade_for(holding, character)
+
+
+# ---------------------------------------------------------------------------
+# A SALE THE ENCHANTER CAN BREAK DOWN INSTEAD (#2411, #1978). Both family
+# enchanters stood at Enchanting 1 on 2026-11-13 with no dust at all, while
+# the sale paths walked disenchantable greens to vendors every day. Every
+# Enchanting rung (craft.RECIPES) eats dust, essence or shards, and only
+# disenchanting makes them. So a stack a sale path has already chosen to let go
+# is offered to the enchanter first:
+#
+#   the holder IS an enchanter whose skill reaches the item  -> disenchant it
+#   a bind-on-equip item another family member can break down -> give it to
+#     that enchanter (the next pass, its holder, disenchants it)
+#   anything else (soulbound off the enchanter, skill too low,
+#     not gear, wrong quality, no DisenchantID)               -> the sale stands
+#
+# It runs AFTER `_epic_blocks` and the keep marks in the bridge, so it never
+# widens what may leave the guild: it only changes where a stack that is
+# already leaving goes. The core's own CheckCast gate is copied exactly
+# (Spell::CheckItems, SPELL_EFFECT_DISENCHANT): weapon or armour, quality
+# uncommon to epic, a DisenchantID, and RequiredDisenchantSkill at or below the
+# caster's Enchanting, where -1 means it can never be broken down.
+DISENCHANT = "disenchant"
+GIVE_TO_ENCHANTER = "give"
+DISENCHANT_CLASSES = frozenset({2, 4})  # weapon, armour
+DISENCHANT_QUALITIES = frozenset({2, 3, 4})  # uncommon, rare, epic
+
+
+@dataclass(frozen=True)
+class DisenchantFacts:
+    """What the core reads about one item before it lets anyone disenchant it.
+
+    `soulbound` is item_instance.flags bit 1. Every field is required: an
+    unread item is not routed and its sale stands.
+    """
+
+    item_class: int
+    quality: int
+    disenchant_id: int
+    required_skill: int
+    soulbound: bool
+
+
+def disenchantable(facts: DisenchantFacts, skill: int) -> bool:
+    """Would the core let a caster at Enchanting `skill` break this down?"""
+    return (
+        facts.item_class in DISENCHANT_CLASSES
+        and facts.quality in DISENCHANT_QUALITIES
+        and facts.disenchant_id > 0
+        and 0 <= facts.required_skill <= int(skill or 0)
+    )
+
+
+def disenchant_route(holder: str, facts, enchanters: dict):
+    """(kind, enchanter) for a stack a sale path chose, or None to sell it.
+
+    `enchanters` is {name: Enchanting skill} for the enchanters in the
+    holder's own family; the holder is one of them when it is an enchanter.
+    `facts` None (unread) keeps the sale. The highest skill wins a give, and a
+    name breaks a tie, so the answer never depends on dict order.
+    """
+    if facts is None:
+        return None
+    if disenchantable(facts, enchanters.get(holder, 0)):
+        return DISENCHANT, holder
+    if facts.soulbound:
+        return None
+    able = sorted(
+        (
+            name
+            for name, skill in enchanters.items()
+            if name != holder and disenchantable(facts, skill)
+        ),
+        key=lambda name: (-int(enchanters[name]), name),
+    )
+    return (GIVE_TO_ENCHANTER, able[0]) if able else None

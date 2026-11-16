@@ -206,6 +206,9 @@ class ThePlanIsItsOwnSourceOfTruth(unittest.TestCase):
         names = raidgoals.plan_item_names()
         self.assertEqual(len(names), len(set(names)))
 
+    def test_onyxia_scale_cloak_is_not_a_molten_core_goal_item(self):
+        self.assertNotIn("Onyxia Scale Cloak", raidgoals.plan_item_names())
+
     def test_every_craft_spell_is_offered_to_the_reads(self):
         self.assertEqual(
             sorted(raidgoals.craft_spells()), sorted(r.spell for r in raidgoals.RECIPES)
@@ -740,6 +743,11 @@ class OneRaidIsModelledAndFourAreNot(unittest.TestCase):
     def test_the_raid_gates_nobody_and_the_page_says_so(self):
         self.assertIn("gates nobody on consumables", payload()["raid_line"])
 
+    def test_the_raid_gates_nobody_on_attunement_or_quintessence(self):
+        line = payload()["raid_line"]
+        self.assertIn("attunement", line.lower())
+        self.assertIn("aqual quintessence", line.lower())
+
 
 class EverySentenceIsReadable(unittest.TestCase):
     def test_nothing_a_reader_sees_is_none_or_empty_where_it_matters(self):
@@ -798,6 +806,121 @@ class EverySentenceIsReadable(unittest.TestCase):
         """
         for said in sentences(payload()):
             self.assertNotIn("\u2014", said, said)
+
+
+class NewMoltenCoreRecipesInRaidgoals(unittest.TestCase):
+    def test_raidgoals_includes_new_mc_recipes_without_summed_herb_shortfall(self):
+        self.assertIn(raidgoals.GREATER_ARCANE_ELIXIR, raidgoals.RECIPE_BY_PRODUCT)
+        self.assertIn(raidgoals.ELIXIR_OF_GIANTS, raidgoals.RECIPE_BY_PRODUCT)
+        self.assertIn(raidgoals.GREATER_STONESHIELD_POTION, raidgoals.RECIPE_BY_PRODUCT)
+        p = payload()
+        self.assertNotIn("herb_shortfall", p)
+        self.assertFalse(hasattr(raidgoals, "_herb_shortfall"))
+
+    def test_per_guild_herb_shortfall_separates_cave_and_bonkers_with_new_consumables(
+        self,
+    ):
+        import raidready
+        import raidsupply as rs
+
+        guild_rows = [
+            {
+                "name": "Grug",
+                "level": 60,
+                "class_id": 1,
+                "race": 2,
+                "guild_name": "Cave",
+                "guildid": 1,
+            },
+            {
+                "name": "Ugga",
+                "level": 60,
+                "class_id": 8,
+                "race": 2,
+                "guild_name": "Cave",
+                "guildid": 1,
+            },
+            {
+                "name": "Bork",
+                "level": 60,
+                "class_id": 4,
+                "race": 2,
+                "guild_name": "Cave",
+                "guildid": 1,
+            },
+            {
+                "name": "Zug",
+                "level": 60,
+                "class_id": 1,
+                "race": 1,
+                "guild_name": "Bonkers",
+                "guildid": 2,
+            },
+        ]
+        char_rows = [
+            {
+                "name": r["name"],
+                "level": r["level"],
+                "class": r["class_id"],
+                "race": r["race"],
+            }
+            for r in guild_rows
+        ]
+        holdings = [
+            holding("Ugga", raidgoals.SUNGRASS, 1),
+            holding("Grug", raidgoals.THORIUM_ORE, 1),
+            holding("Zug", raidgoals.ELEMENTAL_FIRE, 2),
+        ]
+        families = {"Grug": ["Grug", "Ugga", "Bork"], "Zug": ["Zug"]}
+        groups = raidready.group_guilds(guild_rows, families)
+        self.assertEqual([g["guild"] for g in groups], ["Cave", "Bonkers"])
+
+        cards = {}
+        for group in groups:
+            goals = payload(
+                guild=group["rows"],
+                roster=group["family_names"],
+                chars=char_rows,
+                holdings=holdings,
+            )
+            self.assertNotIn("herb_shortfall", goals)
+            cards[group["guild"]] = raidready.build_guild(
+                group,
+                char_rows,
+                [],
+                [],
+                55,
+                goals,
+                holding_rows=holdings,
+            )
+
+        cave_hs = cards["Cave"]["supply"]["herb_shortfall"]
+        bonkers_hs = cards["Bonkers"]["supply"]["herb_shortfall"]
+        self.assertEqual(cave_hs["guild"], "Cave")
+        self.assertEqual(bonkers_hs["guild"], "Bonkers")
+        cave_by_entry = {r["entry"]: r for r in cave_hs["herbs"]}
+        bonkers_by_entry = {r["entry"]: r for r in bonkers_hs["herbs"]}
+
+        # Cave has 1 tank (Grug), 1 physical DPS (Bork), 1 caster (Ugga):
+        # - Elixir of Giants (9206, spell 11472) -> 1 Sungrass + 1 Gromsblood
+        # - Greater Stoneshield Potion (13455, spell 17570) -> 2 Stonescale Oil + 1 Thorium Ore
+        # - Greater Arcane Elixir (13454, spell 17573) -> 3 Dreamfoil + 1 Mountain Silversage
+        self.assertEqual(cave_by_entry[rs.SUNGRASS]["need"], 1)
+        self.assertEqual(cave_by_entry[rs.SUNGRASS]["held"], 1)
+        self.assertEqual(cave_by_entry[rs.SUNGRASS]["short"], 0)
+        self.assertEqual(cave_by_entry[rs.THORIUM_ORE]["need"], 1)
+        self.assertEqual(cave_by_entry[rs.THORIUM_ORE]["held"], 1)
+        self.assertEqual(cave_by_entry[rs.THORIUM_ORE]["short"], 0)
+        self.assertEqual(cave_by_entry[rs.ELEMENTAL_FIRE]["held"], 0)
+
+        # Bonkers has only 1 tank (Zug): no Elixir of Giants or Greater Arcane Elixir needed,
+        # and Zug's 2 Elemental Fire count only toward Bonkers, never Cave.
+        self.assertNotIn(rs.SUNGRASS, bonkers_by_entry)
+        self.assertEqual(bonkers_by_entry[rs.THORIUM_ORE]["need"], 1)
+        self.assertEqual(bonkers_by_entry[rs.THORIUM_ORE]["held"], 0)
+        self.assertEqual(bonkers_by_entry[rs.ELEMENTAL_FIRE]["need"], 4)
+        self.assertEqual(bonkers_by_entry[rs.ELEMENTAL_FIRE]["held"], 2)
+        self.assertEqual(bonkers_by_entry[rs.ELEMENTAL_FIRE]["short"], 2)
 
 
 if __name__ == "__main__":

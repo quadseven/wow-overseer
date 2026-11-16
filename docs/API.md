@@ -242,6 +242,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Answers: each family's recent dungeon runs, step by step.
 - Example: `overseer get /api/runtimeline`
 
+## `GET /api/spectate`
+
+- Query: none
+- Answers: where the observer camera is, for the Watch buttons.
+- Example: `overseer get /api/spectate`
+
 ## `GET /api/thoughts`
 
 - Query: `name`, `before`, `limit`
@@ -338,11 +344,23 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Answers: the open problems, highest impact first.
 - Example: `overseer get /api/v2/health`
 
+## `GET /api/v2/journeys`
+
+- Query: `guild`, `name`
+- Answers: every epic item copy's journey: drop, roll, council, hand-overs, equips, ending.
+- Example: `overseer get /api/v2/journeys guild=cave`
+
 ## `GET /api/v2/operator`
 
 - Query: none
 - Answers: whether operator actions are on for this deployment.
 - Example: `overseer get /api/v2/operator`
+
+## `GET /api/v2/production`
+
+- Query: none
+- Answers: per member, job, last craft, skill gain, gather.
+- Example: `overseer get /api/v2/production`
 
 ## `GET /api/v2/questers`
 
@@ -373,6 +391,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Query: `guild`
 - Answers: the approved Molten Core seats.
 - Example: `overseer get /api/v2/raidteams guild=cave`
+
+## `GET /api/v2/realm-status`
+
+- Query: none
+- Answers: is the worldserver up, and if not, why and until when.
+- Example: `overseer get /api/v2/realm-status`
 
 ## `GET /api/v2/roll`
 
@@ -433,6 +457,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Query: none
 - Answers: how far behind each pinned dependency is.
 - Example: `overseer get /api/v2/upstream`
+
+## `GET /api/v2/whats-live`
+
+- Query: none
+- Answers: follower bridge commit, worldserver roll, and recent PRs.
+- Example: `overseer get /api/v2/whats-live`
 
 ## `GET /api/v2/zone-danger`
 
@@ -505,6 +535,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Query: none
 - Answers: the character shape table the map draws from
 - Example: `overseer get /shapes.json`
+
+## `GET /sw.js`
+
+- Query: none
+- Answers: see the handler
+- Example: `overseer get /sw.js`
 
 ## `POST /api/clips/claim`
 

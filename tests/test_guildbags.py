@@ -1,4 +1,4 @@
-"""Paid capacity recovery reaches maintenance members through the real job plan."""
+"""Paid capacity recovery reaches guild members of every role through the real job plan."""
 
 import unittest
 from dataclasses import replace
@@ -104,7 +104,6 @@ class MaintenanceCapacity(unittest.TestCase):
             {"map_id": None},
             {"map_id": 530},
             {"free_slots": None},
-            {"role": guildjobs.RAIDER},
         ):
             with self.subTest(changes=changes):
                 self.assertFalse(guildbags.eligible(replace(worker(), **changes)))
@@ -311,17 +310,59 @@ class WearingABagItAlreadyCarries(unittest.TestCase):
             [(r.kind, r.command) for r in step.rows], [("bot", "e Hitem:4498:0")]
         )
 
-    def test_a_raider_is_never_sent_to_buy_a_bag(self):
-        m = member(
-            "Raider",
-            role=guildjobs.RAIDER,
-            level=43,
-            money=20000,
-            free_slots=0,
-            bag_slots=22,
+    def test_a_raider_or_summoner_short_of_space_buys_a_bag(self):
+        """Measured 2026-11-13: 36 of 162 guild members wore no bag at all,
+        and only the maintenance role was ever sent to buy one (#2430)."""
+        for role in (guildjobs.RAIDER, guildjobs.SUMMONER):
+            with self.subTest(role=role):
+                m = member(
+                    "Raider",
+                    role=role,
+                    level=43,
+                    money=20000,
+                    free_slots=0,
+                    bag_slots=22,
+                )
+                offers = {"Raider": vendors()["Tailor"]}
+                steps, _ = guildbags.plan([m], [bags_for("Raider")], offers)
+                self.assertEqual(
+                    [(r.kind, r.command) for r in steps["Raider"].step.rows],
+                    [
+                        ("buy", "entry:4496 count:1 max:500"),
+                        ("bot", "e Hitem:4496:0"),
+                    ],
+                )
+
+
+def stocked(*offers):
+    return {"Tailor": (replace(vendors()["Tailor"][0], offers=offers),)}
+
+
+POUCH = bp.BagOffer(4496, "Small Brown Pouch", 6, 500)
+SACK = bp.BagOffer(4499, "Huge Brown Sack", 12, 100000)
+
+
+class TheBestBagThePurseAllows(unittest.TestCase):
+    """A member with 30 gold bought a 6-slot pouch: the cheapest bag (#2430)."""
+
+    def test_a_member_who_can_spare_a_quarter_buys_the_bigger_bag(self):
+        m = replace(worker(), money=bp.bag_reserve(43) + 4 * SACK.price)
+        steps, _ = guildbags.plan([m], [containers()], stocked(POUCH, SACK))
+        self.assertEqual(
+            steps["Tailor"].step.rows[0].command, "entry:4499 count:1 max:100000"
         )
-        offers = {"Raider": vendors()["Tailor"]}
-        steps, _ = guildbags.plan([m], [bags_for("Raider")], offers)
+        self.assertEqual(steps["Tailor"].step.walk.command, "walk-to-vendor item:4499")
+
+    def test_a_member_who_cannot_spare_a_quarter_buys_the_cheapest(self):
+        m = replace(worker(), money=bp.bag_reserve(43) + 4 * SACK.price - 1)
+        steps, _ = guildbags.plan([m], [containers()], stocked(POUCH, SACK))
+        self.assertEqual(
+            steps["Tailor"].step.rows[0].command, "entry:4496 count:1 max:500"
+        )
+
+    def test_below_the_reserve_nothing_is_bought(self):
+        m = replace(worker(), money=bp.bag_reserve(43) + POUCH.price - 1)
+        steps, _ = guildbags.plan([m], [containers()], stocked(POUCH, SACK))
         self.assertEqual(steps, {})
 
 

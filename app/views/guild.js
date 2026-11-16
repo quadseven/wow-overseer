@@ -7,10 +7,12 @@
 // Reads: /api/v2/guild (header, tiles, class quests, deaths, the path),
 // /api/v2/series (guild XP per hour), /api/guildruns, /api/v2/dungeonups, /api/runtimeline, and for the
 // chronicle /api/v2/chronicle, /api/loot, /api/recap, /api/council and
-// /api/guildchat, and the announcer's /api/v2/achievements. Nothing here writes.
+// /api/guildchat, the announcer's /api/v2/achievements and /api/v2/journeys
+// (epic journeys, ?who= keeps one character's). The one write is the Watch
+// button on a live group (_spectate.js), which posts a run id to /api/spectate.
 
 import {
-  html, raw, pageHead, sectionHead, tabs, kpi, sparkline, histogram, notMeasured,
+  html, raw, pageHead, sectionHead, tabs, kpi, sparkline, histogram, bindHistogram, notMeasured,
   state, pendingRead, item, member, memberHref, plural, duration, classVar,
 } from "../ui.js";
 import { peek } from "../api.js";
@@ -22,6 +24,8 @@ import { roster as rosterModel } from "../models/roster.js";
 import { items as achItems, notable } from "../models/achievements.js";
 import { feedRow as achRow, CSS as ACH_CSS } from "./_achievements.js";
 import { clipLink, clipLinks, shelf as clipShelf, bindShelf as bindClips, CSS as CLIPS_CSS, READ as CLIPS_READ } from "./_clips.js";
+import { control as watchControl, stage as watchStage, bind as bindWatch, CSS as WATCH_CSS, READ as WATCH_READ, OPERATOR as WATCH_OPERATOR } from "./_spectate.js";
+import { section as journeysSection, bind as bindJourneys, read as journeysRead, CSS as JOURNEYS_CSS } from "./_journeys.js";
 
 const TABS = [["progress", "Progress"], ["runs", "Runs"], ["chronicle", "Chronicle"]];
 const FEED_KINDS = [
@@ -61,12 +65,15 @@ const P = {
   council: () => "/api/council",
   chat: (ctx) => "/api/guildchat?guild=" + encodeURIComponent(gname(ctx)),
   achievements: (ctx) => "/api/v2/achievements?guild=" + slug(ctx),
+  journeys: (ctx) => journeysRead(key(ctx)),
+  camera: () => WATCH_READ,
+  operator: () => WATCH_OPERATOR,
 };
 
 const TAB_READS = {
   progress: ["guild", "series", "roster"],
   runs: ["guild", "runs", "ups", "timeline", "seats"],
-  chronicle: ["guild", "runs", "chronicle", "loot", "clips", "recap", "council", "chat", "achievements"],
+  chronicle: ["guild", "runs", "chronicle", "loot", "clips", "recap", "council", "chat", "achievements", "journeys", "camera", "operator"],
 };
 
 // Per-device view state that is not worth a URL: the feed's page length and
@@ -380,14 +387,17 @@ ${list.length > shown.length ? html`<div class="g-row"><button type="button" cla
 function rightNow(ctx) {
   const gr = peek(P.runs());
   const rc = peek(P.recap());
+  const sp = peek(P.camera());
+  const op = peek(P.operator());
   const out = gr.data ? mine(ctx, gr.data.active) : [];
-  const cards = out.map((r) => html`<div class="card g-now stretch-card"><a class="g-name stretch-link" href="${runHref(r)}" data-run="${r.id}">${gname(ctx)} ${r.state === "queued" ? "is queued for" : "is in"} ${r.place}: ${r.bosses_total ? r.bosses_done + " of " + r.bosses_total + " bosses down" : "bosses not measured"}, ${plural(r.deaths || 0, "death")}${r.seconds_inside ? ", " + duration(r.seconds_inside) + " inside" : ""}.</a>${seatChips(r)}</div>`);
+  const cards = out.map((r) => html`<div class="card g-now stretch-card"><a class="g-name stretch-link" href="${runHref(r)}" data-run="${r.id}">${gname(ctx)} ${r.state === "queued" ? "is queued for" : "is in"} ${r.place}: ${r.bosses_total ? r.bosses_done + " of " + r.bosses_total + " bosses down" : "bosses not measured"}, ${plural(r.deaths || 0, "death")}${r.seconds_inside ? ", " + duration(r.seconds_inside) + " inside" : ""}.</a>${seatChips(r)}${r.state === "queued" ? "" : watchControl(r, sp, op)}</div>`);
   const live = rc.data && rc.data.live && rc.data.family === family(ctx) ? recapCard(ctx, rc.data) : "";
+  const camera = watchStage(sp, gr.data ? gr.data.active : []);
   if (!cards.length && !live) {
     if (!gr.data) return pendingRead(gr, 1);
-    return state("empty", "Nobody from " + gname(ctx) + " is inside a dungeon right now.", gr.at ? "Checked " + since(fromClock(gr.at)) + "." : "");
+    return html`${camera}${state("empty", "Nobody from " + gname(ctx) + " is inside a dungeon right now.", gr.at ? "Checked " + since(fromClock(gr.at)) + "." : "")}`;
   }
-  return html`${live}${cards}`;
+  return html`${camera}${live}${cards}`;
 }
 
 function recapCard(ctx, r) {
@@ -491,13 +501,14 @@ function chronicleTab(ctx) {
 </div>
 <section class="section">${sectionHead("05", "The council: last sitting, what it carried, where next")}${sittings(ctx)}</section>
 <section class="section">${sectionHead("06", "Guild chat: asks and answers")}${chat(ctx)}</section>
-<section class="section">${sectionHead("07", "Clips", "Saved moments, newest first")}${clipShelf(peek(P.clips()))}</section>`;
+<section class="section">${sectionHead("07", "Clips", "Saved moments, newest first")}${clipShelf(peek(P.clips()))}</section>
+<section class="section">${sectionHead("08", "Epic journeys", "Each epic copy: drop, roll, council, hand-overs, ending")}${journeysSection(peek(P.journeys(ctx)), ctx.query.who || "")}</section>`;
 }
 
 // ---- the view -------------------------------------------------------------------
 
 export default {
-  css: ["views/guild.css", ACH_CSS, CLIPS_CSS],
+  css: ["views/guild.css", ACH_CSS, CLIPS_CSS, JOURNEYS_CSS, WATCH_CSS],
   every: 30000,
   reads: (ctx) => (TAB_READS[ctx.params.tab] || TAB_READS.progress).map((k) => P[k](ctx)),
   title: (ctx) => gname(ctx) + (ctx.params.tab === "progress" ? "" : " " + ctx.params.tab),
@@ -517,6 +528,9 @@ export default {
   after(main, ctx) {
     bindRunCards(main, () => window.matchMedia("(max-width: 759.98px)").matches);
     bindClips(main);
+    bindWatch(main);
+    bindJourneys(main);
+    bindHistogram(main);
     main.querySelectorAll("details[data-path]").forEach((d) => {
       d.addEventListener("toggle", () => {
         if (d.open) view.open.add(d.getAttribute("data-path"));

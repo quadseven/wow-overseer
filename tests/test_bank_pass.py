@@ -157,12 +157,12 @@ class ASplitFamilyDoesNotWaitForeverForTheBanker(unittest.TestCase):
 
     def test_bridge_measures_the_family_before_settling_the_bank_aim(self):
         settle = _code("    async def _settle_bank_errand(")
-        self.assertIn("await self._bank_family_progress(names, leader)", settle)
+        self.assertIn("await self._bank_family_progress(names, leader, party)", settle)
         self.assertIn("family_split_seconds=family_stall.split_seconds", settle)
         self.assertIn("bank.BANK_ERRAND_DEFER", settle)
         measure = _code("    async def _bank_family_progress(")
         self.assertIn("vendor_stall.family_progress(", measure)
-        self.assertIn("_fetch_positions, names", measure)
+        self.assertIn("_fetch_positions, watched", measure)
         self.assertIn("self._bank_family_movement[leader] = progress.current", measure)
 
     def test_the_errand_goes_to_the_family_leader(self):
@@ -612,7 +612,7 @@ class ABankBagStepTakesTheFamilyToABanker(unittest.TestCase):
         async def mid_run(names):
             return False
 
-        async def family_progress(names, leader):
+        async def family_progress(names, leader, party=None):
             return types.SimpleNamespace(readable=True, split=False, split_seconds=0.0)
 
         async def exit_route(*args):

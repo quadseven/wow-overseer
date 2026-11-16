@@ -167,6 +167,8 @@ class Held:
     required_skill: int
     required_rank: int
     recipe_spell: int = 0
+    allowable_class: int = -1
+    required_level: int = 0
 
 
 @dataclass(frozen=True)
@@ -255,7 +257,14 @@ def within_reach(required_skill: int, required_rank: int, skills: dict) -> bool:
     return value > 0 and value >= int(required_rank)
 
 
-def plan_learns(held, skills: dict, settled=None, seen=None):
+def plan_learns(
+    held,
+    skills: dict,
+    settled=None,
+    seen=None,
+    member_classes: dict | None = None,
+    member_levels: dict | None = None,
+):
     """Every recipe already in the bags worth using, and why the rest are not.
 
     `skills`   {character: {skill_id: value}}
@@ -307,6 +316,42 @@ def plan_learns(held, skills: dict, settled=None, seen=None):
                 )
             )
             continue
+        if int(item.required_skill) <= 0:
+            if item.label.startswith("Libram of "):
+                skipped.append(
+                    Skipped(
+                        item.holder,
+                        int(item.entry),
+                        item.label,
+                        "libram is turned in at Dire Maul, not learned",
+                    )
+                )
+                continue
+            allow = int(getattr(item, "allowable_class", -1))
+            if allow > 0 and member_classes is not None:
+                cid = int(member_classes.get(item.holder, 0) or 0)
+                lvl = int((member_levels or {}).get(item.holder, 60) or 0)
+                req_lvl = int(getattr(item, "required_level", 0) or 0)
+                if cid <= 0 or not (allow & (1 << (cid - 1))):
+                    skipped.append(
+                        Skipped(
+                            item.holder,
+                            int(item.entry),
+                            item.label,
+                            "%s is not the class for %s" % (item.holder, item.label),
+                        )
+                    )
+                    continue
+                if lvl < req_lvl:
+                    skipped.append(
+                        Skipped(
+                            item.holder,
+                            int(item.entry),
+                            item.label,
+                            "%s is level %d, needs %d" % (item.holder, lvl, req_lvl),
+                        )
+                    )
+                    continue
         if not within_reach(item.required_skill, item.required_rank, mine):
             have = int(mine.get(int(item.required_skill), 0) or 0)
             skipped.append(
@@ -617,3 +662,38 @@ def report(learns, purchases, skipped) -> str:
             )
         )
     return "recipebook: " + "; ".join(parts)
+
+
+def classify_class9(held, skills: dict) -> dict:
+    """Group held class-9 items per member into own_trade, other_trade, book_or_libram."""
+    summary: dict[str, dict[str, int]] = {}
+    for item in held or ():
+        row = summary.setdefault(
+            item.holder, {"own_trade": 0, "other_trade": 0, "book_or_libram": 0}
+        )
+        req_skill = int(item.required_skill or 0)
+        if req_skill <= 0:
+            row["book_or_libram"] += 1
+        elif int((skills.get(item.holder) or {}).get(req_skill, 0) or 0) > 0:
+            row["own_trade"] += 1
+        else:
+            row["other_trade"] += 1
+    return summary
+
+
+def class9_report(summary: dict) -> str:
+    """One bridge log line listing the three class-9 groups per family member."""
+    if not summary:
+        return "class9: nobody holds a class 9 item"
+    parts = [
+        "%s %d (own=%d, other=%d, book=%d)"
+        % (
+            name,
+            counts["own_trade"] + counts["other_trade"] + counts["book_or_libram"],
+            counts["own_trade"],
+            counts["other_trade"],
+            counts["book_or_libram"],
+        )
+        for name, counts in sorted(summary.items())
+    ]
+    return "class9: " + "; ".join(parts)

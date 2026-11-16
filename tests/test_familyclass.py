@@ -9,11 +9,13 @@ the gap between two runs, and it has made no class walk lately.
 """
 
 import dataclasses
+import types
 import unittest
 from unittest import mock
 
 import classquest
 import familyclass
+import guildcorps
 import guildjobs
 import guildroute
 from test_guildsocial_bridge import bridge
@@ -67,15 +69,22 @@ class TheFamilyMemberGetsItsClassStep(unittest.TestCase):
         self.assertIsNone(step.walk)
 
     def test_a_giver_on_the_members_map_within_the_bound_is_walked_to(self):
-        m = member(x=-4633.5 + 3000.0, y=-932.0)
+        m = member(x=-4633.5 + 2000.0, y=-932.0)
         step, _doing, _note = guildjobs.class_step(m, book(), [], CAP)
         self.assertIsNotNone(step)
         self.assertIsNotNone(step.walk)
 
 
 class TheGapBetweenRunsIsKept(unittest.TestCase):
+    def test_a_giver_between_the_lone_cap_and_the_old_cap_is_not_walked_to(self):
+        m = member(x=-4633.5 + 3000.0, y=-932.0)
+        self.assertLess(familyclass.LONE_WALK_YARDS, 3000.0)
+        step, _doing, note = guildjobs.class_step(m, book(), [], CAP)
+        self.assertIsNone(step)
+        self.assertIn("too far", note)
+
     def test_a_giver_past_the_walk_bound_is_skipped_and_named(self):
-        m = member(x=-4633.5 + familyclass.WALK_YARDS + 500.0, y=-932.0)
+        m = member(x=-4633.5 + familyclass.LONE_WALK_YARDS + 500.0, y=-932.0)
         step, _doing, note = guildjobs.class_step(m, book(), [], CAP)
         self.assertIsNone(step)
         self.assertIn("too far", note)
@@ -89,7 +98,7 @@ class TheGapBetweenRunsIsKept(unittest.TestCase):
         self.assertIn("another map", familyclass.holds(far, move, []))
 
     def test_one_class_walk_per_gap(self):
-        m = member(x=-4633.5 + 3000.0, y=-932.0)
+        m = member(x=-4633.5 + 2000.0, y=-932.0)
         step, _doing, note = guildjobs.class_step(
             m, book(), [recent_walk(familyclass.WALK_GAP_MINUTES - 5)], CAP
         )
@@ -97,14 +106,14 @@ class TheGapBetweenRunsIsKept(unittest.TestCase):
         self.assertIn("class walk", note)
 
     def test_the_walk_is_asked_again_after_the_gap(self):
-        m = member(x=-4633.5 + 3000.0, y=-932.0)
+        m = member(x=-4633.5 + 2000.0, y=-932.0)
         step, _doing, _note = guildjobs.class_step(
             m, book(), [recent_walk(familyclass.WALK_GAP_MINUTES + 5)], CAP
         )
         self.assertIsNotNone(step)
 
     def test_a_follower_is_planned_no_walk_but_the_step_it_can_make_here(self):
-        far = member(x=-4633.5 + 3000.0, y=-932.0, follows=True)
+        far = member(x=-4633.5 + 2000.0, y=-932.0, follows=True)
         step, _doing, note = guildjobs.class_step(far, book(), [], CAP)
         self.assertIsNone(step)
         self.assertIn("follower", note)
@@ -181,6 +190,40 @@ class TheFamilyIsIdleOnlyBetweenRuns(unittest.TestCase):
         idle = familyclass.idle_names(self.ROSTER, live_leaders=(), inside=())
         self.assertEqual(idle, {"Boss", "Dwarf", "Other"})
 
+    def test_a_live_run_names_the_hold_for_each_family_member(self):
+        holds = familyclass.not_idle_holds(self.ROSTER, live_leaders={"Boss"})
+        self.assertEqual(
+            holds,
+            {
+                "Boss": "its family has an active dungeon run",
+                "Dwarf": "its family has an active dungeon run",
+            },
+        )
+
+    def test_an_instance_and_town_errand_name_their_holds(self):
+        holds = familyclass.not_idle_holds(
+            self.ROSTER, inside={"Dwarf"}, errands={"Other"}
+        )
+        self.assertEqual(
+            holds,
+            {
+                "Boss": "a family member is still inside an instance",
+                "Dwarf": "a family member is still inside an instance",
+                "Other": "the member is on a town errand",
+            },
+        )
+
+    def test_unavailable_gates_are_named(self):
+        m = member()
+        self.assertEqual(
+            familyclass.not_idle_holds((), members=[m], enabled=False),
+            {m.name: "family class steps are disabled"},
+        )
+        self.assertEqual(
+            familyclass.not_idle_holds((), members=[m], status_read=False),
+            {m.name: "live dungeon status could not be read"},
+        )
+
 
 class TheBridgeReadsTheFamilyAsMembersOfRoleFamily(unittest.TestCase):
     def facts(self):
@@ -205,6 +248,26 @@ class TheBridgeReadsTheFamilyAsMembersOfRoleFamily(unittest.TestCase):
         self.assertEqual([m.name for m in facts["family_members"]], ["Dwarf"])
         self.assertEqual(facts["family_members"][0].role, guildjobs.FAMILY)
 
+    def test_a_family_hold_is_visible_only_for_an_owed_class_quest(self):
+        m = self.facts()["family_members"][0]
+        result = guildjobs.plan(
+            [],
+            classes=book(),
+            family_candidates=[m],
+            family_holds={m.name: "its family has an active dungeon run"},
+        )
+        self.assertEqual(
+            result.class_holds[m.name], "its family has an active dungeon run"
+        )
+        settled = dataclasses.replace(m, class_id=1)
+        result = guildjobs.plan(
+            [],
+            classes=book(),
+            family_candidates=[settled],
+            family_holds={settled.name: "its family has an active dungeon run"},
+        )
+        self.assertNotIn(settled.name, result.class_holds)
+
     def _idle(self, live, members=None):
         facts = {"family_members": members or self.facts()["family_members"]}
         roster = [
@@ -220,16 +283,38 @@ class TheBridgeReadsTheFamilyAsMembersOfRoleFamily(unittest.TestCase):
         ):
             return [m.name for m in bridge._idle_family_members(facts)]
 
+    def _state(self, live, members=None):
+        facts = {"family_members": members or self.facts()["family_members"]}
+        roster = [
+            {"name": "Dwarf", "family": "Boss"},
+            {"name": "Boss", "family": "Boss"},
+        ]
+        conn = mock.MagicMock()
+        cur = conn.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cur.fetchall.return_value = [{"leader_name": n} for n in live]
+        with (
+            mock.patch.object(bridge, "_connect", return_value=conn),
+            mock.patch.object(bridge, "_fetch_queue_roster", return_value=roster),
+        ):
+            return bridge._family_class_state(facts)
+
     def test_a_family_between_runs_is_idle(self):
         self.assertEqual(self._idle([]), ["Dwarf"])
 
     def test_a_live_run_of_its_leader_holds_it(self):
         self.assertEqual(self._idle(["Boss"]), [])
 
+    def test_a_live_run_carries_a_named_hold_for_its_owed_family_member(self):
+        idle, holds = self._state(["Boss"])
+        self.assertEqual(idle, [])
+        self.assertEqual(holds["Dwarf"], "its family has an active dungeon run")
+
     def test_a_member_standing_in_an_instance_holds_it(self):
         inside = self.facts()["family_members"]
         inside = [dataclasses.replace(inside[0], map_id=230)]
         self.assertEqual(self._idle([], inside), [])
+        _idle, holds = self._state([], inside)
+        self.assertEqual(holds["Dwarf"], "a family member is still inside an instance")
 
     def test_the_switch_off_plans_nobody(self):
         with mock.patch.dict("os.environ", {"FAMILY_CLASS_STEPS": "off"}):
@@ -240,7 +325,7 @@ class TheLoneStepIsGuardedAgainstTheErrandAndTheGround(unittest.TestCase):
     """wow-overseer#2338: the busy guard, the level check and no boat."""
 
     def far(self, **over):
-        return member(x=-4633.5 + 3000.0, y=-932.0, **over)
+        return member(x=-4633.5 + 2000.0, y=-932.0, **over)
 
     def plan(self, m, danger=None):
         return guildjobs.plan(
@@ -308,7 +393,7 @@ class TheBridgeKeepsAnErrandMemberOutOfTheFamilyList(
 
     def test_family_danger_reads_the_giver_ground_of_a_far_member(self):
         far = dataclasses.replace(
-            self.facts()["family_members"][0], map_id=0, x=-4633.5 + 3000.0, y=-932.0
+            self.facts()["family_members"][0], map_id=0, x=-4633.5 + 2000.0, y=-932.0
         )
         with mock.patch.object(bridge, "_gather_danger", return_value=64) as g:
             out = bridge._family_danger([far], book(), [])
@@ -317,10 +402,86 @@ class TheBridgeKeepsAnErrandMemberOutOfTheFamilyList(
 
     def test_an_unread_ground_leaves_the_member_out(self):
         far = dataclasses.replace(
-            self.facts()["family_members"][0], map_id=0, x=-4633.5 + 3000.0, y=-932.0
+            self.facts()["family_members"][0], map_id=0, x=-4633.5 + 2000.0, y=-932.0
         )
         with mock.patch.object(bridge, "_gather_danger", return_value=None):
             self.assertEqual(bridge._family_danger([far], book(), []), {})
+
+    def _family_danger_with_spot(self, member_x, spot_x):
+        m = dataclasses.replace(
+            self.facts()["family_members"][0], map_id=0, x=member_x, y=-932.0
+        )
+        spot = types.SimpleNamespace(map_id=0, x=spot_x, y=-932.0)
+        with (
+            mock.patch.object(guildjobs, "class_move_spot", return_value=spot),
+            mock.patch.object(bridge, "_gather_danger", return_value=64) as g,
+        ):
+            out = bridge._family_danger([m], book(), [])
+        return out, g.call_count
+
+    def test_family_danger_skips_a_member_already_in_reach(self):
+        self.assertEqual(self._family_danger_with_spot(0.0, 10.0), ({}, 0))
+
+    def test_family_danger_skips_a_member_held_for_distance_anyway(self):
+        far = familyclass.LONE_WALK_YARDS + 500.0
+        self.assertEqual(self._family_danger_with_spot(0.0, far), ({}, 0))
+
+    def test_family_danger_reads_a_member_that_would_walk(self):
+        self.assertEqual(self._family_danger_with_spot(0.0, 1000.0), ({"Dwarf": 64}, 1))
+
+    def test_a_connection_error_leaves_the_member_out_and_the_pass_goes_on(self):
+        far = dataclasses.replace(
+            self.facts()["family_members"][0], map_id=0, x=-4633.5 + 2000.0, y=-932.0
+        )
+        other = dataclasses.replace(far, name="Other")
+        reads = [OSError("connection refused"), 61]
+        with mock.patch.object(bridge, "_gather_danger", side_effect=reads):
+            out = bridge._family_danger([far, other], book(), [])
+        self.assertEqual(out, {"Other": 61})
+
+    def test_family_danger_reads_the_move_the_walk_makes(self):
+        far = dataclasses.replace(
+            self.facts()["family_members"][0], map_id=0, x=-4633.5 + 2000.0, y=-932.0
+        )
+        spot = types.SimpleNamespace(map_id=0, x=-4633.5 + 2100.0, y=-932.0)
+        with (
+            mock.patch.object(guildjobs, "class_move_spot", return_value=spot) as mv,
+            mock.patch.object(bridge, "_gather_danger", return_value=40) as g,
+        ):
+            bridge._family_danger([far], book(), [])
+        self.assertEqual(g.call_args.args[:3], (0, spot.x, spot.y))
+        self.assertEqual(mv.call_count, 1)
+
+
+class TheStepStartRechecksTheErrand(unittest.TestCase):
+    """An errand that began after the idle snapshot blocks the step at the insert."""
+
+    def _plan(self):
+        step = guildcorps.Step("Dwarf", classquest.ACTION, 1, "take", rows=())
+        return mock.Mock(steps=[step])
+
+    def _start(self, errands):
+        runner = bridge.Bridge.__new__(bridge.Bridge)
+        runner._guild_run_names = set()
+        runner._job_steps = {}
+        runner._mail_walk_tasks = set()
+        runner._mail_walk_task_done = mock.Mock()
+        runner._run_job_step = mock.Mock()
+        with (
+            mock.patch.dict(bridge._TOWN_ERRANDS, errands, clear=False),
+            mock.patch.object(bridge.asyncio, "create_task") as ct,
+            mock.patch.object(bridge, "_shadow_class_step"),
+        ):
+            n = runner._start_guild_job_steps(self._plan(), 0.0, CAP, True)
+        return n, ct.call_count
+
+    def test_a_member_on_an_active_errand_is_not_started(self):
+        n, tasks = self._start({("Boss", "Dwarf"): mock.Mock(active=True)})
+        self.assertEqual((n, tasks), (0, 0))
+
+    def test_a_member_with_no_errand_is_started(self):
+        n, tasks = self._start({("Boss", "Dwarf"): mock.Mock(active=False)})
+        self.assertEqual((n, tasks), (1, 1))
 
 
 if __name__ == "__main__":

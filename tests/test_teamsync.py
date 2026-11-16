@@ -249,10 +249,10 @@ class StalledOnRenames(unittest.TestCase):
     def test_the_live_cave_numbers(self):
         members = _cave_live()
         self.assertEqual(len(members), 71)
-        # The 6 raid seats and the 10 questers' (5 since #927, 5 more since
-        # every class got one).
+        # The 6 raid seats, the 10 questers' (5 since #927, 5 more since
+        # every class got one) and the 2 bankers'.
         self.assertEqual(
-            len(teamsync.open_seats("Cave", [m["name"] for m in members])), 16
+            len(teamsync.open_seats("Cave", [m["name"] for m in members])), 18
         )
         self.assertEqual(len(teamsync.recruits_in_guild("Cave", members)), 6)
 
@@ -285,7 +285,7 @@ class StalledOnRenames(unittest.TestCase):
         ]
         why = teamsync.stall_reason("Cave", members, cand, set(), True)
         self.assertIn(
-            "the guild is full (81) and the approved teams name no leaver", why
+            "the guild is full (83) and the approved teams name no leaver", why
         )
         self.assertIn(
             "no candidate on a rotating random-bot account fits Fizzog (level 1 "
@@ -294,7 +294,8 @@ class StalledOnRenames(unittest.TestCase):
             "or under), Mirra (level 60 or under), Velo (level 60 or under), "
             "Durga (level 60 or under), Fizzik (level 60 or under), Kellan (level "
             "60 or under), Bromli (level 60 or under), Sylvi (level 60 or under), "
-            "Pindle (level 60 or under), Corvane (level 60 or under)",
+            "Pindle (level 60 or under), Corvane (level 60 or under), "
+            "Hoarg (level 60 or under), Stowk (level 60 or under)",
             why,
         )
 
@@ -319,6 +320,7 @@ class StalledOnRenames(unittest.TestCase):
             for seat, m in teamsync.recruits_in_guild("Cave", members).items()
         ] + [m for m in members if m["level"] != 1]
         members += [_quester(q) for q in raidteams.QUESTERS["Cave"]]
+        members += [_quester(b) for b in raidteams.BANKERS["Cave"]]
         self.assertEqual(teamsync.stall_reason("Cave", members, [], set()), "")
 
 
@@ -404,7 +406,7 @@ class Questers(unittest.TestCase):
 
     def test_the_guild_has_room_for_the_questers(self):
         self.assertEqual(len(_bonkers_full_raid()), 71)
-        self.assertEqual(teamsync.GUILD_SIZE, 81)
+        self.assertEqual(teamsync.GUILD_SIZE, 83)
 
     def test_a_random_bot_of_the_seat_race_and_class_is_invited(self):
         acts = teamsync.plan(

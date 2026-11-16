@@ -67,9 +67,9 @@ RAIDERS = (
 ALCHEMIST = gc.Post("Oden", "alchemist", gc.ALCHEMY, 300, 375)
 
 
-def facts(members, raiders=RAIDERS, posts=(ALCHEMIST,), vendors=None):
+def facts(members, raiders=RAIDERS, posts=(ALCHEMIST,), vendors=None, **over):
     return rs.GuildFacts(
-        "Cave", tuple(members), tuple(raiders), tuple(posts), vendors or {}
+        "Cave", tuple(members), tuple(raiders), tuple(posts), vendors or {}, **over
     )
 
 
@@ -756,6 +756,64 @@ class TheFireProtectionPotionStandsIn(unittest.TestCase):
             ORC, gc.members_from_rows([row], (), (), (), (), (), (), ())[0].race
         )
 
+    def test_major_mana_potion_recipe_requires_295_alchemy(self):
+        plan = self.plan(294, HUMAN, 0, {0: frozenset({13501})})
+        steps = [
+            s
+            for s in plan.steps
+            if s.holder == "Oden" and "13501" in " ".join(r.command for r in s.rows)
+        ]
+        self.assertFalse(steps)
+        supply = next(s for s in rs.SUPPLIES if s.entry == rs.MAJOR_MANA)
+        self.assertEqual(295, supply.make.recipe_skill)
+
+    def test_corps_members_reads_money_and_recipe_buy_keeps_purse_floor(self):
+        row = {
+            "guild_name": "Cave",
+            "guid": 1,
+            "name": "Oden",
+            "race": HUMAN,
+            "level": 60,
+            "money": 40000,
+        }
+        m = gc.members_from_rows([row], (), (), (), (), (), (), ())[0]
+        self.assertEqual(40000, m.money)
+        self.assertIsNone(
+            gc.members_from_rows(
+                [{"guild_name": "Cave", "guid": 2, "name": "B"}],
+                (),
+                (),
+                (),
+                (),
+                (),
+                (),
+                (),
+            )[0].money
+        )
+        # Level 60 purse floor is 36_000c; Fire Protection Potion recipe 6055 is 1500c -> needs 37_500c.
+        poor = member(
+            "Oden", skills={gc.ALCHEMY: (165, 225)}, race=HUMAN, map_id=0, money=37499
+        )
+        plan_poor = rs.plan_guild(
+            facts([poor, *raider_members()], vendors={0: frozenset({6055})}),
+            {},
+            set(),
+        )
+        self.assertFalse([s for s in plan_poor.steps if s.holder == "Oden"])
+        self.assertIn(
+            "Oden is short of gold for the Fire Protection Potion recipe",
+            plan_poor.notes,
+        )
+        enough = member(
+            "Oden", skills={gc.ALCHEMY: (165, 225)}, race=HUMAN, map_id=0, money=37500
+        )
+        plan_ok = rs.plan_guild(
+            facts([enough, *raider_members()], vendors={0: frozenset({6055})}),
+            {},
+            set(),
+        )
+        self.assertTrue([s for s in plan_ok.steps if s.holder == "Oden"])
+
 
 class FakeClient:
     def __init__(self, choice, confidence):
@@ -904,9 +962,41 @@ class TheRaidTab(unittest.TestCase):
             lines,
         )
 
+    def test_the_supply_section_names_onyxia_scale_cloak_as_unobtainable(self):
+        group = {"guild": "Cave", "family": "Grug", "family_names": ["Grug"]}
+        group["rows"] = [{"name": "Grug", "level": 60, "class_id": 1}]
+        chars = [{"name": "Grug", "level": 60, "class": 1}]
+        supply = {"have": {}, "knowers": {}, "bank": 0}
+        card = raidready.build_guild(group, chars, [], [], 55, {}, supply=supply)
+        lines = card["supply"]["unobtainable"]
+        self.assertTrue(
+            any(
+                "Onyxia Scale Cloak is unobtainable on this realm" in line
+                and "not needed for Molten Core" in line
+                and "only relevant to Blackwing Lair" in line
+                and "craft spell 19093" in line
+                and "2026-11-13 realm database read" in line
+                and "no trainer, vendor, loot or quest source" in line
+                for line in lines
+            ),
+            lines,
+        )
+        blockers = [row["text"] for row in card["blockers"]]
+        self.assertFalse(
+            any("Onyxia Scale Cloak" in blocker for blocker in blockers), blockers
+        )
+
     def test_the_page_draws_the_unobtainable_lines(self):
         raid = (HERE / "app" / "views" / "raid.js").read_text(encoding="utf-8")
         self.assertIn("s.unobtainable", raid)
+
+    def test_mc_facts_document_excludes_onyxia_scale_cloak(self):
+        facts = " ".join(
+            (HERE / "docs" / "MC-SPELL-FACTS.md").read_text(encoding="utf-8").split()
+        )
+        self.assertIn("Onyxia Scale Cloak is unobtainable on this realm", facts)
+        self.assertIn("not needed for Molten Core", facts)
+        self.assertIn("Nefarian's Shadow Flame in Blackwing Lair", facts)
 
     def test_the_readiness_card_carries_the_supply_section(self):
         group = {
@@ -1026,7 +1116,9 @@ class TheBridgePassRuns(unittest.TestCase):
         "_farm_assign_guild",
     )
 
-    def run_pass(self, at_vault=True, at_counter=True, listings=(), farm=None):
+    def run_pass(
+        self, at_vault=True, at_counter=True, listings=(), farm=None, extra_over=None
+    ):
         """`farm` adds to the Cave: "members" and "posts" beside the
         alchemist, "recent" farmassign rows, "tasks" standing from a pass."""
         farm = farm or {}
@@ -1046,6 +1138,8 @@ class TheBridgePassRuns(unittest.TestCase):
             "recent": [],
             "farm_recent": list(farm.get("recent", ())),
         }
+        if extra_over:
+            extra.update(extra_over)
 
         def create_task(coro):
             # The step is never run; its own coroutine names the step it holds.
@@ -1132,6 +1226,31 @@ class TheBridgePassRuns(unittest.TestCase):
         )
         self.assertIn("raid supply: started 1 step(s)", log.lines)
         self.assertIn("Cave", me._raid_supply_said)
+
+    def test_the_bridge_pass_logs_short_reagent_and_drink_seats_from_seat_facts(self):
+        _, default_log, _ = self.run_pass()
+        self.assertTrue(
+            any(
+                "reagents short nothing, drink short nothing" in line
+                for line in default_log.lines
+            )
+        )
+        _, log, _ = self.run_pass(
+            extra_over={
+                "seat_reagents": {r.name: {} for r in RAIDERS},
+                "seat_drink": {r.name: 0 for r in RAIDERS},
+                "known_spells": {},
+                "bank_reagents": {},
+                "bank_drink": 0,
+            }
+        )
+        supply_lines = [
+            line for line in log.lines if line.startswith("raid supply: Cave:")
+        ]
+        self.assertTrue(supply_lines)
+        line = supply_lines[0]
+        self.assertIn("reagents short Aylysae 0/", line)
+        self.assertIn("drink short Aylysae 0/", line)
 
     def test_the_master_withdraws_at_the_vault_and_buys_at_the_counter(self):
         listings = [auction.Listing(11, rs.FIRE_PROTECTION, "FPP", 5, 20_000, 2)]
@@ -1335,6 +1454,447 @@ class TheAlchemistsPace(unittest.TestCase):
         raid = (HERE / "app" / "views" / "raid.js").read_text(encoding="utf-8")
         self.assertIn("s.pace", raid)
         self.assertIn("s.level_60_line", raid)
+
+
+class StockpileTargetsAndHerbs(unittest.TestCase):
+    @staticmethod
+    def _mc_night_raiders(hunter_count: int = 0) -> list:
+        raiders = []
+        for i in range(8):
+            raiders.append(
+                rs.Raider("Tank%d" % i, rs.TANK, 1, main_tank=(i == 0), family=(i == 0))
+            )
+        for i in range(11):
+            raiders.append(rs.Raider("Heal%d" % i, rs.HEALER, 5, False, False))
+        for i in range(12):
+            cls = 3 if i < hunter_count else 4
+            raiders.append(rs.Raider("Phys%d" % i, rs.PHYSICAL, cls, False, False))
+        for i in range(9):
+            raiders.append(rs.Raider("Cast%d" % i, rs.CASTER, 8, False, False))
+        return raiders
+
+    def test_new_mc_consumables_in_supplies_with_sources(self):
+        by_entry = rs.SUPPLY_BY_ENTRY
+        arcane = by_entry[13454]
+        self.assertEqual(arcane.name, "Greater Arcane Elixir")
+        self.assertEqual(arcane.per_role, (0, 0, 0, 1))
+        self.assertIsNotNone(arcane.make)
+        self.assertEqual(arcane.make.spell, 17573)
+        self.assertEqual(
+            arcane.make.reagents, ((rs.DREAMFOIL, 3), (rs.MOUNTAIN_SILVERSAGE, 1))
+        )
+        self.assertIn("285", arcane.source)
+
+        giants = by_entry[9206]
+        self.assertEqual(giants.name, "Elixir of Giants")
+        self.assertEqual(giants.per_role, (0, 0, 1, 0))
+        self.assertEqual(giants.make.spell, 11472)
+        self.assertEqual(giants.make.reagents, ((rs.SUNGRASS, 1), (rs.GROMSBLOOD, 1)))
+        self.assertEqual(giants.make.recipe_item, 9298)
+        self.assertIn("9298", giants.source)
+
+        stone = by_entry[13455]
+        self.assertEqual(stone.name, "Greater Stoneshield Potion")
+        self.assertEqual(stone.per_role, (1, 0, 0, 0))
+        self.assertEqual(stone.make.spell, 17570)
+        self.assertEqual(
+            stone.make.reagents, ((rs.STONESCALE_OIL, 2), (rs.THORIUM_ORE, 1))
+        )
+        self.assertEqual(stone.make.recipe_item, 13490)
+        self.assertIn("13490", stone.source)
+
+    def test_reagent_names_cover_every_crafted_supply_reagent(self):
+        for supply in rs.SUPPLIES:
+            if supply.make is None:
+                continue
+            for entry, _ in supply.make.reagents:
+                self.assertIn(entry, rs.REAGENT_NAMES, supply.name)
+
+    def test_per_guild_per_night_target_table_matches_2425(self):
+        raiders = self._mc_night_raiders()
+        wants = {
+            entry: sum(by_raider.values())
+            for entry, by_raider in rs.night_wants(raiders).items()
+        }
+        self.assertEqual(wants[rs.GREATER_FIRE_PROTECTION], 96)
+        self.assertEqual(wants[rs.MAJOR_HEALING], 116)
+        self.assertEqual(wants[rs.MAJOR_MANA], 82)
+        self.assertEqual(wants[13510], 8)
+        self.assertEqual(wants[13511], 11)
+        self.assertEqual(wants[13512], 9)
+        self.assertEqual(wants[13452], 20)
+        self.assertEqual(wants[rs.GREATER_ARCANE_ELIXIR], 9)
+        self.assertEqual(wants[rs.ELIXIR_OF_GIANTS], 12)
+        self.assertEqual(wants[rs.GREATER_STONESHIELD_POTION], 8)
+        self.assertEqual(wants[20452], 40)
+        self.assertEqual(wants[13931], 40)
+
+        with_hunters = rs.night_wants(self._mc_night_raiders(hunter_count=2))
+        self.assertEqual(sum(with_hunters[rs.MAJOR_MANA].values()), 86)
+
+        hs = rs.herb_shortfall(raiders, {}, guild="Cave")
+        self.assertEqual(hs["guild"], "Cave")
+        self.assertIn("Cave:", hs["line"])
+        self.assertIn("Black Lotus", hs["lotus_note"])
+        self.assertIn("flasks", hs["lotus_note"])
+        by_entry = {row["entry"]: row for row in hs["herbs"]}
+        expected_need = {
+            rs.DREAMFOIL: 509,
+            rs.GOLDEN_SANSAM: 232,
+            rs.MOUNTAIN_SILVERSAGE: 192,
+            rs.ICECAP: 197,
+            rs.GROMSBLOOD: 68,
+            rs.PLAGUEBLOOM: 40,
+            rs.ELEMENTAL_FIRE: 96,
+            rs.BLACK_LOTUS: 28,
+            rs.STONESCALE_OIL: 40,
+            rs.SUNGRASS: 12,
+            rs.THORIUM_ORE: 8,
+            rs.SANDWORM_MEAT: 40,
+            rs.RAW_NIGHTFIN_SNAPPER: 40,
+        }
+        self.assertEqual(set(by_entry), set(expected_need))
+        for entry, need in expected_need.items():
+            row = by_entry[entry]
+            self.assertEqual(row["need"], need, row["name"])
+            self.assertEqual(row["held"], 0, row["name"])
+            self.assertEqual(row["short"], need, row["name"])
+            self.assertIn("%d needed, 0 held, %d short" % (need, need), row["line"])
+
+    def test_held_consumables_and_reagents_reduce_per_guild_shortfall(self):
+        raiders = self._mc_night_raiders()
+        hs = rs.herb_shortfall(
+            raiders,
+            {
+                rs.GREATER_ARCANE_ELIXIR: 5,
+                rs.DREAMFOIL: 100,
+                rs.BLACK_LOTUS: 10,
+            },
+            guild="Cave",
+        )
+        by_entry = {row["entry"]: row for row in hs["herbs"]}
+        self.assertEqual(by_entry[rs.DREAMFOIL]["need"], 494)
+        self.assertEqual(by_entry[rs.DREAMFOIL]["held"], 100)
+        self.assertEqual(by_entry[rs.DREAMFOIL]["short"], 394)
+        self.assertEqual(by_entry[rs.MOUNTAIN_SILVERSAGE]["need"], 187)
+        self.assertEqual(by_entry[rs.BLACK_LOTUS]["need"], 28)
+        self.assertEqual(by_entry[rs.BLACK_LOTUS]["held"], 10)
+        self.assertEqual(by_entry[rs.BLACK_LOTUS]["short"], 18)
+
+    def test_each_guild_card_carries_its_own_herb_shortfall_and_page_renders_it(self):
+        cave_group = {
+            "guild": "Cave",
+            "family": "Grug",
+            "family_names": ["Grug"],
+            "rows": [
+                {"name": "Grug", "level": 60, "class_id": 1},
+                {"name": "Ugga", "level": 60, "class_id": 8},
+            ],
+        }
+        cave_chars = [
+            {"name": "Grug", "level": 60, "class": 1, "race": 1},
+            {"name": "Ugga", "level": 60, "class": 8, "race": 3},
+        ]
+        bonkers_group = {
+            "guild": "Bonkers",
+            "family": "Zug",
+            "family_names": ["Zug"],
+            "rows": [
+                {"name": "Zug", "level": 60, "class_id": 1},
+            ],
+        }
+        bonkers_chars = [
+            {"name": "Zug", "level": 60, "class": 1, "race": 2},
+        ]
+        cave_card = raidready.build_guild(
+            cave_group,
+            cave_chars,
+            [],
+            [],
+            55,
+            {},
+            supply={"have": {rs.DREAMFOIL: 3}, "knowers": {}, "bank": 0},
+        )
+        bonkers_card = raidready.build_guild(
+            bonkers_group,
+            bonkers_chars,
+            [],
+            [],
+            55,
+            {},
+            supply={"have": {rs.ELEMENTAL_FIRE: 2}, "knowers": {}, "bank": 0},
+        )
+        self.assertEqual(cave_card["faction"], "Alliance")
+        self.assertEqual(bonkers_card["faction"], "Horde")
+        for guild_card in (cave_card, bonkers_card):
+            fire = {row["entry"]: row for row in guild_card["supply"]["supplies"]}[
+                rs.FIRE_PROTECTION
+            ]
+            self.assertEqual(fire["route"], rs.VENDOR_RECIPE)
+            self.assertEqual(fire["cells"][2], "0")
+            self.assertEqual(fire["cells"][3], fire["cells"][1])
+            self.assertIn("at a vendor first", fire["cells"][4])
+            self.assertNotIn("auction house", fire["cells"][4])
+        cave_hs = cave_card["supply"]["herb_shortfall"]
+        bonkers_hs = bonkers_card["supply"]["herb_shortfall"]
+        self.assertEqual(cave_hs["guild"], "Cave")
+        self.assertEqual(bonkers_hs["guild"], "Bonkers")
+        cave_herbs = {r["entry"]: r for r in cave_hs["herbs"]}
+        bonkers_herbs = {r["entry"]: r for r in bonkers_hs["herbs"]}
+        self.assertEqual(cave_herbs[rs.DREAMFOIL]["held"], 3)
+        self.assertNotIn(rs.SUNGRASS, bonkers_herbs)
+        self.assertEqual(bonkers_herbs[rs.ELEMENTAL_FIRE]["need"], 4)
+        self.assertEqual(bonkers_herbs[rs.ELEMENTAL_FIRE]["held"], 2)
+        self.assertEqual(bonkers_herbs[rs.ELEMENTAL_FIRE]["short"], 2)
+        self.assertGreater(
+            cave_herbs[rs.DREAMFOIL]["need"], bonkers_herbs[rs.DREAMFOIL]["need"]
+        )
+
+        raid_js = (HERE / "app" / "views" / "raid.js").read_text(encoding="utf-8")
+        self.assertIn("herbShortfall(s.herb_shortfall)", raid_js)
+        self.assertNotIn("gl.herb_shortfall", raid_js)
+
+
+class TopRecipesTracking(unittest.TestCase):
+    def test_card_tracks_top_recipes_as_acquired_or_not_per_family(self):
+        card = rs.card(
+            [],
+            {},
+            {17574: ["Ugga"]},
+            carriers={13519: ["Grug"]},
+        )
+        top = {r["entry"]: r for r in card["top_recipes"]}
+        self.assertEqual(set(top), {13494, 13519, 13521, 13520})
+        self.assertTrue(top[13494]["acquired"])
+        self.assertIn("Ugga", top[13494]["line"])
+        self.assertTrue(top[13519]["acquired"])
+        self.assertIn("Grug", top[13519]["line"])
+        self.assertFalse(top[13521]["acquired"])
+        self.assertIn("not acquired", top[13521]["line"])
+        self.assertFalse(top[13520]["acquired"])
+
+    def test_the_page_draws_top_recipes(self):
+        raid = (HERE / "app" / "views" / "raid.js").read_text(encoding="utf-8")
+        self.assertIn("s.top_recipes", raid)
+
+
+class BufferReagentsAndDrink(unittest.TestCase):
+    def test_buffer_spell_reagents_come_from_spell_dbc_and_fail_on_unknown_id(self):
+        resolved = rs.resolve_buffer_spells(rs.ALL_BUFFER_SPELL_IDS)
+        self.assertEqual(set(resolved), set(rs.ALL_BUFFER_SPELL_IDS))
+        for spell_id, pairs in resolved.items():
+            self.assertTrue(pairs, spell_id)
+            for entry, per_cast in pairs:
+                self.assertGreater(entry, 0)
+                self.assertGreater(per_cast, 0)
+        self.assertEqual(resolved[25916], ((21177, 1),))
+        self.assertEqual(resolved[25918], ((21177, 1),))
+        with self.assertRaises(KeyError):
+            rs.resolve_buffer_spells([25895])
+        with self.assertRaises(KeyError):
+            rs.resolve_buffer_spells([9999999])
+
+    def test_plan_guild_without_seat_supply_does_not_report_false_shorts(self):
+        lineup = (
+            raider("Grug", rs.TANK, rs.WARRIOR, main_tank=True),
+            raider("Aylysae", rs.HEALER, rs.PRIEST),
+            raider("Alindy", rs.CASTER, rs.MAGE),
+            raider("Zork", rs.HEALER, rs.DRUID),
+        )
+        members = [
+            member(r.name, maintenance=False, class_id=r.class_id, carried=())
+            for r in lineup
+        ]
+        plan = rs.plan_guild(facts(members, raiders=lineup), {}, set())
+        self.assertEqual(plan.reagents, ())
+        self.assertEqual(plan.drink, ())
+        self.assertIn("reagents short nothing, drink short nothing", rs.summary(plan))
+
+    def test_priest_mage_druid_zero_reagents_and_healer_zero_drink_are_short(self):
+        lineup = (
+            raider("Grug", rs.TANK, rs.WARRIOR, main_tank=True),
+            raider("Aylysae", rs.HEALER, rs.PRIEST),
+            raider("Alindy", rs.CASTER, rs.MAGE),
+            raider("Zork", rs.HEALER, rs.DRUID),
+        )
+        members = [
+            member(r.name, maintenance=False, class_id=r.class_id) for r in lineup
+        ]
+        plan = rs.plan_guild(
+            facts(
+                members,
+                raiders=lineup,
+                seat_reagents={r.name: {} for r in lineup},
+                seat_drink={r.name: 0 for r in lineup},
+            ),
+            {},
+            set(),
+        )
+        line = rs.summary(plan)
+        reagent_by_name = {r.name: r for r in plan.reagents}
+        drink_by_name = {d.name: d for d in plan.drink}
+        for name in ("Aylysae", "Alindy", "Zork"):
+            self.assertEqual(reagent_by_name[name].have, 0)
+            self.assertGreater(reagent_by_name[name].want, 0)
+            self.assertGreater(reagent_by_name[name].short, 0)
+            self.assertEqual(reagent_by_name[name].route, rs.ROUTE_VENDOR)
+            self.assertIn(
+                "%s 0/%d" % (name, reagent_by_name[name].want),
+                line,
+            )
+        for name in ("Aylysae", "Alindy", "Zork"):
+            self.assertEqual(drink_by_name[name].have, 0)
+            self.assertGreater(drink_by_name[name].want, 0)
+            self.assertGreater(drink_by_name[name].short, 0)
+            self.assertEqual(drink_by_name[name].route, rs.ROUTE_MAGE_CONJURE)
+            self.assertIn(
+                "%s 0/%d" % (name, drink_by_name[name].want),
+                line,
+            )
+        self.assertNotIn("Grug", reagent_by_name)
+        self.assertNotIn("Grug", drink_by_name)
+        self.assertIn("reagents short ", line)
+        self.assertIn(", drink short ", line)
+
+    def test_summary_exact_shape_for_single_short_priest(self):
+        priest_only = (raider("Aylysae", rs.HEALER, rs.PRIEST),)
+        members = [member("Aylysae", maintenance=False, class_id=rs.PRIEST)]
+        plan = rs.plan_guild(
+            facts(
+                members,
+                raiders=priest_only,
+                seat_reagents={"Aylysae": {}},
+                seat_drink={"Aylysae": 0},
+            ),
+            {},
+            set(),
+        )
+        line = rs.summary(plan)
+        reagent_want = plan.reagents[0].want
+        drink_want = plan.drink[0].want
+        self.assertEqual(plan.drink[0].route, rs.ROUTE_VENDOR)
+        self.assertIn(
+            "raid supply: Cave: reagents short Aylysae 0/%d, drink short Aylysae 0/%d"
+            % (reagent_want, drink_want),
+            line,
+        )
+
+    def test_routes_cover_vendor_mage_conjure_and_guild_bank(self):
+        no_mage = (raider("Aylysae", rs.HEALER, rs.PRIEST),)
+        vendor_drink = rs.seat_drink_lines(no_mage, {"Aylysae": 0}, guild_bank_drink=0)
+        self.assertEqual(vendor_drink[0].route, rs.ROUTE_VENDOR)
+
+        with_mage = (
+            raider("Aylysae", rs.HEALER, rs.PRIEST),
+            raider("Alindy", rs.CASTER, rs.MAGE),
+        )
+        conjure_drink = rs.seat_drink_lines(
+            with_mage, {"Aylysae": 0, "Alindy": 0}, guild_bank_drink=0
+        )
+        self.assertEqual(conjure_drink[0].route, rs.ROUTE_MAGE_CONJURE)
+
+        bank_drink = rs.seat_drink_lines(
+            with_mage, {"Aylysae": 0, "Alindy": 0}, guild_bank_drink=40
+        )
+        self.assertEqual(bank_drink[0].route, rs.ROUTE_GUILD_BANK)
+
+        resolved = rs.resolve_buffer_spells(rs.ALL_BUFFER_SPELL_IDS)
+        sacred_candle = resolved[21564][0][0]
+        bank_reagents = rs.seat_reagent_lines(
+            no_mage,
+            {"Aylysae": {}},
+            guild_bank_reagents={sacred_candle: 10},
+        )
+        self.assertEqual(bank_reagents[0].route, rs.ROUTE_GUILD_BANK)
+
+    def test_raid_page_blockers_and_supply_card_name_the_same_short_seats(self):
+        group = {
+            "guild": "Bonkers",
+            "family": "Zug",
+            "family_names": ["Zug"],
+            "rows": [
+                {"name": "Zug", "level": 60, "class_id": 1},
+                {"name": "Uzza", "level": 60, "class_id": 5},
+                {"name": "Oz", "level": 60, "class_id": 8},
+                {"name": "Zork", "level": 60, "class_id": 11},
+            ],
+        }
+        chars = [
+            {"name": "Zug", "level": 60, "class": 1},
+            {"name": "Uzza", "level": 60, "class": 5},
+            {"name": "Oz", "level": 60, "class": 8},
+            {"name": "Zork", "level": 60, "class": 11},
+        ]
+        card = raidready.build_guild(
+            group,
+            chars,
+            [],
+            [],
+            55,
+            {},
+            supply={
+                "have": {},
+                "knowers": {},
+                "bank": 0,
+                "seat_reagents": {
+                    "Uzza": {},
+                    "Oz": {},
+                    "Zork": {},
+                },
+                "seat_drink": {
+                    "Uzza": 0,
+                    "Oz": 0,
+                    "Zork": 0,
+                },
+                "known_spells": {},
+                "bank_reagents": {},
+                "bank_drink": 0,
+            },
+        )
+        blocker_text = "\n".join(b["text"] for b in card["blockers"])
+        supply_section = card["supply"]
+        self.assertEqual(
+            {r["name"] for r in supply_section["seat_reagents"] if r["short"]},
+            {"Uzza", "Oz", "Zork"},
+        )
+        self.assertEqual(
+            {d["name"] for d in supply_section["seat_drink"] if d["short"]},
+            {"Uzza", "Oz", "Zork"},
+        )
+        for name in ("Uzza", "Oz", "Zork"):
+            self.assertIn(name, blocker_text)
+        self.assertIn(rs.ROUTE_VENDOR, blocker_text)
+        self.assertIn(rs.ROUTE_MAGE_CONJURE, blocker_text)
+
+    def test_fetch_raid_supply_reads_seat_reagents_and_drink(self):
+        import map_server
+        import realmread
+
+        map_server._RAID_SPELL_REAGENTS = None
+        resolved = rs.resolve_buffer_spells(rs.ALL_BUFFER_SPELL_IDS)
+        powder = resolved[23028][0][0]
+        rd = realmread.Memory(
+            {
+                map_server._RAID_SUPPLY_SPELL_DBC: [],
+                map_server._RAID_SUPPLY_HAVE: [],
+                map_server._RAID_SUPPLY_GBANK: [],
+                map_server._RAID_SUPPLY_KNOWN: [
+                    {"guildid": 24, "name": "Oz", "spell": 23028},
+                ],
+                map_server._RAID_SUPPLY_MONEY: [{"guildid": 24, "bank": 50000}],
+                map_server._RAID_SUPPLY_SEAT_REAGENTS: [
+                    {"guildid": 24, "name": "Oz", "entry": powder, "count": 7},
+                ],
+                map_server._RAID_SUPPLY_SEAT_DRINK: [
+                    {"guildid": 24, "name": "Uzza", "units": 12},
+                ],
+                map_server._RAID_SUPPLY_GBANK_DRINK: [],
+            }
+        )
+        got = map_server._fetch_raid_supply(rd, [24])[24]
+        self.assertEqual(got["seat_reagents"]["Oz"][powder], 7)
+        self.assertEqual(got["seat_drink"]["Uzza"], 12)
+        self.assertEqual(got["known_spells"]["Oz"], {23028})
 
 
 if __name__ == "__main__":

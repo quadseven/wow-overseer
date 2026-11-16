@@ -350,6 +350,11 @@ def reagent_errand(
 REAGENTS: dict[int, tuple[tuple[int, str, int, int], ...]] = {
     8776: ((2320, "Coarse Thread", 10, 1),),  # Linen Belt (Tailoring)
     3755: ((2320, "Coarse Thread", 10, 3),),  # Linen Bag (craft.BAG_RECIPES)
+    # ENCHANTING (#2411): item_template.BuyPrice, each sold by over a hundred
+    # npc_vendor rows (read 2026-11-13). The dust half is craft_rhythm's
+    # DISENCHANT_FED.
+    7421: ((6217, "Copper Rod", 124, 1),),  # Runed Copper Rod (craft.ROD_RECIPES)
+    14807: ((4470, "Simple Wood", 38, 1),),  # Greater Magic Wand
     # TAILORING 145-300 (craft.RECIPES' block of that name). Counts are
     # Spell.dbc's (543b9fe61355b6a77a01714d52fea2e5); prices are
     # item_template.BuyPrice, and every item has npc_vendor rows (read

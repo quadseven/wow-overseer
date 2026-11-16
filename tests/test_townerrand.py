@@ -1448,3 +1448,84 @@ def replace_phase(state, phase):
     import dataclasses
 
     return dataclasses.replace(state, phase=phase)
+
+
+class TheLeaderThatCannotWalk(unittest.TestCase):
+    """The Zug family's sale trip never landed (wow-dev 2026-11-14).
+
+    The profession loop's town errand took the family's one travel column,
+    the module held the leader still to regroup a straggler, the walk
+    "did not land in 1200s", and the loop asked for the next errand at once,
+    so the ordinary sale trip was refused the column on every pass.
+    """
+
+    LOOP = "profession loop: Zrog below 8 free bag slots"
+
+    def _kw(self, now):
+        return dict(now=now, in_run=False, mail_gear={}, facts={})
+
+    def test_a_loop_errand_is_not_restarted_straight_after_one_that_never_landed(self):
+        unlanded, _ = te.advance(te.start(0.0, HUB, self.LOOP), te.GO_SECONDS)
+        self.assertTrue(unlanded.unlanded)
+        soon = self._kw(unlanded.ended + 60.0)
+        self.assertEqual("", te.should_start(unlanded, loop_why=self.LOOP, **soon))
+        late = self._kw(unlanded.ended + te.LOOP_UNLANDED_RETRY_SECONDS)
+        self.assertEqual(
+            self.LOOP, te.should_start(unlanded, loop_why=self.LOOP, **late)
+        )
+
+    def test_a_loop_errand_after_one_that_landed_is_not_held_back(self):
+        done, _ = te.end(te.start(0.0, HUB, self.LOOP), 500.0, "every step ran")
+        self.assertFalse(done.unlanded)
+        self.assertEqual(
+            self.LOOP,
+            te.should_start(done, loop_why=self.LOOP, **self._kw(510.0)),
+        )
+
+    def test_a_leader_that_stands_still_ends_the_walk_early(self):
+        s = te.start(0.0, HUB, self.LOOP)
+        s, line = te.advance(s, 10.0, hub_yards=997.0)
+        self.assertEqual(te.GO, s.phase)
+        s, line = te.advance(s, 10.0 + te.GO_STALL_SECONDS - 1, hub_yards=997.0)
+        self.assertEqual(te.GO, s.phase)
+        s, line = te.advance(s, 10.0 + te.GO_STALL_SECONDS, hub_yards=996.0)
+        self.assertEqual(te.DONE, s.phase)
+        self.assertIn(te.DID_NOT_LAND, line)
+        self.assertTrue(s.unlanded)
+        self.assertLess(s.ended, te.GO_SECONDS)
+
+    def test_a_leader_that_keeps_closing_is_never_cut(self):
+        s = te.start(0.0, HUB, self.LOOP)
+        yards = 3000.0
+        for tick in range(1, 19):
+            yards -= 100.0
+            s, _ = te.advance(s, tick * 60.0, hub_yards=yards)
+            self.assertEqual(te.GO, s.phase)
+
+    def test_no_reading_leaves_the_old_bound_alone(self):
+        s = te.start(0.0, HUB, self.LOOP)
+        for tick in range(1, 15):
+            s, _ = te.advance(s, tick * 60.0, hub_yards=None)
+        self.assertEqual(te.GO, s.phase)
+
+    def test_a_hearth_cast_does_not_count_as_standing_still(self):
+        s = te.start(0.0, HUB, self.LOOP, hearthed=True)
+        s, _ = te.advance(s, te.HEARTH_SECONDS - 1, hub_yards=4000.0)
+        s, _ = te.advance(s, te.HEARTH_SECONDS + 10.0, hub_yards=4000.0)
+        self.assertEqual(te.GO, s.phase)
+
+    def test_yards_to_reads_the_hub_and_refuses_another_map(self):
+        self.assertAlmostEqual(
+            50.0, te.yards_to(HUB, {"map_id": 0, "pos_x": 150.0, "pos_y": 100.0})
+        )
+        self.assertIsNone(
+            te.yards_to(HUB, {"map_id": 1, "pos_x": 150.0, "pos_y": 100.0})
+        )
+        self.assertIsNone(te.yards_to(HUB, None))
+
+
+class TheBridgeReadsTheLeaderTowardTheHub(unittest.TestCase):
+    def test_the_errand_pass_hands_advance_the_leaders_yards_to_the_hub(self):
+        self.assertIn(
+            "hub_yards=townerrand.yards_to(hub, positions.get(leader))", BRIDGE
+        )

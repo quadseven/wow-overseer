@@ -123,6 +123,12 @@ def _standin_words(why: str) -> str:
 # itself (the tests carry a real example of each).
 _RULES = (
     (
+        re.compile(r"^guild class quest: (?P<s>\w+) held: (?P<why>.+)$"),
+        "character",
+        "class_quest_held",
+        lambda m: ("Waiting for a class quest", m["why"]),
+    ),
+    (
         re.compile(
             r"^economy: vendor aim yielded; bag room could not be freed "
             r"within the bounded wait; leader=(?P<s>\w+)"

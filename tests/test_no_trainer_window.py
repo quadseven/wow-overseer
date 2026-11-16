@@ -10,9 +10,13 @@ planned again while the map had not changed.
 import json
 import pathlib
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
+import classquest
 import guildjobs
+import guildroute
+from test_classquest import book as class_quest_book
 from test_guildjobs import member
 from test_guildsocial_bridge import bridge
 
@@ -73,6 +77,77 @@ class ARefusalOlderThanTheRecentRead(unittest.TestCase):
 
 
 class TheBridgeReadsThem(unittest.TestCase):
+    def test_a_member_without_a_lineup_role_reaches_class_quest_planning(self):
+        # Keep assigned members in the real lineup so the surplus seat below
+        # follows the same roster path as production instead of a mock.
+        rows = [
+            {
+                "name": "Filler%02d" % index,
+                "guid": index + 1,
+                "guild_name": "Research Guild",
+                "level": 10 if index >= 40 else 55,
+                "class_id": 1,
+                "race": 2,
+                "online": 1,
+                "map_id": 1,
+                "pos_x": 10.0,
+                "pos_y": 20.0,
+            }
+            for index in range(50)
+        ]
+        rows.extend(
+            {
+                "name": "Summoner%02d" % index,
+                "guid": 100 + index,
+                "guild_name": "Research Guild",
+                "level": 55,
+                "class_id": 9,
+                "race": 2,
+                "online": 1,
+                "map_id": 1,
+                "pos_x": 10.0,
+                "pos_y": 20.0,
+            }
+            for index in range(21)
+        )
+        rows.append(
+            {
+                "name": "Unplaced",
+                "guid": 999,
+                "guild_name": "Research Guild",
+                "level": 55,
+                "class_id": 1,
+                "race": 2,
+                "online": 1,
+                "map_id": 1,
+                "pos_x": 186.0,
+                "pos_y": -3597.0,
+            }
+        )
+        facts = bridge._job_facts_from_rows(
+            rows=rows,
+            family_names=[],
+            eligible=set(),
+            skill_rows=[],
+            spell_rows=[],
+            item_rows=[],
+            recent_rows=[],
+            pending_rows=[],
+            done_rows=[{"guid": 999, "quest": 1505}],
+        )
+        assigned = {member.name for member in facts["members"]}
+        candidates = {member.name: member for member in facts["class_candidates"]}
+        self.assertIn("Filler00", assigned)
+        self.assertNotIn("Unplaced", assigned)
+        self.assertEqual(candidates["Unplaced"].role, guildjobs.UNASSIGNED)
+        plan = guildjobs.plan(
+            [],
+            classes=class_quest_book(),
+            class_candidates=facts["class_candidates"],
+            masters={"Research Guild": "Unplaced"},
+        )
+        self.assertIn("Unplaced", {step.holder for step in plan.steps})
+
     def test_the_read_reaches_past_the_recent_window(self):
         sql = bridge._JOB_NO_TRAINER_SQL
         self.assertIn("created_at <= NOW() - INTERVAL 1 DAY", sql)
@@ -105,6 +180,77 @@ class TheBridgeReadsThem(unittest.TestCase):
         self.assertEqual(609, kept[0].map_id)
         step, _note = guildjobs.riding_step(stranded, facts["recent"])
         self.assertIsNone(step)
+
+
+class TheBridgePlansUnassignedCandidates(unittest.IsolatedAsyncioTestCase):
+    async def test_the_bridge_forwards_unassigned_candidates_to_the_planner(self):
+        # The row-conversion test above proves that the spare roster seat is
+        # available. Exercise the production adapter too: dropping its
+        # class_candidates argument must make this candidate disappear.
+        candidate = member(
+            "Unplaced",
+            role=guildjobs.UNASSIGNED,
+            guild="Research Guild",
+            level=55,
+            race=2,
+            map_id=1,
+            x=186.0,
+            y=-3597.0,
+            quests_done=frozenset({1505}),
+        )
+        this = SimpleNamespace(
+            _class_hunts=None,
+            _class_owing=None,
+            _equip_room={},
+            _guild_still={},
+            _class_owed_by={},
+            _log_purses=mock.Mock(),
+            _class_book_for_plan=lambda facts: facts.get("class_book"),
+        )
+        for name in (
+            "_job_fields",
+            "_job_gear_offers",
+            "_job_supply_offers",
+            "_job_bag_steps",
+            "_job_pet_offers",
+            "_job_weapon_offers",
+            "_job_pvp_moves",
+        ):
+            setattr(this, name, mock.AsyncMock(return_value={}))
+        facts = dict(
+            masters={"Research Guild": "Unplaced"},
+            crafters={},
+            stones=(),
+            pending=(),
+            recent=(),
+            class_book=class_quest_book(),
+            class_candidates=(candidate,),
+            family_members=(),
+            far_open=(),
+        )
+        with (
+            mock.patch.multiple(
+                bridge,
+                _kept_with_bank_policy=lambda *args: {},
+                _with_purses_and_reserves=lambda members, *args: members,
+                _guild_campaign_door=lambda *args: "",
+                _fetch_mount_facts=lambda *args: {},
+                _job_mail_commands=lambda *args: {},
+                _job_leveling=lambda *args: None,
+                _family_class_state=lambda facts: ([], {}),
+                _family_danger=lambda *args: {},
+                _keep_class_plan=lambda *args: None,
+            ),
+            mock.patch.object(guildroute, "far_slots_free", return_value=3),
+        ):
+            result = await bridge.Bridge._plan_guild_jobs(
+                this, [], facts, set(), guildroute.MAIL_RUN_YARDS, True
+            )
+
+        self.assertIn(
+            "Unplaced",
+            {step.holder for step in result.steps if step.action == classquest.ACTION},
+        )
 
 
 if __name__ == "__main__":

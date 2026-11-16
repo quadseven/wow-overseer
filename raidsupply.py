@@ -67,13 +67,16 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 import auction
+import classreagents
 import classic
 import fireplan
 import guildcorps
 import guildroute
 import jev
 import jev_choices
+import purse
 import raidlineup
+import restsupply
 import workorders
 
 SOURCE = "raidsupply"
@@ -301,8 +304,10 @@ RAW_NIGHTFIN_SNAPPER = 13759
 ELEMENTAL_FIRE, DREAMFOIL, GOLDEN_SANSAM = 7068, 13463, 13464
 MOUNTAIN_SILVERSAGE, PLAGUEBLOOM, ICECAP = 13465, 13466, 13467
 BLACK_LOTUS, GROMSBLOOD, STONESCALE_OIL = 13468, 8846, 13423
+SUNGRASS, THORIUM_ORE = 8838, 10620
 SANDWORM_MEAT, BOLT_OF_RUNECLOTH, DREAM_DUST, RUNE_THREAD = 20424, 14048, 11176, 14341
 GREATER_FIRE_PROTECTION, MAJOR_HEALING, MAJOR_MANA = 13457, 13446, 13444
+GREATER_ARCANE_ELIXIR, ELIXIR_OF_GIANTS, GREATER_STONESHIELD_POTION = 13454, 9206, 13455
 FIRE_PROTECTION = 6049
 FIRE_PROTECTION_RECIPE = 6055
 # Either fire potion is the night's fire protection (raidready.FIRE_PROTECTION).
@@ -380,7 +385,13 @@ SUPPLIES = (
         "Major Mana Potion",
         (0, 5, 0, 3),
         Make(
-            17580, ALCHEMY, ((DREAMFOIL, 3), (ICECAP, 2)), (CRYSTAL_VIAL,), 13501, 30000
+            17580,
+            ALCHEMY,
+            ((DREAMFOIL, 3), (ICECAP, 2)),
+            (CRYSTAL_VIAL,),
+            13501,
+            30000,
+            recipe_skill=295,
         ),
         "Recipe 13501 is sold by Magnus Frostwake for 3 gold and drops from "
         "Darkmaster Gandling",
@@ -436,6 +447,44 @@ SUPPLIES = (
             13491,
         ),
         "Recipe 13491 drops from Legashi and Jadefire Rogues (about 4 percent)",
+    ),
+    Supply(
+        GREATER_ARCANE_ELIXIR,
+        "Greater Arcane Elixir",
+        (0, 0, 0, 1),
+        Make(
+            17573,
+            ALCHEMY,
+            ((DREAMFOIL, 3), (MOUNTAIN_SILVERSAGE, 1)),
+            (CRYSTAL_VIAL,),
+        ),
+        "trainer teaches it at Alchemy 285",
+    ),
+    Supply(
+        ELIXIR_OF_GIANTS,
+        "Elixir of Giants",
+        (0, 0, 1, 0),
+        Make(
+            11472,
+            ALCHEMY,
+            ((SUNGRASS, 1), (GROMSBLOOD, 1)),
+            (CRYSTAL_VIAL,),
+            9298,
+        ),
+        "Recipe 9298: world drop or auction house",
+    ),
+    Supply(
+        GREATER_STONESHIELD_POTION,
+        "Greater Stoneshield Potion",
+        (1, 0, 0, 0),
+        Make(
+            17570,
+            ALCHEMY,
+            ((STONESCALE_OIL, 2), (THORIUM_ORE, 1)),
+            (CRYSTAL_VIAL,),
+            13490,
+        ),
+        "Recipe 13490: world drop or auction house",
     ),
     Supply(
         20452,
@@ -502,6 +551,8 @@ SUPPLIES = (
     ),
 )
 SUPPLY_BY_ENTRY = {s.entry: s for s in SUPPLIES}
+
+
 # The fire potion lines; the night wants one of them, and the fire gear after it.
 FIRE_POTIONS = frozenset({GREATER_FIRE_PROTECTION, FIRE_PROTECTION})
 
@@ -514,6 +565,45 @@ DROP_RECIPES = {
     for s in SUPPLIES
     if s.make and s.make.recipe_item and not s.make.recipe_price
 }
+
+# The four rare TOP drop recipes (#2420): Greater Fire Protection Potion
+# (LBRS), Flask of the Titans (UBRS), Flask of Supreme Power (Scholomance),
+# and Flask of Distilled Wisdom (Stratholme live).
+TOP_RECIPES = (
+    (13494, "Recipe: Greater Fire Protection Potion", 17574),
+    (13519, "Recipe: Flask of the Titans", 17635),
+    (13521, "Recipe: Flask of Supreme Power", 17637),
+    (13520, "Recipe: Flask of Distilled Wisdom", 17636),
+)
+
+
+def top_recipes(knowers: dict, carriers=None) -> list:
+    """Per-family acquisition status for the four TOP Molten Core recipes."""
+    carriers = carriers or {}
+    rows = []
+    for entry, name, spell in TOP_RECIPES:
+        who_knows = sorted(set(knowers.get(spell, ())))
+        who_holds = sorted(set(carriers.get(entry, ())))
+        acquired = bool(who_knows or who_holds)
+        parts = []
+        if who_knows:
+            parts.append("known by %s" % ", ".join(who_knows))
+        if who_holds:
+            parts.append("held by %s" % ", ".join(who_holds))
+        detail = "; ".join(parts) if parts else "not acquired"
+        rows.append(
+            {
+                "entry": entry,
+                "name": name,
+                "spell": spell,
+                "acquired": acquired,
+                "knowers": who_knows,
+                "carriers": who_holds,
+                "line": "%s: %s" % (name, detail),
+            }
+        )
+    return rows
+
 
 # ---------------------------------------------------------------------------
 # FIRE RESISTANCE, PER ROLE. The Ragnaros tank first, as classic guilds asked
@@ -1169,6 +1259,11 @@ def craft_step(crafter, make, name, want, vendors, cap):
             and make.recipe_item in vendors
             and crafter.skill(make.skill)[0] >= make.recipe_skill
         ):
+            if crafter.money is not None and (
+                crafter.money
+                < make.recipe_price + purse.recipe_purse_floor(crafter.level)
+            ):
+                return None
             if not make.recipe_vendors:
                 return _buy_step(
                     crafter,
@@ -1232,7 +1327,7 @@ def letters_for(crafter, make, want, members, busy, room, recent, cap) -> list:
                 and not m.family
                 and m.online
                 and m.name not in busy
-                and not classic.is_expansion_map(m.map_id)
+                and not classic.stands_outside(m)
                 and m.count(entry) > 0
             ),
             key=lambda m: (-m.count(entry), m.name),
@@ -1300,6 +1395,12 @@ class GuildFacts:
     raiders: tuple  # Raider
     posts: tuple  # guildcorps.Post
     vendors_by_map: dict
+    seat_reagents: dict | None = None
+    seat_drink: dict | None = None
+    known_spells: dict | None = None
+    guild_bank_reagents: dict | None = None
+    guild_bank_drink: int = 0
+    spell_reagents: dict | None = None
 
 
 def guild_facts(guild, members, worn_rows, posts, vendors_by_map) -> GuildFacts:
@@ -1334,6 +1435,33 @@ def guild_facts(guild, members, worn_rows, posts, vendors_by_map) -> GuildFacts:
     )
 
 
+def with_seat_supply(facts: GuildFacts, extra: dict | None) -> GuildFacts:
+    """Attach measured per-seat reagent, drink and spell rows to `facts`."""
+    read = extra or {}
+    if not any(
+        k in read
+        for k in (
+            "seat_reagents",
+            "seat_drink",
+            "known_spells",
+            "bank_reagents",
+            "bank_drink",
+            "spell_reagents",
+        )
+    ):
+        return facts
+    guild = facts.guild
+    return replace(
+        facts,
+        seat_reagents=read.get("seat_reagents"),
+        seat_drink=read.get("seat_drink"),
+        known_spells=read.get("known_spells"),
+        guild_bank_reagents=(read.get("bank_reagents") or {}).get(guild),
+        guild_bank_drink=int((read.get("bank_drink") or {}).get(guild) or 0),
+        spell_reagents=read.get("spell_reagents"),
+    )
+
+
 @dataclass(frozen=True)
 class SupplyPlan:
     guild: str
@@ -1341,6 +1469,8 @@ class SupplyPlan:
     fire: tuple
     steps: tuple = ()
     notes: tuple = ()
+    reagents: tuple = ()
+    drink: tuple = ()
 
 
 def fire_potion_order(lines):
@@ -1468,7 +1598,7 @@ def _crafters(role, members, posts, busy):
         if n in by
         and by[n].online
         and n not in busy
-        and not classic.is_expansion_map(by[n].map_id)
+        and not classic.stands_outside(by[n])
     ]
 
 
@@ -1527,6 +1657,9 @@ REAGENT_NAMES = {
     BLACK_LOTUS: "Black Lotus",
     GROMSBLOOD: "Gromsblood",
     STONESCALE_OIL: "Stonescale Oil",
+    SUNGRASS: "Sungrass",
+    THORIUM_ORE: "Thorium Ore",
+    RAW_NIGHTFIN_SNAPPER: "Raw Nightfin Snapper",
     SANDWORM_MEAT: "Sandworm Meat",
     BOLT_OF_RUNECLOTH: "Bolt of Runecloth",
     DREAM_DUST: "Dream Dust",
@@ -1570,6 +1703,13 @@ def _why_not(crafter, make, name, members) -> str:
                 seller.where,
             )
     if make.spell not in crafter.known:
+        if (
+            make.recipe_price
+            and crafter.money is not None
+            and crafter.money
+            < make.recipe_price + purse.recipe_purse_floor(crafter.level)
+        ):
+            return "%s is short of gold for the %s recipe" % (crafter.name, name)
         return "%s does not know %s and carries no recipe for it" % (crafter.name, name)
     lacks = _campfire_lacks(crafter) if make.skill == COOKING else []
     if lacks and _can_make(crafter, make) > 0:
@@ -1627,7 +1767,7 @@ def handout_steps(
                 and not m.family
                 and m.online
                 and m.name not in busy
-                and not classic.is_expansion_map(m.map_id)
+                and not classic.stands_outside(m)
                 and m.count(entry) > 0
             ),
             key=lambda m: (-m.count(entry), m.name),
@@ -1695,7 +1835,7 @@ def plan_guild(
         member = by_name.get(raider.name)
         if member is None or raider.family or not member.online or raider.name in busy:
             continue
-        if classic.is_expansion_map(member.map_id):
+        if classic.stands_outside(member):
             continue
         step = None
         for gear in FIRE_GEAR:
@@ -1755,8 +1895,30 @@ def plan_guild(
         steps.extend(taken)
         letters += sum(1 for s in taken if s.action == "supply")
         notes.extend(said)
+    reagent_lines = tuple(
+        seat_reagent_lines(
+            facts.raiders,
+            facts.seat_reagents,
+            known_spells=facts.known_spells,
+            guild_bank_reagents=facts.guild_bank_reagents,
+            spell_reagents=facts.spell_reagents,
+        )
+    )
+    drink_lines = tuple(
+        seat_drink_lines(
+            facts.raiders,
+            facts.seat_drink,
+            guild_bank_drink=facts.guild_bank_drink,
+        )
+    )
     return SupplyPlan(
-        facts.guild, tuple(lines), tuple(fire), tuple(steps), tuple(notes)
+        facts.guild,
+        tuple(lines),
+        tuple(fire),
+        tuple(steps),
+        tuple(notes),
+        reagent_lines,
+        drink_lines,
     )
 
 
@@ -2072,6 +2234,276 @@ def pace_lines(crafters, snapshots) -> list:
 
 SUPPLY_COLUMNS = ("supply", "wanted", "held", "short", "how it closes")
 FIRE_COLUMNS = ("raider", "role", "target", "worn", "short", "next piece")
+REAGENT_COLUMNS = ("raider", "needed", "carried", "short", "route")
+DRINK_COLUMNS = ("raider", "role", "needed", "carried", "short", "route")
+LOTUS_NOTE = (
+    "Black Lotus is the hard ceiling: a single rare world spawn at Herbalism "
+    "300. When it cannot be met, flasks are the first thing cut."
+)
+
+ROUTE_VENDOR = "vendor"
+ROUTE_MAGE_CONJURE = "mage conjure"
+ROUTE_GUILD_BANK = "guild bank"
+
+REAGENT_BUFF_CASTS = 20
+REAGENT_PORTAL_CASTS = classreagents.TARGET_STOCK
+
+# Group-buff and portal spell IDs per buffer class; their reagent item entries
+# and per-cast counts are read at run time from Spell.dbc / spellreagents.json
+# via classreagents.load_spell_reagents(), never typed by hand.
+BUFFER_SPELLS: dict[int, tuple[tuple[tuple[int, ...], int], ...]] = {
+    PALADIN: (
+        ((25782, 25916), REAGENT_BUFF_CASTS),  # Greater Blessing of Might (R1, R2)
+        ((25894, 25918), REAGENT_BUFF_CASTS),  # Greater Blessing of Wisdom (R1, R2)
+        ((25898,), REAGENT_BUFF_CASTS),  # Greater Blessing of Kings
+        ((25899,), REAGENT_BUFF_CASTS),  # Greater Blessing of Sanctuary
+    ),
+    PRIEST: (
+        ((21562, 21564), REAGENT_BUFF_CASTS),  # Prayer of Fortitude (R1, R2)
+        ((27681,), REAGENT_BUFF_CASTS),  # Prayer of Spirit
+        ((27683,), REAGENT_BUFF_CASTS),  # Prayer of Shadow Protection
+    ),
+    MAGE: (
+        ((23028,), REAGENT_BUFF_CASTS),  # Arcane Brilliance
+        ((10059,), REAGENT_PORTAL_CASTS),  # Portal: Stormwind
+        ((11416,), REAGENT_PORTAL_CASTS),  # Portal: Ironforge
+        ((11419,), REAGENT_PORTAL_CASTS),  # Portal: Darnassus
+        ((11417,), REAGENT_PORTAL_CASTS),  # Portal: Orgrimmar
+        ((11418,), REAGENT_PORTAL_CASTS),  # Portal: Undercity
+        ((11420,), REAGENT_PORTAL_CASTS),  # Portal: Thunder Bluff
+    ),
+    DRUID: (
+        ((21849, 21850), REAGENT_BUFF_CASTS),  # Gift of the Wild (R1, R2)
+    ),
+}
+
+ALL_BUFFER_SPELL_IDS: tuple[int, ...] = tuple(
+    dict.fromkeys(
+        sid
+        for specs in BUFFER_SPELLS.values()
+        for ranks, _casts in specs
+        for sid in ranks
+    )
+)
+
+
+@dataclass(frozen=True)
+class SeatReagentLine:
+    """One buffer seat's group-buff and portal reagent state."""
+
+    name: str
+    class_id: int
+    want: int
+    have: int
+    needed: dict
+    carried: dict
+    route: str
+
+    @property
+    def short(self) -> int:
+        return max(0, self.want - self.have)
+
+
+@dataclass(frozen=True)
+class SeatDrinkLine:
+    """One mana seat's drink state."""
+
+    name: str
+    role: str
+    class_id: int
+    want: int
+    have: int
+    route: str
+
+    @property
+    def short(self) -> int:
+        return max(0, self.want - self.have)
+
+
+def resolve_buffer_spells(
+    spell_ids, spell_reagents: dict | None = None
+) -> dict[int, tuple[tuple[int, int], ...]]:
+    """Resolve `spell_ids` against Spell.dbc reagents; raises KeyError if unknown."""
+    table = (
+        classreagents.load_spell_reagents()
+        if spell_reagents is None
+        else spell_reagents
+    )
+    resolved: dict[int, tuple[tuple[int, int], ...]] = {}
+    for sid in spell_ids:
+        key = int(sid)
+        pairs = table.get(key)
+        if not pairs:
+            raise KeyError("unknown spell id %d in Spell.dbc" % key)
+        resolved[key] = tuple((int(e), max(1, int(c))) for e, c in pairs)
+    return resolved
+
+
+def buffer_reagent_entries(spell_reagents: dict | None = None) -> frozenset[int]:
+    """Every reagent item entry named by BUFFER_SPELLS in Spell.dbc."""
+    resolved = resolve_buffer_spells(ALL_BUFFER_SPELL_IDS, spell_reagents)
+    return frozenset(entry for pairs in resolved.values() for entry, _ in pairs)
+
+
+def seat_reagent_lines(
+    raiders,
+    seat_reagents: dict | None,
+    *,
+    known_spells: dict | None = None,
+    guild_bank_reagents: dict | None = None,
+    spell_reagents: dict | None = None,
+) -> list[SeatReagentLine]:
+    """Per-buffer-seat reagent counts for group buffs and portals (#2109)."""
+    if seat_reagents is None:
+        return []
+    table = resolve_buffer_spells(ALL_BUFFER_SPELL_IDS, spell_reagents)
+    gbank = guild_bank_reagents or {}
+    lines = []
+    for raider in raiders or ():
+        specs = BUFFER_SPELLS.get(int(raider.class_id))
+        if not specs:
+            continue
+        known = (known_spells or {}).get(raider.name) or ()
+        needed: dict[int, int] = {}
+        for ranks, casts in specs:
+            sid = next((r for r in reversed(ranks) if r in known), ranks[-1])
+            for entry, per_cast in table[sid]:
+                want_entry = int(casts) * max(1, int(per_cast))
+                if want_entry > needed.get(entry, 0):
+                    needed[entry] = want_entry
+        raw_carried = seat_reagents.get(raider.name) or {}
+        carried = {e: max(0, int(raw_carried.get(e, 0))) for e in needed}
+        have = sum(min(carried[e], w) for e, w in needed.items())
+        want = sum(needed.values())
+        short_entries = [e for e, w in needed.items() if carried[e] < w]
+        route = (
+            ROUTE_GUILD_BANK
+            if any(int(gbank.get(e, 0)) > 0 for e in short_entries)
+            else ROUTE_VENDOR
+        )
+        lines.append(
+            SeatReagentLine(
+                raider.name,
+                int(raider.class_id),
+                want,
+                have,
+                needed,
+                carried,
+                route,
+            )
+        )
+    return lines
+
+
+def seat_drink_lines(
+    raiders,
+    seat_drink: dict | None,
+    *,
+    guild_bank_drink: int = 0,
+) -> list[SeatDrinkLine]:
+    """Per-mana-seat drink counts for a night of Molten Core (#2109)."""
+    if seat_drink is None:
+        return []
+    has_mage = any(int(r.class_id) == MAGE for r in (raiders or ()))
+    if int(guild_bank_drink or 0) > 0:
+        route = ROUTE_GUILD_BANK
+    elif has_mage:
+        route = ROUTE_MAGE_CONJURE
+    else:
+        route = ROUTE_VENDOR
+    lines = []
+    for raider in raiders or ():
+        want = restsupply.drink_target(raider.class_id)
+        if want <= 0:
+            continue
+        have = max(0, int(seat_drink.get(raider.name, 0)))
+        lines.append(
+            SeatDrinkLine(
+                raider.name,
+                raider.role,
+                int(raider.class_id),
+                want,
+                have,
+                route,
+            )
+        )
+    return lines
+
+
+def seat_supply_blockers(
+    reagent_lines,
+    drink_lines,
+) -> list[str]:
+    """Blocker sentences for seats short of group-buff reagents or drink (#2109)."""
+    out = []
+    for r in reagent_lines or ():
+        if r.short:
+            out.append(
+                "%s carries %d/%d group-buff reagents (route: %s)."
+                % (r.name, r.have, r.want, r.route)
+            )
+    for d in drink_lines or ():
+        if d.short:
+            out.append(
+                "%s carries %d/%d drink (route: %s)."
+                % (d.name, d.have, d.want, d.route)
+            )
+    return out
+
+
+def herb_shortfall(
+    raiders,
+    have=None,
+    guild: str = "",
+) -> dict:
+    """Per-guild herb and reagent shortfall for one night of Molten Core (#2425).
+
+    Computed from the guild's seated `raiders` (`night_wants(raiders)`, where
+    `Greater Fire Protection Potion` is the night's fire potion target) and the
+    guild's `have` counts across bags, bank and the guild bank. Holding a
+    crafted consumable reduces that consumable's craft shortfall before its
+    reagents are summed; holding a raw reagent reduces that reagent's shortfall.
+    """
+    have = have or {}
+    wants = night_wants(raiders)
+    needed: dict[int, int] = {}
+    for supply in SUPPLIES:
+        if supply.make is None:
+            continue
+        want = sum((wants.get(supply.entry) or {}).values())
+        if not want:
+            continue
+        short_casts = max(0, want - int(have.get(supply.entry, 0)))
+        if not short_casts:
+            continue
+        for entry, per in supply.make.reagents:
+            needed[int(entry)] = needed.get(int(entry), 0) + short_casts * int(per)
+    herbs = []
+    for entry, need in sorted(
+        needed.items(), key=lambda kv: REAGENT_NAMES.get(kv[0], "item %d" % kv[0])
+    ):
+        name = REAGENT_NAMES.get(entry, "item %d" % entry)
+        held = int(have.get(entry, 0))
+        short = max(0, need - held)
+        herbs.append(
+            {
+                "entry": entry,
+                "name": name,
+                "need": need,
+                "held": held,
+                "short": short,
+                "line": "%s: %d needed, %d held, %d short" % (name, need, held, short),
+            }
+        )
+    short_kinds = sum(1 for h in herbs if h["short"] > 0)
+    prefix = "%s: " % guild if guild else ""
+    return {
+        "guild": guild,
+        "line": "%s%d of %d herb and reagent kinds short for one night of Molten Core"
+        % (prefix, short_kinds, len(herbs)),
+        "herbs": herbs,
+        "lotus_note": LOTUS_NOTE,
+    }
 
 
 def card(
@@ -2083,6 +2515,15 @@ def card(
     crafters=(),
     snapshots=(),
     unobtainable=(),
+    guild: str = "",
+    vendor_recipes=(),
+    *,
+    seat_reagents: dict | None = None,
+    seat_drink: dict | None = None,
+    known_spells: dict | None = None,
+    bank_reagents: dict | None = None,
+    bank_drink: int = 0,
+    spell_reagents: dict | None = None,
 ) -> dict:
     """The supply section of one guild's readiness card; the page decides nothing.
 
@@ -2091,9 +2532,23 @@ def card(
     `crafters` are the guild's family names and `snapshots` the metric
     watcher's records of the last week, for the alchemists' pace.
     `unobtainable` are sentences naming raid crafts this realm cannot teach.
+    `vendor_recipes` are recipe entries sold by a vendor available to this
+    guild's faction.
     """
-    lines = supply_lines(raiders, have, knowers, carriers)
+    lines = supply_lines(raiders, have, knowers, carriers, vendor_recipes)
     fire = fire_lines(raiders)
+    reagent_lines = seat_reagent_lines(
+        raiders,
+        seat_reagents,
+        known_spells=known_spells,
+        guild_bank_reagents=bank_reagents,
+        spell_reagents=spell_reagents,
+    )
+    drink_lines = seat_drink_lines(
+        raiders,
+        seat_drink,
+        guild_bank_drink=bank_drink,
+    )
     short = [line for line in lines if line.short]
     fire_short = [f for f in fire if f.short]
     head = (
@@ -2115,6 +2570,8 @@ def card(
         "pace": pace_lines(crafters, snapshots),
         "level_60_line": level_60_line(snapshots),
         "unobtainable": list(unobtainable),
+        "top_recipes": top_recipes(knowers, carriers),
+        "herb_shortfall": herb_shortfall(raiders, have, guild=guild),
         "supply_columns": list(SUPPLY_COLUMNS),
         "supplies": [
             {
@@ -2170,6 +2627,45 @@ def card(
             "Reagents were read from the worldserver's Spell.dbc and recipe "
             "sources from the realm's own tables."
         ),
+        "reagent_columns": list(REAGENT_COLUMNS),
+        "seat_reagents": [
+            {
+                "name": r.name,
+                "want": r.want,
+                "have": r.have,
+                "short": r.short,
+                "route": r.route,
+                "cells": [
+                    r.name,
+                    str(r.want),
+                    str(r.have),
+                    str(r.short),
+                    r.route if r.short else "",
+                ],
+            }
+            for r in reagent_lines
+        ],
+        "drink_columns": list(DRINK_COLUMNS),
+        "seat_drink": [
+            {
+                "name": d.name,
+                "role": d.role,
+                "want": d.want,
+                "have": d.have,
+                "short": d.short,
+                "route": d.route,
+                "cells": [
+                    d.name,
+                    d.role,
+                    str(d.want),
+                    str(d.have),
+                    str(d.short),
+                    d.route if d.short else "",
+                ],
+            }
+            for d in drink_lines
+        ],
+        "seat_blockers": seat_supply_blockers(reagent_lines, drink_lines),
     }
 
 
@@ -2196,6 +2692,10 @@ def have_from_holdings(holding_rows, guild_bank_rows=()) -> dict:
 
 def summary(plan) -> str:
     """One log line for a guild's plan."""
+    reagent_short = [
+        "%s %d/%d" % (r.name, r.have, r.want) for r in plan.reagents if r.short
+    ]
+    drink_short = ["%s %d/%d" % (d.name, d.have, d.want) for d in plan.drink if d.short]
     short = [
         "%s %d/%d" % (line.name, line.have, line.want)
         for line in plan.lines
@@ -2217,10 +2717,16 @@ def summary(plan) -> str:
         for line in plan.lines
         if line.short and line.route == QUEST
     ]
-    return "raid supply: %s: short %s; fire resistance short %s; %d step(s)%s" % (
-        plan.guild,
-        ", ".join(short) or "nothing",
-        ", ".join(fire) or "nobody",
-        len(plan.steps),
-        "; by quest: " + ", ".join(quests) if quests else "",
+    return (
+        "raid supply: %s: reagents short %s, drink short %s; short %s; "
+        "fire resistance short %s; %d step(s)%s"
+        % (
+            plan.guild,
+            ", ".join(reagent_short) or "nothing",
+            ", ".join(drink_short) or "nothing",
+            ", ".join(short) or "nothing",
+            ", ".join(fire) or "nobody",
+            len(plan.steps),
+            "; by quest: " + ", ".join(quests) if quests else "",
+        )
     )

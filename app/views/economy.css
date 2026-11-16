@@ -154,3 +154,35 @@
 .eco-hierarchy { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 0; }
 .eco-hier-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; background: var(--color-neutral-900); border-radius: 4px; font-size: var(--fs-1); }
 .eco-hier-chip .tag { font-size: var(--fs-0); padding: 1px 6px; }
+
+@media (pointer: coarse) {
+  .eco-namechip,
+  .eco-pick {
+    min-width: 44px;
+    justify-content: center;
+  }
+  .eco-auc-table td a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .eco-note a,
+  .eco-pair-body a {
+    position: relative;
+    display: inline;
+  }
+  .eco-note a::after,
+  .eco-pair-body a::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    min-width: 44px;
+    min-height: 44px;
+    width: 100%;
+    height: 100%;
+  }
+}

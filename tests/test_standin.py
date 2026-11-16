@@ -224,8 +224,9 @@ class ACraftThatCannotMoveIsNoReasonToSitOut(unittest.TestCase):
         )
 
     def test_a_trade_with_no_rung_at_its_value_cannot_move(self):
-        why = standin.sits_out(facts(skills={"enchanting": 1}, known=frozenset()))
-        self.assertIn("enchanting 1", why)
+        # Enchanting has a rung at 1 since #2411; Inscription has no ladder.
+        why = standin.sits_out(facts(skills={"inscription": 1}, known=frozenset()))
+        self.assertIn("inscription 1", why)
 
     def test_an_unread_spellbook_with_a_row_leaves_the_row(self):
         row = seated(in_name="")

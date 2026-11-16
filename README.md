@@ -77,6 +77,41 @@ Settings are environment variables. These are the ones to set first.
 | `LLM_URL`, `LLM_MODEL` | OpenAI-compatible chat endpoint. Set your own: the `LLM_URL` default is private. |
 | `WOW_STREAM_PREFIX` | Broadcast prefix for this realm. Empty means no videos. |
 
+### Holding a family for manual control
+
+To drive a family by hand, hold it with one row in `acore_characters`. The
+bridge reads the row on every pass, so no restart is needed:
+
+```sql
+INSERT INTO overseer_operator_hold (family, reason, expires_at, source)
+VALUES ('Grug', 'driving by hand', UTC_TIMESTAMP() + INTERVAL 4 HOUR, 'sql')
+ON DUPLICATE KEY UPDATE reason = VALUES(reason),
+  expires_at = VALUES(expires_at), source = VALUES(source);
+-- release it
+DELETE FROM overseer_operator_hold WHERE family = 'Grug';
+```
+
+`family` is the roster's `family` value, or `*` for every family.
+`expires_at` is UTC; NULL holds until the row is deleted.
+
+While a family is held, these write nothing for it and log
+`held by operator: <reason>` at most every ten minutes:
+
+- the campaign queue pass: the planner, the attunement and Hydraxian quest
+  steps, the Upper Spire pass, the trade turn, dungeon quests, town first and
+  the queue step itself
+  (a queued entry is not stepped);
+- the council (no scene and no goal, including the one after a restart);
+- the activity choice;
+- the leveling route.
+
+The farm pass (family-wide and per member), and the bag, bank, mail, vendor and
+craft passes keep working inside the job the family has. A hold undoes nothing already written, so set the job you want
+from the console. `CAMPAIGN_PLANNER=off`, `ATTUNEMENT_STEP=off`,
+`HYDRAXIAN_STEP=off` and `JEV_MODE_ACTIVITY_CHOICE=off` switch their writer off
+for every family from the next start. Either a switch or a hold is enough to
+stop a writer.
+
 ## Status
 
 Last checked 2026-11-07. The bridge and site run as two deployments in the `wow-dev` namespace, the only realm left. The site is reachable only on the operator's private network, through a reverse proxy.
@@ -130,6 +165,10 @@ A worldserver roll is separate and logs every bot out. [docs/ROLLS.md](docs/ROLL
 - `apiv2/`: the versioned API.
 - `tests/`: the unit suite.
 - `tools/`, `scripts/`: maintenance and local checks. Only the scheduled metric watcher and its audit dependency ship in the image.
+- `forge/`: builds the nightly `lean` and `full` database templates for ephemeral test worlds from the backup share. It is a build tool and does not ship in the bridge image.
+  - Build one: `FORGE_REGISTRY=<your registry path> FORGE_BACKUP_PREFIX=<your dump file prefix> python -m forge build --class lean --backup-dir <read-only backup mount> --workdir <absolute scratch dir>`. `--dry-run` prints the steps and stops. Set both variables as in `data/forge/config.example.env`; `--workdir` must be an absolute path of letters, digits, `.`, `_`, `-` and `/`.
+  - Needs on the host: Python 3.12 or newer, `mysqld` and the `mysql` client (8.4), `bash`, `gzip`, `tar`, `crane` for the push, and AzerothCore's `dbimport` (override with `--db-import-cmd`). It reads the backup share only and talks to a loopback MySQL it starts itself.
+  - A world built from a template needs the existing client-data volume mounted read-only: the client-data image is only a downloader and holds empty directories. A `lean` world also needs `Playerbots.RandomBotAccountCount = 0` and `Playerbots.AddClassAccountPoolSize = 0` (`forge.scrub.LEAN_PLAYERBOTS_CONF`), or mod-playerbots creates and fills bot accounts at boot; `python -m forge lean-conf` prints them and a lean template's marker table records them in `required_conf`.
 - `mod-overseer/`: pinned submodule, read as text by tests only.
 - `patches/`, `UPSTREAM-PINS.env`: test fixtures, not build inputs.
 - `services/strands-decider/`: a separate image.

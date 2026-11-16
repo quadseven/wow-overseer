@@ -481,6 +481,42 @@ def aim_statements(names, target):
     ]
 
 
+def aim_only_statements(names, target):
+    """The write that aims `names` at `target` and touches nobody else.
+
+    For a family in individual mode (individual.py, #2395): each member may
+    hold an errand of its own, so clearing everyone else, which is what
+    `aim_statements` does for a family with one traveller, would undo the
+    other members' errands. A target is required; naming nobody writes
+    nothing.
+
+    ONLY AN EMPTY COLUMN IS WRITTEN. Several passes already write a member's
+    own `travel_npc` (the trade errand, the learn aim, the site's orders), and
+    the module's catch-up and run claims live in the same column. This write
+    never replaces any of them: a member already walking somewhere keeps that
+    walk, and is aimed again on a later pass once the column is clear. The
+    same guard the learn aim uses (learnaim.py, `travel_npc = ''`).
+    """
+    if not target:
+        raise ValueError("an aim needs a target")
+    resolved = resolve(target)
+    if resolved is None:
+        raise ValueError("not a travel target: %r" % (target,))
+    if len(resolved) > COLUMN_WIDTH:
+        raise ValueError("travel target too long for the column: %r" % (resolved,))
+    chosen = sorted({str(n) for n in (names or [])})
+    if not chosen:
+        return []
+    marks = ", ".join(["%s"] * len(chosen))
+    return [
+        (
+            "UPDATE overseer_roster SET travel_npc = %%s "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "WHERE travel_npc = %%s AND name IN (%s)" % marks,
+            (resolved, NONE, *chosen),
+        )
+    ]
+
+
 def is_ground_aim(value):
     """Whether `value` is an `at:<map>:<x>,<y>,<z>` aim rather than a keyword.
 
@@ -808,6 +844,114 @@ def forge_aim(spawn, standing_on):
             )
         )
     return ForgeAim(aim=aim, radius=radius)
+
+
+# THE FORGE PASS'S WALKING RULES (#2538). Nearest-on-the-map has no limit, so a
+# leader standing in hostile ground was sent to the nearest Forge in more of it.
+# A Forge farther than this from the leader is not walked to.
+FORGE_WALK_YARDS = 2000.0
+# Members within this many yards of the leader count as with it; fewer than
+# half of the others with it is a split family, and the followers would not
+# arrive by following.
+FAMILY_SPLIT_YARDS = 500.0
+# Hostile spawns this close to the Forge are the ground the smelter stands in.
+FORGE_DANGER_YARDS = 500.0
+# Mirrors levelroute.DANGER_GAP and DANGER_SHARE (a test pins the equality):
+# a spawn this many levels over the leader is red, and ground that is mostly
+# red is not stood in.
+FORGE_DANGER_GAP = 5
+FORGE_DANGER_SHARE = 0.5
+
+
+def _yards(a, b) -> float:
+    return (
+        (float(a["x"]) - float(b["x"])) ** 2 + (float(a["y"]) - float(b["y"])) ** 2
+    ) ** 0.5
+
+
+def _split_refusal(leader, positions, here, name) -> str:
+    """The sentence for a family that is not with its leader, or ""."""
+    others = [p for n, p in positions.items() if n != leader and p]
+    if not others:
+        return ""
+    near = sum(
+        1
+        for p in others
+        if p.get("map_id") == here.get("map_id")
+        and _yards(p, here) <= FAMILY_SPLIT_YARDS
+    )
+    if near * 2 >= len(others):
+        return ""
+    return (
+        "the family is split (%d of %d members within %d yards of "
+        "the leader), so the walk to %s would leave it behind"
+        % (near, len(others), int(FAMILY_SPLIT_YARDS), name)
+    )
+
+
+def _danger_tally(spawn, hostile, level) -> tuple:
+    """(hostile spawns, red ones, elites at `level` or above) beside `spawn`."""
+    point = {"x": spawn["x"], "y": spawn["y"]}
+    total = red = elites = 0
+    for c in hostile or ():
+        if int(c.map_id) != int(spawn["map_id"]):
+            continue
+        if _yards({"x": c.x, "y": c.y}, point) > FORGE_DANGER_YARDS:
+            continue
+        total += c.n
+        if c.level >= level + FORGE_DANGER_GAP:
+            red += c.n
+        if c.elite and c.level >= level:
+            elites += c.n
+    return total, red, elites
+
+
+def _danger_refusal(spawn, hostile, level, name) -> str:
+    """The sentence for hostile ground beside the Forge, or ""."""
+    if not (level and level > 0):
+        return ""
+    total, red, elites = _danger_tally(spawn, hostile, level)
+    if elites:
+        return (
+            "%d hostile elite spawn%s at level %d or above stand within "
+            "%d yards of %s"
+            % (elites, "" if elites == 1 else "s", level, int(FORGE_DANGER_YARDS), name)
+        )
+    if total and red / total >= FORGE_DANGER_SHARE:
+        return (
+            "%d of %d hostile spawns within %d yards of %s stand %d or "
+            "more levels above the leader (level %d)"
+            % (red, total, int(FORGE_DANGER_YARDS), name, FORGE_DANGER_GAP, level)
+        )
+    return ""
+
+
+def forge_refusal(spawn, leader, positions, hostile, level) -> str:
+    """Why the leader must not be walked to the Forge `spawn` (a `_FORGE_SQL`
+    row with its squared `d2`), or "".
+
+    `positions` is {name: {map_id, x, y}} off the snapshot, `hostile` the spawn
+    cells hostile to the family (map_id, x, y, level, elite, n) and `level` the
+    leader's. ADVISORY like the death discs: whatever cannot be read refuses
+    nothing, and the other half of the judgement (death discs) is the bridge's.
+    """
+    here = (positions or {}).get(leader)
+    if not spawn or not here:
+        return ""
+    name = "the nearest Forge (%s, %s)" % (
+        int(float(spawn["x"])),
+        int(float(spawn["y"])),
+    )
+    yards = float(spawn.get("d2") or 0) ** 0.5
+    if yards > FORGE_WALK_YARDS:
+        return "%s is %d yards away, past the %d-yard walking budget" % (
+            name,
+            round(yards),
+            int(FORGE_WALK_YARDS),
+        )
+    return _split_refusal(leader, positions, here, name) or _danger_refusal(
+        spawn, hostile, level, name
+    )
 
 
 def within_focus(spawn) -> bool:

@@ -659,6 +659,12 @@ STATE_READS = (
         "_read_watch_order",
         "director state query failed",
     ),
+    (
+        "/api/spectate",
+        "_spectate_state",
+        "_read_watch_order",
+        "spectate state query failed",
+    ),
 )
 
 

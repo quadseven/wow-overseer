@@ -50,8 +50,10 @@ from __future__ import annotations
 
 import os
 
+import campaignplan
 import guildrun
 import jobs
+import operatorhold
 
 ENV_SWITCH = "GUILD_FAMILY_SEATS"
 # The campaign guard (#2353): on unless this says off.
@@ -73,6 +75,23 @@ def guard_enabled(environ=None) -> bool:
     env = os.environ if environ is None else environ
     raw = str(env.get(ENV_GUARD, "") or "").strip().lower()
     return raw not in ("off", "0", "false", "no")
+
+
+def lend_holds(holds: dict, environ=None) -> dict:
+    """The operator holds that stand a lend down: the stored holds
+    (operatorhold.read) plus an every-family hold while the campaign planner
+    is switched off. A loan into a guild run is a dungeon the family did not
+    plan, so a family the operator has not sent into a dungeon lends nobody
+    while the hold or the planner switch says so."""
+    out = dict(holds or {})
+    if not campaignplan.enabled(environ):
+        out.setdefault(
+            operatorhold.EVERY_FAMILY,
+            operatorhold.Hold(
+                operatorhold.EVERY_FAMILY, "the campaign planner is switched off"
+            ),
+        )
+    return out
 
 
 def campaign_families(campaign_rows) -> set:
@@ -146,6 +165,7 @@ def lendable(
     campaigns=(),
     seats=None,
     guard: bool = True,
+    holds: dict | None = None,
 ) -> set:
     """The family members who may take a guild run's tank or healer seat now:
     every member of an idle family but its head (the family key is the head's
@@ -159,12 +179,17 @@ def lendable(
     quest, so it lends only a member who is not the family's sole holder of a
     tank or healer seat (`seats`, seats_played: the seats each name plays; the
     head counts as a holder). With no `seats` read it lends nobody. `guard`
-    off restores the old lend."""
+    off restores the old lend.
+
+    THE OPERATOR HOLD: a family `holds` covers (operatorhold.held, lend_holds)
+    lends nobody, because a loan puts its member inside a dungeon."""
     idle = idle_families(roster, inside_names, in_runs)
     busy_campaign = set(campaigns or ()) if guard else set()
     out = set()
     for family, members in _families(roster).items():
         if not family or family not in idle:
+            continue
+        if operatorhold.held(holds, family) is not None:
             continue
         for name, _job in members:
             if name == family:

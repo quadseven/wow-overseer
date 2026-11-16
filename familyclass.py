@@ -56,6 +56,10 @@ ENV_SWITCH = "FAMILY_CLASS_STEPS"
 # the way lost to bends: the longest a walk may stretch the gap between runs.
 WALK_MINUTES = 20
 WALK_YARDS = 5000.0
+# A LONE class walk is held shorter: the danger read is of the giver's ground,
+# not of the way, so the longer the walk the more unread ground it crosses. Half
+# of WALK_YARDS, about ten minutes on foot. The riding walk keeps WALK_YARDS.
+LONE_WALK_YARDS = 2500.0
 # One class walk per member per two hours: the chain is four short steps.
 WALK_GAP_MINUTES = 120
 # Within this of the giver a member makes the step where it stands.
@@ -101,6 +105,54 @@ def idle_names(roster, live_leaders=(), inside=()) -> set:
     return out
 
 
+def not_idle_holds(
+    roster,
+    live_leaders=(),
+    inside=(),
+    errands=(),
+    members=(),
+    enabled=True,
+    status_read=True,
+    roster_read=True,
+) -> dict:
+    """name -> why a family cannot take its between-run class step this pass."""
+    names = {m.name for m in members or ()}
+    if not enabled:
+        return {name: "family class steps are disabled" for name in names}
+    if not status_read:
+        return {name: "live dungeon status could not be read" for name in names}
+    if not roster_read:
+        return {name: "family roster could not be read" for name in names}
+    holds = _run_holds(roster, live_leaders, inside)
+    holds.update(_errand_holds(errands))
+    return holds
+
+
+def _run_holds(roster, live_leaders, inside) -> dict:
+    """The run or instance keeping each family between-run step closed."""
+    families: dict = {}
+    for row in roster or ():
+        name = str(row.get("name") or "")
+        if name:
+            families.setdefault(str(row.get("family") or ""), []).append(name)
+    live, within = set(live_leaders or ()), set(inside or ())
+    holds = {}
+    for leader, names in families.items():
+        if leader in live:
+            reason = "its family has an active dungeon run"
+        elif within.intersection(names):
+            reason = "a family member is still inside an instance"
+        else:
+            continue
+        holds.update({name: reason for name in names})
+    return holds
+
+
+def _errand_holds(errands) -> dict:
+    """The members held by a town errand outside the family run state."""
+    return {name: "the member is on a town errand" for name in set(errands or ())}
+
+
 def _yards(m, spot) -> float:
     return math.hypot(float(m.x) - float(spot.x), float(m.y) - float(spot.y))
 
@@ -132,7 +184,7 @@ def _walk_hold(m, spot, recent) -> str:
             "%s follows its leader and cannot walk to its giver; a follower makes "
             "only the class step in reach" % m.name
         )
-    if yards > WALK_YARDS:
+    if yards > LONE_WALK_YARDS:
         return "%s's giver is %d yards away: too far for the gap between runs" % (
             m.name,
             int(yards),
@@ -155,6 +207,17 @@ def _gap_hold(m, recent) -> str:
                 WALK_GAP_MINUTES,
             )
     return ""
+
+
+def needs_ground_read(m, spot) -> bool:
+    """Whether the giver's ground is worth a read: the member stands on the
+    giver's map, past reach and within LONE_WALK_YARDS. A member in reach walks
+    nowhere, and one past the cap or on another map is held for that alone."""
+    if m.map_id is None or m.x is None or m.y is None:
+        return False
+    if int(m.map_id) != int(spot.map_id):
+        return False
+    return REACH_YARDS < _yards(m, spot) <= LONE_WALK_YARDS
 
 
 def errand_free(members, errand_names) -> list:

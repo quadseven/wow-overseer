@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, Mock
 import craft
 import craft_rhythm
 import craft_supply
+import individual
 import towntrip
 
 
@@ -355,6 +356,8 @@ class FamilyModeGuard(unittest.IsolatedAsyncioTestCase):
             craft_rhythm=craft_rhythm,
             craft_supply=craft_supply,
             _names_of=lambda cohort: ["Smith"],
+            individual=individual,
+            _individual_family=lambda cohort=None: None,
             _standing_jobs=lambda family: {"Smith": "dungeon:zulfarrak"},
             _standin_out=lambda: set(),
             _fetch_standing_crafts=reader,

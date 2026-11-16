@@ -66,6 +66,9 @@ import weaponskill
 
 # The share of the worn piece's score a carried piece must add to be put on.
 MIN_GAIN = 0.1
+# Bounded per-tier weight inside a score band so equal/near-score heavier class
+# armor breaks ties upward without letting low-scored armor strip stronger wear.
+TIER_BONUS = 0.05
 # A score difference smaller than this is no difference.
 EPSILON = 1e-6
 # Below this gear score on both pieces the spec has no real opinion (a stray
@@ -296,25 +299,73 @@ def role_score(stats: dict, role: str) -> float:
     return total
 
 
-def value(row: dict, wearer: Wearer, key: str = "", book=None) -> tuple:
-    """(gear score, role score) of one piece for this member, in hand `key`."""
+def armor_tier(row: dict | None, wearer: Wearer) -> int:
+    """Material tier (1..4) for body armor slots, else 0 (cloaks, jewelry, weapons)."""
     if row is None:
-        return (0.0, 0.0)
+        return 0
+    return bag_pressure.armor_material_tier(
+        _int(row.get("item_class")),
+        _int(row.get("item_subclass")),
+        _int(row.get("inventory_type")),
+        wearer.class_id,
+        wearer.level,
+    )
+
+
+def resistance_only(row: dict, book=None) -> bool:
+    """True when `row` gives only resistance(s) (and base armor/shield block)
+    so it belongs in a situational set rather than everyday wear."""
+    if row is None:
+        return False
+    stats = stats_of(row, book)
+    _spells, unread = _drive_spells(row, book)
+    _rolled, unresolved = _drive_property(row, book)
+    if (
+        not unresolved
+        and "random_property_id" not in row
+        and (_int(row.get("RandomProperty")) or _int(row.get("RandomSuffix")))
+    ):
+        unresolved = True
+    return gearscore.is_resistance_only(
+        row, stats, unread_spell=unread, unresolved_random=unresolved
+    )
+
+
+def value(row: dict, wearer: Wearer, key: str = "", book=None) -> tuple:
+    """(gear score, role score, armor tier) of one piece for this member, in hand `key`."""
+    if row is None or resistance_only(row, book):
+        return (0.0, 0.0, 0)
     stats = stats_of(row, book)
     gs = gearscore.score(stats, wearer.spec, wearer.level, key) if wearer.spec else 0.0
-    return (gs, role_score(stats, wearer.role))
+    return (gs, role_score(stats, wearer.role), armor_tier(row, wearer))
 
 
 def _add(a: tuple, b: tuple) -> tuple:
-    return (a[0] + b[0], a[1] + b[1])
+    return (a[0] + b[0], a[1] + b[1], 0)
+
+
+def _tier(v: tuple) -> int:
+    return int(v[2]) if len(v) > 2 else 0
+
+
+def _bonused(score: float, tier: int) -> float:
+    return score * (1.0 + TIER_BONUS * tier)
 
 
 def beats(new: tuple, old: tuple) -> bool:
-    """Does `new` beat `old` by MIN_GAIN: by gear score, or by the role score
-    when the spec scores neither."""
-    if _spec_decides(new, old):
-        return new[0] - old[0] > EPSILON and new[0] > old[0] * (1.0 + MIN_GAIN)
-    return new[1] - old[1] > EPSILON and new[1] > old[1] * (1.0 + MIN_GAIN)
+    """Does `new` beat `old` by MIN_GAIN, with armor tier breaking ties and
+    narrowing gains inside a bounded score band."""
+    idx = 0 if _spec_decides(new, old) else 1
+    s_new, s_old = new[idx], old[idx]
+    new_tier, old_tier = _tier(new), _tier(old)
+    if new_tier > 0 and old_tier > 0 and new_tier != old_tier:
+        b_new, b_old = _bonused(s_new, new_tier), _bonused(s_old, old_tier)
+        if new_tier > old_tier:
+            if s_old <= EPSILON and s_new <= EPSILON:
+                return True
+            return b_new - b_old > EPSILON
+        return b_new - b_old > EPSILON and b_new > b_old * (1.0 + MIN_GAIN)
+    return s_new - s_old > EPSILON and s_new > s_old * (1.0 + MIN_GAIN)
 
 
 def _spec_decides(new: tuple, old: tuple) -> bool:
@@ -322,7 +373,13 @@ def _spec_decides(new: tuple, old: tuple) -> bool:
 
 
 def _rank(v: tuple, row: dict | None) -> tuple:
-    return (round(v[0], 6), round(v[1], 6), _int((row or {}).get("item_level")))
+    tier = _tier(v)
+    return (
+        round(_bonused(v[0], tier), 6),
+        round(_bonused(v[1], tier), 6),
+        tier,
+        _int((row or {}).get("item_level")),
+    )
 
 
 # --- can it be put on now ----------------------------------------------------
@@ -473,6 +530,13 @@ def _equip(row: dict, wearer: Wearer, slot: str, worn_level: int, reason: str):
 
 
 def _said(new: tuple, old: tuple, wearer: Wearer) -> str:
+    new_tier, old_tier = _tier(new), _tier(old)
+    if new_tier > old_tier > 0:
+        return "armor tier %d over %d for %s" % (
+            new_tier,
+            old_tier,
+            wearer.spec or "unknown",
+        )
     if _spec_decides(new, old):
         return "gear score %.1f over %.1f for %s" % (new[0], old[0], wearer.spec)
     return "%s role score %.1f over %.1f (the %s spec scores neither)" % (
@@ -783,6 +847,31 @@ def _split_gear(gear_rows, wearers, keep_names) -> tuple:
     return worn, carried
 
 
+def wanted_by(row: dict, wearer_rows, worn_rows, book=None) -> tuple:
+    """The members whose own judge (`choose`) would put `row` on over what
+    they wear now, in name order (#2389).
+
+    `wearer_rows` are member rows for `wearer_from_row`; `worn_rows` are the
+    members' gear rows (`holder`, `equipment_slot`), of which only the worn
+    ones count. `row` is judged as the only piece each member carries, so the
+    answer is "an upgrade over what is worn", not "the best piece anywhere".
+    """
+    wearers = _wearers(
+        wearer_rows, [str(r.get("name") or "") for r in wearer_rows or ()], ()
+    )
+    worn: dict = {}
+    for gear_row in worn_rows or ():
+        if _is_worn(gear_row):
+            worn.setdefault(str(gear_row.get("holder") or ""), []).append(gear_row)
+    guid = _int(row.get("item_guid"))
+    out = []
+    for name in sorted(wearers):
+        picks = choose(wearers[name], worn.get(name, ()), [row], book)
+        if any(e.guid == guid for e in picks):
+            out.append(name)
+    return tuple(out)
+
+
 def plan(
     legacy, wearer_rows, gear_rows, names, keep_names=(), tanks=(), book=None
 ) -> Plan:
@@ -810,3 +899,271 @@ def plan(
     # order `choose` gave its rows (weapons first, main hand before off hand).
     out.sort(key=lambda e: e.holder)
     return Plan(equips=tuple(out), waiting=tuple(waiting), scored=frozenset(wearers))
+
+
+# --- the module's gear drive, mirrored (#2381) --------------------------------
+#
+# TWO JUDGES DISAGREED AND NOTHING RECONCILED THEM. Read on the dev realm on
+# 2026-11-13: Grug, a Protection warrior, carries Emperor's Seal of the Whale
+# (item level 61, +20 Stamina, +11 Spirit) and wears Archaedic Stone of
+# Strength (item level 47, 50 armour, +13 Strength) and Naglering. The item
+# plan's gear verdict (itemplan_data.upgrade_verdicts, item level alone) said
+# wear the Seal, so it was carried for ever (KEEP_CARRY, R4); the bridge leaves
+# a roster member's equips to mod-overseer's gear drive (SweepGear), and the
+# drive keeps the Stone. For a roster member the drive is the one that acts,
+# so its rule is the authority, and this is that rule:
+#
+#   score    GearScore: armour times the role's armour weight (a shield's at
+#            the caster rate unless a tank holds it), every stat times the
+#            role's weight, weapon DPS times the role's DPS weight, plus half a
+#            point per item level; never below zero. The weights are
+#            statweights.py, which mirrors the module's tables.
+#   stats    the template's stat rows, the equip spells it can read as stats
+#            (GearReadItemSpells), and the random property's rolled stats
+#            (GearRandomPropertyOf), which reads the property slots only.
+#   floor    a spell that is not a readable on-equip stat (a proc, a "Use:", a
+#            damage shield like Naglering's thorns), or a random property that
+#            cannot be read, leaves the score a FLOOR rather than exact.
+#   slot     the slot the core would fill: a ring or trinket against the worse
+#            of the two worn, a two-hander against both hands, an off-hand
+#            piece not while a two-hander is held.
+#   compare  GearCompare: better only when the candidate clears the worn score
+#            by 1% plus half a point. A worn floor proves nothing can beat it
+#            (undecided); a candidate floor that clears is better, one that
+#            does not is undecided.
+#
+# Here Archaedic Stone scores 93 exactly, Naglering 123.5 as a floor, and the
+# Seal 70.5, so the drive keeps the Stone, and so does this.
+DRIVE_LEVEL_TIEBREAK = 0.5
+DRIVE_MARGIN_FRACTION = 0.01
+DRIVE_MARGIN_FLOOR = 0.5
+DRIVE_WEAR, DRIVE_KEEP, DRIVE_UNDECIDED, DRIVE_REFUSED = (
+    "wear",
+    "keep",
+    "undecided",
+    "refused",
+)
+ITEM_CLASS_ARMOR_SHIELD = 6
+EQUIP_SLOT_FINGER, EQUIP_SLOT_TRINKET, RANGED_SLOT = 10, 12, 17
+# InventoryType -> the bag 0 equipment slot the core fills first, for the
+# slots a single piece occupies (character_inventory numbering).
+_DRIVE_SLOT = {
+    1: 0,
+    2: 1,
+    3: 2,
+    5: 4,
+    20: 4,
+    6: 5,
+    7: 6,
+    8: 7,
+    9: 8,
+    10: 9,
+    16: 14,
+    15: RANGED_SLOT,
+    25: RANGED_SLOT,
+    26: RANGED_SLOT,
+    28: RANGED_SLOT,
+    11: EQUIP_SLOT_FINGER,
+    12: EQUIP_SLOT_TRINKET,
+    13: MAIN_HAND_SLOT,
+    21: MAIN_HAND_SLOT,
+    17: MAIN_HAND_SLOT,
+    14: OFF_HAND_SLOT,
+    22: OFF_HAND_SLOT,
+    23: OFF_HAND_SLOT,
+}
+
+
+def _drive_spells(row: dict, book=None) -> tuple:
+    """({stat type: amount} the equip spells give, any spell left unread)."""
+    texts = getattr(book, "spells", None)
+    stats: dict = {}
+    unread = False
+    for n in range(1, 6):
+        spell = _int(row.get(f"spellid_{n}"))
+        if spell <= 0:
+            continue
+        if _int(row.get(f"spelltrigger_{n}")) != preraid.SPELL_ON_EQUIP:
+            unread = True
+            continue
+        read = preraid.spell_stats(spell, texts)
+        kinds = [(_SPELL_STAT_TYPE.get(name), amount) for name, amount in read.items()]
+        if not read or any(kind is None for kind, _amount in kinds):
+            unread = True
+            continue
+        for kind, amount in kinds:
+            stats[kind] = stats.get(kind, 0) + amount
+    return stats, unread
+
+
+def _drive_property(row: dict, book=None) -> tuple:
+    """({stat type: amount} the random property rolled, unresolved)."""
+    if not _int(row.get("random_property_id")):
+        return {}, False
+    if book is None:
+        return {}, True
+    try:
+        _suffix, pct = armory._random_property(row, book)
+        ids = armory.parse_enchantments(row.get("enchantments"))
+        stats: dict = {}
+        for slot in armory.PROPERTY_ENCHANT_SLOTS:
+            enchant = ids[slot]
+            if not enchant:
+                continue
+            if enchant not in book.enchants:
+                return stats, True
+            _lines, added = armory._enchant_lines(enchant, row, book, pct.get(enchant))
+            for kind, amount in added.items():
+                stats[kind] = stats.get(kind, 0) + amount
+        return stats, False
+    except (KeyError, TypeError, ValueError, IndexError):
+        return {}, True
+
+
+def drive_score(row: dict, role: str, book=None) -> tuple:
+    """(score, floor): what the module's GearScore gives this piece for this
+    role, and whether that number is only a floor. An unknown role scores
+    (0.0, True): no opinion the comparison may act on."""
+    if row is None or resistance_only(row, book):
+        return 0.0, False
+    weights = statweights.stat_weights(role)
+    if not weights:
+        return 0.0, True
+    spells, unread = _drive_spells(row, book)
+    rolled, unresolved = _drive_property(row, book)
+    stats: dict = {}
+    for n in range(1, 11):
+        name = gearscore.STAT_TYPES.get(_int(row.get(f"stat_type{n}")))
+        value = _int(row.get(f"stat_value{n}"))
+        if name and value:
+            stats[name] = stats.get(name, 0) + value
+    stats = gearscore.add_stats(gearscore.add_stats(stats, spells), rolled)
+    shield = (
+        _int(row.get("item_class")) == ITEM_CLASS_ARMOR
+        and _int(row.get("item_subclass")) == ITEM_CLASS_ARMOR_SHIELD
+    )
+    armor_weight = (
+        statweights.stat_weights(statweights.CASTER)["armor"]
+        if shield and role != statweights.TANK
+        else weights.get("armor", 0.0)
+    )
+    score = armor_weight * _int(row.get("armor"))
+    for name, value in stats.items():
+        score += weights.get(_ROLE_STAT.get(name, ""), 0.0) * float(value)
+    score += weights.get("weapon_dps", 0.0) * gearscore.stats_from_row(row).get(
+        "weapon_dps", 0.0
+    )
+    score += DRIVE_LEVEL_TIEBREAK * _int(row.get("item_level"))
+    return max(score, 0.0), unread or unresolved
+
+
+def _drive_refusal(row: dict, wearer: Wearer, off_hand: bool) -> str:
+    """GearUsable's gates: what the piece is, level, class and race, the
+    proficiency, and the off-hand guards. mod-playerbots' own refusals
+    (`_bot_refusal`) are not the drive's."""
+    return (
+        _template_refusal(row)
+        or _wearer_refusal(row, wearer)
+        or _skill_refusal(row, wearer)
+        or _hand_refusal(row, wearer, off_hand)
+    )
+
+
+def _drive_compare(new: tuple, old: tuple) -> str:
+    clears = new[0] > old[0] * (1.0 + DRIVE_MARGIN_FRACTION) + DRIVE_MARGIN_FLOOR
+    if old[1]:
+        return DRIVE_UNDECIDED
+    if not new[1]:
+        return DRIVE_WEAR if clears else DRIVE_KEEP
+    return DRIVE_WEAR if clears else DRIVE_UNDECIDED
+
+
+def _drive_slot_refusal(row: dict, by_slot: dict, off_hand: bool) -> str:
+    """The refusals that turn on what is already worn: an off-hand under a
+    two-hander, and a unique-equipped piece worn already."""
+    main = by_slot.get(MAIN_HAND_SLOT)
+    if off_hand and main is not None and _inv(main) == TWO_HAND:
+        return "a two-hander is held in both hands"
+    if _unique(row) and any(
+        _int(r.get("entry")) == _int(row.get("entry")) for r in by_slot.values()
+    ):
+        return "unique-equipped and already worn"
+    return ""
+
+
+def _drive_incumbent(inv: int, slot: int, by_slot: dict, scored) -> tuple:
+    """The score the piece must beat: the slot's wearer, plus the off-hand for
+    a two-hander, or the worse of the pair for a ring or trinket."""
+    old = scored(by_slot.get(slot))
+    if inv == TWO_HAND:
+        off = scored(by_slot.get(OFF_HAND_SLOT))
+        return (old[0] + off[0], old[1] or off[1])
+    if slot in (EQUIP_SLOT_FINGER, EQUIP_SLOT_TRINKET):
+        other = scored(by_slot.get(slot + 1))
+        if other[0] < old[0]:
+            return other
+    return old
+
+
+def _drive_why(row: dict, new: tuple, old: tuple) -> str:
+    return "%s %.1f%s against %.1f%s" % (
+        row.get("name") or "it",
+        new[0],
+        " (a floor)" if new[1] else "",
+        old[0],
+        " (a floor)" if old[1] else "",
+    )
+
+
+def drive_verdict(row: dict, wearer: Wearer, worn, book=None) -> tuple:
+    """(verdict, why) for one carried piece by the module's gear drive rule:
+    DRIVE_WEAR, DRIVE_KEEP, DRIVE_UNDECIDED (the numbers cannot settle it) or
+    DRIVE_REFUSED (the drive will not put it on). `worn` are the member's rows
+    with `equipment_slot`."""
+    by_slot = {_int(r.get("equipment_slot"), -1): r for r in worn or ()}
+    inv = _int(row.get("inventory_type"))
+    slot = _DRIVE_SLOT.get(inv)
+    off_hand = slot == OFF_HAND_SLOT
+    refused = _drive_refusal(row, wearer, off_hand)
+    if refused or slot is None:
+        return DRIVE_REFUSED, refused or "no slot it can go in"
+    if resistance_only(row, book):
+        return DRIVE_REFUSED, "resistance-only piece for a situational set"
+    refused = _drive_slot_refusal(row, by_slot, off_hand)
+    if refused:
+        return DRIVE_REFUSED, refused
+
+    def scored(r):
+        return drive_score(r, wearer.role, book) if r is not None else (0.0, False)
+
+    old = _drive_incumbent(inv, slot, by_slot, scored)
+    new = drive_score(row, wearer.role, book)
+    return _drive_compare(new, old), _drive_why(row, new, old)
+
+
+def drive_verdicts(wearer_rows, gear_rows, names, book=None) -> dict:
+    """{member: {entry: verdict}} for every carried piece of each named member
+    this can judge, by the module's gear drive rule. A member missing here was
+    not judged (no class row, or no role)."""
+    wearers = {
+        name: w
+        for name, w in _wearers(wearer_rows, names, ()).items()
+        if w.role != statweights.UNKNOWN
+    }
+    worn: dict = {}
+    carried: dict = {}
+    for row in gear_rows or ():
+        holder = str(row.get("holder") or "")
+        if holder not in wearers:
+            continue
+        (worn if _is_worn(row) else carried).setdefault(holder, []).append(row)
+    out: dict = {}
+    for name, wearer in wearers.items():
+        verdicts: dict = {}
+        for row in carried.get(name, ()):
+            entry = _int(row.get("entry"))
+            verdict, _why = drive_verdict(row, wearer, worn.get(name, ()), book)
+            if verdicts.get(entry) != DRIVE_WEAR:
+                verdicts[entry] = verdict
+        out[name] = verdicts
+    return out

@@ -311,6 +311,101 @@ class TheTouchTargets(unittest.TestCase):
         self.assertIn("width: 44px; height: 44px;", family)
         self.assertNotIn(".qwho { width: 40px; }", family)
 
+    def _run_touch_audit(self, route, markup):
+        audit_js = (HERE / "tests" / "touch_audit.mjs").read_text(encoding="utf-8")
+        files = {
+            "touch_audit.mjs": audit_js,
+            "app.css": (APP / "app.css").read_text(encoding="utf-8"),
+        }
+        for name in ("quests.css", "economy.css", "map.css", "now.css", "guild.css"):
+            files[name] = (APP / "views" / name).read_text(encoding="utf-8")
+        script = (
+            'import { loadAppRules, auditHtml } from "./touch_audit.mjs";\n'
+            "const rules = loadAppRules(import.meta.dirname);\n"
+            "const res = auditHtml(%s, rules, %s);\n"
+            "console.log(JSON.stringify(res));\n"
+            % (json.dumps(markup), json.dumps(route))
+        )
+        return node_dir(files, script)
+
+    def test_quests_links_are_44px_on_touch(self):
+        markup = (
+            '<div class="card qs-quester"><span class="row qs-between">'
+            '<a class="mname" href="#/m/Zug?tab=quests">Zug</a></span>'
+            '<span class="qs-s"><a href="#/quests/1">Defias</a></span></div>'
+            '<div class="card qs-table"><table class="table"><tbody>'
+            '<tr><td><a href="#/quests/1">Defias</a></td></tr></tbody></table></div>'
+            '<li class="card qs-attempt"><a class="mname" href="#/m/Zug?tab=quests">Zug</a></li>'
+            '<a class="qs-s" href="https://github.com/org/repo/issues/1" target="_blank">Ticket #1</a>'
+        )
+        res = self._run_touch_audit("quests", markup)
+        self.assertEqual(res["offenders"], [], res["offenders"])
+
+    def test_economy_links_are_44px_on_touch(self):
+        markup = (
+            '<div class="card eco-auc-table"><table class="table"><tbody>'
+            '<tr><td><a href="#/m/Zug">Zug</a></td></tr></tbody></table></div>'
+            '<div class="eco-craft"><span class="eco-who">'
+            '<a class="eco-namechip" href="#/m/Zug"><span>Zug</span></a>'
+            '<a class="eco-namechip" href="#/m/Al"><span>Al</span></a>'
+            "</span></div>"
+            '<p class="eco-note"><a href="https://github.com/org/repo/issues/2">Ticket #2</a></p>'
+        )
+        res = self._run_touch_audit("economy", markup)
+        self.assertEqual(res["offenders"], [], res["offenders"])
+
+    def test_map_pins_and_links_are_44px_on_touch(self):
+        worldmap_js = (APP / "views" / "now" / "worldmap.js").read_text(
+            encoding="utf-8"
+        )
+        # Render a linked dot at ppu=1 (1 viewBox unit == 1 CSS px) and inspect drawn vs hit circles.
+        script = (
+            "const src = %s;\n"
+            "const mHit = src.match(/const hit = `([^`]+)`/);\n"
+            "const mRing = src.match(/const ring = [\\s\\S]*?: `([^`]+)`/);\n"
+            "const px = (v) => v;\n"
+            "const f1 = (n) => Number(n).toFixed(1);\n"
+            "const esc = (s) => String(s);\n"
+            'const d = { x: 100, y: 100, r: 5.5, color: "#c69b6d", name: "Zug", label: "Zug", fallback: false };\n'
+            "const c = d.color;\n"
+            'const hit = eval("`" + mHit[1] + "`");\n'
+            'const ring = eval("`" + mRing[1] + "`");\n'
+            'const dot = `<a class="wm-dot" href="#/m/Zug" aria-label="Zug">${hit}${ring}</a>`;\n'
+            "console.log(JSON.stringify({ hit, ring, dot }));\n"
+            % json.dumps(worldmap_js)
+        )
+        rendered = node_dir({}, script)
+        # Drawn pin radius stays 5.5 (halo 12.1); hit circle radius must be >= 22 (44 px diameter).
+        self.assertIn('r="5.5"', rendered["ring"])
+        self.assertIn('r="22.0"', rendered["hit"])
+        markup = (
+            rendered["dot"]
+            + '<div class="where-who"><a href="#/m/Zug">Zug</a></div>'
+            + '<a class="back" href="#/now">Now</a>'
+        )
+        res = self._run_touch_audit("map", markup)
+        self.assertEqual(res["offenders"], [], res["offenders"])
+
+    def test_histogram_tap_shows_nearest_point_value(self):
+        script = (
+            'import * as M from "./ui.js";\n'
+            "const out = String(M.histogram([\n"
+            '  { label: "10-11", n: 2, href: "#/a" },\n'
+            '  { label: "12-13", n: 5, href: "#/b" },\n'
+            "]));\n"
+            'const nearest = typeof M.nearestHistoBar === "function";\n'
+            "const bars = [\n"
+            '  { getBoundingClientRect: () => ({ left: 10, right: 22 }), getAttribute: (k) => k === "aria-label" ? "10-11: 2 members" : "#/a" },\n'
+            '  { getBoundingClientRect: () => ({ left: 25, right: 37 }), getAttribute: (k) => k === "aria-label" ? "12-13: 5 members" : "#/b" },\n'
+            "];\n"
+            'const picked = nearest ? M.nearestHistoBar(bars, 24)?.getAttribute("aria-label") : null;\n'
+            "console.log(JSON.stringify({ out, nearest, picked }));\n"
+        )
+        res = node_dir({"ui.js": (APP / "ui.js").read_text(encoding="utf-8")}, script)
+        self.assertIn("data-histo-read", res["out"])
+        self.assertTrue(res["nearest"])
+        self.assertEqual(res["picked"], "12-13: 5 members")
+
 
 # A two-handed staff as /api/item answers it, with every kind of line.
 STAFF = {

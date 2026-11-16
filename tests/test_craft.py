@@ -174,6 +174,19 @@ MEASURED_FOCUS = {
     10558: 0,
     19052: 0,
     19082: 0,
+    # ENCHANTING (#2411)
+    7418: 0,
+    7457: 0,
+    14807: 0,
+    7857: 0,
+    13501: 0,
+    13642: 0,
+    13661: 0,
+    13746: 0,
+    13822: 0,
+    13939: 0,
+    20008: 0,
+    20028: 0,
 }
 
 # THE SIBLING PROJECTION, FOR THE TWO FIELDS NOTHING CHECKED AT ALL.
@@ -300,6 +313,19 @@ MEASURED_BANDS = {
     10558: (1, 255, 275),
     19052: (1, 285, 305),
     19082: (1, 310, 330),
+    # ENCHANTING (#2411)
+    7418: (1, 70, 110),
+    7457: (1, 100, 140),
+    14807: (1, 110, 150),
+    7857: (1, 145, 185),
+    13501: (1, 155, 195),
+    13642: (1, 185, 225),
+    13661: (1, 200, 240),
+    13746: (1, 225, 265),
+    13822: (1, 230, 270),
+    13939: (1, 260, 300),
+    20008: (1, 275, 315),
+    20028: (1, 305, 340),
 }
 
 # The eleven entries that declare a focus nothing in this repo walks to yet.
@@ -434,12 +460,9 @@ class RecipeForTests(unittest.TestCase):
         self.assertEqual(recipe.spell_id, 18401)
 
     def test_returns_none_for_a_profession_with_no_entry(self):
-        # Enchanting is assigned in professions.py's own ROSTER (Og) but has
-        # no verified recipe in craft.RECIPES - it is not even a plain
-        # SPELL_EFFECT_CREATE_ITEM output (see the module docstring on why an
-        # unverified/wrong-shaped id is never guessed in rather than left
-        # absent).
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["enchanting"], 1))
+        # Inscription has no verified recipe in craft.RECIPES (Enchanting
+        # had none until #2411), and an unverified id is never guessed in.
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["inscription"], 1))
 
     def test_finds_the_bracket_a_skill_value_falls_in(self):
         # 2963, NOT 3910. Spell 3910 is named "Tailoring" in the
@@ -1025,14 +1048,19 @@ class AlchemyRecipeForTests(unittest.TestCase):
 
 class CraftErrandTests(unittest.TestCase):
     def test_zero_for_a_character_with_no_crafting_trade(self):
-        # Og holds tailoring + enchanting (professions.ROSTER). Tailoring at
-        # 0 means "not learned yet" (professions.py's trainer errand owns
-        # that), and enchanting still has no craft.RECIPES entry (a
-        # non-CREATE_ITEM output, flagged deferred in the design doc) - so
-        # this must fall all the way through to 0, never a guessed spell id.
-        # No secondary (First Aid/Cooking) keys are given, so the fallback
-        # below this loop also finds nothing learned.
-        self.assertEqual(craft.craft_errand("Og", {"tailoring": 0, "enchanting": 1}), 0)
+        # Tailoring at 0 means "not learned yet" (professions.py's trainer
+        # errand owns that), and inscription has no craft.RECIPES entry
+        # (Enchanting has one since #2411) - so this must fall all the way
+        # through to 0, never a guessed spell id. No secondary (First
+        # Aid/Cooking) keys are given, so the fallback finds nothing learned.
+        self.assertEqual(
+            craft.craft_errand(
+                "Og",
+                {"tailoring": 0, "inscription": 1},
+                primaries=("tailoring", "inscription"),
+            ),
+            0,
+        )
 
     def test_zero_for_a_trade_not_yet_learned(self):
         # Og is assigned tailoring but a skill value of 0 means the trainer
@@ -1792,6 +1820,91 @@ class ColourBandTests(unittest.TestCase):
         self.assertIn("TrivialSkillLineRankHigh", source)
         self.assertIn("MinSkillLineRank", source)
         self.assertIn("COLOUR BANDS", source)
+
+
+# trainer_spell TrainerId 96 (the classic Enchanting trainers), read
+# 2026-11-13: spell -> ReqSkillRank, for every bought Enchanting rung and rod.
+ENCHANTING_TRAINER_RANK = {
+    7457: 50,
+    14807: 70,
+    7795: 100,
+    7857: 120,
+    13501: 130,
+    13628: 150,
+    13642: 165,
+    13661: 180,
+    13702: 200,
+    13746: 205,
+    13822: 210,
+    13939: 240,
+    20008: 255,
+    20028: 290,
+}
+# Spell.dbc RequiredTotemCategoryID of each rung -> the rod item it needs.
+ENCHANTING_ROD = {
+    7418: 6218,
+    7457: 6218,
+    14807: 6218,
+    7857: 6339,
+    13501: 6339,
+    13642: 11130,
+    13661: 11130,
+    13746: 11145,
+    13822: 11145,
+    13939: 11145,
+    20008: 11145,
+    20028: 11145,
+}
+
+
+class EnchantingLadderTests(unittest.TestCase):
+    """#2411: Enchanting 1-300 from the realm's own trainer and DBC."""
+
+    ENCHANTING = goals.SKILL_IDS["enchanting"]
+
+    def test_enchanting_climbs_without_a_break_from_1_to_300(self):
+        for value in range(1, 301):
+            with self.subTest(value=value):
+                self.assertIsNotNone(craft.recipe_for(self.ENCHANTING, value))
+
+    def test_every_rung_is_auto_learned_or_trainer_taught_at_its_rank(self):
+        for recipe in craft.RECIPES[self.ENCHANTING]:
+            with self.subTest(recipe=recipe.name):
+                if recipe.spell_id in craft.AUTO_LEARNED:
+                    continue
+                rank, _cost = craft.TRAINER_RECIPES[recipe.spell_id]
+                self.assertEqual(rank, ENCHANTING_TRAINER_RANK[recipe.spell_id])
+                self.assertGreaterEqual(recipe.min_skill, rank)
+
+    def test_every_rung_names_the_rod_the_dbc_asks_for(self):
+        for recipe in craft.RECIPES[self.ENCHANTING]:
+            with self.subTest(recipe=recipe.name):
+                self.assertEqual(recipe.tool, ENCHANTING_ROD[recipe.spell_id])
+                self.assertIn(recipe.tool, craft.TOOL_WALKS)
+
+    def test_the_bought_rods_are_trainer_recipes_at_their_rank(self):
+        for rod in craft.ROD_RECIPES[self.ENCHANTING]:
+            with self.subTest(rod=rod.name):
+                if rod.spell_id == 7421:  # AcquireMethod 1, comes with Apprentice
+                    self.assertNotIn(7421, craft.TRAINER_RECIPES)
+                    continue
+                rank, _cost = craft.TRAINER_RECIPES[rod.spell_id]
+                self.assertEqual(rank, ENCHANTING_TRAINER_RANK[rod.spell_id])
+                self.assertEqual(rod.min_skill, rank)
+
+    def test_rod_for_asks_for_the_rods_tier_only_when_none_is_held(self):
+        self.assertEqual(craft.rod_for(7418, {}).spell_id, 7421)
+        self.assertIsNone(craft.rod_for(7418, {6218: 1}))
+        self.assertIsNone(craft.rod_for(7418, {16207: 1}))  # Arcanite answers all
+        self.assertEqual(craft.rod_for(13501, {6218: 1}).spell_id, 7795)
+        self.assertEqual(craft.rod_for(13746, {6339: 1}).spell_id, 13702)
+        self.assertIsNone(craft.rod_for(2963, {}))  # not an Enchanting rung
+
+    def test_a_rung_needs_a_bought_recipe_before_the_learn_errand_buys_it(self):
+        self.assertTrue(craft.holds(7418, frozenset()))  # auto-learned
+        self.assertTrue(craft.holds(7421, frozenset()))  # rod, auto-learned
+        self.assertFalse(craft.holds(7457, frozenset()))
+        self.assertTrue(craft.holds(7457, frozenset({7457})))
 
 
 if __name__ == "__main__":

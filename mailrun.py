@@ -296,6 +296,70 @@ def letters_from_rows(rows, names):
     )
 
 
+# A LETTER THE MAILBOX HAS NOT LOADED (#2402). The worldserver loads a
+# character's mailbox once, at login (`Player::_LoadMail`), and the executor's
+# take looks the letter up in that loaded mailbox. A letter written into the
+# `mail` table while its holder is online is therefore answered
+# `no mail with that id` until the holder logs in again. Measured on the dev
+# realm 2026-11-13: eight such letters drew that answer on every take, the
+# town errand's mail step spun its whole window on them, and counted as
+# bought gear they started a fresh errand after every bridge restart.
+NOT_LOADED = "no mail with that id"
+
+
+def unloaded_letters(rows) -> frozenset:
+    """(holder, mail id) of each letter its holder's mailbox has not loaded.
+
+    `rows` are refused mail commands whose answer was `NOT_LOADED`, each with
+    `holder`, `command`, `refused` (epoch seconds) and the holder's
+    `logout_time`. A logout after the refusal means a login came after it
+    too, and the letter is loaded now; a refusal at or after the last logout
+    still stands. A row whose time or mail id cannot be read is dropped,
+    never guessed at, so the letter stays plannable.
+    """
+    out = set()
+    for row in rows:
+        holder = row.get("holder")
+        refused = row.get("refused")
+        if not holder or refused is None:
+            continue
+        words = str(row.get("command") or "").split()
+        if not words or words[0] not in (TAKE_ITEM, TAKE_MONEY):
+            continue
+        mail_id = 0
+        for word in words[1:]:
+            if word.startswith("mail:"):
+                mail_id = _int(word[len("mail:") :])
+        if mail_id <= 0:
+            continue
+        if _int(refused) >= _int(row.get("logout_time")):
+            out.add((holder, mail_id))
+    return frozenset(out)
+
+
+def loaded_rows(rows, unloaded) -> list:
+    """The `letters_from_rows` input less every letter in `unloaded`."""
+    return [
+        row
+        for row in rows
+        if (row.get("holder"), _int(row.get("mail_id"))) not in unloaded
+    ]
+
+
+def unloaded_note(unloaded) -> str:
+    """One line naming each unloaded letter and its holder, or ''."""
+    if not unloaded:
+        return ""
+    return (
+        "%d letter(s) were written while their holder was online and wait for "
+        "its next login: %s"
+        % (
+            len(unloaded),
+            ", ".join("%s mail %d" % pair for pair in sorted(unloaded)),
+        )
+    )
+
+
 def gear_waiting(letters) -> dict:
     """name -> delivered letters carrying equipment that name can wear now.
 

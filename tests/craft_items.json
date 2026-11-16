@@ -1,0 +1,497 @@
+{
+  "10050": {
+    "class": 1,
+    "name": "Mageweave Bag",
+    "subclass": 0
+  },
+  "10938": {
+    "class": 7,
+    "name": "Lesser Magic Essence",
+    "subclass": 12
+  },
+  "10939": {
+    "class": 7,
+    "name": "Greater Magic Essence",
+    "subclass": 12
+  },
+  "10940": {
+    "class": 7,
+    "name": "Strange Dust",
+    "subclass": 12
+  },
+  "10998": {
+    "class": 7,
+    "name": "Lesser Astral Essence",
+    "subclass": 12
+  },
+  "11082": {
+    "class": 7,
+    "name": "Greater Astral Essence",
+    "subclass": 12
+  },
+  "11083": {
+    "class": 7,
+    "name": "Soul Dust",
+    "subclass": 12
+  },
+  "11128": {
+    "class": 7,
+    "name": "Golden Rod",
+    "subclass": 12
+  },
+  "11130": {
+    "class": 7,
+    "name": "Runed Golden Rod",
+    "subclass": 12
+  },
+  "11134": {
+    "class": 7,
+    "name": "Lesser Mystic Essence",
+    "subclass": 12
+  },
+  "11135": {
+    "class": 7,
+    "name": "Greater Mystic Essence",
+    "subclass": 12
+  },
+  "11137": {
+    "class": 7,
+    "name": "Vision Dust",
+    "subclass": 12
+  },
+  "11144": {
+    "class": 7,
+    "name": "Truesilver Rod",
+    "subclass": 12
+  },
+  "11174": {
+    "class": 7,
+    "name": "Lesser Nether Essence",
+    "subclass": 12
+  },
+  "11175": {
+    "class": 7,
+    "name": "Greater Nether Essence",
+    "subclass": 12
+  },
+  "11176": {
+    "class": 7,
+    "name": "Dream Dust",
+    "subclass": 12
+  },
+  "118": {
+    "class": 0,
+    "name": "Minor Healing Potion",
+    "subclass": 1
+  },
+  "12184": {
+    "class": 7,
+    "name": "Raptor Flesh",
+    "subclass": 8
+  },
+  "12365": {
+    "class": 7,
+    "name": "Dense Stone",
+    "subclass": 7
+  },
+  "13464": {
+    "class": 7,
+    "name": "Golden Sansam",
+    "subclass": 9
+  },
+  "13465": {
+    "class": 7,
+    "name": "Mountain Silversage",
+    "subclass": 9
+  },
+  "13759": {
+    "class": 7,
+    "name": "Raw Nightfin Snapper",
+    "subclass": 8
+  },
+  "14046": {
+    "class": 1,
+    "name": "Runecloth Bag",
+    "subclass": 0
+  },
+  "14047": {
+    "class": 7,
+    "name": "Runecloth",
+    "subclass": 5
+  },
+  "14048": {
+    "class": 7,
+    "name": "Bolt of Runecloth",
+    "subclass": 5
+  },
+  "14155": {
+    "class": 1,
+    "name": "Mooncloth Bag",
+    "subclass": 0
+  },
+  "14341": {
+    "class": 7,
+    "name": "Rune Thread",
+    "subclass": 5
+  },
+  "14342": {
+    "class": 7,
+    "name": "Mooncloth",
+    "subclass": 5
+  },
+  "16202": {
+    "class": 7,
+    "name": "Lesser Eternal Essence",
+    "subclass": 12
+  },
+  "16204": {
+    "class": 7,
+    "name": "Illusion Dust",
+    "subclass": 12
+  },
+  "20401": {
+    "class": 12,
+    "name": "Restored Twilight Tablet",
+    "subclass": 0
+  },
+  "20424": {
+    "class": 7,
+    "name": "Sandworm Meat",
+    "subclass": 8
+  },
+  "21840": {
+    "class": 7,
+    "name": "Bolt of Netherweave",
+    "subclass": 5
+  },
+  "21841": {
+    "class": 1,
+    "name": "Netherweave Bag",
+    "subclass": 0
+  },
+  "21877": {
+    "class": 7,
+    "name": "Netherweave Cloth",
+    "subclass": 5
+  },
+  "2318": {
+    "class": 7,
+    "name": "Light Leather",
+    "subclass": 6
+  },
+  "2319": {
+    "class": 7,
+    "name": "Medium Leather",
+    "subclass": 6
+  },
+  "2320": {
+    "class": 7,
+    "name": "Coarse Thread",
+    "subclass": 5
+  },
+  "2321": {
+    "class": 7,
+    "name": "Fine Thread",
+    "subclass": 5
+  },
+  "2325": {
+    "class": 7,
+    "name": "Black Dye",
+    "subclass": 11
+  },
+  "2447": {
+    "class": 7,
+    "name": "Peacebloom",
+    "subclass": 9
+  },
+  "2450": {
+    "class": 7,
+    "name": "Briarthorn",
+    "subclass": 9
+  },
+  "2453": {
+    "class": 7,
+    "name": "Bruiseweed",
+    "subclass": 9
+  },
+  "2589": {
+    "class": 7,
+    "name": "Linen Cloth",
+    "subclass": 5
+  },
+  "2592": {
+    "class": 7,
+    "name": "Wool Cloth",
+    "subclass": 5
+  },
+  "2604": {
+    "class": 7,
+    "name": "Red Dye",
+    "subclass": 11
+  },
+  "2605": {
+    "class": 7,
+    "name": "Green Dye",
+    "subclass": 11
+  },
+  "2672": {
+    "class": 7,
+    "name": "Stringy Wolf Meat",
+    "subclass": 8
+  },
+  "2675": {
+    "class": 7,
+    "name": "Crawler Claw",
+    "subclass": 8
+  },
+  "2770": {
+    "class": 7,
+    "name": "Copper Ore",
+    "subclass": 7
+  },
+  "2835": {
+    "class": 7,
+    "name": "Rough Stone",
+    "subclass": 7
+  },
+  "2836": {
+    "class": 7,
+    "name": "Coarse Stone",
+    "subclass": 7
+  },
+  "2838": {
+    "class": 7,
+    "name": "Heavy Stone",
+    "subclass": 7
+  },
+  "2880": {
+    "class": 7,
+    "name": "Weak Flux",
+    "subclass": 11
+  },
+  "2934": {
+    "class": 7,
+    "name": "Ruined Leather Scraps",
+    "subclass": 6
+  },
+  "2996": {
+    "class": 7,
+    "name": "Bolt of Linen Cloth",
+    "subclass": 5
+  },
+  "2997": {
+    "class": 7,
+    "name": "Bolt of Woolen Cloth",
+    "subclass": 5
+  },
+  "3173": {
+    "class": 7,
+    "name": "Bear Meat",
+    "subclass": 8
+  },
+  "3355": {
+    "class": 7,
+    "name": "Wild Steelbloom",
+    "subclass": 9
+  },
+  "3356": {
+    "class": 7,
+    "name": "Kingsblood",
+    "subclass": 9
+  },
+  "3357": {
+    "class": 7,
+    "name": "Liferoot",
+    "subclass": 9
+  },
+  "3358": {
+    "class": 7,
+    "name": "Khadgar's Whisker",
+    "subclass": 9
+  },
+  "3371": {
+    "class": 7,
+    "name": "Empty Vial",
+    "subclass": 11
+  },
+  "3372": {
+    "class": 7,
+    "name": "Leaded Vial",
+    "subclass": 11
+  },
+  "3730": {
+    "class": 7,
+    "name": "Big Bear Meat",
+    "subclass": 8
+  },
+  "3820": {
+    "class": 7,
+    "name": "Stranglekelp",
+    "subclass": 9
+  },
+  "3821": {
+    "class": 7,
+    "name": "Goldthorn",
+    "subclass": 9
+  },
+  "4234": {
+    "class": 7,
+    "name": "Heavy Leather",
+    "subclass": 6
+  },
+  "4235": {
+    "class": 7,
+    "name": "Heavy Hide",
+    "subclass": 6
+  },
+  "4236": {
+    "class": 7,
+    "name": "Cured Heavy Hide",
+    "subclass": 6
+  },
+  "4238": {
+    "class": 1,
+    "name": "Linen Bag",
+    "subclass": 0
+  },
+  "4240": {
+    "class": 1,
+    "name": "Woolen Bag",
+    "subclass": 0
+  },
+  "4245": {
+    "class": 1,
+    "name": "Small Silk Pack",
+    "subclass": 0
+  },
+  "4289": {
+    "class": 7,
+    "name": "Salt",
+    "subclass": 6
+  },
+  "4291": {
+    "class": 7,
+    "name": "Silken Thread",
+    "subclass": 5
+  },
+  "4304": {
+    "class": 7,
+    "name": "Thick Leather",
+    "subclass": 6
+  },
+  "4305": {
+    "class": 7,
+    "name": "Bolt of Silk Cloth",
+    "subclass": 5
+  },
+  "4306": {
+    "class": 7,
+    "name": "Silk Cloth",
+    "subclass": 5
+  },
+  "4338": {
+    "class": 7,
+    "name": "Mageweave Cloth",
+    "subclass": 5
+  },
+  "4339": {
+    "class": 7,
+    "name": "Bolt of Mageweave",
+    "subclass": 5
+  },
+  "4340": {
+    "class": 7,
+    "name": "Gray Dye",
+    "subclass": 11
+  },
+  "4470": {
+    "class": 7,
+    "name": "Simple Wood",
+    "subclass": 11
+  },
+  "5500": {
+    "class": 3,
+    "name": "Iridescent Pearl",
+    "subclass": 7
+  },
+  "6217": {
+    "class": 7,
+    "name": "Copper Rod",
+    "subclass": 12
+  },
+  "6218": {
+    "class": 7,
+    "name": "Runed Copper Rod",
+    "subclass": 12
+  },
+  "6260": {
+    "class": 7,
+    "name": "Blue Dye",
+    "subclass": 11
+  },
+  "6338": {
+    "class": 7,
+    "name": "Silver Rod",
+    "subclass": 12
+  },
+  "6339": {
+    "class": 7,
+    "name": "Runed Silver Rod",
+    "subclass": 12
+  },
+  "765": {
+    "class": 7,
+    "name": "Silverleaf",
+    "subclass": 9
+  },
+  "769": {
+    "class": 7,
+    "name": "Chunk of Boar Meat",
+    "subclass": 8
+  },
+  "785": {
+    "class": 7,
+    "name": "Mageroyal",
+    "subclass": 9
+  },
+  "7912": {
+    "class": 7,
+    "name": "Solid Stone",
+    "subclass": 7
+  },
+  "7971": {
+    "class": 3,
+    "name": "Black Pearl",
+    "subclass": 7
+  },
+  "8170": {
+    "class": 7,
+    "name": "Rugged Leather",
+    "subclass": 6
+  },
+  "8343": {
+    "class": 7,
+    "name": "Heavy Silken Thread",
+    "subclass": 5
+  },
+  "8836": {
+    "class": 7,
+    "name": "Arthas' Tears",
+    "subclass": 9
+  },
+  "8838": {
+    "class": 7,
+    "name": "Sungrass",
+    "subclass": 9
+  },
+  "8839": {
+    "class": 7,
+    "name": "Blindweed",
+    "subclass": 9
+  },
+  "8925": {
+    "class": 7,
+    "name": "Crystal Vial",
+    "subclass": 11
+  }
+}

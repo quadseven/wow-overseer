@@ -69,10 +69,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import bankpolicy
+import craft
 import disposition
 import goals
 import guildbank
+import itemplan
 import materials
+import reagentplan
 import recipebook
 
 # The two verbs this module emits. `buy slot` is the third the executor takes
@@ -271,6 +274,8 @@ class Plan:
     # walks to a different place to write them: `moves` are answered by a
     # banker, these by a guild vault.
     guild: tuple = ()
+    # Members whose full personal bank has nothing to withdraw or relocate (#2608).
+    kept_full: frozenset = frozenset()
 
 
 def _int(value, default=0):
@@ -594,6 +599,37 @@ class Storage:
     # target (bankforecast.Forecast.over_target). The guild bank takes no
     # more of it: the vault keeps what the guild will eat, not the overflow.
     over_target: dict = field(default_factory=dict)
+    # holder -> item entries that holder's own craft errand is short of in the
+    # bags and its bank holds (reagentplan.bank_wants, #774). A banked stack
+    # of one comes out; a carried one is never put down by the keeper rule.
+    craft_wants: dict = field(default_factory=dict)
+    # THE VAULT'S RESERVE FOR THE NEXT RUNG (vault_reagents). The entries the
+    # guild's crafters are short of on their current recipes, and the Materials
+    # slots held back for them: a stack that is not one of these may not take
+    # the tab below `len(guild_reagents)` free slots.
+    guild_reagents: frozenset = frozenset()
+    # Second-set gear dropped when locking to seat role (#2606): left in personal bank.
+    dropped_second_sets: frozenset = frozenset()
+    # THE ITEM PLAN'S WORD ON A STACK THAT LEAVES FOR GOOD (#2604). item guid ->
+    # why, for every stack the plan routes to a vendor, a member or the house
+    # and whose executor is switched on (`itemplan_shadow.leaving`). The keeper
+    # rule stores none of them: one answer per stack, and it is the plan's.
+    #
+    # A BANKED GUID HERE IS A STACK THE PLAN SELLS TO A VENDOR (#2603): it is
+    # fetched out into the bags (`_plan_withdrawals`), never put back, and only
+    # while the holder keeps `itemplan.BAG_FLOOR` free slots after it.
+    plan_leaves: dict = field(default_factory=dict)
+    # True when the plan was to be consulted and could not be read. The keeper
+    # rule then stores nothing new (`_stored`), because a deposit the plan
+    # would have sold is a deposit nobody asked for.
+    plan_unread: bool = False
+
+
+def _craft_wanted(holding, storage):
+    """Whether the holder's craft errand eats this stack (reagentplan)."""
+    if storage is None:
+        return False
+    return holding.template_id in storage.craft_wants.get(holding.holder, ())
 
 
 def _trades_and_skills(held, worked_by):
@@ -652,6 +688,30 @@ def _guild_tabs(guild):
     return depositors, free
 
 
+def vault_reagents(skills, guild):
+    """Item entries the guild's crafters need for the rung they stand on.
+
+    Read from the recipe each member's skill value selects (`craft.recipe_for`)
+    and the reagents that recipe eats (`reagentplan.reagents`), never a fixed
+    list, so the reserve moves as the crafters climb. A vendor-sold reagent
+    (thread, dye) needs no vault slot and is left out. Only members of this
+    guild count.
+    """
+    members = set(dict(guild or {}).get("member_ranks") or ())
+    entries = set()
+    for name, by_skill in (skills or {}).items():
+        if name not in members:
+            continue
+        for skill_id, value in by_skill.items():
+            recipe = craft.recipe_for(skill_id, value)
+            if recipe is None:
+                continue
+            entries.update(
+                r.entry for r in reagentplan.reagents(recipe.spell_id) if not r.vendor
+            )
+    return frozenset(entries)
+
+
 def storage_from(
     held,
     worked_by=None,
@@ -662,6 +722,10 @@ def storage_from(
     policy=None,
     spare=frozenset(),
     over_target=None,
+    craft_wants=None,
+    dropped_second_sets=frozenset(),
+    plan_leaves=None,
+    plan_unread=False,
 ):
     """The Storage this family is today, from what the bridge already reads.
 
@@ -692,6 +756,14 @@ def storage_from(
         guild_tab_free=tabs,
         spare=frozenset(spare or ()),
         over_target=dict(over_target or {}),
+        craft_wants={
+            str(name): frozenset(int(e) for e in entries)
+            for name, entries in (craft_wants or {}).items()
+        },
+        guild_reagents=vault_reagents(skills, guild) if depositors else frozenset(),
+        dropped_second_sets=frozenset(dropped_second_sets or ()),
+        plan_leaves=dict(plan_leaves or {}),
+        plan_unread=bool(plan_unread),
     )
 
 
@@ -799,9 +871,16 @@ def storage_reason(holding, storage, surplus=frozenset()):
     if holding.guid in storage.routed and not disposition.recipe(item):
         # On its way to another member (the tidy pass): never put back down.
         return ""
+    if _craft_wanted(holding, storage):
+        # The holder's own craft errand is short of it (#774).
+        return ""
     settled = _class_reason(holding, storage)
     if settled is not None:
         return settled
+    if holding.guid in storage.plan_leaves:
+        # THE ITEM PLAN SELLS, GIVES OR LISTS IT (#2604): not a stack the
+        # keeper rule has any business storing, whatever its kind.
+        return ""
     if holding.start_quest > 0 or item.quest_item:
         return ""
     trades = storage.trades.get(holding.holder, frozenset())
@@ -848,6 +927,10 @@ def _stored(member, storage):
     surplus = stock_surplus(member.carried, storage)
     found = []
     for holding in member.carried:
+        if storage.plan_unread and _class_reason(holding, storage) is None:
+            # The plan could not be read: only what a policy placement or a
+            # kept BoE settled by kind is stored, nothing new on the rule's word.
+            continue
         why = storage_reason(holding, storage, surplus)
         if why:
             found.append((holding.guid in surplus, _stack_order(holding), holding, why))
@@ -874,8 +957,15 @@ def _deposit_candidates(member, family, totals, storage):
     ]
     chosen = {holding.guid for holding, _why, _keeper in candidates}
     routed = storage.routed if storage else {}
+    if storage is not None and storage.plan_unread:
+        return candidates
+    leaves = storage.plan_leaves if storage else {}
     for holding in member.carried:
+        if holding.guid in leaves:
+            continue
         if holding.guid in routed and not disposition.recipe(holding.item):
+            continue
+        if _craft_wanted(holding, storage):
             continue
         if holding.guid in chosen or holding.container_slots > 0:
             # An empty spare bag belongs in somebody's empty bag position
@@ -962,10 +1052,31 @@ def _guild_tab_for(holding, storage, guild_room):
         wanted = bankpolicy.GEAR_TAB
     else:
         wanted = bankpolicy.MATERIALS_TAB
-    for tab in (wanted, bankpolicy.MATERIALS_TAB):
-        if guild_room.get(tab, 0) > 0:
+    # THE OVERFLOW: a purchased tab with room that is not the raid's. Cave and
+    # Bonkers each stood at 98 of 98 in Materials with a second tab bought and
+    # empty, because only a rare piece for a later wearer ever chose it.
+    overflow = sorted(
+        t
+        for t in guild_room
+        if t not in (wanted, bankpolicy.MATERIALS_TAB, bankpolicy.RAID_TAB)
+    )
+    for tab in (wanted, bankpolicy.MATERIALS_TAB, *overflow):
+        if guild_room.get(tab, 0) > _reserved_slots(holding, storage, tab):
             return tab
     return None
+
+
+def _reserved_slots(holding, storage, tab):
+    """Free slots of `tab` this stack may not take.
+
+    The Materials tab keeps one free slot per next-rung reagent
+    (`Storage.guild_reagents`) for those reagents alone: a stack that is not
+    one of them is refused once the tab is down to that many, so the vault
+    cannot fill with other goods and leave a crafter nowhere to be fed from.
+    """
+    if tab != bankpolicy.MATERIALS_TAB or holding.template_id in storage.guild_reagents:
+        return 0
+    return len(storage.guild_reagents)
 
 
 def _no_room_note(name, item, room):
@@ -1053,6 +1164,14 @@ def _wanted_back(holding, member, family, totals, storage):
         return "%s is for %s" % (holding.item.name, storage.routed[holding.guid])
     if holding.guid in storage.spare:
         return "%s is a spare copy, sold from the bags" % holding.item.name
+    if holding.guid in storage.dropped_second_sets:
+        return ""
+    if _craft_wanted(holding, storage):
+        return "%s's craft errand is short of it in the bags (reagentplan)" % (
+            member.name
+        )
+    if holding.guid in storage.plan_leaves:
+        return storage.plan_leaves[holding.guid]
     if storage_reason(holding, storage):
         return ""
     if disposition.recipe(holding.item) and _learnable(holding, storage):
@@ -1076,6 +1195,13 @@ def _plan_withdrawals(member, family, totals, storage, space, budget, notes):
         why = _wanted_back(holding, member, family, totals, storage)
         if not why:
             continue
+        for_sale = storage is not None and holding.guid in storage.plan_leaves
+        if for_sale and space <= itemplan.BAG_FLOOR:
+            notes.append(
+                "%s keeps %d free slots, so %s stays banked until it is sold"
+                % (member.name, itemplan.BAG_FLOOR, holding.item.name)
+            )
+            continue
         if space <= 0:
             notes.append(
                 "%s has no room to take %s back out" % (member.name, holding.item.name)
@@ -1095,6 +1221,31 @@ def _plan_withdrawals(member, family, totals, storage, space, budget, notes):
     return withdrawals
 
 
+def _relocatable(holding, storage) -> bool:
+    """Whether a banked stack may come out for a guild tab."""
+    if (
+        holding.container_slots > 0
+        or holding.bound
+        or holding.guid in storage.routed
+        or holding.guid in storage.spare
+    ):
+        return False
+    placed = storage.policy.get(holding.guid)
+    if placed is not None:
+        return placed.to == bankpolicy.GUILD and placed.tab is not None
+    return holding.item.item_class in (ITEM_CLASS_TRADE_GOODS, ITEM_CLASS_GEM)
+
+
+def _relocatable_tab(holding, storage, guild_room):
+    """(tab, why) if this banked stack may relocate to a guild vault tab."""
+    if not _relocatable(holding, storage):
+        return None, ""
+    why = storage_reason(holding, storage)
+    if not why:
+        return None, ""
+    return _guild_tab_for(holding, storage, guild_room), why
+
+
 def _plan_relocations(member, storage, guild_room, space, budget, notes):
     """Withdrawals that bring banked shared stock out for the guild bank.
 
@@ -1104,10 +1255,10 @@ def _plan_relocations(member, storage, guild_room, space, budget, notes):
     the tab had some. The guild bank takes a deposit only from the bags, so
     the stack comes out here and the guild pass deposits it. It is planned
     only while the tab has a free slot for it, which that slot is then spoken
-    for, so the stack is not carried out to be put straight back. A stack the
-    holder's own trade uses, a policy placement, and anything bound never
-    come out. Only materials and gems move: a recipe waiting for a family
-    member to learn it, gear and a lockbox stay where the keeper rule put them.
+    for, so the stack is not carried out to be put straight back. Policy gear
+    placed for a guild tab (Gear for Later) also moves once tradable; a stack
+    the holder's own trade uses, personal policy gear, anything bound,
+    recipes, and lockboxes stay put.
     """
     out = []
     if storage is None or member.name not in storage.guild_depositors:
@@ -1115,19 +1266,7 @@ def _plan_relocations(member, storage, guild_room, space, budget, notes):
     for holding in member.banked:
         if len(out) >= budget:
             break
-        if (
-            holding.container_slots > 0
-            or holding.bound
-            or holding.guid in storage.policy
-            or holding.guid in storage.routed
-            or holding.guid in storage.spare
-            or holding.item.item_class not in (ITEM_CLASS_TRADE_GOODS, ITEM_CLASS_GEM)
-        ):
-            continue
-        why = storage_reason(holding, storage)
-        if not why:
-            continue
-        tab = _guild_tab_for(holding, storage, guild_room)
+        tab, why = _relocatable_tab(holding, storage, guild_room)
         if tab is None:
             continue
         if space <= 0:
@@ -1150,6 +1289,21 @@ def _plan_relocations(member, storage, guild_room, space, budget, notes):
             )
         )
     return out
+
+
+def _bank_full_of_kept(member, family, totals, storage, guild_room) -> bool:
+    """Whether a full personal bank has no stack the plan asks to take out."""
+    if member.bank_free > 0 or not member.banked:
+        return False
+    relocates = storage is not None and member.name in storage.guild_depositors
+    for holding in member.banked:
+        if holding.container_slots > 0:
+            continue
+        if _wanted_back(holding, member, family, totals, storage):
+            return False
+        if relocates and _relocatable_tab(holding, storage, guild_room)[0] is not None:
+            return False
+    return True
 
 
 def _room_by_tab(storage):
@@ -1202,9 +1356,11 @@ def plan(
     (`bankbags.room_gain`); a deposit is judged against the grown room.
     """
     totals = reagent_totals(members)
-    moves, notes, guild = [], [], []
+    moves, notes, guild, kept_full = [], [], [], []
     guild_room = _room_by_tab(storage)
     for member in sorted(members, key=lambda m: m.name):
+        if _bank_full_of_kept(member, family, totals, storage, guild_room):
+            kept_full.append(member.name)
         candidates = _deposit_candidates(member, family, totals, storage)
         candidates += _room_candidates(
             member,
@@ -1248,6 +1404,7 @@ def plan(
         moves=tuple(moves),
         notes=tuple(dict.fromkeys(notes)),
         guild=tuple(guild),
+        kept_full=frozenset(kept_full),
     )
 
 

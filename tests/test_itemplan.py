@@ -131,6 +131,105 @@ class TradeStock(unittest.TestCase):
         self.assertEqual(d.route, SELL_VENDOR)
 
 
+class SkippedReasons(unittest.TestCase):
+    def test_a_decision_records_why_its_earlier_options_failed(self):
+        food = [
+            stack(
+                entry=100 + n,
+                name="Moist Cornbread %d" % n,
+                item_class=0,
+                subclass=5,
+                sell=25,
+                count=10 + n,
+            )
+            for n in range(5)
+        ]
+        by_key, _ = decide(food, [member()])
+        sold = [d for d in by_key.values() if d.route == SELL_VENDOR]
+        self.assertEqual(len(sold), 2)
+        for d in sold:
+            self.assertEqual(d.options[0], KEEP_CARRY)
+            self.assertEqual(len(d.skipped), 1)
+            self.assertIn("its share of food is full", d.skipped[0])
+        kept = [d for d in by_key.values() if d.route == KEEP_CARRY]
+        self.assertTrue(all(d.skipped == () for d in kept))
+
+
+class VaultAdmission(unittest.TestCase):
+    """The vault takes a surplus material only when a crafter can use it.
+
+    Measured on the dev realm: both guild vaults sat at 98 of 98 with about
+    three quarters of the slots holding materials, recipes and gems that no
+    crafter in the guild could ever use, so the plan's first choice for the
+    next surplus stack was always a full tab and its sale was held for good.
+    """
+
+    VAULT = {("Fam", itemplan.GUILD_TAB_MATERIALS): 5}
+
+    def test_a_material_no_crafter_uses_goes_to_the_vendor_not_the_vault(self):
+        # Flask of Mojo: a trade good no recipe in the tables eats and no
+        # trade in guildshare.FEEDS names.
+        mojo = stack(
+            entry=8956,
+            name="Flask of Mojo",
+            item_class=7,
+            subclass=11,
+            sell=12,
+            count=20,
+        )
+        d = one([mojo], [member(cls=PALADIN)], mojo, Context(guild_free=self.VAULT))
+        self.assertEqual(d.route, SELL_VENDOR)
+        self.assertNotIn(GUILD_BANK, d.options)
+
+    def test_a_material_a_crafter_could_use_may_still_take_a_vault_slot(self):
+        # Surplus Silk Cloth with only a guildmate tailor in reach: the gift
+        # comes first, and the vault stays a choice behind it.
+        cloth = stack(
+            holder="Bo",
+            entry=4306,
+            name="Silk Cloth",
+            item_class=7,
+            subclass=5,
+            sell=60,
+            count=20,
+        )
+        ctx = Context(guild_free=self.VAULT, guild_crafters=(("Cy", "tailoring", 150),))
+        d = one([cloth], [member("Bo", cls=DRUID)], cloth, ctx)
+        self.assertEqual((d.route, d.target), (GIVE, "Cy"))
+        self.assertIn(GUILD_BANK, d.options)
+
+    def test_a_trade_worked_in_the_family_keeps_the_vault_option(self):
+        # A third stack of dye past a working tailor's need: the dye feeds a
+        # recipe the tailor casts, so the vault is a sensible place for it.
+        dye = [
+            stack(
+                entry=6260,
+                name="Blue Dye",
+                item_class=7,
+                subclass=11,
+                sell=12,
+                count=20,
+            )
+            for _ in range(3)
+        ]
+        tailor = member(skills=[(TAILORING, 145, 225)])
+        by_key, _ = decide(dye, [tailor], Context(guild_free=self.VAULT))
+        self.assertIn(GUILD_BANK, {d.route for d in by_key.values()})
+
+    def test_a_gem_nobody_cuts_does_not_take_a_vault_slot(self):
+        gem = stack(
+            entry=1705,
+            name="Lesser Moonstone",
+            item_class=itemplan.C_GEM,
+            subclass=7,
+            quality=2,
+            sell=600,
+            count=1,
+        )
+        d = one([gem], [member(cls=PALADIN)], gem, Context(guild_free=self.VAULT))
+        self.assertNotIn(GUILD_BANK, d.options)
+
+
 class Capacity(unittest.TestCase):
     def test_full_bag_evicts_lowest_value_per_slot_first(self):
         thread = stack(
@@ -237,7 +336,7 @@ class Gear(unittest.TestCase):
         d = one([plate], [bo, pal], plate)
         self.assertEqual((d.route, d.target), (GIVE, "Pal"))
 
-    def test_outgrown_green_is_sold_and_marked_refusable(self):
+    def test_outgrown_green_is_banked_never_vendored(self):
         ring = stack(
             entry=80,
             item_class=4,
@@ -249,8 +348,9 @@ class Gear(unittest.TestCase):
             item_level=25,
         )
         d = one([ring], [member()], ring)
-        self.assertEqual(d.route, SELL_VENDOR)
-        self.assertTrue(d.irreversible and d.refusable)
+        # The guild loot policy: a green is banked or listed, never vendored.
+        self.assertNotEqual(d.route, SELL_VENDOR)
+        self.assertIn(d.route, (GUILD_BANK, BANK_PERSONAL, AUCTION))
 
     def test_epic_is_never_sold(self):
         epic = stack(
@@ -266,7 +366,7 @@ class Gear(unittest.TestCase):
         d = one([epic], [member()], epic)
         self.assertNotIn(d.route, itemplan.IRREVERSIBLE)
 
-    def test_blue_sale_waits_for_a_release(self):
+    def test_a_blue_is_never_vendored(self):
         blue = stack(
             entry=82,
             item_class=4,
@@ -278,8 +378,8 @@ class Gear(unittest.TestCase):
             item_level=25,
         )
         d = one([blue], [member()], blue)
-        self.assertEqual(d.route, SELL_VENDOR)
-        self.assertTrue(d.confirm)
+        self.assertNotEqual(d.route, SELL_VENDOR)
+        self.assertEqual(d.route, BANK_PERSONAL)
 
 
 class Destroy(unittest.TestCase):
@@ -482,20 +582,18 @@ class ZorkBlues(unittest.TestCase):
     def test_nothing_is_destroyed(self):
         self.assertFalse([d for d in self.plan.decisions if d.route == DESTROY])
 
-    def test_every_blue_sale_waits_for_a_release(self):
-        sales = [d for d in self.plan.decisions if d.route == SELL_VENDOR]
-        self.assertTrue(sales)
-        self.assertTrue(all(d.confirm and d.refusable for d in sales))
+    def test_no_blue_is_vendored(self):
+        self.assertFalse([d for d in self.plan.decisions if d.route == SELL_VENDOR])
 
     def test_the_levelled_leather_set_is_banked_not_sold(self):
         for name in ("Embrace of the Lycan", "Soothsayer's Headdress"):
             for d in self.by_name[name]:
                 self.assertEqual(d.route, BANK_PERSONAL, name)
 
-    def test_the_outgrown_staff_and_cloth_go_to_the_vendor(self):
+    def test_the_outgrown_staff_and_cloth_are_kept_not_vendored(self):
         # Level 42 staff and cloth the druid cannot wear at its level.
-        self.assertEqual(self.by_name["Zum'rah's Vexing Cane"][0].route, SELL_VENDOR)
-        self.assertEqual(self.by_name["Chloromesh Girdle"][0].route, SELL_VENDOR)
+        for name in ("Zum'rah's Vexing Cane", "Chloromesh Girdle"):
+            self.assertNotEqual(self.by_name[name][0].route, SELL_VENDOR)
 
     def test_the_spare_set_is_capped(self):
         banked = [
@@ -541,6 +639,229 @@ class Shapes(unittest.TestCase):
         ]
         carried, bank, empty, _ = itemplan.capacities(worn, 2)
         self.assertEqual((carried, bank, empty), (16 + 4 * 14, 28 + 12, 1))
+
+
+class ClassNineTriage(unittest.TestCase):
+    def test_own_trade_recipe_above_reach_stays_with_holder_never_sold(self):
+        # Ugga has Alchemy 150 and holds a 250 Alchemy recipe (beyond 225 reach).
+        rec = stack(
+            holder="Ugga",
+            entry=13492,
+            name="Recipe: Greater Arcane Elixir",
+            item_class=itemplan.C_RECIPE,
+            subclass=6,
+            quality=2,
+            sell=5000,
+            required_skill_rank=250,
+            required_skill=171,
+        )
+        ugga = member("Ugga", skills=[(171, 150, 225)])
+        ctx = itemplan.Context(
+            market={13492: (50_000, 1)},
+            guild_free={
+                ("Fam", itemplan.GUILD_TAB_RAID): 10,
+                ("Fam", itemplan.GUILD_TAB_MATERIALS): 10,
+            },
+        )
+        d = one([rec], [ugga], rec, ctx)
+        self.assertIn(d.route, (KEEP_CARRY, BANK_PERSONAL))
+
+    def test_other_trade_recipe_goes_to_guild_crafter_or_auction_never_vendor(self):
+        # Plans held by Uzza routed to Grug (guild blacksmith, even if skill < rank).
+        plans = stack(
+            holder="Uzza",
+            entry=17059,
+            name="Plans: Dark Iron Plate",
+            item_class=itemplan.C_RECIPE,
+            subclass=4,
+            quality=3,
+            sell=5000,
+            required_skill_rank=300,
+            required_skill=164,
+        )
+        uzza = member("Uzza", skills=[(197, 150, 225)])
+        grug = member("Grug", skills=[(164, 200, 300)])
+        d = one([plans], [uzza, grug], plans)
+        self.assertEqual(d.route, GIVE)
+        self.assertEqual(d.target, "Grug")
+
+        # Design for Jewelcrafting (nobody works it): auction if priced, else bank, never vendor.
+        design = stack(
+            holder="Uzza",
+            entry=20854,
+            name="Design: Amulet of the Moon",
+            item_class=itemplan.C_RECIPE,
+            subclass=10,
+            quality=2,
+            sell=2000,
+            required_skill_rank=200,
+            required_skill=755,
+        )
+        d_no_ah = one([design], [uzza], design)
+        self.assertNotEqual(d_no_ah.route, SELL_VENDOR)
+        ctx_ah = itemplan.Context(market={20854: (40_000, 1)})
+        d_ah = one([design], [uzza], design, ctx_ah)
+        self.assertEqual(d_ah.route, AUCTION)
+
+    def test_class_book_routes_to_matching_class_and_libram_to_raid_bank(self):
+        # Druid bit = 1 << (11 - 1) = 1024
+        book = stack(
+            holder="Grug",
+            entry=17682,
+            name="Book: Gift of the Wild",
+            item_class=itemplan.C_RECIPE,
+            subclass=0,
+            quality=2,
+            sell=2500,
+            req_level=50,
+            required_skill_rank=0,
+            required_skill=0,
+            allowable_class=1024,
+        )
+        grug = member("Grug", cls=itemplan.WARRIOR, level=60)
+        bork = member("Bork", cls=itemplan.DRUID, level=60)
+        d_give = one([book], [grug, bork], book)
+        self.assertEqual(d_give.route, GIVE)
+        self.assertEqual(d_give.target, "Bork")
+
+        book_held = stack(
+            holder="Bork",
+            entry=17682,
+            name="Book: Gift of the Wild",
+            item_class=itemplan.C_RECIPE,
+            subclass=0,
+            quality=2,
+            sell=2500,
+            req_level=50,
+            required_skill_rank=0,
+            required_skill=0,
+            allowable_class=1024,
+        )
+        d_keep = one([book_held], [bork], book_held)
+        self.assertEqual(d_keep.route, KEEP_CARRY)
+
+        libram = stack(
+            holder="Grug",
+            entry=18334,
+            name="Libram of Protection",
+            item_class=itemplan.C_RECIPE,
+            subclass=0,
+            quality=3,
+            sell=5000,
+            required_skill_rank=0,
+            required_skill=0,
+        )
+        ctx = itemplan.Context(guild_free={("Fam", itemplan.GUILD_TAB_RAID): 10})
+        d_lib = one([libram], [grug], libram, ctx)
+        self.assertEqual(d_lib.route, GUILD_BANK)
+
+    def test_class_book_routes_to_guildmate_when_known_or_absent_in_family(self):
+        # Druid bit = 1024; Glob is an outside guildmate Druid lvl 53.
+        book = stack(
+            holder="Grug",
+            entry=17682,
+            name="Book: Gift of the Wild",
+            item_class=itemplan.C_RECIPE,
+            subclass=0,
+            quality=2,
+            sell=2500,
+            req_level=50,
+            required_skill_rank=0,
+            required_skill=0,
+            allowable_class=1024,
+            spell_id=21849,
+        )
+        grug = member("Grug", cls=itemplan.WARRIOR, level=60)
+        bork = member("Bork", cls=itemplan.DRUID, level=60)
+        # Holder/sibling already knows spell_id 21849 -> goes to outside guildmate Glob.
+        ctx = itemplan.Context(
+            guild_class_members=(("Glob", itemplan.DRUID, 53, False),),
+            known_spells={
+                "Bork": frozenset({21849}),
+                "Glob": frozenset(),
+            },
+        )
+        d_guild = one([book], [grug, bork], book, ctx)
+        self.assertEqual(d_guild.route, GIVE)
+        self.assertEqual(d_guild.target, "Glob")
+
+        # Matching holder who already knows the book gives it to an unknown guildmate.
+        held = stack(
+            holder="Bork",
+            entry=17682,
+            name="Book: Gift of the Wild",
+            item_class=itemplan.C_RECIPE,
+            subclass=0,
+            quality=2,
+            sell=2500,
+            req_level=50,
+            required_skill_rank=0,
+            required_skill=0,
+            allowable_class=1024,
+            spell_id=21849,
+        )
+        d_self_known = one([held], [bork], held, ctx)
+        self.assertEqual(d_self_known.route, GIVE)
+        self.assertEqual(d_self_known.target, "Glob")
+
+        # When every matching family/guild member already knows it, sell/auction surplus.
+        ctx_all = itemplan.Context(
+            guild_class_members=(("Glob", itemplan.DRUID, 53, False),),
+            known_spells={
+                "Bork": frozenset({21849}),
+                "Glob": frozenset({21849}),
+            },
+        )
+        d_surplus = one([held], [bork], held, ctx_all)
+        self.assertEqual(d_surplus.route, AUCTION)
+
+    def test_unread_guild_roster_banks_class_book_instead_of_selling(self):
+        held = stack(
+            holder="Bork",
+            entry=17682,
+            name="Book: Gift of the Wild",
+            item_class=itemplan.C_RECIPE,
+            subclass=0,
+            quality=2,
+            sell=2500,
+            req_level=50,
+            required_skill_rank=0,
+            required_skill=0,
+            allowable_class=1024,
+            spell_id=21849,
+        )
+        bork = member("Bork", cls=itemplan.DRUID, level=60)
+        ctx_unread = itemplan.Context(
+            guild_class_members=None,
+            known_spells={"Bork": frozenset({21849})},
+            market={17682: (40_000, 1)},
+        )
+        d = one([held], [bork], held, ctx_unread)
+        self.assertEqual(d.route, BANK_PERSONAL)
+
+    def test_already_known_trade_recipe_skips_holder_and_known_learners(self):
+        recipe = stack(
+            holder="Oz",
+            entry=16245,
+            name="Formula: Enchant Boots - Greater Agility",
+            item_class=itemplan.C_RECIPE,
+            subclass=8,
+            quality=2,
+            sell=500,
+            required_skill_rank=295,
+            required_skill=333,
+            spell_id=20023,
+        )
+        ench = itemplan.guildshare.SKILL_LINES["enchanting"]
+        oz = member("Oz", skills=((ench, 300, 300),))
+        ugga = member("Ugga", skills=((ench, 300, 300),))
+        ctx = itemplan.Context(
+            known_spells={"Oz": frozenset({20023}), "Ugga": frozenset({20023})},
+            guild_crafters=(("Gnar", "enchanting", 300),),
+        )
+        d = one([recipe], [oz, ugga], recipe, ctx)
+        self.assertEqual(d.route, GIVE)
+        self.assertEqual(d.target, "Gnar")
 
 
 if __name__ == "__main__":

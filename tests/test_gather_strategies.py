@@ -27,6 +27,7 @@ import pathlib
 import re
 import unittest
 
+import craft_rhythm
 import goals
 
 BRIDGE = pathlib.Path(__file__).resolve().parent.parent / "bridge.py"
@@ -113,6 +114,21 @@ class TheStrategyPairThatPicksThingsUp(unittest.TestCase):
                     self.assertTrue(rest.startswith(("+", "-")), cmd)
 
 
+class WhoIsOutGathering(unittest.TestCase):
+    """A farm order sends the family to pick nodes, so it needs the pair too."""
+
+    def test_the_quest_job_gathers(self):
+        self.assertTrue(craft_rhythm.is_gathering("quest"))
+
+    def test_a_farm_job_gathers(self):
+        for job in ("farm:mining", "farm:herbalism", "farm:13463"):
+            self.assertTrue(craft_rhythm.is_gathering(job), job)
+
+    def test_other_jobs_do_not(self):
+        for job in ("craft", "town run", "train", "", None):
+            self.assertFalse(craft_rhythm.is_gathering(job), job)
+
+
 class TheBridgeActuallyHandsThemOut(unittest.TestCase):
     """Asserted against bridge.py as source, the way `test_aimed_names` guards
     the same module and for the same reason: `_give_them_a_life` opens a
@@ -129,7 +145,7 @@ class TheBridgeActuallyHandsThemOut(unittest.TestCase):
         """`overseer_roster.job` is per row on the far side - DriveCraft skips
         anyone whose job is not `craft` and the quest gate stands the drive down
         for every non-quest value, both one row at a time."""
-        self.assertIn("if mode == craft_rhythm.MODE_GATHER", self.text)
+        self.assertIn("if craft_rhythm.is_gathering(mode)", self.text)
 
     def test_it_is_read_once_for_the_whole_sweep(self):
         """`head`, `aimed` and `travelling` are each fetched once for the pass

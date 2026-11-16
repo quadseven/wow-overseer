@@ -68,3 +68,32 @@
 .qs-attempts { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 8px; }
 .qs-attempt { gap: 4px; }
 .qs-reason { margin: 0; font-size: var(--fs-2); color: var(--color-neutral-200); overflow-wrap: anywhere; }
+
+@media (pointer: coarse) {
+  .qs-qcard { min-height: 44px; }
+  .qs-quester a.mname,
+  .qs-attempt a.mname,
+  .qs-table td a {
+    display: inline-flex;
+    align-items: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .qs-quester .qs-s a,
+  a.qs-s {
+    position: relative;
+    display: inline;
+  }
+  .qs-quester .qs-s a::after,
+  a.qs-s::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    min-width: 44px;
+    min-height: 44px;
+    width: 100%;
+    height: 100%;
+  }
+}
