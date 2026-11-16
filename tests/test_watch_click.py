@@ -253,6 +253,22 @@ class TheLiveList(unittest.TestCase):
         self.assertEqual(got["battlegrounds"][0]["place"], "Warsong Gulch")
         self.assertIn("order", got["battlegrounds"][0])
 
+    def test_an_unresolved_instance_is_not_offered_as_a_jump_target(self):
+        # The bridge refuses a target on an instance map whose instance id is
+        # still 0 (R_UNRESOLVED), so a button for it could never move the camera.
+        for map_id in (409, 489):
+            spots = [
+                d.spot_from_row(spot(n, map_id, inst=0)) for n in ("Aa", "Bb", "Cc")
+            ]
+            got = self.live(spots=spots)
+            self.assertEqual((got["raids"], got["battlegrounds"]), ([], []), map_id)
+
+    def test_resolved_members_still_list_when_an_unresolved_one_stands_beside(self):
+        spots = [d.spot_from_row(spot(n, 409, inst=7)) for n in ("Aa", "Bb")]
+        spots.append(d.spot_from_row(spot("Cc", 409, inst=0)))
+        got = self.live(spots=spots)["raids"]
+        self.assertEqual([(g["instance_id"], g["count"]) for g in got], [(7, 2)])
+
     def test_a_lone_character_or_the_watcher_does_not_make_a_group(self):
         lone = [d.spot_from_row(spot("Aa", 409))]
         self.assertEqual(self.live(spots=lone)["raids"], [])

@@ -53,7 +53,7 @@ function memberStrip(ctx, p) {
   const codes = new Map(D.ok(party) ? (party.data.members || []).map((m) => [m.name, m.label || m.code]) : []);
   return html`<div class="fam-members">${(fam.data.members || []).map((m) => {
     const st = !m.present ? "offline" : m.condition === "dead" ? "dead" : m.combat ? "in combat" : m.condition === "ok" ? "alive" : m.condition || "";
-    return html`<div class="fam-member stretch-card"><a class="stretch-link fam-link" href="${memberHref(m.name)}"><span class="b" style="color:${classVar(m["class"])}">${m.name}</span><span class="dim small">${m.present ? "L" + m.level + " " + m["class"] : "not in the world"}</span><span class="small muted">${st}${codes.has(m.name) ? " | party: " + codes.get(m.name) : ""}</span></a>${m.present ? charButton(m.name, ctx.get(p.camera), ctx.get(p.operator)) : ""}</div>`;
+    return html`<div class="fam-member stretch-card"><a class="stretch-link fam-link" href="${memberHref(m.name)}"><span class="b" style="color:${classVar(m["class"])}">${m.name}</span><span class="dim small">${m.present ? "L" + m.level + " " + m["class"] : "not in the world"}</span><span class="small muted">${st}${codes.has(m.name) ? " | party: " + codes.get(m.name) : ""}</span></a>${charButton(m.name, ctx.get(p.camera), ctx.get(p.operator))}</div>`;
   })}</div>`;
 }
 

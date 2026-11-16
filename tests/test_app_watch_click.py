@@ -236,6 +236,13 @@ class TheWiring(unittest.TestCase):
         ):
             self.assertIn(needle, src, needle)
 
+    def test_every_family_member_gets_a_button_present_or_not(self):
+        # An absent member is refused in words by the bridge ("not in the
+        # world"), which the tile shows; the page does not hide the button.
+        src = app_file("views/family.js")
+        self.assertNotIn("m.present ? charButton", src)
+        self.assertIn("charButton(m.name", src)
+
     def test_the_character_lists_carry_the_button_and_bind_it(self):
         for view in ("members", "family", "map", "member"):
             src = app_file("views/%s.js" % view)

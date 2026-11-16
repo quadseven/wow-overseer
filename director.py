@@ -538,7 +538,7 @@ def _crowd_groups(spots, maps, seats, place_name, kind):
     roles = {n: r for n, r in seats}
     places: dict = {}
     for s in spots:
-        if s.map_id in maps and not is_watcher(s.name):
+        if s.map_id in maps and s.instance_id and not is_watcher(s.name):
             places.setdefault(s.place, []).append(s)
     out = []
     for (map_id, instance_id), group in places.items():
