@@ -1,0 +1,43 @@
+# A revived member with no food, on a vendor walk interrupted by a fight, has the revived-sickness hold
+# released and retaken (mod-overseer issue 1377). Og is revived at the Stormwind graveyard with an empty
+# food bag and walks to a vendor.
+# Fix: mod-overseer pull 1421 (a vendor walk paused for a fight keeps its member).
+decree: v1
+id: revived-member-no-food-vendor-walk
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1377, criterion: "a food vendor walk of a revived member with no food releases the sickness hold and retakes it after the fight"}
+fix: {repo: quadseven/mod-overseer, commit: "e103daa3f042a3847f331833080a92b7aead66e2"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 30m
+cast:
+  - who: family:grug
+    set: {alive: true, at: {creature: "Lord Grayson Shadowbreaker"}}
+    ceiling: "nothing granted but position"
+  - who: Og
+    set: {alive: false, corpse_at: {creature: "Lord Grayson Shadowbreaker"}, at: {graveyard: 1}}
+    ceiling: "nothing granted; the death is the scenario"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "town run"}
+observe:
+  - name: og-started-dead
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM corpse WHERE guid = @Og
+    expect: {scalar: "= 1"}
+  - name: og-reached-a-vendor-and-bought-food
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_event WHERE character_name = 'Og' AND last_seen >= @t0 AND kind = 'vendor_buy'
+    expect: {scalar: ">= 1"}
+  - name: og-did-not-die-again
+    role: check
+    when: end
+    sql: |
+      SELECT character_name, created_at FROM overseer_death WHERE created_at >= @t0 AND character_name = 'Og'
+    expect: {rows: 0}

@@ -1,0 +1,48 @@
+# A family run ends in the Stratholme exit yard and gets out of it: the door, the button or the hearth is
+# used and the party is seen outside the yard (mod-overseer issue 645), the yard drive runs for a family held
+# by bag pressure with no yard ceiling warning (issue 1221), and a yard hearth names the yard in its line
+# (issue 1276). The family starts inside the yard beside the button, with the Stratholme job set.
+# Zero free bag slots is not seeded: the template state decides, and the precondition witnesses it.
+# Fixes: mod-overseer pulls 1164 (way out), 1324 (bag pressure) and 1280 (hearth line); commit is 1324.
+decree: v1
+id: stratholme-exit-yard
+proves:
+  - {repo: quadseven/mod-overseer, issue: 645, criterion: "the log shows 'stratholme exit: door closed, way out button' or 'way out hearth' after a real run and the family is outside the yard"}
+  - {repo: quadseven/mod-overseer, issue: 1221, criterion: "no stratholme yard ceiling warning is logged for a family that reached the town trip with full bags"}
+  - {repo: quadseven/mod-overseer, issue: 1276, criterion: "a yard hearth's log line carries 'leaving the Stratholme exit yard'"}
+fix: {repo: quadseven/mod-overseer, commit: "e72f892e7f9d90f5348eea691b8b27bc8071189f"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 1h
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, at: {captured: stratholme-exit-yard-button}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+  - instance: {map: "Stratholme", as: strat, bind: family:grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:stratholme-live"}
+observe:
+  - name: family-starts-by-the-yard-button
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND map_id IN (0, 329)
+    expect: {scalar: "= 5"}
+  - name: family-ended-outside-the-yard
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND map_id = 0 AND zone_id = 139
+    expect: {scalar: ">= 1"}
+  - name: a-yard-way-out-was-recorded
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run_event WHERE family = 'Grug' AND created_at >= @t0 AND detail LIKE '%stratholme exit%'
+    expect: {scalar: ">= 1"}
+  - name: no-yard-ceiling-warning
+    role: check
+    log: {pattern: "stratholme yard.*ceiling", expect: {count: 0}}
