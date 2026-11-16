@@ -29,6 +29,7 @@ class TheExistingBankPlanFetchesTheUpgrade(unittest.TestCase):
         import types
         from unittest.mock import Mock
 
+        import itemplan_route
         import reagentplan
 
         import bank
@@ -109,6 +110,9 @@ class TheExistingBankPlanFetchesTheUpgrade(unittest.TestCase):
             _campaign_waiting=lambda names: False,
             # The item plan is not consulted: every executor is off here (#2604).
             _bank_plan_leaves=lambda names: ({}, False),
+            # The item plan's bank routes are not consulted here (#2136).
+            itemplan_route=itemplan_route,
+            _itemplan_bank_routes=lambda names: itemplan_route.Routed(),
             # No craft errand is short of a banked reagent here (#774).
             reagentplan=reagentplan,
             _craft_plans_of=lambda names: [],
