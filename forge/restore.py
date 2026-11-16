@@ -88,7 +88,12 @@ def assert_local_mysql(host: str) -> None:
 
 
 def restore_command(backup: Backup, port: int, host: str = "127.0.0.1") -> list[str]:
-    """`gunzip -c <dump> | mysql` against the throwaway server. No password on argv."""
+    """`gunzip -c <dump> | mysql` against the throwaway server. No password on argv.
+
+    Run under bash with pipefail: a truncated or corrupt archive can still feed
+    the client valid SQL and a clean exit, so the pipeline must report gunzip's
+    failure too.
+    """
     assert_local_mysql(host)
     script = f"gunzip -c {shlex.quote(backup.path.as_posix())} | mysql -h{host} -P{int(port)} -uroot --protocol=TCP"
-    return ["sh", "-c", script]
+    return ["bash", "-o", "pipefail", "-c", script]

@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import gzip
 import io
+import os
 import pathlib
 import tempfile
 import unittest
@@ -129,8 +130,8 @@ class LocalOnly(unittest.TestCase):
     def test_the_restore_command_pipes_the_dump_into_a_loopback_client(self) -> None:
         backup = restore.Backup(pathlib.Path("/backups") / OLD, "20261113T051002Z")
         argv = restore.restore_command(backup, port=3307)
-        self.assertEqual(argv[:2], ["sh", "-c"])
-        script = argv[2]
+        self.assertEqual(argv[:4], ["bash", "-o", "pipefail", "-c"])
+        script = argv[4]
         self.assertIn("gunzip -c /backups/" + OLD, script)
         self.assertIn("-h127.0.0.1", script)
         self.assertIn("-P3307", script)
@@ -141,7 +142,7 @@ class LocalOnly(unittest.TestCase):
         backup = restore.Backup(
             pathlib.Path("/backups/a b;rm -rf x.sql.gz"), "20261113T051002Z"
         )
-        script = restore.restore_command(backup, port=3306)[2]
+        script = restore.restore_command(backup, port=3306)[4]
         self.assertIn("'/backups/a b;rm -rf x.sql.gz'", script)
 
 
@@ -364,6 +365,23 @@ class Plan(unittest.TestCase):
             )
         )
 
+    def test_every_restore_pipeline_fails_when_any_stage_fails(self) -> None:
+        auth = self.dir / "auth.sql.gz"
+        write_dump(self.dir, "auth.sql.gz")
+        for step in self.plan("full", auth_dump=auth):
+            if step.name in ("restore", "auth-restore"):
+                self.assertEqual(step.argv[:3], ("bash", "-o", "pipefail"), step.name)
+
+    def test_the_auth_dump_is_verified_before_any_database_work(self) -> None:
+        auth = self.dir / "auth.sql.gz"
+        write_dump(self.dir, "auth.sql.gz")
+        names = [s.name for s in self.plan("full", auth_dump=auth)]
+        self.assertIn("verify-auth-dump", names)
+        self.assertLess(names.index("verify-auth-dump"), names.index("start-mysql"))
+
+    def test_no_auth_dump_means_no_auth_verification_step(self) -> None:
+        self.assertNotIn("verify-auth-dump", self.names("full"))
+
     def test_the_push_names_the_class_and_stamp_and_the_prune_keeps_three(self) -> None:
         plan = self.plan("lean")
         push = next(s for s in plan if s.name == "push")
@@ -426,6 +444,49 @@ class Execution(unittest.TestCase):
             registry="r.example.invalid/x",
         )
         return build.plan(cfg, classes.load_classes(classes.DEFAULT_PATH))
+
+    def damaged_auth_steps(self, content: bytes, compress: bool) -> list[build.Step]:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        directory = pathlib.Path(tmp.name)
+        write_dump(directory, NEW)
+        auth = directory / "auth.sql.gz"
+        if compress:
+            with gzip.open(auth, "wb") as handle:
+                handle.write(content)
+        else:
+            auth.write_bytes(content)
+        cfg = build.Config(
+            template_class="full",
+            backup_dir=directory,
+            workdir=directory / "w",
+            registry="r.example.invalid/x",
+            auth_dump=auth,
+        )
+        return build.plan(cfg, classes.load_classes(classes.DEFAULT_PATH))
+
+    def test_a_truncated_auth_dump_stops_before_any_database_work_or_publish(
+        self,
+    ) -> None:
+        steps = self.damaged_auth_steps(b"INSERT INTO account VALUES (1);\n", True)
+        rec = self.Recorder()
+        with self.assertRaises(build.StepFailed):
+            build.execute(steps, rec)
+        self.assertEqual(rec.calls, [], "nothing ran after the failed verification")
+
+    def test_an_auth_dump_that_is_not_gzip_stops_the_build(self) -> None:
+        steps = self.damaged_auth_steps(b"plain text, not gzip", False)
+        rec = self.Recorder()
+        with self.assertRaises(build.StepFailed):
+            build.execute(steps, rec)
+        self.assertEqual(rec.calls, [])
+
+    def test_a_complete_auth_dump_lets_the_build_proceed(self) -> None:
+        steps = self.damaged_auth_steps(b"-- Dump completed\n", True)
+        rec = self.Recorder()
+        build.execute(steps, rec)
+        self.assertIn("auth-restore", rec.calls)
+        self.assertEqual(rec.calls[-1], "prune")
 
     def test_a_clean_run_executes_every_step(self) -> None:
         rec = self.Recorder()
@@ -816,6 +877,38 @@ class ServerIdentity(unittest.TestCase):
         self.assertEqual(start.argv[2].count("--server-id=77"), 2)
         for name in ("restore", "db-import"):
             self.assertTrue(steps[name].needs_server, name)
+
+
+@unittest.skipIf(os.name == "nt", "needs a POSIX shell with bash and gunzip")
+class RestorePipelineExitStatus(unittest.TestCase):
+    """The pipeline reports gunzip's failure even when the client exits 0."""
+
+    def run_restore(self, content: bytes) -> int:
+        import shutil
+        import stat
+        import subprocess
+
+        if not (shutil.which("bash") and shutil.which("gunzip")):
+            self.skipTest("bash and gunzip are required")
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            client = directory / "mysql"
+            client.write_text("#!/bin/sh\ncat > /dev/null\nexit 0\n", encoding="utf-8")
+            client.chmod(client.stat().st_mode | stat.S_IEXEC)
+            dump = directory / "example-characters-20261114T051003Z.sql.gz"
+            with gzip.open(dump, "wb") as handle:
+                handle.write(content)
+            raw = dump.read_bytes()
+            dump.write_bytes(raw[: len(raw) // 2])
+            backup = restore.Backup(dump, "20261114T051003Z")
+            argv = restore.restore_command(backup, port=3307)
+            env = {**os.environ, "PATH": f"{directory}{os.pathsep}{os.environ['PATH']}"}
+            return subprocess.run(argv, env=env, capture_output=True).returncode
+
+    def test_a_truncated_archive_fails_the_pipeline_even_if_the_client_succeeds(
+        self,
+    ) -> None:
+        self.assertNotEqual(self.run_restore(b"INSERT INTO t VALUES (1);\n" * 20000), 0)
 
 
 class Cli(unittest.TestCase):

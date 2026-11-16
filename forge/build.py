@@ -198,6 +198,14 @@ def plan(cfg: Config, classes: dict[str, TableClass]) -> list[Step]:
     ]
 
     if cfg.auth_dump is not None:
+        auth_dump = cfg.auth_dump
+        # The same check the characters dump gets, before any database work.
+        steps.insert(
+            1,
+            Step(
+                "verify-auth-dump", fn=lambda: restore.verify_dump_complete(auth_dump)
+            ),
+        )
         steps.append(
             Step(
                 "auth-restore", argv=_mysql_pipe(cfg.auth_dump, cfg), needs_server=True
