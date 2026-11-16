@@ -71,6 +71,7 @@ import guildcover
 import leadcmd
 import attunestep
 import dungeonquests
+import hydraxian
 import bonds
 import campaignhandoff
 import campaignplan
@@ -567,6 +568,8 @@ def _insert_guild(name: str, command: str, source: str, target_arg: str = "") ->
     whichever loop called it rather than skipping a pass. 1265 is a truncated
     ENUM value, 1146 a missing table, 1054 a missing column.
     """
+    if command.startswith("bank deposit") and _quest_log_holds(name, command):
+        return 0
     if command.startswith("bank deposit") and _KEEP.blocks(name, command):
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, name)
         return 0
@@ -4876,22 +4879,92 @@ def _attunement_facts(family: str, leader: str, names: list, job: str,
         job=job, mid_run=mid_run, due=due)
 
 
-def _insert_attunement_row(name: str, command: str) -> int:
-    """One kind='quest' row (quadseven/mod-overseer#678). 0 when the realm's
-    overseer_command has no 'quest' kind yet: its 2026_09_24_04 migration is
-    not applied, and strict mode refuses the value with 1265."""
+def _hydraxian_optional_rows(cur, sql: str, args: tuple, what: str) -> list:
+    """A missing snapshot or command ledger costs only that optional fact."""
+    try:
+        cur.execute(sql, args)
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] in (1054, 1146)):
+            raise
+        log.debug("Hydraxian quest: %s cannot be read on this realm", what)
+        return []
+    return [dict(row) for row in cur.fetchall()]
+
+
+def _hydraxian_giver_rows(cur, quest_rows: list) -> list:
+    """Read only the live creature spawns named by these quests."""
+    entries = hydraxian.giver_entries(quest_rows)
+    if not entries:
+        return []
+    cur.execute(hydraxian.GIVERS_SQL.format(
+        entries=", ".join(str(entry) for entry in entries)))
+    return [dict(row) for row in cur.fetchall()]
+
+
+def _hydraxian_facts(names: list) -> hydraxian.Facts:
+    """Read each family's Hydraxian state, then hand those rows to the plan."""
+    if not names:
+        return hydraxian.Facts()
+    holes = ", ".join(["%s"] * len(names))
+    quests = hydraxian.quest_ids()
+    args = tuple(names)
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(hydraxian.MEMBERS_SQL.format(holes=holes), args)
+        member_rows = [dict(row) for row in cur.fetchall()]
+        snapshot_rows = _hydraxian_optional_rows(
+            cur, hydraxian.SNAPSHOT_SQL.format(holes=holes), args, "fresh positions"
+        )
+        cur.execute(hydraxian.QUEST_SQL.format(quests=quests))
+        quest_rows = [dict(row) for row in cur.fetchall()]
+        cur.execute(hydraxian.REWARDED_SQL.format(holes=holes, quests=quests), args)
+        rewarded_rows = [dict(row) for row in cur.fetchall()]
+        cur.execute(hydraxian.LOG_SQL.format(holes=holes, quests=quests), args)
+        log_rows = [dict(row) for row in cur.fetchall()]
+        giver_rows = _hydraxian_giver_rows(cur, quest_rows)
+        recent_rows = _hydraxian_optional_rows(
+            cur,
+            hydraxian.RECENT_SQL,
+            (hydraxian.SOURCE, hydraxian.ROW_RETRY_SECONDS),
+            "recent quest commands",
+        )
+    return hydraxian.facts_from_rows(
+        member_rows,
+        snapshot_rows,
+        quest_rows,
+        rewarded_rows,
+        log_rows,
+        giver_rows,
+        recent_rows,
+    )
+
+
+def _insert_quest_row(name: str, command: str, source: str, feature: str) -> int:
+    """Insert one natural quest verb, shared by the two NPC quest passes."""
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(attunestep.INSERT_SQL, (name, command, attunestep.SOURCE))
+            cur.execute(attunestep.INSERT_SQL, (name, command, source))
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] == 1265:
                 log.warning(
-                    "attunement: overseer_command.kind has no 'quest' value - "
-                    "%s for %s needs mod-overseer's "
-                    "2026_09_24_04_overseer_quest.sql applied", command, name)
+                    "%s: overseer_command.kind has no 'quest' value - %s for %s "
+                    "needs mod-overseer's 2026_09_24_04_overseer_quest.sql applied",
+                    feature,
+                    command,
+                    name,
+                )
                 return 0
             raise
         return cur.lastrowid or 0
+
+
+def _insert_attunement_row(name: str, command: str) -> int:
+    """Write a Core attunement quest verb using the shared quest-kind guard."""
+    return _insert_quest_row(name, command, attunestep.SOURCE, "attunement")
+
+
+def _insert_hydraxian_row(name: str, command: str) -> int:
+    """Write a Hydraxian quest verb using the shared quest-kind guard."""
+    return _insert_quest_row(name, command, hydraxian.SOURCE, "Hydraxian quest")
 
 
 def _dungeonquest_facts(family: dict, keyword: str, leader: str,
@@ -8884,6 +8957,8 @@ class Bridge(discord.Client):
         # and when the current stretch of holding its planner began.
         self._attune_said: dict = {}
         self._attune_since: dict = {}
+        self._hydraxian_since: dict = {}
+        self._hydraxian_spent: set = set()
         self._activity_own_key = None
         # THE MOVEMENT PICTURE (situation.py): each roster member's recent
         # positions, sampled by _situation_loop on its own clock because no
@@ -25305,6 +25380,7 @@ class Bridge(discord.Client):
         (attunestep.py), and a family on that walk is not planned for.
         """
         held = await self._attunement_pass(pending, fams)
+        held.update(await self._hydraxian_pass(pending, fams, skip=held))
         if not campaignplan.enabled():
             return False
         wrote = False
@@ -25319,6 +25395,119 @@ class Bridge(discord.Client):
                               "stands and it is tried again next cycle",
                               campaignqueue._family(key))
         return wrote
+
+    async def _hydraxian_pass(
+        self, pending: dict, fams: dict, *, skip=frozenset()
+    ) -> set:
+        """Walk a due family to a chain giver and issue ordinary quest verbs.
+
+        Attunement's Lothos walk wins when both trips are ready. The pass does
+        not run inside a dungeon or during the profession loop, and the game's
+        own quest state still owns every objective, item, reputation and reward.
+        """
+        if not hydraxian.enabled():
+            self._hydraxian_since.clear()
+            self._hydraxian_spent.clear()
+            return set()
+        own = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
+        held = set()
+        for key, fam in sorted(fams.items()):
+            if await self._hydraxian_family_pass(
+                key, fam, pending.get(key, []), own, skip=key in skip
+            ):
+                held.add(key)
+        return held
+
+    async def _hydraxian_family_pass(
+        self, key: str, fam: dict, pending: list, own: str | None, *, skip: bool
+    ) -> bool:
+        """Plan and carry one family's giver visit, isolating expected I/O faults."""
+        if skip:
+            self._hydraxian_clear_hold(key)
+            return False
+        names = list(fam.get("names") or ())
+        leader_row = fam.get("leader") or {}
+        leader = str(leader_row.get("name") or "")
+        if not names or not leader:
+            self._hydraxian_clear_hold(key)
+            return False
+        looped_by = globals().get("_prof_loop_family")
+        if looped_by is not None and looped_by(key):
+            self._hydraxian_clear_hold(key)
+            log.info("Hydraxian quest: %s waits for the profession loop",
+                     campaignqueue._family(key))
+            return False
+        try:
+            if await self._mid_run(names):
+                self._hydraxian_clear_hold(key)
+                log.info("Hydraxian quest: %s waits until it is out of the run",
+                         campaignqueue._family(key))
+                return False
+            step = await self._hydraxian_plan_step(fam, pending, leader_row, names)
+            step = await self._hydraxian_hold_step(key, leader, step)
+            await self._hydraxian_carry_out(key, leader, own, step)
+            return step.hold_planner
+        except (pymysql.err.MySQLError, TimeoutError):
+            log.exception("Hydraxian quest pass failed for %s",
+                          campaignqueue._family(key))
+            return False
+
+    def _hydraxian_clear_hold(self, key: str) -> None:
+        """Clear the timer and its expiry marker when this hold stretch ends."""
+        self._hydraxian_since.pop(key, None)
+        self._hydraxian_spent.discard(key)
+
+    async def _hydraxian_plan_step(
+        self, fam: dict, pending: list, leader_row: dict, names: list
+    ) -> hydraxian.Step:
+        """Read the campaign due state and plan one family's next quest action."""
+        level_rows = await asyncio.to_thread(_queue_level_rows, fam)
+        due = bool(campaignplan.due(pending, leader_row, level_rows).reason)
+        job = str(leader_row.get("job") or "").strip().lower()
+        facts = await asyncio.to_thread(_hydraxian_facts, names)
+        return hydraxian.step(facts, allow_walk=due and job in ("", "quest"))
+
+    async def _hydraxian_hold_step(
+        self, key: str, leader: str, step: hydraxian.Step
+    ) -> hydraxian.Step:
+        """Expire an overdue giver walk and return the unheld step."""
+        if not step.hold_planner:
+            self._hydraxian_clear_hold(key)
+            return step
+        since = self._hydraxian_since.setdefault(key, time.monotonic())
+        if time.monotonic() - since <= hydraxian.HOLD_LIMIT_SECONDS:
+            return step
+        if key not in self._hydraxian_spent:
+            log.warning(
+                "Hydraxian quest: %s gave the planner back after the giver walk "
+                "exceeded %d minutes",
+                campaignqueue._family(key),
+                hydraxian.HOLD_LIMIT_SECONDS // 60,
+            )
+            await asyncio.to_thread(_release_trade_errand, leader, str(step.aim))
+            self._hydraxian_spent.add(key)
+        return dataclasses.replace(step, aim=None, hold_planner=False, release=None)
+
+    async def _hydraxian_carry_out(
+        self, key: str, leader: str, own: str | None, step: hydraxian.Step
+    ) -> None:
+        """Write ordinary quest verbs and aim or release the town slot."""
+        for name, command in step.rows:
+            written = await asyncio.to_thread(_insert_hydraxian_row, name, command)
+            if written:
+                log.info(
+                    "Hydraxian quest: %s wrote %s for %s (%d)",
+                    campaignqueue._family(key), command, name, written,
+                )
+        if step.aim:
+            await self._claim_town_slot(
+                ATTUNE_CLAIMANT,
+                leader,
+                str(step.aim),
+                cohort=None if own == key else key,
+            )
+        if step.release:
+            await asyncio.to_thread(_release_trade_errand, leader, str(step.release))
 
     async def _plan_campaign(self, key: str, fam: dict, rows: list) -> bool:
         """Choose, record and queue one family's next dungeon, when it is due.
@@ -34023,7 +34212,10 @@ _EPIC_FACTS_SQL = (
     "it.DisenchantID AS disenchant_id, "
     "it.RequiredDisenchantSkill AS disenchant_skill, "
     "it.SellPrice AS sell_price, "
-    "it.bonding AS bonding, c.class AS holder_class "
+    "it.bonding AS bonding, c.class AS holder_class, "
+    # A quest in the holder's log names the item: never sold, destroyed or
+    # disenchanted, whatever its class (lootpolicy.decide).
+    + bag_pressure.LOG_QUEST_NEEDED_SQL + " AS quest_needed "
     "FROM item_instance ii "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
     "LEFT JOIN characters c ON c.guid = ii.owner_guid "
@@ -34215,6 +34407,36 @@ def _loot_policy_blocks(holder: str, command: str, kind: str = "sell"):
             log.info("%s", lootpolicy.kept_line(row, holder, verdict, kind))
             return verdict
     return None
+
+
+def _quest_log_holds(holder: str, command: str) -> bool:
+    """Does a quest in the holder's log name an item this row moves out?
+
+    The movers that do not ask the loot policy (the guild gift by give or mail,
+    the personal bank and the guild bank deposit) ask this one fact: the item
+    is the source, drop or required item of a quest the holder is on, so it
+    stays in the bags. Fail closed: an unread fact, or an item with no row,
+    holds it. A row naming no item is not held.
+    """
+    guids, _entries = keep.items_named(command)
+    if not guids:
+        return False
+    try:
+        rows = _fetch_epic_facts(guids)
+    except Exception:
+        log.exception("quest log: cannot read the item in %r for %s, so the "
+                      "row is not written", command, holder)
+        return True
+    found = {int(r["item_guid"]): r for r in rows}
+    for guid in guids:
+        row = found.get(int(guid))
+        needed = None if row is None else row.get("quest_needed")
+        if needed is None or needed:
+            log.info("quest log: %s keeps item %s, a quest in the log names it "
+                     "or the log could not be read, so %r is not written",
+                     holder, guid, command)
+            return True
+    return False
 
 
 def _epic_blocks(holder: str, command: str, kind: str = "sell") -> bool:
@@ -35108,6 +35330,8 @@ def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
         log.warning("guildshare: refusing to write kind=%r for %s", verb, gift.item)
         return 0
     command = gift.post_command if verb == handover.MAIL else gift.command
+    if _quest_log_holds(gift.holder, command):
+        return 0
     if _KEEP.blocks(gift.holder, command):
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, gift.holder)
         return 0
@@ -41539,6 +41763,8 @@ def _insert_bank(move, command: str) -> int:
     worldserver whose image predates the bank migration must warn rather than
     take the whole pass down.
     """
+    if command.startswith("deposit") and _quest_log_holds(move.character, command):
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(

@@ -351,6 +351,8 @@ class OneGivePerCopy(unittest.TestCase):
             self.addCleanup(patch.stop)
         import guildshare
 
+        # No quest in the holder's log names the gifted piece.
+        self.inner.facts[8001] = {"item_guid": 8001, "quest_needed": False}
         self.gift = guildshare.Gift(
             holder="Grug",
             taker="Oz",
