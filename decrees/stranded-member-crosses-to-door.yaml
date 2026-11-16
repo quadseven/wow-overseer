@@ -1,0 +1,49 @@
+# A family member stranded on the other continent from the campaign dungeon door crosses to the door's
+# continent and walks in within the run (wow-overseer issue 743). Zork starts on Kalimdor; the Zug family
+# door is in the Eastern Kingdoms (Blackrock Depths). The cross-to-map row must end applied.
+# Fix: mod-overseer pull 900 (stranded member crosses and walks in).
+decree: v1
+id: stranded-member-crosses-to-door
+proves:
+  - {repo: quadseven/wow-overseer, issue: 743, criterion: "a stranded member crosses to the door's continent through a cross-to-map row that ends applied and enters the instance within the run"}
+fix: {repo: quadseven/mod-overseer, commit: "2463b92a714d677f1f023781d27d4fe85e3d2ab6"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 1h
+cast:
+  - who: family:zug
+    set: {alive: true, health_pct: 100, at: {areatrigger: 1466}}
+    ceiling: "nothing granted but position"
+  - who: Zork
+    set: {alive: true, at: {creature: "Gazlowe"}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:zug, leader: Zug}
+act:
+  - at: 0s
+    roster: {who: family:zug, job: "dungeon:blackrock-depths"}
+observe:
+  - name: zork-starts-on-kalimdor
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid = @Zork AND map_id = 1
+    expect: {scalar: "= 1"}
+  - name: cross-row-applied
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Zork' AND created_at >= @t0 AND status = 'applied' AND command LIKE 'cross%'
+    expect: {scalar: ">= 1"}
+  - name: zork-entered-the-instance
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid = @Zork AND map_id = 230
+    expect: {scalar: "= 1"}
+  - name: no-run-stalled-for-the-straggler
+    role: check
+    when: end
+    sql: |
+      SELECT id FROM overseer_dungeon_run WHERE map_id = 230 AND started_at >= @t0 AND outcome IN ('stalled', 'split_failed')
+    expect: {rows: 0}

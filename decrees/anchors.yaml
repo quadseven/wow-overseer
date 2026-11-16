@@ -35,3 +35,15 @@ anchors:
     z: 260.68
     o: -2.766
     provenance: {source: acore_world.gameobject, ref: "guid 427 (Meeting Stone, entry 179584)", observed: "2026-11-15", note: "the Blackrock Mountain stone beside Franclorn Forgewright"}
+  # Copied from game-written rows on 2026-11-15; provenance on each entry.
+  theramore-pier-guard:
+    map: 1
+    zone: 15
+    x: -3932.3
+    y: -4735.9
+    z: 5.1
+    o: 0.0
+    provenance: {source: acore_world.creature, ref: "guid 30521 (Theramore Guard)", observed: "2026-11-15", note: "a guard on the Theramore pier approach; the berth itself is read by the module at run time"}
+  ragefire-overhead-rim:
+    pending: true
+    todo: "copy the leader position above the Ragefire corridor from the overseer_approach_quarantine row cited by mod-overseer issue 396; the dev table is empty today"

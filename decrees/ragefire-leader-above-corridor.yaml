@@ -1,0 +1,44 @@
+# A Ragefire Chasm run opened with the leader high above the corridor is refused with the position in the
+# log, the retry is blocked by the persisted quarantine row, and a run that does open ends with the leader
+# closer than it started (mod-overseer issues 396 and 1153). The leader starts at the overhead rim anchor.
+# That anchor is pending: its position has to be copied from the quarantine row the issue cites, so lint
+# warns and the seed step refuses until it is.
+# Fix: mod-overseer pull 1273 (criteria left from the earlier far-leader pull).
+decree: v1
+id: ragefire-leader-above-corridor
+proves:
+  - {repo: quadseven/mod-overseer, issue: 396, criterion: "a run opened with the leader above the corridor is refused with the position, and the retry is blocked by the quarantine row"}
+  - {repo: quadseven/mod-overseer, issue: 1153, criterion: "a run whose leader starts far away ends closer than it started or fails with a retreat line"}
+fix: {repo: quadseven/mod-overseer, commit: "16fb9e2623c540389a97e78d195c0284feb12bd6"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 30m
+cast:
+  - who: Zug
+    set: {alive: true, health_pct: 100, at: {captured: ragefire-overhead-rim}}
+    ceiling: "nothing granted but position"
+  - who: Uzza
+    set: {alive: true, at: {areatrigger: 2230}}
+    ceiling: "nothing granted but position"
+act:
+  - at: 0s
+    roster: {who: family:zug, job: "dungeon:ragefire"}
+observe:
+  - name: leader-starts-above-the-corridor
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid = @Zug AND map_id = 389
+    expect: {scalar: "= 1"}
+  - name: retry-blocked-by-quarantine
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_approach_quarantine WHERE since >= @t0
+    expect: {scalar: ">= 1"}
+  - name: no-staging-failed-loop
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run WHERE map_id = 389 AND started_at >= @t0 AND outcome = 'staging_failed'
+    expect: {scalar: "<= 1"}
