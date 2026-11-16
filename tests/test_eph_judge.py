@@ -259,6 +259,37 @@ class ScalarAndCreditTest(unittest.TestCase):
         self.assertEqual(r["verdict"], "INVALID")
         self.assertIn("encounter credit", " ".join(r["reasons"]))
 
+    def test_a_literal_string_spoof_of_the_table_name_is_refused(self):
+        spoofs = (
+            "SELECT COUNT('log_encounter') FROM characters WHERE guid IN (@cast)",
+            "SELECT COUNT(*) FROM characters WHERE name <> 'log_encounter'",
+            "SELECT COUNT(*) AS log_encounter FROM characters",
+        )
+        for sql in spoofs:
+            d = copy.deepcopy(GUZZLER)
+            for o in d["observe"]:
+                if o["name"] == "encounter-credited":
+                    o["sql"] = sql
+            clock = Clock()
+            r = run(d, guzzler_world(clock), clock)
+            self.assertEqual(r["verdict"], "INVALID", sql)
+            self.assertIn("encounter credit", " ".join(r["reasons"]), sql)
+
+    def test_a_real_read_or_join_of_the_table_counts(self):
+        reads = (
+            "SELECT COUNT(*) FROM acore_characters.log_encounter WHERE map = 230",
+            "SELECT COUNT(*) FROM characters c JOIN log_encounter e ON e.map = c.map",
+            "SELECT COUNT(*) FROM `log_encounter` WHERE map = 230",
+        )
+        for sql in reads:
+            d = copy.deepcopy(GUZZLER)
+            for o in d["observe"]:
+                if o["name"] == "encounter-credited":
+                    o["sql"] = sql
+            clock = Clock()
+            r = run(d, guzzler_world(clock), clock)
+            self.assertEqual(r["verdict"], "PASS", (sql, r["reasons"]))
+
     def test_the_credit_must_come_from_the_core_log_not_a_run_flag(self):
         d = copy.deepcopy(GUZZLER)
         for o in d["observe"]:

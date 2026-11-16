@@ -38,6 +38,7 @@ from .sqlgen import SeedError
 
 PASS, FAIL, INVALID = "PASS", "FAIL", "INVALID"
 POLL_SECONDS = 10
+CREDIT_DB, CREDIT_TABLE = "acore_characters", "log_encounter"
 QUERY_TIMEOUT_SECONDS = 30
 MAX_SAMPLE_ROWS = 20
 MAX_MATCHED_LINES = 20
@@ -328,7 +329,7 @@ class Judge:
         for name, sql in self.rendered.items():
             rec = self.records.get(name)
             if (
-                re.search(r"\blog_encounter\b", sql, re.I)
+                (CREDIT_DB, CREDIT_TABLE) in dbschema.tables_read(sql, self.schema)
                 and rec
                 and rec["role"] == "precondition"
                 and rec["status"] == "held"
