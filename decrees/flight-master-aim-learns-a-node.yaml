@@ -24,7 +24,7 @@ observe:
     role: precondition
     when: start
     sql: |
-      SELECT COUNT(*) FROM overseer_snapshot WHERE guid = @Grug AND map_id = 0
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid = @cast0 AND map_id = 0
     expect: {scalar: "= 1"}
   - name: flight-aim-was-issued
     role: check
