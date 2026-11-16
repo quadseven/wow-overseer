@@ -153,7 +153,9 @@ export function bind(main) {
     b.addEventListener("click", () => { order(b); });
   });
   const slot = main.querySelector("[data-spectate-slot]");
-  if (!slot) { stopPicture(); return; }
+  // A view with no Watcher slot (or a renderer that answers every selector
+  // with something that is not an element) has no picture to place.
+  if (!slot || typeof slot.getAttribute !== "function") { stopPicture(); return; }
   const url = slot.getAttribute("data-stream");
   if (!kept.video) {
     kept.video = document.createElement("video");

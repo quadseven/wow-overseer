@@ -250,6 +250,17 @@ class TheWiring(unittest.TestCase):
         )
         self.assertEqual(out["ok"], "function")
 
+    def test_bind_survives_a_view_whose_renderer_stubs_every_selector(self):
+        # Node renderers (test_table_sort) answer querySelector with a stub that
+        # is not an element; a view with no Watcher slot must still bind.
+        out = run(
+            'const S = await import("./views/_spectate.js");\n'
+            "const main = { querySelectorAll: () => [], querySelector: () => ({ on: {} }) };\n"
+            "S.bind(main);\n"
+            "console.log(JSON.stringify({ok: true, players: (globalThis.players || []).length}));\n"
+        )
+        self.assertEqual(out, {"ok": True, "players": 0})
+
     def test_every_family_member_gets_a_button_present_or_not(self):
         # An absent member is refused in words by the bridge ("not in the
         # world"), which the tile shows; the page does not hide the button.

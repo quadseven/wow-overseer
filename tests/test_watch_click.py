@@ -51,6 +51,9 @@ class TheCharacterOrder(unittest.TestCase):
             "Abcdefghijklm",
             "Ug-ga",
             "off 5",
+            "Ugga\n",
+            "Ugga\n\n",
+            " Ugga",
             ["Ugga"],
             {"n": "Ugga"},
         ):
@@ -59,6 +62,11 @@ class TheCharacterOrder(unittest.TestCase):
     def test_the_watcher_cannot_be_pointed_at_itself(self):
         self.assertIsInstance(d.spectate_character(d.WATCHER_NAME), d.SpecError)
         self.assertIsInstance(d.spectate_character(d.WATCHER_NAME.upper()), d.SpecError)
+
+    def test_the_live_payload_is_a_typed_record(self):
+        self.assertEqual(
+            sorted(d.LiveNow.__annotations__), ["battlegrounds", "dungeons", "raids"]
+        )
 
     def test_stop_is_the_off_order(self):
         self.assertEqual(d.spectate_stop().text(), "off")

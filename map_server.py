@@ -7340,7 +7340,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
     @_get_route("live groups query failed", default=str)
-    def _live_now(_query: dict, ctx) -> tuple[int, dict]:
+    def _live_now(_query: dict, ctx) -> tuple[int, director.LiveNow]:
         """GET /api/live - every active dungeon run, raid and battleground.
 
         Read-only. Dungeons are the guild coordinator's runs that are inside;

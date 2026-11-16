@@ -50,7 +50,7 @@ import math
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Mapping, Sequence, TypedDict
 
 WATCHER_NAME = os.environ.get("OVERSEER_WATCHER_NAME", "Watcher").strip() or "Watcher"
 
@@ -434,7 +434,7 @@ def spectate_character(name) -> Spec | SpecError:
     Only a string of the grammar's name shape gets that far; the Watcher itself
     is refused here, before anything is written, as the bridge would refuse it
     later with the same reason."""
-    if not isinstance(name, str) or not _NAME_RE.match(name):
+    if not isinstance(name, str) or not _NAME_RE.fullmatch(name):
         return SpecError("the character to watch must be a name of 2 to 12 letters")
     if is_watcher(name):
         return SpecError(REFUSALS[R_SELF])
@@ -515,6 +515,16 @@ def spectate_state(row: Mapping | None) -> dict:
 
 # ------------------------------------------------------------------ live now --
 
+
+class LiveNow(TypedDict):
+    """GET /api/live: each list holds one group per live dungeon run, raid or
+    battleground, every group with an `order` the POST on /api/spectate takes."""
+
+    dungeons: list[dict]
+    raids: list[dict]
+    battlegrounds: list[dict]
+
+
 MIN_CROWD = 2  # a raid or battleground needs this many to be worth a camera
 
 
@@ -568,7 +578,7 @@ def _crowd_groups(spots, maps, seats, place_name, kind):
     return out
 
 
-def live_now(spots, runs, seats, place_name) -> dict:
+def live_now(spots, runs, seats, place_name) -> LiveNow:
     """Every active dungeon run, raid and battleground, each with the order
     that jumps the Watcher into it. `runs` are the site's run views; a run is
     live only while it is inside. Raids and battlegrounds come from the fresh
