@@ -1,0 +1,181 @@
+# Classification of every acore_characters table for the ephemeral-world forge.
+#
+# Format: <table>: <class> [<spec>]
+#   keep           rows survive unchanged (config, bookkeeping, learned data)
+#   truncate       every row removed (logs, stale runtime state, pending work)
+#   scrub          rows survive, named columns reset (spec names the rule in forge/scrub.py)
+#   per-character rows survive only for kept characters (spec: key column,
+#                  or `col > parent.col` to follow a parent table that is trimmed first)
+#
+# tests/test_forge_classes.py fails when a table in the schema fixture has no class,
+# so a new table cannot leak stale state into every future world.
+
+_inv_snap: truncate
+_module_sql_applied: keep
+account_data: keep
+account_instance_times: truncate
+account_tutorial: keep
+active_arena_season: keep
+addons: keep
+arena_team: keep
+arena_team_member: per-character guid
+auctionhouse: per-character itemowner
+banned_addons: keep
+battleground_deserters: per-character guid
+bugreport: truncate
+calendar_events: truncate
+calendar_invites: truncate
+channels: keep
+channels_bans: truncate
+channels_rights: keep
+character_account_data: per-character guid
+character_achievement: per-character guid
+character_achievement_offline_updates: per-character guid
+character_achievement_progress: per-character guid
+character_action: per-character guid
+character_arena_stats: per-character guid
+character_aura: per-character guid
+character_banned: per-character guid
+character_battleground_random: per-character guid
+character_brew_of_the_month: per-character guid
+character_declinedname: per-character guid
+character_entry_point: per-character guid
+character_equipmentsets: per-character guid
+character_gifts: per-character guid
+character_glyphs: per-character guid
+character_homebind: per-character guid
+character_instance: truncate
+character_inventory: per-character guid
+character_pet: per-character owner
+character_pet_declinedname: per-character owner
+character_queststatus: per-character guid
+character_queststatus_daily: per-character guid
+character_queststatus_monthly: per-character guid
+character_queststatus_rewarded: per-character guid
+character_queststatus_seasonal: per-character guid
+character_queststatus_weekly: per-character guid
+character_reputation: per-character guid
+character_settings: per-character guid
+character_skills: per-character guid
+character_social: per-character guid
+character_spell: per-character guid
+character_spell_cooldown: per-character guid
+character_stats: per-character guid
+character_talent: per-character guid
+characters: per-character guid
+chat_filter: keep
+corpse: truncate
+creature_respawn: truncate
+game_event_condition_save: keep
+game_event_save: keep
+gameobject_respawn: truncate
+gm_subsurvey: truncate
+gm_survey: truncate
+gm_ticket: truncate
+group_member: truncate
+groups: truncate
+guild: per-character leaderguid
+guild_bank_eventlog: truncate
+guild_bank_item: per-character guildid > guild.guildid
+guild_bank_right: per-character guildid > guild.guildid
+guild_bank_tab: per-character guildid > guild.guildid
+guild_eventlog: truncate
+guild_member: per-character guid
+guild_member_withdraw: per-character guid
+guild_rank: per-character guildid > guild.guildid
+instance: truncate
+instance_reset: truncate
+instance_saved_go_state_data: truncate
+item_instance: per-character owner_guid
+item_loot_storage: per-character containerGUID > item_instance.guid
+item_refund_instance: per-character player_guid
+item_soulbound_trade_data: per-character itemGuid > item_instance.guid
+lag_reports: truncate
+lfg_data: truncate
+log_arena_fights: truncate
+log_arena_memberstats: truncate
+log_encounter: truncate
+log_money: truncate
+mail: per-character receiver
+mail_items: per-character receiver
+mail_server_character: per-character guid
+mail_server_template: keep
+mail_server_template_conditions: keep
+mail_server_template_items: keep
+mod_ollama_chat_bot_player_sentiments: truncate
+mod_ollama_chat_history: truncate
+mod_ollama_chat_memories: truncate
+mod_ollama_chat_personality: per-character guid
+mod_ollama_chat_personality_templates: keep
+mod_ollama_chat_relationships: truncate
+mod_ollama_chat_voice: keep
+overseer_approach_quarantine: truncate
+overseer_auction_history: truncate
+overseer_bridge_memo: truncate
+overseer_build: truncate
+overseer_chat: truncate
+overseer_chat_watch: truncate
+overseer_clip: truncate
+overseer_command: truncate
+overseer_death: truncate
+overseer_dungeon_pace: keep
+overseer_dungeon_queue: truncate
+overseer_dungeon_queue_turn: truncate
+overseer_dungeon_run: truncate
+overseer_dungeon_run_event: truncate
+overseer_dungeon_run_report: truncate
+overseer_economy_sample: truncate
+overseer_event: truncate
+overseer_family_intent: truncate
+overseer_family_priorities: keep
+overseer_family_standin: truncate
+overseer_goal: truncate
+overseer_guild_answer: truncate
+overseer_guild_ask: truncate
+overseer_guild_pug_call: truncate
+overseer_guild_run: truncate
+overseer_jev_judgment: truncate
+overseer_jev_outcome: truncate
+overseer_keep: per-character item_guid > item_instance.guid
+overseer_level: per-character character_guid
+overseer_loot_council: per-character item_guid > item_instance.guid
+overseer_naturalized: per-character guid
+overseer_now_step: truncate
+overseer_operator_hold: truncate
+overseer_order: truncate
+overseer_quest_ledger: per-character guid
+overseer_raid_seat: keep
+overseer_raid_spec: keep
+overseer_roster: scrub neutral-job
+overseer_run_damage: truncate
+overseer_run_recovery: truncate
+overseer_sample: truncate
+overseer_snapshot: truncate
+overseer_stream: truncate
+overseer_thought: truncate
+overseer_trade: truncate
+overseer_travel_refusal: truncate
+overseer_watch: truncate
+overseer_work_order: truncate
+overseer_zone_danger: keep
+pet_aura: per-character guid > character_pet.id
+pet_spell: per-character guid > character_pet.id
+pet_spell_cooldown: per-character guid > character_pet.id
+petition: truncate
+petition_sign: truncate
+playerbots_arena_team_names: keep
+playerbots_guild_names: keep
+playerbots_names: keep
+pool_quest_save: keep
+profanity_name: keep
+pvpstats_battlegrounds: truncate
+pvpstats_players: truncate
+quest_tracker: truncate
+recovery_item: per-character Guid
+reserved_name: keep
+spam_reports: truncate
+updates: keep
+updates_include: keep
+warden_action: keep
+world_state: keep
+worldstates: keep
