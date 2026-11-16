@@ -1,6 +1,7 @@
 """The runner commands exist, fail closed without a config, and say why."""
 
 import io
+import pathlib
 import unittest
 from contextlib import redirect_stdout
 
@@ -32,7 +33,12 @@ class CliTest(unittest.TestCase):
 
         from ephemeral import runcfg
 
-        raw = json.loads(runcfg.EXAMPLE_PATH.read_text(encoding="utf-8"))
+        example = (
+            pathlib.Path(__file__).resolve().parent.parent
+            / "ephemeral"
+            / "eph.config.example.json"
+        )
+        raw = json.loads(example.read_text(encoding="utf-8"))
         raw["never_nodes"] = ["some-other-node"]
         raw["tools_image"] = "registry.example.com/t@sha256:" + "0" * 64
         cfg = runcfg.from_dict(raw)

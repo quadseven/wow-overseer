@@ -15,7 +15,6 @@ DEFAULT_FIX_PIN_ENV = {
     "quadseven/mod-dungeon-clear": "OVERSEER_PIN_DUNGEON_CLEAR",
     "quadseven/mod-playerbots": "OVERSEER_PIN_PLAYERBOTS",
 }
-EXAMPLE_PATH = pathlib.Path(__file__).resolve().parent / "eph.config.example.json"
 
 
 class ConfigError(Exception):
