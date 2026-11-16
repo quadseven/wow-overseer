@@ -2,6 +2,8 @@
 # required-key chest before leaving, so a new guild key holder exists and the
 # Armory or Cathedral progression is eligible.
 # Fix: mod-dungeon-clear pull 92.
+# item_instance has no creation time. The cast is seeded with nothing but a
+# position, so a key owned by a cast character was picked up during the run.
 decree: v1
 id: scarlet-library-key-holder
 proves:
@@ -41,7 +43,7 @@ observe:
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM item_instance WHERE itemEntry = 7146
+      SELECT COUNT(*) FROM item_instance WHERE itemEntry = 7146 AND owner_guid IN (@cast)
     expect: {scalar: ">= 1"}
   - name: armory-or-cathedral-entered-after
     role: check
