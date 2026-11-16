@@ -125,6 +125,7 @@ import itemplan_reads
 import itemplan_shadow
 import itemplan
 import itemplan_disenchant
+import itemplan_route
 import itemplan_vendor
 import seatbags
 import itemsource
@@ -39120,6 +39121,55 @@ def _bank_plan_leaves(names: list) -> tuple:
     return leaves, unread
 
 
+def _itemplan_bank_routes(names: list) -> "itemplan_route.Routed":
+    """The item plan's GUILD_BANK and BANK_PERSONAL decisions as bank moves.
+
+    The plan named these routes and nothing carried them out (#2136), so a
+    bag of unworn greens stayed full. Each stack is judged by the guild loot
+    policy (`_policy_verdict`, the call every seller makes) before it becomes a
+    move, and a stack a quest in the log names is kept; the deposit rows still
+    pass `_quest_log_holds` when written. Empty when ITEMPLAN_BANK is off or
+    the plan could not be read: nothing is moved on a guess. Blocking.
+    """
+    key = tuple(sorted(str(n) for n in names or ()))
+    if not key or not itemplan_route.enabled():
+        return itemplan_route.Routed()
+    try:
+        rows = _fetch_vendor_items(list(key))
+        free_slots = _fetch_free_slots(list(key))
+        gear_rows = _fetch_surplus_gear(list(key))
+        worn_rows = _fetch_family_equipped(list(key))
+        banked_rows = _banked_rows(list(key))
+        extras = _itemplan_reads(
+            list(key), key[0], rows + banked_rows, gear_rows, worn_rows)
+        report = itemplan_shadow.shadow(
+            list(key), key[0], rows, free_slots, gear_rows=gear_rows,
+            worn_rows=worn_rows, keep_names=OWNER_KEEPS, extras=extras)
+        if report is None:
+            return itemplan_route.Routed()
+        stacks = itemplan_shadow.build_stacks(
+            rows, gear_rows, extras.templates, extras.instance_soulbound)
+        pairs = list(zip(stacks, rows, strict=True))
+        guids = sorted({int(r["item_guid"]) for _s, r in pairs
+                        if r.get("item_guid")})
+        facts = {int(f["item_guid"]): f for f in _fetch_epic_facts(guids)}             if guids else {}
+        classes = _guild_classes()
+
+        def judge(row, holder):
+            fact = facts.get(int(row.get("item_guid") or 0))
+            if fact is None:
+                return lootpolicy.Verdict(
+                    lootpolicy.HOLD, "its facts could not be read")
+            return _policy_verdict(holder, fact, classes)
+
+        return itemplan_route.routes_for(
+            report.plan, pairs, judge, keep_names=OWNER_KEEPS)
+    except Exception:
+        log.exception("bank: the item plan's bank routes could not be read; "
+                      "nothing is added to the bank plan this pass")
+        return itemplan_route.Routed()
+
+
 def _plan_bank(names: list) -> "bank.Plan":
     """bank.plan over the family's rows, with the keeper rule switched on.
 
@@ -39157,12 +39207,15 @@ def _plan_bank(names: list) -> "bank.Plan":
     # least the room the hold is waiting for.
     room_floor = (bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS
                   if _campaign_waiting(names) else 0)
-    return bank.plan(
+    plan = bank.plan(
         bank.members_from_rows(rows, names), bank.family_from_skills(held),
         storage=storage, room_floor=room_floor,
         # A bag placed on this visit is sent before the deposits (#2263).
         room_gain=bankbags.room_gain(_fetch_bank_bag_facts(names)),
     )
+    # WHAT THE ITEM PLAN BANKS IS BANKED (#2136): its GUILD_BANK and
+    # BANK_PERSONAL routes had no executor, so full bags stayed full.
+    return itemplan_route.merge(plan, _itemplan_bank_routes(names))
 
 
 # THE GUILD'S BANK FORECAST, READ ONCE PER GUILD BANK CYCLE PER FAMILY

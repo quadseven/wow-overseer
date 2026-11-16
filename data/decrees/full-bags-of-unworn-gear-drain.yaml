@@ -1,0 +1,69 @@
+# A member whose bags are full of unworn greens and whites ends with free bag slots, and the greens are
+# banked per the loot policy, not sold (wow-overseer issue 2136). The item plan named a bank for every
+# unworn green and nothing carried the route out, so the bags stayed full and the family stayed held at
+# the bag floor. The test character is a cloth wearer (a priest), so the plate greens are nobody's upgrade
+# in the cast and the policy files them for the bank; the white weapons are sold, the only thing it sells.
+# Scope: items are granted in the throwaway world only, to reach a full-bag state a decree cannot otherwise
+# set. The walk to a banker and a vendor is the bridge's own, so the window is long.
+decree: v1
+id: full-bags-of-unworn-gear-drain
+proves:
+  - {repo: quadseven/wow-overseer, issue: 2136, criterion: "bags full of unworn gear drain: free bag slots appear and the unworn greens are routed per the loot policy, never sold"}
+fix: {repo: quadseven/wow-overseer, commit: TODO}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 90m
+cast:
+  - who: Uzza
+    set:
+      level: 60
+      alive: true
+      at: {creature: "Stephen Ryback"}
+      items:
+        - {name: "Heavy Mithril Shoulder"}
+        - {name: "Heavy Mithril Gauntlet"}
+        - {name: "Heavy Mithril Pants"}
+        - {name: "Ornate Mithril Pants"}
+        - {name: "Ornate Mithril Gloves"}
+        - {name: "Ornate Mithril Shoulder"}
+        - {name: "Heavy Mithril Breastplate"}
+        - {name: "Heavy Mithril Boots"}
+        - {name: "Cutlass"}
+        - {name: "Mace"}
+        - {name: "Hatchet"}
+        - {name: "Quarter Staff"}
+        - {name: "Tabar"}
+        - {name: "Giant Mace"}
+        - {name: "Claymore"}
+        - {name: "Studded Blackjack"}
+    ceiling: "a level 60 priest carrying 8 plate greens and 8 white weapons, 16 stacks in a 16 slot pack; nothing else granted"
+act:
+  - at: 0s
+    roster: {who: Uzza, job: "quest"}
+observe:
+  - name: bags-start-full
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_inventory WHERE guid = @Uzza AND bag = 0 AND slot BETWEEN 23 AND 38
+    expect: {scalar: ">= 16"}
+  - name: bags-have-room-at-the-end
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM character_inventory WHERE guid = @Uzza AND bag = 0 AND slot BETWEEN 23 AND 38
+    expect: {scalar: "<= 8"}
+  - name: greens-are-routed-to-a-bank-not-sold
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command c JOIN characters ch ON ch.name = c.target_name
+      WHERE ch.guid = @Uzza AND c.created_at >= @t0 AND (c.kind = 'bank' OR (c.kind = 'guild' AND c.command LIKE 'bank deposit-item%'))
+    expect: {scalar: ">= 4"}
+  - name: greens-are-still-owned
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM item_instance ii JOIN acore_world.item_template t ON t.entry = ii.itemEntry
+      WHERE ii.owner_guid = @Uzza AND t.Quality = 2
+    expect: {scalar: ">= 4"}
