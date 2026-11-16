@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import pathlib
+import shlex
 import sys
 
 from forge import build, classes
@@ -33,6 +34,7 @@ def _build(args: argparse.Namespace) -> int:
         backup_dir=pathlib.Path(args.backup_dir),
         workdir=pathlib.Path(args.workdir),
         registry=registry,
+        db_import_cmd=tuple(shlex.split(args.db_import_cmd)),
         auth_dump=pathlib.Path(args.auth_dump) if args.auth_dump else None,
     )
     steps = build.plan(cfg, classes.load_classes())
@@ -68,6 +70,11 @@ def main(argv: list[str] | None = None) -> int:
     make.add_argument(
         "--auth-dump",
         help="optional auth dump to restore and scrub; default synthesises accounts",
+    )
+    make.add_argument(
+        "--db-import-cmd",
+        default="dbimport",
+        help="command that builds the world and auth schemas (default: dbimport)",
     )
     make.add_argument(
         "--dry-run", action="store_true", help="print the step names and stop"

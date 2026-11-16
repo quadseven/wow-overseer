@@ -9,13 +9,15 @@ process. Tests drive `execute()` with a recording runner; the CLI drives it with
 # ruff: noqa: S608
 # S608 is a false positive here: every interpolated value is a validated schema or
 # table identifier, a module constant, or a backup stamp matched by a strict regex.
-# Nothing comes from user input.
+# The caller-supplied workdir never reaches SQL; it is validated by check_workdir
+# and shell-quoted where it enters a command.
 
 from __future__ import annotations
 
 import os
 import pathlib
 import re
+import shlex
 import subprocess
 import time
 from collections.abc import Callable, Sequence
@@ -49,6 +51,20 @@ class CredentialLeft(StepFailed):
     """The audit found a usable credential, address or contact detail."""
 
 
+# An absolute path of plain characters. The workdir is caller-supplied and ends up
+# in a `sh -c` script, so it is both validated here and shell-quoted there. The
+# optional drive letter only lets the tests run on Windows; mysqld never sees it.
+_WORKDIR_RE = re.compile(r"^(?:[A-Za-z]:)?/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
+
+
+def check_workdir(workdir: pathlib.PurePath) -> None:
+    text = workdir.as_posix()
+    if not _WORKDIR_RE.match(text) or ".." in text.split("/"):
+        raise ValueError(
+            f"workdir must be an absolute path of letters, digits, . _ - and /, not {text!r}"
+        )
+
+
 @dataclass(frozen=True)
 class Config:
     template_class: str
@@ -67,6 +83,7 @@ class Config:
                 f"class must be one of {CLASSES}, not {self.template_class!r}"
             )
         restore.assert_local_mysql(self.mysql_host)
+        check_workdir(self.workdir)
 
 
 @dataclass(frozen=True)
@@ -134,9 +151,10 @@ def plan(cfg: Config, classes: dict[str, TableClass]) -> list[Step]:
     tag = image_tag(cfg.template_class, backup.stamp)
     port = str(cfg.mysql_port)
     flags = " ".join(MYSQL_FLAGS)
+    datadir_flag = shlex.quote(f"--datadir={datadir.as_posix()}")
     start = (
-        f"mysqld {flags} --initialize-insecure --datadir={datadir.as_posix()} && "
-        f"exec mysqld {flags} --datadir={datadir.as_posix()} --port={port}"
+        f"mysqld {flags} --initialize-insecure {datadir_flag} && "
+        f"exec mysqld {flags} {datadir_flag} --port={int(cfg.mysql_port)}"
     )
     db_env = (
         ("AC_LOGIN_DATABASE_INFO", f"{cfg.mysql_host};{port};root;;acore_auth"),

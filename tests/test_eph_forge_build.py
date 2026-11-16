@@ -10,6 +10,7 @@ import gzip
 import pathlib
 import tempfile
 import unittest
+from unittest import mock
 
 from forge import build, classes, restore, scrub
 
@@ -122,6 +123,87 @@ class Config(unittest.TestCase):
                 workdir=pathlib.Path("/w"),
                 mysql_host="mysql",
             )
+
+    def test_a_workdir_must_be_a_plain_absolute_path(self) -> None:
+        bad = (
+            "relative/dir",
+            "/with space/work",
+            "/w;rm -rf /",
+            "/w$(id)",
+            "/w`id`",
+            "/w'quote",
+            '/w"quote',
+            "/w|x",
+            "/w&x",
+            "/w\nnewline",
+            "/w/../etc",
+            "/",
+            "",
+        )
+        for workdir in bad:
+            with self.assertRaises(ValueError, msg=repr(workdir)):
+                build.Config(
+                    template_class="full",
+                    backup_dir=pathlib.Path("/b"),
+                    workdir=pathlib.PurePosixPath(workdir),
+                )
+
+    def test_ordinary_workdirs_are_accepted(self) -> None:
+        for workdir in (
+            "/w",
+            "/var/lib/forge/work-1",
+            "/tmp/forge_work.d",
+            "C:/work/forge",
+        ):
+            build.Config(
+                template_class="full",
+                backup_dir=pathlib.Path("/b"),
+                workdir=pathlib.PurePosixPath(workdir),
+            )
+
+    def test_the_mysql_script_is_one_word_per_path_after_shell_splitting(self) -> None:
+        import shlex
+
+        cfg = build.Config(
+            template_class="full",
+            backup_dir=pathlib.Path("/b"),
+            workdir=pathlib.PurePosixPath("/var/lib/forge/work-1"),
+            registry="registry.example.invalid/eph",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            write_dump(pathlib.Path(tmp), NEW)
+            cfg = build.Config(
+                template_class="full",
+                backup_dir=pathlib.Path(tmp),
+                workdir=cfg.workdir,
+                registry=cfg.registry,
+            )
+            step = next(
+                s
+                for s in build.plan(cfg, classes.load_classes())
+                if s.name == "start-mysql"
+            )
+        words = shlex.split(step.argv[2])
+        datadirs = [w for w in words if w.startswith("--datadir=")]
+        self.assertEqual(datadirs, ["--datadir=/var/lib/forge/work-1/datadir"] * 2)
+
+    def test_the_datadir_is_shell_quoted_in_the_script_text(self) -> None:
+        import shlex
+
+        with tempfile.TemporaryDirectory() as tmp:
+            write_dump(pathlib.Path(tmp), NEW)
+            cfg = build.Config(
+                template_class="full",
+                backup_dir=pathlib.Path(tmp),
+                workdir=pathlib.PurePosixPath("/w"),
+                registry="registry.example.invalid/eph",
+            )
+            step = next(
+                s
+                for s in build.plan(cfg, classes.load_classes())
+                if s.name == "start-mysql"
+            )
+        self.assertIn(shlex.quote("--datadir=/w/datadir"), step.argv[2])
 
     def test_the_image_ref_uses_class_and_stamp(self) -> None:
         self.assertEqual(
@@ -477,6 +559,62 @@ class Cli(unittest.TestCase):
             self.assertEqual(cli.main(["check-classes", "--tables", str(tables)]), 1)
             tables.write_text(fixture.read_text(encoding="utf-8"), encoding="utf-8")
             self.assertEqual(cli.main(["check-classes", "--tables", str(tables)]), 0)
+
+    def test_build_dry_run_lists_the_steps_and_rejects_a_bad_workdir(self) -> None:
+        from forge import __main__ as cli
+
+        with tempfile.TemporaryDirectory() as tmp:
+            write_dump(pathlib.Path(tmp), NEW)
+            base = ["build", "--class", "lean", "--backup-dir", tmp, "--dry-run"]
+            with mock.patch.dict(
+                "os.environ", {"FORGE_REGISTRY": "registry.example.invalid/eph"}
+            ):
+                self.assertEqual(
+                    cli.main([*base, "--workdir", "/var/lib/forge/work"]), 0
+                )
+                with self.assertRaises(ValueError):
+                    cli.main([*base, "--workdir", "/w; rm -rf /"])
+
+
+class Documented(unittest.TestCase):
+    """AGENTS.md: a file that reads real config ships an example for it."""
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+
+    def test_every_environment_variable_the_forge_reads_is_in_the_example(self) -> None:
+        import re
+
+        names: set[str] = set()
+        for path in (self.root / "forge").glob("*.py"):
+            names |= set(
+                re.findall(
+                    r'environ(?:\.get)?\(\s*"([A-Z][A-Z0-9_]+)"',
+                    path.read_text(encoding="utf-8"),
+                )
+            )
+        self.assertIn("FORGE_REGISTRY", names)
+        example = (self.root / "forge" / "config.example.env").read_text(
+            encoding="utf-8"
+        )
+        for name in sorted(names):
+            self.assertRegex(example, rf"(?m)^{name}=")
+
+    def test_the_example_holds_only_placeholders(self) -> None:
+        example = (self.root / "forge" / "config.example.env").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("example.invalid", example)
+
+    def test_the_readme_gives_the_build_command_and_prerequisites(self) -> None:
+        readme = (self.root / "README.md").read_text(encoding="utf-8")
+        for needle in (
+            "python -m forge build",
+            "FORGE_REGISTRY",
+            "config.example.env",
+            "crane",
+            "mysqld",
+        ):
+            self.assertIn(needle, readme)
 
 
 if __name__ == "__main__":
