@@ -6,11 +6,13 @@
 # Scope: the buy row must be DELIVERED (a failed request no longer counts), there must be exactly one row for
 # the hammer in the window, and the craft event must come after that delivery. The worn recipe is not named in
 # the event row, so a craft of any recipe after the purchase is what is read.
+# Issue 1516 (the material-request consumer) is dropped from proves: no row records a material-request event
+# for item 5956, so a decree cannot show the buy handled that request and not a generic craft-planner buy
+# (wow-overseer#2767 covers the log side). Only issue 1590 is claimed.
 # Fixes: wow-overseer pulls 1878 (hammer purchase) and 1597 (worn recipes); the commit is 1878.
 decree: v1
 id: smith-without-a-hammer-buys-one
 proves:
-  - {repo: quadseven/wow-overseer, issue: 1516, criterion: "the bridge handles the tool material-request for item 5956 and one delivered kind buy row follows within 24 hours"}
   - {repo: quadseven/wow-overseer, issue: 1590, criterion: "a job craft smith with no hammer gets exactly one kind buy row for item 5956 and no second while it is held, then a craft event for a worn recipe spell"}
 fix: {repo: quadseven/wow-overseer, commit: "ac6cba9a04590c9d2cdd673dfb07fdf2d5e7d527"}
 world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}

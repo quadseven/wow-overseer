@@ -6,12 +6,14 @@
 # Scope: the module's party-wait stop is a log line, so 'while the module was stopped' is not asserted. What
 # is proven by rows: the credited run opened, Og was alive AND back on the dungeon map by the end, and the
 # clearing went on (a boss event was written after the start), with no run closed split_failed.
+# Issue 1500 (re-arm while the party reassembles) is dropped from proves: no row records Og's release or rejoin
+# event, so a decree cannot order release, STAGED_INSIDE, CLEARING and a later boss (wow-overseer#2767).
+# The boss-after-reassembly check stays as supporting evidence for issue 1472 only.
 # Fixes: mod-overseer pulls 1473 (walk back) and 1501 (re-arm); the commit below is 1501, the later.
 decree: v1
 id: brd-member-dies-and-releases
 proves:
   - {repo: quadseven/mod-overseer, issue: 1472, criterion: "a dead BRD member released at the mountain graveyard is back on the dungeon map alive and no run closes split_failed"}
-  - {repo: quadseven/mod-overseer, issue: 1500, criterion: "after a BRD member dies and releases the run keeps clearing (a boss event follows) and is not closed split_failed (the party-wait stop is not asserted here)"}
 fix: {repo: quadseven/mod-overseer, commit: "864b71ec085fcaaf75cac98b520ef5c6fbc9347b"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
