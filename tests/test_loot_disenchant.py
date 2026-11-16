@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -249,12 +251,18 @@ class TheBridgeGate(unittest.TestCase):
         self.assertTrue(self.bridge._epic_blocks("Og", "guid:7005", "disenchant"))
 
 
+STATEMENTS: list = []
+
+
 class LedgerCursor:
     """A cursor over a shared list of written overseer_command rows."""
 
     def __init__(self, ledger):
         self.ledger = ledger
         self.lastrowid = 0
+        self.rowcount = 0
+        self.pause = 0.0
+        self.statements = STATEMENTS
         self._one = None
 
     def __enter__(self):
@@ -264,29 +272,31 @@ class LedgerCursor:
         return False
 
     def execute(self, sql, params=()):
-        if sql.startswith("INSERT INTO overseer_command"):
-            if "'disenchant'" in sql:
-                kind = "disenchant"
-            elif "'give'" in sql:
-                kind = "give"
-            else:
-                kind = params[2]
+        self.rowcount = 0
+        self.statements.append(sql)
+        if sql.startswith("INSERT INTO overseer_command") and "NOT EXISTS" in sql:
+            exact, like_a, like_b = params[5:]
+            prefixes = (like_a[:-1], like_b[:-1])
+            taken = any(
+                row["kind"] in ("give", "mail")
+                and row["status"] in ("pending", "claimed")
+                and (row["command"] == exact or row["command"].startswith(prefixes))
+                for row in self.ledger
+            )
+            time.sleep(self.pause)  # a window a non-atomic caller would lose
+            if not taken:
+                self.ledger.append(
+                    {"kind": params[2], "command": params[1], "status": "pending"}
+                )
+                self.lastrowid = len(self.ledger)
+                self.rowcount = 1
+        elif sql.startswith("INSERT INTO overseer_command"):
+            kind = "disenchant" if "'disenchant'" in sql else params[2]
             self.ledger.append(
                 {"kind": kind, "command": params[1], "status": "pending"}
             )
             self.lastrowid = len(self.ledger)
-        elif "status IN ('pending', 'claimed')" in sql and "command LIKE" in sql:
-            exact, like_a, like_b = params
-            prefixes = (like_a[:-1], like_b[:-1])
-            self._one = {
-                "n": sum(
-                    1
-                    for row in self.ledger
-                    if row["kind"] in ("give", "mail")
-                    and row["status"] in ("pending", "claimed")
-                    and (row["command"] == exact or row["command"].startswith(prefixes))
-                )
-            }
+            self.rowcount = 1
         else:
             self._one = None
 
@@ -366,6 +376,41 @@ class OneGivePerCopy(unittest.TestCase):
         self.assertEqual(self.kinds(), ["give", "disenchant"])
         self.assertEqual(self.bridge._insert_guild_gift(self.gift), 0)
         self.assertEqual(self.kinds(), ["give", "disenchant"])
+
+    def test_the_check_and_the_insert_are_one_statement(self):
+        STATEMENTS.clear()
+        self.assertTrue(self.bridge._insert_guild_gift(self.gift))
+        pending = [q for q in STATEMENTS if "overseer_command" in q]
+        self.assertEqual(len(pending), 1)
+        self.assertIn("NOT EXISTS", pending[0])
+
+    def test_two_threads_writing_at_once_write_one_give(self):
+        """Each statement has a window between its check and its insert; the
+        lock and the single statement keep both writers from passing it."""
+        orig = LedgerCursor.__init__
+
+        def slow(cursor, ledger):
+            orig(cursor, ledger)
+            cursor.pause = 0.05
+
+        gate = threading.Barrier(2)
+        wrote = []
+
+        def sale_path():
+            gate.wait()
+            wrote.append(self.bridge._disenchant_instead("Grug", 8001))
+
+        def plan_path():
+            gate.wait()
+            wrote.append(self.bridge._insert_guild_gift(self.gift))
+
+        with mock.patch.object(LedgerCursor, "__init__", slow):
+            threads = [threading.Thread(target=f) for f in (sale_path, plan_path)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        self.assertEqual(self.kinds().count("give"), 1)
 
     def test_a_delivered_give_does_not_block_a_later_one(self):
         self.assertTrue(self.bridge._insert_guild_gift(self.gift))

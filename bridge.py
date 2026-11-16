@@ -22,6 +22,7 @@ import logging
 import math
 import os
 import re
+import threading
 import time
 from types import SimpleNamespace
 
@@ -34238,19 +34239,23 @@ def _disenchant_instead(holder: str, item_guid: int):
                 DISENCHANT_ROUTE_SOURCE, holder, command, DISENCHANT_ROUTE_HOURS))
             if int((cur.fetchone() or {}).get("n") or 0):
                 return 0
-            if (kind == bag_pressure.GIVE_TO_ENCHANTER
-                    and _give_pending_for(cur, item_guid)):
-                # Another writer (the plan's gift) already moves this copy.
-                return 0
-            cur.execute(
-                "INSERT INTO overseer_command "
-                "(target_name, command, kind, target_arg, source) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (holder, command, kind,
-                 enchanter if kind == bag_pressure.GIVE_TO_ENCHANTER else "",
-                 DISENCHANT_ROUTE_SOURCE),
-            )
-            row_id = cur.lastrowid or 0
+            if kind == bag_pressure.GIVE_TO_ENCHANTER:
+                # One atomic check-and-insert: another writer (the plan's
+                # gift) may already be moving this copy, and then nothing is
+                # written here.
+                row_id = _insert_give_once(
+                    cur, item_guid, holder, command, kind, enchanter,
+                    DISENCHANT_ROUTE_SOURCE)
+                if not row_id:
+                    return 0
+            else:
+                cur.execute(
+                    "INSERT INTO overseer_command "
+                    "(target_name, command, kind, target_arg, source) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (holder, command, kind, "", DISENCHANT_ROUTE_SOURCE),
+                )
+                row_id = cur.lastrowid or 0
             if kind == bag_pressure.GIVE_TO_ENCHANTER and row_id:
                 # The enchanter's half, written now: the module holds a named
                 # disenchant standing ("not owned") until the give lands, and
@@ -34842,23 +34847,34 @@ def _recently_given_guids(hours: int) -> frozenset:
 
 # ONE GIVE PER ITEM COPY. The item plan's gift writer (`_insert_guild_gift`) and
 # the sale path's give-to-enchanter (`_disenchant_instead`) can both name the
-# same item instance in one tick; whichever writes second sees the first's row
-# still pending and writes nothing. Keyed on the instance guid in the command
-# (`guid:N` for a give, `send item:N ...` for a letter), not on the taker, so
-# two writers that picked different takers still move the piece once.
-_PENDING_GIVE_SQL = (
-    "SELECT COUNT(*) AS n FROM overseer_command "
+# same item instance, and each runs on a worker thread. A check followed by an
+# insert would let both pass the check, so the two are ONE statement, an
+# INSERT ... SELECT ... WHERE NOT EXISTS over any pending or claimed give or
+# letter naming the instance guid (`guid:N` for a give, `send item:N ...` for a
+# letter), whatever the taker; and the statement runs under one process lock,
+# because under autocommit two concurrent copies of it could still both read
+# "none" before either row is visible. The schema is the module's, so there is
+# no unique key to lean on here.
+_GIVE_WRITE_LOCK = threading.Lock()
+_INSERT_GIVE_ONCE_SQL = (
+    "INSERT INTO overseer_command "
+    "(target_name, command, kind, target_arg, source) "
+    "SELECT %s, %s, %s, %s, %s FROM DUAL WHERE NOT EXISTS ("
+    "SELECT 1 FROM overseer_command "
     "WHERE kind IN ('give', 'mail') AND status IN ('pending', 'claimed') "
-    "AND (command = %s OR command LIKE %s OR command LIKE %s)"
+    "AND (command = %s OR command LIKE %s OR command LIKE %s))"
 )
 
 
-def _give_pending_for(cur, item_guid: int) -> bool:
-    """Is a give or letter for this item instance still waiting on the world?"""
+def _insert_give_once(cur, item_guid: int, holder, command, kind, taker, source):
+    """Row id of the give written, or 0 when one is already pending for this
+    item instance (nothing is written then)."""
     guid = int(item_guid)
-    cur.execute(_PENDING_GIVE_SQL, (
-        "guid:%d" % guid, "guid:%d %%" % guid, "send item:%d %%" % guid))
-    return bool(int((cur.fetchone() or {}).get("n") or 0))
+    with _GIVE_WRITE_LOCK:
+        cur.execute(_INSERT_GIVE_ONCE_SQL, (
+            holder, command, kind, taker, source,
+            "guid:%d" % guid, "guid:%d %%" % guid, "send item:%d %%" % guid))
+        return (cur.lastrowid or 0) if cur.rowcount else 0
 
 
 def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
@@ -34882,18 +34898,15 @@ def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, gift.holder)
         return 0
     with _connect() as conn, conn.cursor() as cur:
-        if _give_pending_for(cur, gift.guid):
-            log.info("guildshare: item %s already has a give pending, so "
-                     "%s's gift to %s is not written", gift.guid, gift.holder,
-                     gift.taker)
-            return 0
         try:
-            cur.execute(
-                "INSERT INTO overseer_command "
-                "(target_name, command, kind, target_arg, source) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (gift.holder, command, verb, gift.taker, "guildshare"),
-            )
+            row_id = _insert_give_once(
+                cur, gift.guid, gift.holder, command, verb, gift.taker,
+                "guildshare")
+            if not row_id:
+                log.info("guildshare: item %s already has a give pending, so "
+                         "%s's gift to %s is not written", gift.guid,
+                         gift.holder, gift.taker)
+            return row_id
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] == 1265:
                 log.warning(
@@ -34903,7 +34916,6 @@ def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
                 )
                 return 0
             raise
-        return cur.lastrowid or 0
 
 
 # Carried weapons and armour of the guild's OTHER members (#174): the same
