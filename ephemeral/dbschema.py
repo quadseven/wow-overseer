@@ -120,9 +120,22 @@ def check_select(sql, schema, known_vars=None):
         return ["SQL must be a single SELECT statement"]
     toks = _tokens(body)
     problems = _syntax_problems(body, toks, known_vars)
-    aliases, opaque = _collect_tables(toks, schema, problems)
-    problems.extend(_column_problems(toks, schema, aliases, opaque))
+    aliases, skip = _collect_tables(toks, schema, problems)
+    problems.extend(_column_problems(toks, schema, aliases, skip))
+    problems.extend(_vacuous_problems(toks, aliases))
     return sorted(set(problems))
+
+
+def _vacuous_problems(toks, aliases):
+    """An observation must look at the world: a known table, or seeded state.
+
+    `SELECT 1` is true whatever happened, so a decree made of such queries would
+    pass without observing anything. `@t0` alone is only a clock.
+    """
+    state_vars = [t for t in toks if t[0] == "var" and t[1] != "@t0"]
+    if aliases or state_vars:
+        return []
+    return ["observation reads no table and no seeded variable, so it cannot fail"]
 
 
 def _syntax_problems(body, toks, known_vars):
@@ -146,9 +159,9 @@ def _is_word(tok, *words):
 
 
 def _collect_tables(toks, schema, problems):
-    """Every table the query names: ({alias or table: (db, table)}, saw a derived table)."""
+    """Every table the query names: ({alias or table: (db, table)}, token indexes of the refs)."""
     aliases = {}
-    opaque = False
+    skip = set()
     in_from = False
     i = 0
     while i < len(toks):
@@ -158,13 +171,14 @@ def _collect_tables(toks, schema, problems):
         )
         if starts_ref:
             in_from = True
-            i, derived = _table_ref(toks, i + 1, schema, aliases, problems)
-            opaque = opaque or derived
+            end = _table_ref(toks, i + 1, schema, aliases, problems)
+            skip.update(range(i + 1, end))
+            i = end
             continue
         if _is_word(tok, *_FROM_ENDERS) or (tok[0] == "op" and tok[1] == ")"):
             in_from = False
         i += 1
-    return aliases, opaque
+    return aliases, skip
 
 
 def _select_aliases(toks):
@@ -173,7 +187,7 @@ def _select_aliases(toks):
     }
 
 
-def _column_problems(toks, schema, aliases, opaque):
+def _column_problems(toks, schema, aliases, skip):
     problems = []
     select_aliases = _select_aliases(toks)
     all_cols = set()
@@ -181,9 +195,10 @@ def _column_problems(toks, schema, aliases, opaque):
         all_cols.update(schema.columns(table, db) or [])
     j = 0
     while j < len(toks):
-        step, problem = _column_ref(
-            toks, j, schema, aliases, all_cols, select_aliases, opaque
-        )
+        if j in skip:
+            j += 1
+            continue
+        step, problem = _column_ref(toks, j, schema, aliases, all_cols, select_aliases)
         if problem:
             problems.append(problem)
         j += step
@@ -194,7 +209,7 @@ def _is_op(tok, text):
     return tok is not None and tok[0] == "op" and tok[1] == text
 
 
-def _column_ref(toks, j, schema, aliases, all_cols, select_aliases, opaque):
+def _column_ref(toks, j, schema, aliases, all_cols, select_aliases):
     """Check the token at j. Returns (tokens consumed, problem or None)."""
     kind, text, quoted = toks[j]
     nxt = toks[j + 1] if j + 1 < len(toks) else None
@@ -203,19 +218,17 @@ def _column_ref(toks, j, schema, aliases, all_cols, select_aliases, opaque):
         return 1, None  # not a name, the tail of a qualified name, or a function call
     if _is_op(nxt, ".") and j + 2 < len(toks):
         return _qualified_ref(toks, j, schema, aliases)
-    problem = _bare_problem(
-        text, quoted, prev, aliases, all_cols, select_aliases, opaque
-    )
+    problem = _bare_problem(text, quoted, prev, aliases, all_cols, select_aliases)
     return 1, problem
 
 
-def _bare_problem(text, quoted, prev, aliases, all_cols, select_aliases, opaque):
+def _bare_problem(text, quoted, prev, aliases, all_cols, select_aliases):
     low = text.lower()
     if not quoted and (low in _KEYWORDS or low in _FORBIDDEN):
         return None
     if prev and _is_word(prev, "as", "from", "join"):
         return None
-    if low in select_aliases or text in aliases or opaque or text in all_cols:
+    if low in select_aliases or text in aliases or text in all_cols:
         return None
     if aliases:
         return f"no referenced table has a column {text!r}"
@@ -247,19 +260,24 @@ def _qualified_problem(qualifier, col, schema, aliases):
         if col != "*" and not schema.has_column(table, col, db):
             return f"table {db}.{table} has no column {col!r}"
         return None
-    if qualifier not in GAME_DBS:
-        return f"unknown table or alias {qualifier!r}"
-    return None
+    if qualifier in GAME_DBS:
+        return (
+            f"{qualifier}.{col} is not a table.column: name the table (db.table.column)"
+        )
+    return f"unknown table or alias {qualifier!r}"
 
 
 def _table_ref(toks, i, schema, aliases, problems):
     """Parse `[db.]table [[AS] alias]` at toks[i]. Returns (next index, opaque)."""
     if i >= len(toks):
         problems.append("dangling FROM or JOIN")
-        return i, False
+        return i
     kind, text, _ = toks[i]
     if kind == "op" and text == "(":
-        return i + 1, True  # derived table: its columns are unknowable here
+        problems.append(
+            "a derived table (FROM (SELECT ...)) is not supported in an observation; join the table"
+        )
+        return i + 1
     db = None
     table = text
     if i + 2 < len(toks) and toks[i + 1][1] == "." and toks[i + 1][0] == "op":
@@ -284,4 +302,4 @@ def _table_ref(toks, i, schema, aliases, problems):
         i += 1
     aliases[alias] = (db, table)
     aliases.setdefault(table, (db, table))
-    return i, False
+    return i

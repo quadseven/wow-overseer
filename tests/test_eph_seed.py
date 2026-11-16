@@ -388,6 +388,43 @@ class GuardTest(unittest.TestCase):
                 )
             self.assertTrue(conn.closed)
 
+    def test_the_old_exposed_token_is_gone(self):
+        self.assertFalse(hasattr(guard.GuardedConnection, "_token"))
+
+    def test_a_hand_wrapped_connection_is_refused_everywhere(self):
+        bare = object.__new__(guard.GuardedConnection)
+        bare._conn = FakeConn()
+        bare._schema = SCHEMA
+        self.assertEqual(bare._conn.executed, [])
+        with self.assertRaises(guard.GuardError):
+            guard.apply_plan(compile_(doc()), bare)
+        with self.assertRaises(guard.GuardError):
+            bare.query("SELECT 1")
+        self.assertEqual(bare._conn.executed, [])
+
+    def test_the_minting_token_is_not_reachable_from_the_class(self):
+        with self.assertRaises(guard.GuardError):
+            guard.GuardedConnection(
+                FakeConn(), SCHEMA, getattr(guard.GuardedConnection, "_mint", object())
+            )
+
+    def test_query_refuses_a_select_with_side_effects(self):
+        g, _, _ = self.open()
+        for sql in (
+            "SELECT 1 INTO OUTFILE 'x'",
+            "SELECT 1; SELECT 2",
+            "SELECT SLEEP(5)",
+            "SELECT 1 -- x",
+            "SELECT guid FROM characters FOR UPDATE",
+        ):
+            with self.assertRaises(guard.GuardError, msg=sql):
+                g.query(sql)
+
+    def test_query_allows_the_fixed_templates(self):
+        g, _, _ = self.open()
+        for sql in resolve.QUERIES.values():
+            g.query(sql, ("x",) * sql.count("%s"))
+
     def test_a_connection_cannot_be_built_by_hand(self):
         with self.assertRaises(guard.GuardError):
             guard.GuardedConnection(FakeConn(), SCHEMA, object())
@@ -591,6 +628,33 @@ class CompileTest(unittest.TestCase):
         d = doc()
         d["cast"][0]["set"]["health_pct"] = 50
         self.assertIn("`health` = 2000", sql_of(compile_(d))[0])
+
+    def test_a_previously_rewarded_quest_is_cleared_for_other_states(self):
+        d = doc()
+        d["cast"][0]["set"]["quests"] = {"Lost Tools": "incomplete", 55: "complete"}
+        sql = sql_of(compile_(d))
+        for qid in (123, 55):
+            self.assertTrue(
+                any(
+                    s.startswith("DELETE")
+                    and "`character_queststatus_rewarded`" in s
+                    and f"`quest` = {qid}" in s
+                    for s in sql
+                )
+            )
+
+    def test_a_quoted_numeric_quest_key_is_an_id(self):
+        d = doc()
+        d["cast"][0]["set"]["quests"] = {"55": "rewarded"}
+        sql = sql_of(compile_(d))
+        self.assertTrue(
+            any(
+                "`character_queststatus_rewarded`" in s
+                and "55" in s
+                and s.startswith("REPLACE")
+                for s in sql
+            )
+        )
 
     def test_skills_spells_quests_homebind(self):
         d = doc()

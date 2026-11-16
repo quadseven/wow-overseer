@@ -471,34 +471,28 @@ class Compiler:
                     )
                 )
 
+    def _quest_id(self, quest):
+        if isinstance(quest, int):
+            return quest
+        if str(quest).isdigit():  # a quoted number is an id, not a title
+            return int(quest)
+        return self.one(self.r.quests(str(quest)), f"quest {quest!r}")
+
     def _quest(self, m, quest, state):
-        qid = (
-            quest
-            if isinstance(quest, int)
-            else self.one(self.r.quests(str(quest)), f"quest {quest!r}")
-        )
-        if isinstance(quest, str) and quest.isdigit():
-            qid = int(quest)
+        qid = self._quest_id(quest)
+        key = {"guid": m.guid, "quest": qid}
         st = self.plan.statements
-        st.append(
-            self.b.delete("character_queststatus", {"guid": m.guid, "quest": qid})
-        )
+        # Clear both places a quest can live, so the requested state is the only one.
+        st.append(self.b.delete("character_queststatus", key))
+        st.append(self.b.delete("character_queststatus_rewarded", key))
         if state == "rewarded":
             st.append(
                 self.b.insert(
-                    "character_queststatus_rewarded",
-                    {"guid": m.guid, "quest": qid, "active": 1},
-                    replace=True,
+                    "character_queststatus_rewarded", {**key, "active": 1}, replace=True
                 )
             )
         else:
-            row = {
-                "guid": m.guid,
-                "quest": qid,
-                "status": _QUEST_STATUS[state],
-                "explored": 0,
-                "timer": 0,
-            }
+            row = {**key, "status": _QUEST_STATUS[state], "explored": 0, "timer": 0}
             st.append(self.b.insert("character_queststatus", row, replace=True))
 
 

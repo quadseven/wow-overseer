@@ -1,11 +1,88 @@
 # Ephemeral worlds: decrees
 
-A decree is one YAML file under `decrees/` that says who is in a throwaway
-world, where, in what state, what to do, and what SQL or log assertions decide
-the verdict. This page covers the parts that exist so far: the schema, `eph
-lint`, and `decrees/anchors.yaml`. Tracking issue: #2343.
+An ephemeral (proving) world is a throwaway copy of the realm that bots can play
+in without touching live progression. A decree is the one YAML file under
+`decrees/` that says who is in that world, where, in what state, what to do, and
+which SQL or log assertions decide the verdict. Tracking issue: #2343.
 
 Last checked: 2026-11-15.
+
+## What ships today, and what does not
+
+Shipped in this repository now:
+
+- the decree schema v1 and `python3 -m ephemeral lint`;
+- `decrees/anchors.yaml`, the only place coordinates may live;
+- `python3 -m ephemeral acts`, which prints a decree's `act` timeline as the
+  command rows it becomes;
+- `python3 -m ephemeral seed`, which compiles `cast` and `arrange` to SQL behind a
+  loopback-only guard (see Seed below);
+- three worked example decrees in `decrees/`.
+
+Not shipped: the world itself. There is no runner, no judge that samples a
+world and gives a verdict, no template build and no cluster objects in this
+repository yet. Nothing here starts a world or produces a PASS, FAIL or INVALID.
+The seed step has only been run against a fake connection in unit tests, never
+against a real database.
+
+## Requesting a proving run
+
+The runner is out of scope for what this page documents, so a run cannot be
+requested yet. What you can do today is the part that comes first anyway:
+
+1. Write the decree for the defect: a starting state, the action, and
+   observations that fail on the broken image and hold on the fixed one.
+2. Run `python3 -m ephemeral lint decrees/<name>.yaml` until it has no errors.
+   Fill the issue number and fix commit (a `TODO` is only a warning).
+3. Open a pull request with the decree. A fix pull request should carry its
+   decree, so the red-then-green evidence exists before the fix merges.
+
+When the runner exists, a run will be the decree executed against the image
+without the fix (control) and with it (treatment), several times each. That is
+planned and not built; this page will describe the request step when it is.
+
+## What a run can and cannot prove
+
+A proving run is a controlled experiment on a copy of the realm's data. When it
+exists, a pass is evidence for the live realm only when all of these hold:
+
+- the treatment image is the one the live realm runs or will run;
+- the fix is present in the treatment image and absent from the control;
+- the preconditions were observed in the same run, so "nothing bad happened"
+  cannot mean "nothing happened";
+- the same decree failed on the control, so the check can fail at all;
+- the evidence is state the game core wrote (respawn rows, skill rows, money and
+  slot changes), not a status flag.
+
+It cannot prove, and a decree for these should be refused or downgraded:
+
+- anything that lives in code the world does not run (bridge code with the bridge
+  off, language-model choices, the map site and UI);
+- behaviour that depends on a client-driven character, because every character
+  in a proving world is headless;
+- population effects such as the travel queue, dungeon-finder matching or the
+  auction house, which need the full bot population;
+- wall-clock effects over hours, unless the decree seeds timestamps, in which
+  case it tests only the seeded path;
+- a scenario made unreachable by over-granting, hand-placed state or config
+  changes on the path under test.
+
+Lint holds a few of these lines now (grants need a `ceiling`, no literal
+coordinates, a bridge-repo fix needs the bridge on). It does not check whether a
+decree can actually reach its scenario; only a run can.
+
+## How it complements fidelity (#2281) and liveproof (#2125)
+
+- The fidelity suite (#2281) replays captured realm truth offline in CI. It is
+  fast and needs no world, but it cannot show behaviour that only appears when
+  bots actually play: movement, rendezvous, party formation, combat.
+- Liveproof (#2125) probes the live realm on a schedule. It sees real play, but
+  only when the live guilds happen to reach the same state again, and it has no
+  control arm.
+- A proving run plays bots in a throwaway copy from a chosen starting state, with
+  a control arm. It complements both and replaces neither: use fidelity for
+  logic that can be replayed, liveproof for what the live realm does, and a
+  proving run for behaviour that needs bots playing from a known state.
 
 ## Lint a decree
 
@@ -13,9 +90,9 @@ Last checked: 2026-11-15.
     python3 -m ephemeral lint --strict decrees/<name>.yaml  # warnings fail
 
 No cluster is needed. The reader is a strict YAML subset (`ephemeral/miniyaml.py`)
-because the unit suite has no YAML parser. Observation SQL is checked against a
-snapshot of the game databases' table and column names
-(`ephemeral/data/acore_schema.json`), so a mistyped column is a lint error.
+because the unit suite has no YAML parser. Table and column names in observation
+SQL are checked against a snapshot of the game databases
+(`ephemeral/data/acore_schema.json`), so a mistyped name is a lint error.
 
 ## Shape
 
@@ -42,17 +119,22 @@ snapshot of the game databases' table and column names
   `family: auction-house`.
 - A grant (level, money, skills, spells, items) needs a `ceiling`, and a grant
   above what the ceiling text allows is rejected.
-- At least one precondition and one check, so a vacuous pass is impossible.
+- At least one precondition and one check. This only stops a decree with no
+  observations of one kind; whether the scenario is reached is shown by a run.
 - A fix in the bridge repo needs `world.bridge: "on"`.
 - A `roster` step is shorthand for a `command` of kind `job`: it is written as an
-  `overseer_command` row, which the module applies within seconds with or
-  without the bridge. Nothing in a decree writes `overseer_roster` directly (a
-  direct update was measured to have no effect). `ephemeral/acts.py` turns the
-  timeline into those rows.
-- Observation SQL is one read-only SELECT over known tables and columns, using
-  only variables the judge defines: `@t0`, `@cast`, `@cast<N>`, `@<Name>`,
-  `@<instance alias>`, `@money_start`, `@seed_skill_value`, `@seed_skill_max`,
-  `@skill_<name>`.
+  `overseer_command` row. Measured on a hand-made world, such a row was applied
+  within seconds with no bridge, while a direct update of `overseer_roster`
+  showed no effect. `ephemeral/acts.py` turns the timeline into those rows.
+- Observation SQL is one read-only SELECT. Every table and column must exist, a
+  derived table (`FROM (SELECT ...)`) is not supported, and a database qualifier
+  must lead to a table and column (`db.table.column`).
+- An observation must be able to fail: it has to read a known table or use a
+  seeded-state variable. `SELECT 1` is refused.
+- Variables are limited to a fixed vocabulary: `@t0`, `@cast`, `@cast<N>`,
+  `@<Name>`, `@<instance alias>`, `@money_start`, `@seed_skill_value`,
+  `@seed_skill_max`, `@skill_<name>`. The component that fills them is not built
+  yet, so today this only fixes the names a decree may use.
 
 `TODO` is allowed for an issue number or commit and is a warning, never an error.
 
@@ -61,7 +143,8 @@ snapshot of the game databases' table and column names
 `decrees/anchors.yaml` is the only file that may hold coordinates. Each entry is
 a position a real character stood at, copied from a row the game wrote, with
 `provenance: {source, ref, observed}`. Never type a position by hand. An entry
-whose row has not been copied is `pending`: lint warns, and a world refuses it.
+whose row has not been copied is `pending`: lint warns when a decree uses it, and
+the seed compiler refuses it.
 
 ## Killing a creature whose death has a script
 
@@ -79,12 +162,14 @@ the window continues `when:` an observation shows the creature dead.
 
     python3 -m ephemeral seed [--dry-run] decrees/<name>.yaml
 
-Runs inside the world pod, before the worldserver starts. It lints the decree,
+Meant to run inside the world pod before the worldserver starts (no pod runs it yet). It lints the decree,
 passes the guard, resolves every name and anchor in the world's own database
 (zero or several matches is INVALID), compiles the statements and applies them
 in one transaction. Settings come from the pod environment, never the decree:
 `EPH_MYSQL_HOST`, `EPH_MYSQL_PORT`, `EPH_MYSQL_USER`, `EPH_MYSQL_PASSWORD`,
-`EPH_WORLD_LABEL`, `EPH_HARNESS_GRANTS`. Exit 0 is applied, 3 is INVALID.
+`EPH_WORLD_LABEL`, `EPH_HARNESS_GRANTS`. Exit 3 is INVALID. Exit 0 means the
+plan compiled, and also that it was applied unless `--dry-run` was given, which
+prints the SQL and applies nothing.
 
 The guard (`ephemeral/guard.py`) makes the SQL unable to reach anything else:
 

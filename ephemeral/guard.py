@@ -20,6 +20,7 @@ the only literals, and the label key is supplied by the pod's own spec.
 """
 
 import re
+import weakref
 from dataclasses import dataclass
 
 from . import gamedata
@@ -75,16 +76,29 @@ def check_inputs(inputs):
     return why
 
 
-class GuardedConnection:
-    """A connection that has passed the guard. Construct only through `open_guarded`."""
+# Connections that came out of open_guarded. A GuardedConnection built any other
+# way (wrapping an arbitrary connection by hand) is not in this set and is
+# refused by `run`, `query` and `apply_plan`.
+_OPENED = weakref.WeakSet()
+_MINT = object()  # module-private; open_guarded is the only holder
+_READ_ONLY_FORBIDDEN = re.compile(
+    r"(;|--|/\*|#|\b(INTO|OUTFILE|DUMPFILE|SLEEP|BENCHMARK|GET_LOCK|LOAD_FILE|FOR\s+UPDATE|LOCK\s+IN)\b)",
+    re.I,
+)
 
-    _token = object()
+
+class GuardedConnection:
+    """A connection that has passed the guard. Only `open_guarded` makes one."""
 
     def __init__(self, conn, schema, token):
-        if token is not GuardedConnection._token:
+        if token is not _MINT:
             raise GuardError("a GuardedConnection comes from open_guarded only")
         self._conn = conn
         self._schema = schema
+
+    def _require_opened(self):
+        if self not in _OPENED:
+            raise GuardError("this connection did not come out of open_guarded")
 
     def use_schema(self, schema):
         """Verify statements against the world's live schema from here on."""
@@ -92,8 +106,11 @@ class GuardedConnection:
 
     def query(self, sql, params=()):
         """Read-only helper for resolution: SELECT only."""
-        if not sql.lstrip().upper().startswith("SELECT"):
-            raise GuardError("query() runs SELECT only")
+        self._require_opened()
+        if not sql.lstrip().upper().startswith("SELECT") or _READ_ONLY_FORBIDDEN.search(
+            sql
+        ):
+            raise GuardError("query() runs one plain SELECT only")
         cur = self._conn.cursor()
         try:
             cur.execute(sql, params or None)  # no params: a literal % stays a %
@@ -106,6 +123,7 @@ class GuardedConnection:
         ms = int(seconds * 1000)
         if ms <= 0:
             raise GuardError("a query timeout must be positive")
+        self._require_opened()
         cur = self._conn.cursor()
         try:
             cur.execute(f"SET SESSION max_execution_time = {ms}")
@@ -119,6 +137,7 @@ class GuardedConnection:
         and the module know, and only plain text, so a decree cannot smuggle
         anything else through the one path that writes.
         """
+        self._require_opened()
         if kind not in COMMAND_KINDS:
             raise GuardError(f"command kind {kind!r} is not one a judge may queue")
         cols = self._schema.columns(COMMAND_TABLE, "acore_characters")
@@ -140,6 +159,7 @@ class GuardedConnection:
 
     def run(self, statements):
         """Verify every statement, then execute them in one transaction."""
+        self._require_opened()
         statements = list(statements)
         for stmt in statements:
             verify_statement(stmt.sql, self._schema)
@@ -182,7 +202,9 @@ def open_guarded(inputs, connect, schema, **connect_kwargs):
     except Exception:
         conn.close()
         raise
-    return GuardedConnection(conn, schema, GuardedConnection._token)
+    guarded = GuardedConnection(conn, schema, _MINT)
+    _OPENED.add(guarded)
+    return guarded
 
 
 def apply_plan(plan, guarded):

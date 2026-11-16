@@ -30,6 +30,16 @@ _INT = re.compile(r"^-?\d+$")
 _FLOAT = re.compile(r"^-?\d+\.\d+$")
 
 
+def _opens_quote(text, i):
+    """A quote starts a quoted scalar only where a value or key can start.
+
+    That is at the start of the text or right after `:`, `-`, `[`, `{` or `,`.
+    A quote inside plain text (He said "hi # there") is just a character.
+    """
+    before = text[:i].rstrip(" 	")
+    return before == "" or before[-1] in ":-[{,"
+
+
 def _strip_comment(text):
     """Drop a trailing ` #...` that is outside quotes."""
     quote = None
@@ -42,9 +52,9 @@ def _strip_comment(text):
                 continue
             if ch == quote:
                 quote = None
-        elif ch in "\"'" and (i == 0 or text[i - 1] in " \t[{,:"):
+        elif ch in "\"'" and _opens_quote(text, i):
             quote = ch
-        elif ch == "#" and (i == 0 or text[i - 1] in " \t"):
+        elif ch == "#" and (i == 0 or text[i - 1] in " 	"):
             return text[:i].rstrip()
         i += 1
     return text.rstrip()
