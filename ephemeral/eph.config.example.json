@@ -1,0 +1,19 @@
+{
+  "namespace": "wow-ephemeral",
+  "source_namespace": "wow-dev",
+  "source_deployment": "worldserver",
+  "kubeconfig": "",
+  "results_dir": "/path/to/ephemeral-results",
+  "ledger_path": "/path/to/livecheck-results.jsonl",
+  "tools_image": "registry.example.com/eph-tools@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "template_images": {
+    "lean": "registry.example.com/eph-template:lean-STAMP",
+    "full": "registry.example.com/eph-template:full-STAMP"
+  },
+  "nodes": {
+    "node-a": {"claim": "client-data-node-a", "max_worlds": 5, "classes": ["lean", "full"]},
+    "node-b": {"claim": "client-data-node-b", "max_worlds": 1, "classes": ["lean"]}
+  },
+  "never_nodes": ["the-node-the-organic-realm-runs-on"],
+  "min_free_percent": 20
+}

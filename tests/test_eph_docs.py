@@ -12,7 +12,7 @@ PAGE = (
 class EphemeralDocsTest(unittest.TestCase):
     def test_says_how_to_request_a_run(self):
         self.assertIn("## Requesting a proving run", PAGE)
-        self.assertRegex(PAGE, r"runner is out of scope")
+        self.assertRegex(PAGE, r"## Runner: submit, dispatch, collect")
 
     def test_describes_the_judge_and_its_three_verdicts(self):
         self.assertIn("## Judge:", PAGE)
@@ -31,7 +31,9 @@ class EphemeralDocsTest(unittest.TestCase):
 
     def test_states_what_does_not_ship(self):
         self.assertIn("Not shipped", PAGE)
-        self.assertRegex(PAGE, r"no runner")
+        self.assertRegex(
+            PAGE, r"never been run end to end|has not\s+been run end to end"
+        )
 
     def test_does_not_claim_a_world_refuses_anything_yet(self):
         self.assertNotRegex(PAGE, r"a world refuses")

@@ -1,4 +1,4 @@
-"""`python3 -m ephemeral <lint|acts|seed|judge> ...`: the `eph` command line."""
+"""`python3 -m ephemeral <lint|acts|seed|judge|submit|dispatch|collect> ...`: the `eph` command line."""
 
 import argparse
 import json
@@ -69,6 +69,70 @@ def _judge(args):
     )
 
 
+def _runner(args):
+    """(config, kubectl, gh) for the PC-side commands."""
+    from . import ghx, kube, runcfg
+
+    cfg = runcfg.load(args.config)
+    k = kube.Kubectl(cfg.namespace, kubeconfig=cfg.kubeconfig or None)
+    gh = ghx.Gh(
+        env=os.environ,
+        author=cfg.author_login,
+        write=not getattr(args, "dry_run", False),
+    )
+    return cfg, k, gh
+
+
+def _guarded(fn):
+    from . import collect, dispatch, ghx, kube, runcfg, submit
+
+    def run(args):
+        try:
+            return fn(args)
+        except dispatch.LeaseHeld as exc:
+            print(f"error: {exc}")
+            return 3
+        except (
+            runcfg.ConfigError, submit.SubmitError, dispatch.DispatchError,
+            collect.CollectError, kube.KubeError, ghx.GhError, OSError,
+        ) as exc:  # fmt: skip
+            print(f"error: {exc}")
+            return 2
+
+    return run
+
+
+def _submit(args):
+    from . import submit
+
+    cfg, k, gh = _runner(args)
+    opts = {
+        "arm": args.arm, "node": args.node, "anchors": args.anchors,
+        "control_worldserver": args.control_worldserver, "control_dbimport": args.control_dbimport,
+        "control_pin": args.control_pin, "treatment_pin": args.treatment_pin,
+        "decree_pr": args.decree_pr, "dry_run": args.dry_run,
+    }  # fmt: skip
+    submit.submit(cfg, k, gh, args.decree, opts)
+    return 0
+
+
+def _dispatch(args):
+    from . import dispatch
+
+    cfg, k, _ = _runner(args)
+    d = dispatch.Dispatcher(cfg, k)
+    return d.run(interval=args.interval, once=args.once)
+
+
+def _collect(args):
+    from . import collect
+
+    cfg, k, gh = _runner(args)
+    col = collect.Collector(cfg, k, gh, env=os.environ)
+    col.run(post=not args.dry_run)
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="eph")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -101,6 +165,57 @@ def main(argv=None):
     j.add_argument("--anchors", help="anchors.yaml (default: decrees/anchors.yaml)")
     j.add_argument("--log", help="the worldserver log file log assertions read")
     j.set_defaults(func=_judge)
+    cfg_help = "runner settings JSON (default: $EPH_CONFIG; see ephemeral/eph.config.example.json)"
+    s = sub.add_parser(
+        "submit", help="queue a decree as suspended Jobs; starts nothing"
+    )
+    s.add_argument("decree")
+    s.add_argument("--config", help=cfg_help)
+    s.add_argument("--anchors", help="anchors.yaml (default: decrees/anchors.yaml)")
+    s.add_argument("--arm", choices=("control", "treatment", "both"), default="both")
+    s.add_argument(
+        "--node",
+        help="a node from the config (default: the first that takes the class)",
+    )
+    s.add_argument(
+        "--control-worldserver", help="control worldserver image, name@sha256:..."
+    )
+    s.add_argument(
+        "--control-dbimport", help="control db-import image, name@sha256:..."
+    )
+    s.add_argument(
+        "--control-pin", help="commit the control image was built from (fix presence)"
+    )
+    s.add_argument(
+        "--treatment-pin",
+        help="commit the treatment image was built from (default: the live pin)",
+    )
+    s.add_argument(
+        "--decree-pr",
+        type=int,
+        help="the decree's own pull request, for results of an unmerged decree",
+    )
+    s.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="render and check everything, create nothing",
+    )
+    s.set_defaults(func=_guarded(_submit))
+    dp = sub.add_parser(
+        "dispatch", help="the one process that starts queued worlds, inside the budget"
+    )
+    dp.add_argument("--config", help=cfg_help)
+    dp.add_argument("--once", action="store_true", help="one pass, then exit")
+    dp.add_argument("--interval", type=int, default=15)
+    dp.set_defaults(func=_guarded(_dispatch))
+    cl = sub.add_parser(
+        "collect", help="copy results, decide, post evidence, close only under the rule"
+    )
+    cl.add_argument("--config", help=cfg_help)
+    cl.add_argument(
+        "--dry-run", action="store_true", help="decide and print, post nothing"
+    )
+    cl.set_defaults(func=_guarded(_collect))
     args = parser.parse_args(argv)
     return args.func(args)
 
