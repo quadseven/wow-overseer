@@ -182,6 +182,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Answers: where the family levels, and next.
 - Example: `overseer get /api/levelroute family=grug`
 
+## `GET /api/live`
+
+- Query: none
+- Answers: every active dungeon run, raid and battleground.
+- Example: `overseer get /api/live`
+
 ## `GET /api/loot`
 
 - Query: none

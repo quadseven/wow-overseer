@@ -50,7 +50,7 @@ import math
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Mapping, Sequence, TypedDict
 
 WATCHER_NAME = os.environ.get("OVERSEER_WATCHER_NAME", "Watcher").strip() or "Watcher"
 
@@ -428,6 +428,32 @@ def order_run(spec: str) -> int | None:
     return int(parsed.arg)
 
 
+def spectate_character(name) -> Spec | SpecError:
+    """`character <name>` for a plain name string, through parse_watch's grammar.
+
+    Only a string of the grammar's name shape gets that far; the Watcher itself
+    is refused here, before anything is written, as the bridge would refuse it
+    later with the same reason."""
+    if not isinstance(name, str) or not _NAME_RE.fullmatch(name):
+        return SpecError("the character to watch must be a name of 2 to 12 letters")
+    if is_watcher(name):
+        return SpecError(REFUSALS[R_SELF])
+    return parse_watch(f"character {name}")
+
+
+def spectate_stop() -> Spec:
+    """The order that ends the watch."""
+    return Spec("off")
+
+
+def order_character(spec: str) -> str:
+    """The character an order names, or '' when it names anything else."""
+    parsed = parse_watch(spec or "")
+    if isinstance(parsed, SpecError) or parsed.kind != "character":
+        return ""
+    return parsed.arg
+
+
 @dataclass(frozen=True)
 class Verdict:
     allowed: bool
@@ -466,6 +492,7 @@ def spectate_state(row: Mapping | None) -> dict:
         return {
             "active": False,
             "run": None,
+            "character": "",
             "spec": "",
             "target": "",
             "note": str(row.get("note") or "") if row else "",
@@ -477,11 +504,108 @@ def spectate_state(row: Mapping | None) -> dict:
     return {
         "active": True,
         "run": order_run(spec),
+        "character": order_character(spec),
         "spec": spec,
         "target": str(row.get("target") or ""),
         "note": str(row.get("note") or ""),
         "expires_in": int(row.get("ttl") or 0),
         "switch_in": wait,
+    }
+
+
+# ------------------------------------------------------------------ live now --
+
+
+class LiveNow(TypedDict):
+    """GET /api/live: each list holds one group per live dungeon run, raid or
+    battleground, every group with an `order` the POST on /api/spectate takes."""
+
+    dungeons: list[dict]
+    raids: list[dict]
+    battlegrounds: list[dict]
+
+
+MIN_CROWD = 2  # a raid or battleground needs this many to be worth a camera
+
+
+def _seat_words(seat: Mapping) -> dict:
+    return {"name": str(seat.get("name") or ""), "seat": str(seat.get("seat") or "")}
+
+
+def _run_progress(run: Mapping) -> str:
+    total = int(run.get("bosses_total") or 0)
+    done = int(run.get("bosses_done") or 0)
+    deaths = int(run.get("deaths") or 0)
+    bosses = f"{done} of {total} bosses down" if total else "bosses not measured"
+    out = f"{bosses}, {deaths} death{'' if deaths == 1 else 's'}"
+    secs = int(run.get("seconds_inside") or 0)
+    if secs:
+        out += f", {max(1, secs // 60)} min inside"
+    return out
+
+
+def _crowd_groups(spots, maps, seats, place_name, kind):
+    roles = {n: r for n, r in seats}
+    places: dict = {}
+    for s in spots:
+        if s.map_id in maps and s.instance_id and not is_watcher(s.name):
+            places.setdefault(s.place, []).append(s)
+    out = []
+    for (map_id, instance_id), group in places.items():
+        if len(group) < MIN_CROWD:
+            continue
+        names = sorted(s.name for s in group)
+        tanks = [n for n in names if roles.get(n) == "tank"]
+        healers = [n for n in names if roles.get(n) == "healer"]
+        pick = tanks[0] if tanks else _fight_centre(group).name
+        fighting = sum(1 for s in group if s.in_combat)
+        out.append(
+            {
+                "kind": kind,
+                "map_id": map_id,
+                "instance_id": instance_id,
+                "place": place_name(map_id),
+                "count": len(group),
+                "fighting": fighting,
+                "tanks": len(tanks),
+                "healers": len(healers),
+                "members": names[:40],
+                "progress": f"{len(group)} inside, {fighting} fighting",
+                "order": {"character": pick},
+            }
+        )
+    out.sort(key=lambda g: (-g["count"], g["map_id"], g["instance_id"]))
+    return out
+
+
+def live_now(spots, runs, seats, place_name) -> LiveNow:
+    """Every active dungeon run, raid and battleground, each with the order
+    that jumps the Watcher into it. `runs` are the site's run views; a run is
+    live only while it is inside. Raids and battlegrounds come from the fresh
+    snapshot, one group per (map, instance), and are jumped into by a seated
+    tank when there is one, else the middle of the fight. The Watcher itself
+    is never counted."""
+    dungeons = [
+        {
+            "kind": "dungeon",
+            "run": int(r["id"]),
+            "guild": str(r.get("guild") or ""),
+            "title": str(r.get("title") or ""),
+            "place": str(r.get("place") or ""),
+            "seats": [_seat_words(m) for m in (r.get("members") or [])],
+            "progress": _run_progress(r),
+            "order": {"run": int(r["id"])},
+        }
+        for r in runs
+        if str(r.get("state") or "") == "inside"
+    ]
+    dungeons.sort(key=lambda g: g["run"])
+    return {
+        "dungeons": dungeons,
+        "raids": _crowd_groups(spots, RAID_MAPS, seats, place_name, "raid"),
+        "battlegrounds": _crowd_groups(
+            spots, BATTLEGROUND_MAPS, seats, place_name, "battleground"
+        ),
     }
 
 

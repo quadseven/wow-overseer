@@ -21,6 +21,8 @@ const FAMILY_BUFFS = new Set([
 const METERS = [["damage", "Damage"], ["healing", "Healing"], ["threat", "Threat"]];
 const BOND_TONE = { COUNTING: "warn", EXEMPT: "accent", ALWAYS: "ok", STOPPED: "bad" };
 
+import { charButton, notice as watchNotice, bind as bindWatch, CSS as WATCH_CSS, READ as WATCH_READ, OPERATOR as WATCH_OPERATOR } from "./_spectate.js";
+
 const famKey = (ctx) => ctx.params.family.charAt(0).toUpperCase() + ctx.params.family.slice(1);
 const q = (path, fam) => path + "?family=" + encodeURIComponent(fam);
 
@@ -28,6 +30,7 @@ function paths(fam) {
   return {
     family: q("/api/family", fam), agenda: D.agendaPath(fam), levelroute: q("/api/levelroute", fam),
     needs: q("/api/needs", fam), questlog: q("/api/questlog", fam),
+    camera: WATCH_READ, operator: WATCH_OPERATOR,
     auras: "/api/auras", meter: "/api/meter", party: "/api/party-status", danger: "/api/v2/zone-danger",
   };
 }
@@ -50,7 +53,7 @@ function memberStrip(ctx, p) {
   const codes = new Map(D.ok(party) ? (party.data.members || []).map((m) => [m.name, m.label || m.code]) : []);
   return html`<div class="fam-members">${(fam.data.members || []).map((m) => {
     const st = !m.present ? "offline" : m.condition === "dead" ? "dead" : m.combat ? "in combat" : m.condition === "ok" ? "alive" : m.condition || "";
-    return html`<a class="fam-member" href="${memberHref(m.name)}"><span class="b" style="color:${classVar(m["class"])}">${m.name}</span><span class="dim small">${m.present ? "L" + m.level + " " + m["class"] : "not in the world"}</span><span class="small muted">${st}${codes.has(m.name) ? " | party: " + codes.get(m.name) : ""}</span></a>`;
+    return html`<div class="fam-member stretch-card"><a class="stretch-link fam-link" href="${memberHref(m.name)}"><span class="b" style="color:${classVar(m["class"])}">${m.name}</span><span class="dim small">${m.present ? "L" + m.level + " " + m["class"] : "not in the world"}</span><span class="small muted">${st}${codes.has(m.name) ? " | party: " + codes.get(m.name) : ""}</span></a>${charButton(m.name, ctx.get(p.camera), ctx.get(p.operator))}</div>`;
   })}</div>`;
 }
 
@@ -199,7 +202,7 @@ function route(ctx, p) {
 }
 
 export default {
-  css: ["views/now.css", "views/family.css"],
+  css: ["views/now.css", "views/family.css", WATCH_CSS],
   reads: (ctx) => Object.values(paths(famKey(ctx))),
   every: 15000,
   title: (ctx) => famKey(ctx) + "'s family",
@@ -212,11 +215,12 @@ export default {
     return html`<a class="back" href="#/now"><i class="ph ph-caret-left" aria-hidden="true"></i>Now</a>
 <div class="head-row"><h1>Family board</h1><nav class="seg" aria-label="Family">${pick}</nav></div>
 ${lead ? html`<p class="lead">${lead}</p>` : D.ok(agenda) ? "" : html`<p class="lead">${notMeasured("The agenda is not measured.")}</p>`}
-${memberStrip(ctx, p)}
+${watchNotice()}${memberStrip(ctx, p)}
 <div class="fam-grid">${buffs(ctx, p, fam)}${meter(ctx, p, fam)}</div>
 ${zoneDanger(ctx, p, fam)}
 ${questBoard(ctx, p)}
 <div class="fam-grid">${needsBlocks(ctx, p)}</div>
 ${route(ctx, p)}`;
   },
+  after(main) { bindWatch(main); },
 };
