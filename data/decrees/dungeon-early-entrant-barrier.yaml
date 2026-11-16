@@ -1,11 +1,14 @@
 # A walk-in run (dungeon finder off): one member is already inside when the rest arrive. The staging
 # barrier names the member as inside and the run reaches CLEARING without operator input (mod-overseer
 # issue 165). Og starts beside the first boss; the others at the door.
+# Scope: the BARRIER line naming the early member is module log text, and a log assertion can only forbid a
+# line, so the naming is NOT asserted. What the rows prove: the others arrived (all five on the dungeon map),
+# the run reached CLEARING, a credited encounter followed, and the run was not held at the barrier.
 # Fix: mod-overseer pull 166.
 decree: v1
 id: dungeon-early-entrant-barrier
 proves:
-  - {repo: quadseven/mod-overseer, issue: 165, criterion: "a BARRIER line names a member as inside already while others arrive, and the run reaches CLEARING without operator input"}
+  - {repo: quadseven/mod-overseer, issue: 165, criterion: "with a member inside already the rest arrive and the run reaches CLEARING without operator input (the BARRIER line naming him is not asserted here)"}
 fix: {repo: quadseven/mod-overseer, commit: "6916f1acd4ee1bac6211390435f892dff33d250a"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -36,6 +39,20 @@ observe:
     sql: |
       SELECT COUNT(*) FROM characters WHERE guid IN (@cast) AND map != 230
     expect: {scalar: ">= 1"}
+  # The judge needs the core's own credited-encounter record when an instance is arranged.
+  - name: encounter-credited
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM log_encounter
+      WHERE map = 230 AND time >= @t0
+    expect: {scalar: ">= 1"}
+  - name: all-five-are-on-the-dungeon-map
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid IN (@cast) AND map = 230
+    expect: {scalar: "= 5"}
   - name: run-reached-clearing
     role: check
     when: end

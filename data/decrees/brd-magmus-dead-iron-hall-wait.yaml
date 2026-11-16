@@ -2,6 +2,11 @@
 # that waits there does not burn (mod-overseer issue 1485).
 # Magmus is NOT seeded dead on a guess: the arrange row seeds him dead, the family stands in the hall
 # and waits (job quest keeps it from walking on). A burn death would be an overseer_death row.
+# Scope: the party must actually WAIT in the hall (within 60 yards of Magmus's spawn point at the start and
+# still there at the end), not just stand on map 230. The seeded-dead boss earns no encounter credit, and the
+# judge refuses a pass for an arranged instance without one, so this decree can end INVALID by design until the
+# judge accepts a wait with no credit; it does not claim otherwise. Deaths are checked against the Iron Hall
+# guardians by name as well as in total.
 # Fix: mod-overseer pull 1486.
 decree: v1
 id: brd-magmus-dead-iron-hall-wait
@@ -33,8 +38,26 @@ observe:
     role: precondition
     when: start
     sql: |
-      SELECT COUNT(*) FROM characters WHERE guid IN (@cast) AND map = 230
-    expect: {scalar: ">= 1"}
+      SELECT COUNT(*) FROM characters ch JOIN acore_world.creature c ON c.map = 230
+      JOIN acore_world.creature_template t ON t.entry = c.id
+      WHERE ch.guid IN (@cast) AND ch.map = 230 AND t.name = 'Magmus'
+        AND POW(ch.position_x - c.position_x, 2) + POW(ch.position_y - c.position_y, 2) <= 3600
+    expect: {scalar: ">= 5"}
+  - name: family-is-still-in-the-hall-at-the-end
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM characters ch JOIN acore_world.creature c ON c.map = 230
+      JOIN acore_world.creature_template t ON t.entry = c.id
+      WHERE ch.guid IN (@cast) AND ch.map = 230 AND t.name = 'Magmus'
+        AND POW(ch.position_x - c.position_x, 2) + POW(ch.position_y - c.position_y, 2) <= 3600
+    expect: {scalar: ">= 4"}
+  - name: no-guardian-killed-anyone
+    role: check
+    when: end
+    sql: |
+      SELECT character_name FROM overseer_death WHERE created_at >= @t0 AND map = 230 AND killer_name LIKE '%Ironhand%'
+    expect: {rows: 0}
   - name: no-flame-death
     role: check
     when: end
