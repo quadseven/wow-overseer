@@ -1,13 +1,12 @@
-"""`python3 -m ephemeral lint <decree>...`: the `eph` command line (lint only so far)."""
+"""`python3 -m ephemeral <lint|acts|seed> ...`: the `eph` command line."""
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 
-from . import acts
-from . import anchors as anchors_mod
-from . import dbschema, lint
+from . import acts, anchors as anchors_mod, dbschema, lint
 from .miniyaml import YamlError, loads
 
 
@@ -51,6 +50,14 @@ def _acts(args):
     return 0
 
 
+def _seed(args):
+    from . import seedrun
+
+    return seedrun.run(
+        args.decree, os.environ, dry_run=args.dry_run, anchors_path=args.anchors
+    )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="eph")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -67,6 +74,18 @@ def main(argv=None):
     )
     a.add_argument("decree")
     a.set_defaults(func=_acts)
+    q = sub.add_parser(
+        "seed",
+        help="in a world pod: guard, compile and apply a decree's cast and arrange",
+    )
+    q.add_argument("decree")
+    q.add_argument(
+        "--anchors", help="anchors.yaml (default: data/decrees/anchors.yaml)"
+    )
+    q.add_argument(
+        "--dry-run", action="store_true", help="print the SQL, apply nothing"
+    )
+    q.set_defaults(func=_seed)
     args = parser.parse_args(argv)
     return args.func(args)
 
