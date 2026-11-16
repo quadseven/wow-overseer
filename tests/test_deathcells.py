@@ -203,6 +203,48 @@ class AFallFromALedgeDoesNotCondemnTheFloor(unittest.TestCase):
         self.assertIn("fall death", why)
 
 
+# Six falls through the world on one map, recorded wow-dev 2026-11-16: landed at
+# z -511 after 120 yards, so the drop began at z -391, hundreds of yards BELOW
+# any ground a walker stands on. A town errand to the nearest banker was
+# refused every cycle for them (the straight line to the city passed within
+# the disc), so the bank routes of the item plan never became deposit rows.
+UNDER_THE_WORLD = [
+    row(-8400.0, 0.0, z=-511.5, liquid="none", fell=120.3),
+    row(-8440.0, -85.0, z=-505.0, liquid="none", fell=118.0),
+    row(-8500.0, -140.0, z=-510.0, liquid="none", fell=121.0),
+]
+HIGH_WALKER = {"map_id": 0, "x": -7545.0, "y": -1233.0, "z": 286.0}
+CITY_BANKER = {"map_id": 0, "x": -8935.0, "y": 613.0, "z": 96.0}
+
+
+class AFallIntoTheVoidDoesNotCondemnTheGroundAbove(unittest.TestCase):
+    def setUp(self):
+        self.discs = dc.discs(UNDER_THE_WORLD)
+
+    def test_the_cluster_is_one_fall_disc_launched_below_the_world(self):
+        self.assertEqual([(d.kind, d.deaths) for d in self.discs], [("fall", 3)])
+
+    def test_a_walk_between_two_heights_far_above_the_launch_is_clear(self):
+        self.assertIsNone(dc.crossing(self.discs, HIGH_WALKER, CITY_BANKER))
+        self.assertEqual(
+            dc.aim_refusal(self.discs, HIGH_WALKER, "banker", spawn=CITY_BANKER), ""
+        )
+
+    def test_a_walk_at_the_launch_height_is_still_refused(self):
+        low = {"map_id": 0, "x": -7545.0, "y": -1233.0, "z": -390.0}
+        goal = {"map_id": 0, "x": -8935.0, "y": 613.0, "z": -390.0}
+        self.assertIsNotNone(dc.crossing(self.discs, low, goal))
+
+    def test_one_end_near_the_launch_keeps_the_disc(self):
+        low_goal = dict(CITY_BANKER, z=-380.0)
+        self.assertIsNotNone(dc.crossing(self.discs, HIGH_WALKER, low_goal))
+
+    def test_a_walk_with_no_heights_keeps_the_disc(self):
+        flat = {"map_id": 0, "x": -7545.0, "y": -1233.0}
+        goal = {"map_id": 0, "x": -8935.0, "y": 613.0}
+        self.assertIsNotNone(dc.crossing(self.discs, flat, goal))
+
+
 class AWalkerAtTheCounterIsNotRefused(unittest.TestCase):
     def test_a_goal_inside_a_disc_a_few_steps_off_is_no_crossing(self):
         discs = dc.discs(LAVA)
