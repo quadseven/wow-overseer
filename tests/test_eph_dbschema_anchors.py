@@ -176,5 +176,23 @@ class TablesReadTest(unittest.TestCase):
         )
 
 
+class TableRefsTest(unittest.TestCase):
+    def test_every_reference_is_listed_with_its_alias(self):
+        schema = dbschema.Schema.load()
+        refs = dbschema.table_refs(
+            "SELECT 1 FROM log_encounter e JOIN log_encounter AS n ON n.map = e.map "
+            "JOIN characters ON 1 = 1",
+            schema,
+        )
+        self.assertEqual(
+            refs,
+            [
+                ("e", "acore_characters", "log_encounter"),
+                ("n", "acore_characters", "log_encounter"),
+                ("characters", "acore_characters", "characters"),
+            ],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

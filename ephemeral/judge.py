@@ -175,12 +175,12 @@ def _sample(rows):
 # -- the judge -------------------------------------------------------------------
 
 
-_TIME_BOUND = re.compile(r"^(?:\w+\.)?time\s*>=?\s*@t0$", re.I)
-_MAP_BOUND = re.compile(r"^(?:\w+\.)?map\s*=\s*(\d+)$", re.I)
+_TIME_BOUND = re.compile(r"^(?:(\w+)\.)?time\s*>=?\s*@t0$", re.I)
+_MAP_BOUND = re.compile(r"^(?:(\w+)\.)?map\s*=\s*(\d+)$", re.I)
 _WHERE_END = re.compile(r"\b(?:group\s+by|order\s+by|having|limit)\b", re.I)
 
 
-def _run_bound_problems(bare, maps):
+def _run_bound_problems(bare, maps, alias=None, sole=True):
     """Why the WHERE clause may not bound every counted row to this run.
 
     Accepts one shape only: a single SELECT whose WHERE is a flat AND chain with
@@ -204,11 +204,25 @@ def _run_bound_problems(bare, maps):
         ]
     conjuncts = [c.strip() for c in re.split(r"\band\b", where, flags=re.I)]
     problems = []
-    if not any(_TIME_BOUND.match(c) for c in conjuncts):
+
+    def on_the_credit_table(qualifier):
+        # unqualified only when it is the only table; otherwise the one alias
+        if qualifier is None:
+            return sole
+        return alias is not None and qualifier.lower() == alias.lower()
+
+    if not any(
+        (m := _TIME_BOUND.match(c)) and on_the_credit_table(m.group(1))
+        for c in conjuncts
+    ):
         problems.append(
             "is not bounded to this run (needs time >= @t0 in its AND chain)"
         )
-    found = {int(m.group(1)) for c in conjuncts if (m := _MAP_BOUND.match(c))}
+    found = {
+        int(m.group(2))
+        for c in conjuncts
+        if (m := _MAP_BOUND.match(c)) and on_the_credit_table(m.group(1))
+    }
     if not found or (maps and not found & maps):
         problems.append(
             "is not bounded to this run's instance map (needs map = <id> in its AND chain)"
@@ -388,7 +402,9 @@ class Judge:
                 continue
             if rec["status"] != "held":
                 continue  # its own failure is already reported
-            bad = self._credit_shape_problems(self.observes[name], maps)
+            bad = self._credit_shape_problems(
+                self.observes[name], maps, self.rendered[name]
+            )
             if not bad:
                 return []
             problems.append(f"{name} {'; '.join(bad)}")
@@ -399,8 +415,7 @@ class Judge:
             "must hold before an instance run can pass"
         ]
 
-    @staticmethod
-    def _credit_shape_problems(obs, maps):
+    def _credit_shape_problems(self, obs, maps, rendered):
         """Why this observation could hold without a credit earned in this run."""
         bad = []
         bare = _STR.sub("''", obs["sql"])
@@ -415,7 +430,14 @@ class Judge:
                 bad.append("holds at zero credits, so it needs a positive expectation")
         except JudgeError:
             bad.append("has an expectation the judge cannot evaluate")
-        bad.extend(_run_bound_problems(bare, maps))
+        refs = dbschema.table_refs(rendered, self.schema)
+        mine = [r for r in refs if (r[1], r[2]) == (CREDIT_DB, CREDIT_TABLE)]
+        if len(mine) != 1:
+            bad.append(
+                f"reads {CREDIT_TABLE} {len(mine)} times; a credit observation reads it exactly once, with no self-join"
+            )
+            return bad
+        bad.extend(_run_bound_problems(bare, maps, mine[0][0], len(refs) == 1))
         return bad
 
     @staticmethod

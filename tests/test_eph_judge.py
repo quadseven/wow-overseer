@@ -375,6 +375,32 @@ class ScalarAndCreditTest(unittest.TestCase):
             self.assertEqual(r["verdict"], "INVALID", sql)
             self.assertIn("encounter credit", " ".join(r["reasons"]), sql)
 
+    def test_a_self_join_or_mismatched_alias_is_not_one_bounded_read(self):
+        bad = (
+            "SELECT COUNT(*) FROM log_encounter e JOIN log_encounter n ON n.map = e.map WHERE e.map = 230 AND n.time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter JOIN log_encounter ON 1 = 1 WHERE map = 230 AND time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter e JOIN log_encounter n ON n.map = e.map WHERE e.map = 230 AND e.time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter e JOIN characters c ON c.guid = e.map WHERE c.map = 230 AND e.time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter e JOIN characters c ON c.guid = e.map WHERE e.map = 230 AND c.guid >= @t0",
+            "SELECT COUNT(*) FROM log_encounter e JOIN characters c ON c.guid = e.map WHERE map = 230 AND e.time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter e WHERE x.map = 230 AND e.time >= @t0",
+        )
+        for sql in bad:
+            r = self.credit_run(sql, {"scalar": ">= 1"})
+            self.assertEqual(r["verdict"], "INVALID", sql)
+
+    def test_both_bounds_on_the_one_alias_pass_qualified_or_unqualified(self):
+        good = (
+            "SELECT COUNT(*) FROM log_encounter e WHERE e.map = 230 AND e.time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter AS e WHERE e.time >= @t0 AND e.map = 230",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE log_encounter.map = 230 AND log_encounter.time >= @t0",
+            "SELECT COUNT(*) FROM characters c JOIN log_encounter e ON e.map = c.map WHERE e.map = 230 AND e.time >= @t0",
+        )
+        for sql in good:
+            r = self.credit_run(sql, {"scalar": ">= 1"})
+            self.assertEqual(r["verdict"], "PASS", (sql, r["reasons"]))
+
     def test_a_plain_and_chain_with_both_bounds_passes(self):
         chains = (
             "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0",
