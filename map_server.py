@@ -7277,12 +7277,14 @@ class Handler(BaseHTTPRequestHandler):
         return 200, state
 
     def _spectate_post(self) -> None:
-        """POST /api/spectate {"run": <id>} - point the camera at a live group.
+        """POST /api/spectate - point the camera, or stop it.
 
-        Behind the operator switch (OPERATOR_ROUTES), not a token: no secret
-        reaches a browser. The only thing read from the body is an integer, and
-        director.spectate_spec turns it into `run <id>`, so no text from the
-        request reaches the grammar or SQL. A different group inside the dwell
+        The body carries exactly one of {"run": <id>}, {"character": "<name>"}
+        or {"stop": true}. Behind the operator switch (OPERATOR_ROUTES), not a
+        token: no secret reaches a browser. Each is turned into an order by
+        director (an integer, a name read through parse_watch's grammar, or
+        `off`), so no free text from the request reaches SQL except as that
+        bound, checked value. A different target, or a stop, inside the dwell
         is a 409 with the wait. Read-then-write, not a transaction: two clicks
         in the same instant both pass, and the later write wins, which is the
         same outcome the dwell gives a click one second later.
@@ -7290,27 +7292,74 @@ class Handler(BaseHTTPRequestHandler):
         request = self._read_json_body()
         if request is None:
             return
-        spec = director.spectate_spec(request.get("run"))
+        given = [k for k in ("run", "character", "stop") if k in request]
+        if len(given) != 1:
+            self._send(400, "application/json", json.dumps(
+                {"error": "send exactly one of run, character or stop"}).encode())
+            return
+        if given[0] == "run":
+            spec = director.spectate_spec(request.get("run"))
+        elif given[0] == "character":
+            spec = director.spectate_character(request.get("character"))
+        elif request.get("stop") is True:
+            spec = director.spectate_stop()
+        else:
+            spec = director.SpecError("stop must be true")
         if isinstance(spec, director.SpecError):
             self._send(400, "application/json", json.dumps({"error": spec.why}).encode())
             return
         try:
-            verdict = director.spectate_verdict(_read_watch_order(), spec.text())
+            current = _read_watch_order()
+            verdict = director.spectate_verdict(current, spec.text())
             if not verdict.allowed:
                 self._send(409, "application/json", json.dumps(
                     {"error": verdict.reason, "switch_in": verdict.switch_in}).encode())
                 return
+            if spec.kind == "off":
+                if director.mandate_active(current):
+                    with _connect() as conn, conn.cursor() as cur:
+                        cur.execute(director.CLEAR_SQL)
+                self._send(200, "application/json", json.dumps(
+                    {"ok": True, "stopped": True, "spec": "off"}).encode())
+                return
             with _connect() as conn, conn.cursor() as cur:
                 cur.execute(director.SET_SQL,
                             (spec.text(), "web:spectate", director.MANDATE_TTL))
-            self._send(200, "application/json", json.dumps({
-                "ok": True, "run": int(spec.arg), "spec": spec.text(),
+            answer = {
+                "ok": True, "spec": spec.text(),
                 "expires_in": director.MANDATE_TTL,
                 "stream": family.broadcast_url(director.WATCHER_NAME) or "",
-            }).encode())
+            }
+            if spec.kind == "run":
+                answer["run"] = int(spec.arg)
+            else:
+                answer["character"] = spec.arg
+            self._send(200, "application/json", json.dumps(answer).encode())
         except Exception:
             log.exception("spectate order failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
+
+    @_get_route("live groups query failed", default=str)
+    def _live_now(_query: dict, ctx) -> tuple[int, director.LiveNow]:
+        """GET /api/live - every active dungeon run, raid and battleground.
+
+        Read-only. Dungeons are the guild coordinator's runs that are inside;
+        raids and battlegrounds are groups of two or more in the fresh
+        overseer_snapshot on those maps (the same 60 second freshness the
+        bridge uses). Each group carries the order that jumps the Watcher in,
+        which the page posts to /api/spectate. A world without the tables
+        answers empty lists.
+        """
+        rd = ctx.read
+        spots = [director.spot_from_row(r) for r in rd.rows(
+            "SELECT name, map_id, instance_id, pos_x, pos_y, pos_z, in_combat, "
+            "group_leader FROM overseer_snapshot "
+            "WHERE updated_at > NOW() - INTERVAL 60 SECOND",
+            what="live snapshot")]
+        runs = guildrun.page(guildrun.recent(rd, n=GUILD_RUNS_LIMIT))["active"]
+        seats = [(r["name"], r["role"]) for r in rd.rows(
+            "SELECT name, role FROM overseer_raid_seat", what="live raid seats")]
+        return 200, director.live_now(spots, runs, seats, places.map_name)
 
     def _read_json_body(self) -> dict | None:
         """The POST body as a dict, or None after sending the error itself."""
@@ -7577,6 +7626,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/watch": _watch_state,
         "/api/director": _director_state,
         "/api/spectate": _spectate_state,
+        "/api/live": _live_now,
         "/": _index,
         "/index.html": _index,
         "/shapes.json": _shapes_file,
