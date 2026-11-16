@@ -1,0 +1,54 @@
+# Blackfathom Deeps: two members stranded out of range at Gelihast are rescued
+# instead of the party stopping every 180 seconds.
+#
+# The two followers start in the Gelihast pool area the tank is fighting toward.
+# Gelihast is the anchor; the module's stranded threshold decides the rescue.
+# Fix: mod-dungeon-clear pull 67 (the pin port is no. 87).
+decree: v1
+id: blackfathom-gelihast-stranded-rescue
+proves:
+  - {repo: quadseven/mod-dungeon-clear, issue: 66, criterion: "over 2 hours no party logs `the party never became ready after` more than twice in a row at the same boss for the same members"}
+fix: {repo: quadseven/mod-dungeon-clear, commit: "449b0628f9f1710b08fca9daac9db97cc4ddef25"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 1h
+cast:
+  - who: family:zug
+    set: {alive: true, health_pct: 100, at: {creature: "Gelihast"}}
+    ceiling: "nothing granted but position"
+  - who: Zork
+    set: {alive: true, at: {areatrigger: 257}}                      # left at the Blackfathom entrance, 40 yards or more behind
+    ceiling: "nothing granted but position"
+  - who: Zrog
+    set: {alive: true, at: {areatrigger: 257}}
+    ceiling: "nothing granted but position"
+arrange:
+  - instance: {map: "Blackfathom Deeps", as: bfd, bind: family:zug}
+  - group: {members: family:zug, leader: Zug}
+act:
+  - at: 0s
+    roster: {who: family:zug, job: "dungeon:blackfathom"}
+observe:
+  - name: run-opened-in-bfd
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run
+      WHERE map_id = 48 AND started_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: two-members-start-away-from-the-tank
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid IN (@Zork, @Zrog) AND map = 0
+    expect: {scalar: "= 2"}
+  - name: no-third-party-wait-stop-in-a-row
+    role: check
+    log: {pattern: "the party never became ready after.*the party never became ready after.*the party never became ready after", expect: {count: 0}}
+  - name: run-did-not-end-on-the-wait
+    role: check
+    when: end
+    sql: |
+      SELECT id, ended_reason FROM overseer_dungeon_run
+      WHERE map_id = 48 AND started_at >= @t0 AND ended_reason LIKE '%never became ready%'
+    expect: {rows: 0}
