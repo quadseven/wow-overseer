@@ -71,8 +71,11 @@ class FakeWorld:
         return len(self.commands)
 
 
-def guzzler_world(clock, patrons=(), plugger_dies_at=60, left=True, loaded=True):
+def guzzler_world(
+    clock, patrons=(), plugger_dies_at=60, left=True, loaded=True, credited=True
+):
     w = FakeWorld(clock)
+    w.answer("log_encounter", [(1 if credited else 0,)])
     w.answer("overseer_dungeon_run", [(1 if loaded else 0,)])
     w.answer(
         "'Plugger Spazzring'",
@@ -230,6 +233,51 @@ class VerdictTest(unittest.TestCase):
         world.answer("online = 1", lambda now: [(2 if now < 200 else 0,)])
         r = run(d, world, clock)
         self.assertEqual(r["verdict"], "INVALID")
+
+
+class ScalarAndCreditTest(unittest.TestCase):
+    def test_an_ambiguous_scalar_makes_the_run_invalid(self):
+        clock = Clock()
+        world = guzzler_world(clock)
+        world.answers.insert(0, ("'Plugger Spazzring'", [(1,), (0,)]))
+        r = run(GUZZLER, world, clock)
+        self.assertEqual(r["verdict"], "INVALID")
+        self.assertEqual(named(r, "plugger-was-dead")["status"], "error")
+
+    def test_a_run_with_no_encounter_credit_is_invalid_not_pass(self):
+        clock = Clock()
+        r = run(GUZZLER, guzzler_world(clock, credited=False), clock)
+        self.assertEqual(r["verdict"], "INVALID")
+        self.assertEqual(named(r, "encounter-credited")["status"], "violated")
+        self.assertIn("encounter-credited", " ".join(r["reasons"]))
+
+    def test_a_decree_with_an_instance_but_no_credit_observation_cannot_pass(self):
+        d = copy.deepcopy(GUZZLER)
+        d["observe"] = [o for o in d["observe"] if o["name"] != "encounter-credited"]
+        clock = Clock()
+        r = run(d, guzzler_world(clock), clock)
+        self.assertEqual(r["verdict"], "INVALID")
+        self.assertIn("encounter credit", " ".join(r["reasons"]))
+
+    def test_the_credit_must_come_from_the_core_log_not_a_run_flag(self):
+        d = copy.deepcopy(GUZZLER)
+        for o in d["observe"]:
+            if o["name"] == "encounter-credited":
+                o["sql"] = (
+                    "SELECT COUNT(*) FROM overseer_dungeon_run WHERE outcome = 'done' "
+                    "AND started_at >= @t0"
+                )
+        clock = Clock()
+        r = run(d, guzzler_world(clock), clock)
+        self.assertEqual(r["verdict"], "INVALID")
+
+    def test_a_decree_with_no_instance_needs_no_credit(self):
+        d = copy.deepcopy(GUZZLER)
+        d["arrange"] = [a for a in d["arrange"] if "instance" not in a]
+        d["observe"] = [o for o in d["observe"] if o["name"] != "encounter-credited"]
+        clock = Clock()
+        r = run(d, guzzler_world(clock), clock)
+        self.assertNotIn("encounter credit", " ".join(r["reasons"]))
 
 
 class TimeoutTest(unittest.TestCase):
@@ -438,9 +486,14 @@ class ExpectTest(unittest.TestCase):
         self.assertFalse(ok({"scalar": "= 1"}, [(2,)])[0])
         self.assertTrue(ok({"scalar": "> 0"}, [(0.5,)])[0])
 
-    def test_a_missing_or_null_scalar_never_holds(self):
-        self.assertFalse(judge.expectation_holds({"scalar": "= 0"}, [])[0])
+    def test_a_null_scalar_never_holds(self):
         self.assertFalse(judge.expectation_holds({"scalar": "= 0"}, [(None,)])[0])
+
+    def test_a_scalar_needs_exactly_one_row_and_one_column(self):
+        # [(1,), (0,)] must not read as held because the first row happens to pass
+        for rows in ([], [(1,), (0,)], [(1, 0)], [(1,), (1,)]):
+            with self.assertRaises(judge.JudgeError, msg=str(rows)):
+                judge.expectation_holds({"scalar": ">= 1"}, rows)
 
 
 class EvidenceTest(unittest.TestCase):
@@ -570,6 +623,50 @@ class ConfigMapStoreTest(unittest.TestCase):
     def test_a_refused_write_raises(self):
         with self.assertRaises(judge.JudgeError):
             self.store(FakeHttp(status=403)).write(self.cm())
+
+
+class InClusterTest(unittest.TestCase):
+    def test_the_api_server_address_comes_from_the_pod_environment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            (d / "token").write_text("tok", encoding="utf-8")
+            store = judge.ConfigMapStore.in_cluster(
+                "eph-ns",
+                {
+                    "KUBERNETES_SERVICE_HOST": "192.0.2.1",
+                    "KUBERNETES_SERVICE_PORT": "443",
+                },
+                sa_dir=d,
+            )
+        self.assertEqual(store.base_url, "https://192.0.2.1:443")
+
+    def test_an_ipv6_host_is_bracketed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            (d / "token").write_text("tok", encoding="utf-8")
+            store = judge.ConfigMapStore.in_cluster(
+                "n",
+                {
+                    "KUBERNETES_SERVICE_HOST": "2001:db8::1",
+                    "KUBERNETES_SERVICE_PORT": "443",
+                },
+                sa_dir=d,
+            )
+        self.assertEqual(store.base_url, "https://[2001:db8::1]:443")
+
+    def test_a_missing_host_or_port_refuses(self):
+        for env in (
+            {},
+            {"KUBERNETES_SERVICE_HOST": "192.0.2.1"},
+            {"KUBERNETES_SERVICE_PORT": "443"},
+            {"KUBERNETES_SERVICE_HOST": "", "KUBERNETES_SERVICE_PORT": "443"},
+        ):
+            with self.assertRaises(judge.JudgeError, msg=str(env)):
+                judge.ConfigMapStore.in_cluster("n", env)
+
+    def test_no_api_server_address_is_written_into_the_source(self):
+        src = (ROOT / "ephemeral" / "judge.py").read_text(encoding="utf-8")
+        self.assertNotIn("kubernetes.default", src)
 
 
 class GuardedWorldDbTest(unittest.TestCase):
@@ -731,6 +828,23 @@ class RunEntryTest(unittest.TestCase):
             clock=Clock(),
         )
         self.assertEqual((rc, stored[0]["data"]["verdict"]), (0, "INVALID"))
+
+    def test_missing_api_server_environment_is_invalid_and_exits_2(self):
+        out = []
+        with tempfile.TemporaryDirectory() as tmp:
+            handoff = pathlib.Path(tmp) / "h.json"
+            handoff.write_text(json.dumps(HANDOFF), encoding="utf-8")
+            rc = judge.run(
+                str(ROOT / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml"),
+                {**self.ENV, "EPH_VARS_FILE": str(handoff)},
+                connect=lambda **kw: ScriptedConn(),
+                out=out.append,
+                clock=Clock(),
+            )
+        text = "\n".join(out)
+        self.assertEqual(rc, 2)
+        self.assertIn("INVALID", text)
+        self.assertIn("KUBERNETES_SERVICE_HOST", text)
 
     def test_a_missing_handoff_writes_an_invalid_result(self):
         rc, _, stored, _ = self.run_entry(self.ENV, with_handoff=False)

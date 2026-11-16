@@ -22,6 +22,7 @@ whole verdict logic runs in unit tests with no database and no cluster.
 
 import hashlib
 import json
+import os
 import pathlib
 import re
 import ssl
@@ -117,9 +118,12 @@ def expectation_holds(expect, rows):
     m = _SCALAR.match(str(expect.get("scalar")))
     if not m:
         raise JudgeError(f"bad scalar expectation {expect!r}")
-    if not rows or not rows[0] or rows[0][0] is None:
-        return False, "scalar=none"
+    if len(rows) != 1 or len(rows[0]) != 1:
+        shape = f"{len(rows)} rows" + (f" of {len(rows[0])} columns" if rows else "")
+        raise JudgeError(f"a scalar expectation needs exactly one value, got {shape}")
     value = rows[0][0]
+    if value is None:
+        return False, "scalar=none"
     return _OPS[m.group(1)](float(value), float(m.group(2))), f"scalar={value}"
 
 
@@ -303,6 +307,7 @@ class Judge:
                 )
             elif r["role"] == "check" and r["status"] in ("timeout", "error"):
                 why.append(f"check {r['name']} {self._phrase(r)}")
+        why.extend(self._credit_reasons())
         for row in self.act_rows:
             if not row["fired"]:
                 trigger = row.get("when") or f"at {row.get('at')}"
@@ -310,6 +315,29 @@ class Judge:
                     f"act step {row['index']} never fired (waited for {trigger})"
                 )
         return why
+
+    def _credit_reasons(self):
+        """A run that arranges an instance needs the core's own credited encounter record.
+
+        The evidence is a held precondition that reads `log_encounter` (the core
+        writes it when an encounter is credited), never a run's own completion
+        flag. A decree that arranges an instance without one cannot PASS.
+        """
+        if not any("instance" in step for step in self.decree.get("arrange") or []):
+            return []
+        for name, sql in self.rendered.items():
+            rec = self.records.get(name)
+            if (
+                re.search(r"\blog_encounter\b", sql, re.I)
+                and rec
+                and rec["role"] == "precondition"
+                and rec["status"] == "held"
+            ):
+                return []
+        return [
+            "no encounter credit evidence: a precondition reading log_encounter "
+            "must hold before an instance run can pass"
+        ]
 
     @staticmethod
     def _phrase(r):
@@ -524,12 +552,24 @@ class ConfigMapStore:
         )
 
     @classmethod
-    def in_cluster(cls, namespace=None):
-        token = (SA_DIR / "token").read_text(encoding="utf-8").strip()
-        ns = namespace or (SA_DIR / "namespace").read_text(encoding="utf-8").strip()
-        return cls(
-            "https://kubernetes.default.svc", token, ns, urllib_http(SA_DIR / "ca.crt")
-        )
+    def in_cluster(cls, namespace=None, env=None, sa_dir=SA_DIR):
+        """The API server address comes from the pod environment, never from the source."""
+        env = os.environ if env is None else env
+        host = env.get("KUBERNETES_SERVICE_HOST")
+        port = env.get("KUBERNETES_SERVICE_PORT")
+        if not host or not port:
+            raise JudgeError(
+                "KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT are not set: "
+                "this is not a pod, so the result cannot be written"
+            )
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        sa_dir = pathlib.Path(sa_dir)
+        token = (sa_dir / "token").read_text(encoding="utf-8").strip()
+        ns = namespace or (sa_dir / "namespace").read_text(encoding="utf-8").strip()
+        ca = sa_dir / "ca.crt"
+        http = urllib_http(ca if ca.exists() else None)
+        return cls(f"https://{host}:{port}", token, ns, http)
 
     def write(self, cm):
         meta = cm.get("metadata", {})
@@ -586,10 +626,21 @@ def run(
     """Returns 0 once a verdict is written (INVALID included), 2 when the harness broke."""
     clock = clock or _Wall
     try:
+        ns = (
+            env.get("EPH_NAMESPACE")
+            or (SA_DIR / "namespace").read_text(encoding="utf-8").strip()
+        )
+        store = store or ConfigMapStore.in_cluster(ns, env)
+    except (JudgeError, OSError) as exc:
+        # Nowhere to write the verdict: say INVALID on stdout and exit as a broken harness.
+        result = _invalid("", env, "", f"the result cannot be written: {exc}")
+        out(f"INVALID: {'; '.join(result['reasons'])}")
+        out(encode_result(result))
+        return 2
+    try:
         raw = pathlib.Path(decree_path).read_bytes()
     except OSError as exc:
-        raw, sha = b"", ""
-        result = _invalid("", env, sha, f"decree unreadable: {exc}")
+        result = _invalid("", env, "", f"decree unreadable: {exc}")
     else:
         sha = hashlib.sha256(raw).hexdigest()
         result = _judge(raw, sha, env, connect, log_path, clock, anchors_path)
@@ -598,12 +649,8 @@ def run(
         + "; ".join(result["reasons"])
     )
     try:
-        ns = (
-            env.get("EPH_NAMESPACE")
-            or (SA_DIR / "namespace").read_text(encoding="utf-8").strip()
-        )
-        (store or ConfigMapStore.in_cluster(ns)).write(result_configmap(result, ns))
-    except (JudgeError, OSError) as exc:
+        store.write(result_configmap(result, ns))
+    except JudgeError as exc:
         out(f"harness error: result not written: {exc}")
         out(encode_result(result))
         return 2

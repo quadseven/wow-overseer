@@ -228,3 +228,12 @@ runs. Settings come from the pod environment: the seed's variables plus
 reasons, the rendered SQL and observed values per assertion, sample rows and
 matched log lines (cut to fit 256 KB, never the verdict). Exit 0 means a verdict
 was written, whatever it was; exit 2 means the harness could not write one.
+
+Two rules keep a PASS honest. A scalar expectation needs exactly one row and one
+column; any other shape is INVALID, so row order can never hide a failing value.
+And a decree that arranges an instance cannot PASS without a held precondition
+that reads `log_encounter`, the core's own credited-encounter record; a run's
+completion flag is never evidence, and a run with no credit is INVALID. The
+judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
+`KUBERNETES_SERVICE_PORT`; without them it prints an INVALID verdict and exits 2,
+because there is nowhere to write the result.
