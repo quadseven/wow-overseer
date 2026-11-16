@@ -1,6 +1,6 @@
 """The corps' guinea pigs, and the vial buy they try first (#2398).
 
-Measured on the dev realm on 2026-11-13: the four corps alchemists (Diggo,
+Measured on the dev realm on 2026-11-13: the four corps alchemists (Chopp,
 Snipp, Lipgloss, Gutsy) sat at Alchemy 1 carrying 100+ Peacebloom and
 Silverleaf, because Minor Healing Potion needs an Empty Vial and nothing
 bought one for a guild member.
@@ -48,7 +48,7 @@ def member(name, guild="Cave", role=guildjobs.MAINTENANCE, skills=None, **over):
     return guildjobs.Member(**base)
 
 
-def alchemist(name="Diggo", vials=0, **over):
+def alchemist(name="Chopp", vials=0, **over):
     carried = [stack(1, PEACEBLOOM, 20), stack(2, SILVERLEAF, 20)]
     if vials:
         carried.append(stack(3, EMPTY_VIAL, vials))
@@ -58,7 +58,7 @@ def alchemist(name="Diggo", vials=0, **over):
 class PickingTheGuineaPigs(unittest.TestCase):
     def test_the_highest_skill_maintenance_member_per_trade_and_guild(self):
         members = [
-            member("Diggo", skills={ALC: (1, 75)}),
+            member("Chopp", skills={ALC: (1, 75)}),
             member("Snipp", skills={ALC: (3, 75)}),
             member("Whakk", skills={TAIL: (50, 150)}),
             member("Nobody", guild="Bonkers", skills={TAIL: (49, 75)}),
@@ -68,21 +68,21 @@ class PickingTheGuineaPigs(unittest.TestCase):
         self.assertEqual({TAIL: "Nobody"}, pigs["Bonkers"])
 
     def test_a_tie_goes_to_the_first_name(self):
-        pigs = guineapig.pick([member("Snipp"), member("Diggo")])
-        self.assertEqual("Diggo", pigs["Cave"][ALC])
+        pigs = guineapig.pick([member("Snipp"), member("Chopp")])
+        self.assertEqual("Chopp", pigs["Cave"][ALC])
 
     def test_raiders_and_unnatural_members_are_never_picked(self):
         members = [
             member("Bonk", role=guildjobs.RAIDER, skills={ALC: (90, 150)}),
             member("Fresh", eligible=False, skills={ALC: (80, 150)}),
-            member("Diggo", skills={ALC: (1, 75)}),
+            member("Chopp", skills={ALC: (1, 75)}),
         ]
-        self.assertEqual("Diggo", guineapig.pick(members)["Cave"][ALC])
+        self.assertEqual("Chopp", guineapig.pick(members)["Cave"][ALC])
 
     def test_the_line_names_each_pig_and_each_gap(self):
-        members = [member("Diggo", skills={ALC: (1, 75)})]
+        members = [member("Chopp", skills={ALC: (1, 75)})]
         (line,) = guineapig.lines(guineapig.pick(members), members)
-        self.assertTrue(line.startswith("Cave guinea pigs: Alchemy Diggo 1"), line)
+        self.assertTrue(line.startswith("Cave guinea pigs: Alchemy Chopp 1"), line)
         self.assertIn("nobody in the corps holds Tailoring, Leatherworking", line)
 
 
@@ -130,7 +130,7 @@ class TheVialBuy(unittest.TestCase):
         self.assertIsNone(guildjobs.reagent_buy_step(m, 600))
 
     def test_no_herbs_no_buy(self):
-        m = member("Diggo", pig_skills=frozenset({ALC}))
+        m = member("Chopp", pig_skills=frozenset({ALC}))
         self.assertIsNone(guildjobs.reagent_buy_step(m, 600))
 
     def test_a_short_purse_buys_what_it_can_pay_for(self):
@@ -140,12 +140,12 @@ class TheVialBuy(unittest.TestCase):
 
     def test_the_plan_marks_the_pig_and_gives_it_the_buy(self):
         result = guildjobs.plan(
-            [alchemist("Diggo"), alchemist("Snipp")],
+            [alchemist("Chopp"), alchemist("Snipp")],
             masters={"Cave": "Grug"},
         )
-        self.assertEqual("Diggo", result.pigs["Cave"][ALC])
+        self.assertEqual("Chopp", result.pigs["Cave"][ALC])
         actions = {s.holder: s.action for s in result.steps}
-        self.assertEqual("reagent", actions.get("Diggo"))
+        self.assertEqual("reagent", actions.get("Chopp"))
         self.assertNotEqual("reagent", actions.get("Snipp"))
 
 
