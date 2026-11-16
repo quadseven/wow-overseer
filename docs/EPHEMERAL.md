@@ -29,7 +29,7 @@ against a real database or cluster.
 
 ## Requesting a proving run
 
-The runner (the thing that creates a world and runs seed, then judge, in it) is out of scope for what this page documents, so a run cannot be
+The runner is out of scope for what this page documents, so a run cannot be
 requested yet. What you can do today is the part that comes first anyway:
 
 1. Write the decree for the defect: a starting state, the action, and
