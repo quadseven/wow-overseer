@@ -277,9 +277,10 @@ class ScalarAndCreditTest(unittest.TestCase):
 
     def test_a_real_read_or_join_of_the_table_counts(self):
         reads = (
-            "SELECT COUNT(*) FROM acore_characters.log_encounter WHERE map = 230",
-            "SELECT COUNT(*) FROM characters c JOIN log_encounter e ON e.map = c.map",
-            "SELECT COUNT(*) FROM `log_encounter` WHERE map = 230",
+            "SELECT COUNT(*) FROM acore_characters.log_encounter WHERE map = 230 AND time >= @t0",
+            "SELECT COUNT(*) FROM characters c JOIN log_encounter e ON e.map = c.map "
+            "WHERE e.map = 230 AND e.time >= @t0",
+            "SELECT COUNT(*) FROM `log_encounter` WHERE map = 230 AND time > @t0",
         )
         for sql in reads:
             d = copy.deepcopy(GUZZLER)
@@ -289,6 +290,68 @@ class ScalarAndCreditTest(unittest.TestCase):
             clock = Clock()
             r = run(d, guzzler_world(clock), clock)
             self.assertEqual(r["verdict"], "PASS", (sql, r["reasons"]))
+
+    def credit_run(self, sql, expect, credited=True):
+        d = copy.deepcopy(GUZZLER)
+        for o in d["observe"]:
+            if o["name"] == "encounter-credited":
+                o["sql"], o["expect"] = sql, expect
+        clock = Clock()
+        return run(d, guzzler_world(clock, credited=credited), clock)
+
+    BOUNDED = "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= @t0"
+
+    def test_an_expectation_that_holds_at_zero_is_not_credit(self):
+        for expect in (
+            {"scalar": ">= 0"},
+            {"scalar": "<= 5"},
+            {"scalar": "!= 7"},
+            {"scalar": "= 0"},
+            {"rows": ">= 0"},
+            {"rows": "<= 1"},
+        ):
+            # no credits were earned, and the expectation holds anyway
+            r = self.credit_run(self.BOUNDED, expect, credited=False)
+            self.assertEqual(r["verdict"], "INVALID", expect)
+            self.assertIn("positive", " ".join(r["reasons"]), expect)
+
+    def test_a_positive_bounded_expectation_passes(self):
+        for expect in ({"scalar": ">= 1"}, {"scalar": "> 0"}, {"rows": ">= 1"}):
+            r = self.credit_run(self.BOUNDED, expect)
+            self.assertEqual(r["verdict"], "PASS", (expect, r["reasons"]))
+
+    def test_a_query_not_bounded_to_this_run_is_not_credit(self):
+        unbounded = (
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230",
+            "SELECT COUNT(*) FROM log_encounter WHERE time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 409 AND time >= @t0",
+            "SELECT COUNT(*) FROM log_encounter WHERE map = 230 AND time >= '2000-01-01'",
+            "SELECT COUNT(*) FROM log_encounter WHERE map <> 230 AND time >= @t0",
+        )
+        for sql in unbounded:
+            r = self.credit_run(sql, {"scalar": ">= 1"})
+            self.assertEqual(r["verdict"], "INVALID", sql)
+            self.assertIn("this run", " ".join(r["reasons"]), sql)
+
+    def test_a_bounded_positive_check_with_no_credit_is_invalid(self):
+        r = self.credit_run(self.BOUNDED, {"scalar": ">= 1"}, credited=False)
+        self.assertEqual(r["verdict"], "INVALID")
+        self.assertEqual(named(r, "encounter-credited")["status"], "violated")
+
+    def test_the_shipped_decree_credit_observation_meets_the_rule(self):
+        r = self.credit_run(
+            next(
+                o["sql"]
+                for o in GUZZLER["observe"]
+                if o["name"] == "encounter-credited"
+            ),
+            next(
+                o["expect"]
+                for o in GUZZLER["observe"]
+                if o["name"] == "encounter-credited"
+            ),
+        )
+        self.assertEqual(r["verdict"], "PASS", r["reasons"])
 
     def test_the_credit_must_come_from_the_core_log_not_a_run_flag(self):
         d = copy.deepcopy(GUZZLER)

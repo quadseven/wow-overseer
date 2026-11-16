@@ -30,7 +30,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import acts, dbschema, guard, lint
+from . import acts, dbschema, gamedata, guard, lint
 from . import anchors as anchors_mod
 from .miniyaml import YamlError, loads
 from .seedrun import LIVE_SCHEMA_SQL, inputs_from_env
@@ -322,23 +322,61 @@ class Judge:
 
         The evidence is a held precondition that reads `log_encounter` (the core
         writes it when an encounter is credited), never a run's own completion
-        flag. A decree that arranges an instance without one cannot PASS.
+        flag, and the observation must be POSITIVE and bounded to THIS run:
+        an expectation that holds at zero credits, or a query that could count
+        an earlier run's credits, proves nothing. A decree that arranges an
+        instance without such an observation cannot PASS.
         """
+        maps = {
+            gamedata.INSTANCE_MAPS[step["instance"]["map"]]
+            for step in self.decree.get("arrange") or []
+            if "instance" in step
+            and step["instance"].get("map") in gamedata.INSTANCE_MAPS
+        }
         if not any("instance" in step for step in self.decree.get("arrange") or []):
             return []
+        problems = []
         for name, sql in self.rendered.items():
             rec = self.records.get(name)
-            if (
-                (CREDIT_DB, CREDIT_TABLE) in dbschema.tables_read(sql, self.schema)
-                and rec
-                and rec["role"] == "precondition"
-                and rec["status"] == "held"
-            ):
+            if (CREDIT_DB, CREDIT_TABLE) not in dbschema.tables_read(sql, self.schema):
+                continue
+            if not rec or rec["role"] != "precondition":
+                problems.append(
+                    f"{name} reads {CREDIT_TABLE} but is not a precondition"
+                )
+                continue
+            if rec["status"] != "held":
+                continue  # its own failure is already reported
+            bad = self._credit_shape_problems(self.observes[name], maps)
+            if not bad:
                 return []
+            problems.append(f"{name} {'; '.join(bad)}")
+        if problems:
+            return ["no encounter credit evidence: " + "; ".join(problems)]
         return [
             "no encounter credit evidence: a precondition reading log_encounter "
             "must hold before an instance run can pass"
         ]
+
+    @staticmethod
+    def _credit_shape_problems(obs, maps):
+        """Why this observation could hold without a credit earned in this run."""
+        bad = []
+        zero = [] if "rows" in obs["expect"] else [(0,)]
+        try:
+            if expectation_holds(obs["expect"], zero)[0]:
+                bad.append("holds at zero credits, so it needs a positive expectation")
+        except JudgeError:
+            bad.append("has an expectation the judge cannot evaluate")
+        bare = _STR.sub("''", obs["sql"])
+        if not re.search(r"\b(?:\w+\.)?time\s*>=?\s*@t0\b", bare, re.I):
+            bad.append("is not bounded to this run (needs time >= @t0)")
+        found = {
+            int(m) for m in re.findall(r"\b(?:\w+\.)?map\s*=\s*(\d+)\b", bare, re.I)
+        }
+        if not found or (maps and not found & maps):
+            bad.append("is not bounded to this run's instance map")
+        return bad
 
     @staticmethod
     def _phrase(r):
