@@ -1,13 +1,18 @@
 # The family class step does not take a class quest for a dead member or one on cooldown (wow-overseer
 # issue 2325), and is held, not walked, for a member on a bag-room town errand or whose giver sits on
-# dangerous ground (issue 2338). Grog, the paladin, is dead beside the paladin trainer; Bork is mid town
-# run. No take row may be written for either.
+# dangerous ground (issue 2338, not claimed: see Scope). Grog, the paladin, is dead beside the paladin trainer.
+# No class step row may be written for him in the whole window.
+# Scope: the family is on job quest (not a town run, which is itself an errand and drives no class step) so
+# a class step is owed, and the first precondition shows a class step row WAS written for a living member in
+# the window: without it the absence of a row for the dead member would be vacuous. The dead member is checked
+# for the whole window, not the first two minutes. A bag-room errand and a giver on dangerous ground (issue
+# 2338) cannot be arranged without filling a bag or placing a giver, which a decree may not grant or hand
+# place, so issue 2338 is not claimed here.
 # Fixes: wow-overseer pulls 2327 and 2339; the commit is 2339.
 decree: v1
 id: class-step-skips-dead-and-busy-members
 proves:
   - {repo: quadseven/wow-overseer, issue: 2325, criterion: "no take is written for a dead or cooling member while the class giver is in reach"}
-  - {repo: quadseven/wow-overseer, issue: 2338, criterion: "the class step is held, not walked, for a member on a bag-room errand or whose giver sits on dangerous ground"}
 fix: {repo: quadseven/wow-overseer, commit: "b1c33154bc9e044c055e05e0da8d7103f28a626a"}
 world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -23,7 +28,7 @@ arrange:
   - group: {members: family:grug, leader: Grug}
 act:
   - at: 0s
-    roster: {who: family:grug, job: "town run"}
+    roster: {who: family:grug, job: "quest"}
 observe:
   - name: grog-started-dead
     role: precondition
@@ -31,15 +36,15 @@ observe:
     sql: |
       SELECT COUNT(*) FROM corpse WHERE guid = @Grog
     expect: {scalar: "= 1"}
-  - name: no-take-for-the-dead-member
+  - name: a-class-step-was-driven-for-a-living-member
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE source LIKE 'guildjobs:classquest:%' AND created_at >= @t0 AND target_name IN ('Grug', 'Ugga', 'Bork', 'Og')
+    expect: {scalar: ">= 1"}
+  - name: no-class-step-row-for-the-dead-member
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Grog' AND kind = 'quest' AND command LIKE 'take%' AND created_at >= @t0 AND created_at < DATE_ADD(@t0, INTERVAL 2 MINUTE)
-    expect: {scalar: "= 0"}
-  - name: no-class-walk-for-a-member-on-an-errand
-    role: check
-    when: end
-    sql: |
-      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Bork' AND source LIKE '%class%' AND created_at >= @t0
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Grog' AND source LIKE 'guildjobs:classquest:%' AND created_at >= @t0
     expect: {scalar: "= 0"}

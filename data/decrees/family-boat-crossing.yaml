@@ -2,6 +2,9 @@
 # the way and no 'on another map' line naming a member afterwards (mod-overseer issue 274). The Grug family
 # starts at the Booty Bay dock on map 0 and its campaign door is on Kalimdor, so the crossing is the only
 # way. Ratchet is the far berth.
+# Scope: 'on another map' is a bridge log line a log assertion can only forbid. The assertion covers the
+# whole run, which is stricter than the 30 minutes after the crossing, never looser. Together-ness is proven by
+# rows: all five sit on one map, and that map is the far continent or its dungeon instance, never the start.
 # Fix: mod-overseer pull 280 (the crossing refuses to leave anybody behind).
 decree: v1
 id: family-boat-crossing
@@ -27,12 +30,18 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND map_id = 0
     expect: {scalar: "= 5"}
-  - name: all-five-ashore-on-map-1
+  - name: all-five-ashore-on-the-far-continent
     role: check
     when: end
     sql: |
       SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND map_id IN (1, 43)
     expect: {scalar: "= 5"}
+  - name: all-five-are-on-the-same-map
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(DISTINCT map_id) FROM overseer_snapshot WHERE guid IN (@cast)
+    expect: {scalar: "= 1"}
   - name: no-family-death-on-the-way
     role: check
     when: end

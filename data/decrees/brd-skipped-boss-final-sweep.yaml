@@ -2,15 +2,19 @@
 # final sweep before the run ends, so a full clear is not lost.
 # The skip is the operator's own verb ('dc skip 1', the module's skip command),
 # sent as a bot command row ten minutes in.
+# Scope: the skip event does not name the boss, so the skipped boss is not identified. What proves it was
+# revisited is the outcome: the run must END COMPLETE after the skip event (a complete outcome needs every boss
+# bit, the skipped one included), where a run that skipped and never swept ends stalled. A full clear takes
+# longer than an hour, so the window is three hours.
 # Fix: mod-dungeon-clear pull 153.
 decree: v1
 id: brd-skipped-boss-final-sweep
 proves:
-  - {repo: quadseven/mod-dungeon-clear, issue: 152, criterion: "a run that skips a boss mid-run revisits it before the run ends"}
+  - {repo: quadseven/mod-dungeon-clear, issue: 152, criterion: "a run that skips a boss mid-run ends complete after the skip, so the skipped boss was revisited (the boss is not named here)"}
 fix: {repo: quadseven/mod-dungeon-clear, commit: "467b53ceb29387d244f37880326a21e40dfd1036"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
-duration: 1h
+duration: 3h
 cast:
   - who: family:grug
     set: {alive: true, health_pct: 100, at: {areatrigger: 1466}}
@@ -30,6 +34,14 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_dungeon_run WHERE map_id = 230 AND started_at >= @t0
     expect: {scalar: ">= 1"}
+  # The judge needs the core's own credited-encounter record when an instance is arranged.
+  - name: encounter-credited
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM log_encounter
+      WHERE map = 230 AND time >= @t0
+    expect: {scalar: ">= 1"}
   - name: a-boss-was-skipped
     role: precondition
     when: end
@@ -37,17 +49,11 @@ observe:
       SELECT COUNT(*) FROM overseer_dungeon_run_event
       WHERE family = 'Grug' AND created_at >= @t0 AND kind = 'dc_skip'
     expect: {scalar: ">= 1"}
-  - name: every-credited-boss-is-in-the-run-events
+  - name: run-ended-complete-after-the-skip
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_dungeon_run_event
-      WHERE family = 'Grug' AND created_at >= @t0 AND kind = 'boss'
-    expect: {scalar: ">= 2"}
-  - name: run-ended-complete
-    role: check
-    when: end
-    sql: |
-      SELECT id, outcome FROM overseer_dungeon_run
-      WHERE map_id = 230 AND started_at >= @t0 AND state = 'ended' AND outcome = 'complete'
-    expect: {rows: ">= 1"}
+      SELECT COUNT(*) FROM overseer_dungeon_run r JOIN overseer_dungeon_run_event k ON k.run_id = r.id AND k.kind = 'dc_skip'
+      WHERE r.map_id = 230 AND r.started_at >= @t0 AND r.state = 'ended' AND r.outcome = 'complete'
+        AND k.created_at >= @t0 AND r.ended_at >= k.created_at
+    expect: {scalar: ">= 1"}

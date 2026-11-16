@@ -1,5 +1,7 @@
 # A family run where a member leaves the instance mid-run: the member is walked back in and the census
 # reaches STAGED_INSIDE before CLEARING resumes (mod-overseer issue 384). Og hearths out five minutes in.
+# Scope: the order is read from the event ids, which only grow: Og's exit, then STAGED_INSIDE, then CLEARING
+# again. A STAGED_INSIDE that came before the exit, or no CLEARING after it, does not pass.
 # Fix: mod-overseer pull 385.
 decree: v1
 id: dungeon-member-leaves-and-rejoins
@@ -34,11 +36,22 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_dungeon_run_event WHERE family = 'Grug' AND character_name = 'Og' AND created_at >= @t0 AND kind IN ('exit_hearth', 'dc_off')
     expect: {scalar: ">= 1"}
+  # The judge needs the core's own credited-encounter record when an instance is arranged.
+  - name: encounter-credited
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM log_encounter
+      WHERE map = 230 AND time >= @t0
+    expect: {scalar: ">= 1"}
   - name: census-restored-before-clearing
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_dungeon_run_event WHERE family = 'Grug' AND created_at >= @t0 AND kind = 'phase' AND detail LIKE '%-> STAGED_INSIDE%'
+      SELECT COUNT(*) FROM overseer_dungeon_run_event x
+      JOIN overseer_dungeon_run_event s ON s.family = x.family AND s.kind = 'phase' AND s.detail LIKE '%-> STAGED_INSIDE%' AND s.id > x.id
+      JOIN overseer_dungeon_run_event c ON c.family = x.family AND c.kind = 'phase' AND c.detail LIKE '%CLEARING%' AND c.id > s.id
+      WHERE x.family = 'Grug' AND x.character_name = 'Og' AND x.kind IN ('exit_hearth', 'dc_off') AND x.created_at >= @t0
     expect: {scalar: ">= 1"}
   - name: no-split-failed
     role: check

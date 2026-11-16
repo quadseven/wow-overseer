@@ -155,5 +155,44 @@ class AnchorsTest(unittest.TestCase):
         self.assertEqual(a.position("g"), (0, 1, 1.0, 2.0, 3.0, 0.0))
 
 
+class TablesReadTest(unittest.TestCase):
+    def test_only_tables_in_from_or_join_count(self):
+        schema = dbschema.Schema.load()
+        read = dbschema.tables_read
+        self.assertEqual(
+            read("SELECT COUNT(*) FROM log_encounter WHERE map = 1", schema),
+            {("acore_characters", "log_encounter")},
+        )
+        self.assertEqual(
+            read(
+                "SELECT 1 FROM characters c JOIN acore_world.creature_template t ON t.entry = c.guid",
+                schema,
+            ),
+            {("acore_characters", "characters"), ("acore_world", "creature_template")},
+        )
+        self.assertEqual(
+            read("SELECT COUNT('log_encounter') FROM characters", schema),
+            {("acore_characters", "characters")},
+        )
+
+
+class TableRefsTest(unittest.TestCase):
+    def test_every_reference_is_listed_with_its_alias(self):
+        schema = dbschema.Schema.load()
+        refs = dbschema.table_refs(
+            "SELECT 1 FROM log_encounter e JOIN log_encounter AS n ON n.map = e.map "
+            "JOIN characters ON 1 = 1",
+            schema,
+        )
+        self.assertEqual(
+            refs,
+            [
+                ("e", "acore_characters", "log_encounter"),
+                ("n", "acore_characters", "log_encounter"),
+                ("characters", "acore_characters", "characters"),
+            ],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
