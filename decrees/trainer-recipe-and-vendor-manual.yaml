@@ -30,19 +30,19 @@ observe:
     role: precondition
     when: start
     sql: |
-      SELECT COUNT(*) FROM character_spell WHERE guid = @Grug AND spell = 2666
+      SELECT COUNT(*) FROM character_spell WHERE guid = @cast0 AND spell = 2666
     expect: {scalar: "= 0"}
   - name: grug-holds-the-recipe
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM character_spell WHERE guid = @Grug AND spell = 2666
+      SELECT COUNT(*) FROM character_spell WHERE guid = @cast0 AND spell = 2666
     expect: {scalar: "= 1"}
   - name: grug-paid-the-trainer
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM characters WHERE guid = @Grug AND money < 2000
+      SELECT COUNT(*) FROM characters WHERE guid = @cast0 AND money < 2000
     expect: {scalar: "= 1"}
   - name: ugga-bought-the-manual
     role: check
