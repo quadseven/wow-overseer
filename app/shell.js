@@ -87,6 +87,11 @@ export function mount(root) {
   <div class="realm-state" data-slot="realm-state" role="status" hidden></div>
   <!-- Now's stage on a phone (views/now/stage.js). Drawn once, outside <main>, so a redraw never touches it; first in the column, so the picture is at the top edge at load. -->
   <section class="stage" id="stage" aria-label="Live picture" hidden>
+    <div class="stage-strip" data-stage-strip>
+      <span class="stage-strip-dot" aria-hidden="true"></span>
+      <span class="stage-msg">Checking live picture</span>
+      <button type="button" class="stage-retry" data-stage-retry hidden>Retry</button>
+    </div>
     <div class="st-slot stage-slot" data-stream=""></div>
     <div class="stage-switch" role="group" aria-label="Family on stage" hidden></div>
   </section>
