@@ -356,8 +356,10 @@ class TheLevellingPlannerAimsAtAFirePiece(unittest.TestCase):
         self.assertEqual([p.fire for p in plans], [(), ()])
 
     def test_without_the_fire_piece_the_soonest_outgrown_wins(self):
-        # The control: the same family, the fire plan unread.
-        pick = campaignplan.heuristic(campaignplan.options(levelling_facts(None)))
+        # The control: the same family, the fire plan unread. At 50 the
+        # family is not yet outgrowing Sunken Temple (its band tops at 55),
+        # so the soonest-outgrown door wins on its own.
+        pick = campaignplan.heuristic(campaignplan.options(levelling_facts(None, 50)))
         self.assertEqual(pick.keyword, "sunken-temple")
 
     def test_the_levelling_planner_prefers_the_dungeon_with_the_fire_piece(self):
