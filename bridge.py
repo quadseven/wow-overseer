@@ -4176,14 +4176,18 @@ def _log_raid_arrivals(cur, keyword: str, seats: list) -> None:
         log.info("%s", raidrun.arrival_line(keyword, raidrun.arrival_plan(raiders, door)))
 
 
-def _raid_seat_eligibility(cur, keyword: str, lineup: dict, seats: list) -> str:
-    """Re-read selected characters and refuse seats that cannot assemble."""
+def _seat_current_rows(cur, seats: list) -> list:
+    """The selected seats' current character rows (name, level, online)."""
     names = [seat[2] for seat in seats]
     holes = ", ".join(["%s"] * len(names))
     cur.execute(raidrun.ELIGIBILITY_SQL.format(holes=holes), tuple(names))  # noqa: S608
+    return [dict(row) for row in cur.fetchall()]
+
+
+def _raid_seat_eligibility(cur, keyword: str, lineup: dict, seats: list) -> str:
+    """Re-read selected characters and refuse seats that cannot assemble."""
     return raidrun.seat_eligibility_refusal(
-        keyword, lineup, [dict(row) for row in cur.fetchall()]
-    )
+        keyword, lineup, _seat_current_rows(cur, seats))
 
 
 def _write_raid_seats(cur, family: str, keyword: str, seats: list,
@@ -4219,7 +4223,7 @@ def _write_raid_seats(cur, family: str, keyword: str, seats: list,
 
 
 def _plan_raid_seats(cur, keyword: str, family: str, names: list,
-                     withheld: list | None) -> tuple | None:
+                     withheld: list | None, first_kill: bool = False) -> tuple | None:
     """Read the guild lineup and refuse a raid whose selected seats cannot form."""
     holes = ", ".join(["%s"] * len(names))
     cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes), tuple(names))  # noqa: S608
@@ -4235,6 +4239,18 @@ def _plan_raid_seats(cur, keyword: str, family: str, names: list,
                     campaignqueue._family(family), keyword)
         _withheld(withheld, "nobody could be placed in the raid")
         return None
+    if first_kill:
+        # A FIRST-KILL ORDER (#2570) forms from the eligible approved seats
+        # alone, and names the rest in the log; below the quorum it refuses.
+        roster = raidrun.first_kill_roster(
+            keyword, lineup, _seat_current_rows(cur, seats),
+            raidrun.first_kill_quorum())
+        if roster.refusal:
+            log.info("raid: %s", roster.refusal)
+            _withheld(withheld, roster.refusal)
+            return None
+        log.info("raid: %s", roster.line)
+        return roster.lineup, raidrun.seat_rows(family, keyword, roster.lineup)
     refusal = _raid_seat_eligibility(cur, keyword, lineup, seats)
     if refusal:
         log.info("raid: %s", refusal)
@@ -4265,7 +4281,7 @@ def _insert_raid_jobs(names: list, mode: str, source: str) -> int:
 
 
 def _drive_raid(keyword: str, family: str, names: list, source: str,
-                withheld: list | None = None) -> int:
+                withheld: list | None = None, first_kill: bool = False) -> int:
     """Write an ordered raid's seats, then its job. Returns jobs written.
 
     THE SEATS ARE THE LINEUP TAB'S OWN SELECTION: the family's guild is read
@@ -4281,7 +4297,8 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
     if mode is None or not names:
         return _withheld(withheld, "no raid door answers to %s" % keyword)[0]
     with _connect() as conn, conn.cursor() as cur:
-        planned = _plan_raid_seats(cur, keyword, family, names, withheld)
+        planned = _plan_raid_seats(cur, keyword, family, names, withheld,
+                                   first_kill)
         if planned is None:
             return 0
         lineup, seats = planned
@@ -4636,7 +4653,8 @@ def _ensure_queue_store() -> None:
             cur.execute(campaignqueue.CREATE_SQL)
             for column, definition in (
                     ("goal_item", "INT UNSIGNED NOT NULL DEFAULT 0"),
-                    ("goal_notice_pending", "TINYINT UNSIGNED NOT NULL DEFAULT 0")):
+                    ("goal_notice_pending", "TINYINT UNSIGNED NOT NULL DEFAULT 0"),
+                    ("first_kill", "TINYINT UNSIGNED NOT NULL DEFAULT 0")):
                 cur.execute(
                     "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
                     "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'overseer_dungeon_queue' "
@@ -5169,6 +5187,8 @@ def _write_queue(plan, source: str, new_ids: list | None = None) -> int:
             params = (plan.family, position, entry.keyword, entry.runs, source[:64])
             if entry.goal_item:
                 cur.execute(campaignqueue.ITEM_INSERT_SQL, params + (entry.goal_item,))
+            elif entry.first_kill:
+                cur.execute(campaignqueue.FIRST_KILL_INSERT_SQL, params)
             else:
                 cur.execute(campaignqueue.INSERT_SQL, params)
             if new_ids is not None:
@@ -5274,7 +5294,7 @@ def _apply_queue_move(move, names: list, family: str = "") -> str:
     withheld: list = []
     if raidrun.is_raid(move.keyword):
         written = _drive_raid(move.keyword, family, names, campaignqueue.SOURCE,
-                              withheld=withheld)
+                              withheld=withheld, first_kill=move.first_kill)
     else:
         written, _ = _drive_dungeon(move.keyword, move.wanted, names,
                                     campaignqueue.SOURCE, withheld=withheld)

@@ -160,7 +160,7 @@ class RankUpsAtATownStop(unittest.TestCase):
 class LevellingIsNeverDisplaced(unittest.TestCase):
     def levelling(self, outgrown):
         return fx.member(
-            "Tugga",
+            "Totta",
             guild=BONKERS,
             skills={FA: (10, 75), H: (30, 75), M: (30, 75)},
             skills_read=True,
@@ -172,7 +172,7 @@ class LevellingIsNeverDisplaced(unittest.TestCase):
         )
 
     def run_plan(self, m):
-        stop = (guildjobs.Recent("Tugga", "sell", 20, "delivered"),)
+        stop = (guildjobs.Recent("Totta", "sell", 20, "delivered"),)
         return guildjobs.plan(
             [m],
             masters={BONKERS: "Zug"},
@@ -183,13 +183,13 @@ class LevellingIsNeverDisplaced(unittest.TestCase):
 
     def test_a_seat_that_has_outgrown_its_zone_walks_to_level_not_to_craft(self):
         result = self.run_plan(self.levelling(True))
-        self.assertEqual(1, len(steps(result, "Tugga", guildjobs.guildlevel.ACTION)))
-        self.assertEqual([], steps(result, "Tugga", "craft"))
+        self.assertEqual(1, len(steps(result, "Totta", guildjobs.guildlevel.ACTION)))
+        self.assertEqual([], steps(result, "Totta", "craft"))
 
     def test_a_seat_with_quests_left_here_crafts_on_its_town_stop(self):
         result = self.run_plan(self.levelling(False))
-        self.assertEqual([], steps(result, "Tugga", guildjobs.guildlevel.ACTION))
-        self.assertEqual(1, len(steps(result, "Tugga", "craft")))
+        self.assertEqual([], steps(result, "Totta", guildjobs.guildlevel.ACTION))
+        self.assertEqual(1, len(steps(result, "Totta", "craft")))
 
 
 class WhatABagKeepsForItsCasts(unittest.TestCase):
