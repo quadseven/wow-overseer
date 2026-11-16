@@ -236,6 +236,20 @@ class TheWiring(unittest.TestCase):
         ):
             self.assertIn(needle, src, needle)
 
+    def test_the_fetch_layer_and_the_watch_control_load_without_a_document(self):
+        # The Node renderers (family view tests) import these with no DOM.
+        out = run_node(
+            {
+                "api.js": app_file("api.js"),
+                "ui.js": app_file("ui.js"),
+                "views/_spectate.js": app_file("views/_spectate.js"),
+                "views/now/whep.js": app_file("views/now/whep.js"),
+            },
+            'const S = await import("./views/_spectate.js");\n'
+            "console.log(JSON.stringify({ok: typeof S.charButton}));\n",
+        )
+        self.assertEqual(out["ok"], "function")
+
     def test_every_family_member_gets_a_button_present_or_not(self):
         # An absent member is refused in words by the bridge ("not in the
         # world"), which the tile shows; the page does not hide the button.
