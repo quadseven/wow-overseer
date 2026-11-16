@@ -1,11 +1,15 @@
 # An aimed council quest that reaches COMPLETE on a family member is handed in and the rewarded row
 # appears within 30 minutes (mod-overseer issue 180). Ugga holds 'A Threat Within' (quest 783) as complete
 # beside the quest's turn-in NPC; the drive must hand it in.
+# Scope: the reward event must fall inside the first 30 minutes of a 35 minute window (an upper bound the
+# issue states), so a hand-in at minute 31 does not pass. The re-issue line counts (single figures over 30
+# minutes) and the handed-in log line are bridge or worldserver text a decree can only forbid, so they are not
+# asserted; the rewarded row is the game's own record of the hand-in.
 # Fix: mod-overseer pull 1103 (the hand-in and aim stability check).
 decree: v1
 id: aimed-quest-complete-handin
 proves:
-  - {repo: quadseven/mod-overseer, issue: 180, criterion: "an aimed quest that reaches COMPLETE is handed in and a rewarded row follows within 30 minutes"}
+  - {repo: quadseven/mod-overseer, issue: 180, criterion: "an aimed quest that reaches COMPLETE is handed in: a rewarded row exists and the reward event falls within 30 minutes (the log lines are not asserted here)"}
 fix: {repo: quadseven/mod-overseer, commit: "c1aef8cd489f78fb768a420166086909006ef4ed"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -34,5 +38,5 @@ observe:
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_event WHERE character_name = 'Ugga' AND last_seen >= @t0 AND kind = 'quest_reward'
+      SELECT COUNT(*) FROM overseer_event WHERE character_name = 'Ugga' AND kind = 'quest_reward' AND first_seen >= @t0 AND first_seen <= DATE_ADD(@t0, INTERVAL 30 MINUTE)
     expect: {scalar: ">= 1"}

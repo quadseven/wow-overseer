@@ -81,7 +81,7 @@ needed `AUCTION_BEATS_VENDOR_BY` to start.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 
 import bag_pressure
 import craft
@@ -363,6 +363,9 @@ class Stack:
     # Whether a quest the holder is on or could still take names the stack
     # (`bag_pressure.QUEST_NEEDED_SQL`, the row's `quest_item`); None is unread.
     quest_needed: bool | None = None
+    # item_instance.guid, so the guild loot policy can be asked about this very
+    # copy (0 when the row carried none).
+    guid: int = 0
 
     @property
     def key(self) -> tuple:
@@ -454,6 +457,12 @@ class Context:
     # family -> stacks the guild's bankers can take by mail (guildledger). Absent
     # or zero means no banker route is offered.
     banker_free: Mapping[str, int] = field(default_factory=dict)
+    # The guild loot policy's route for one carried copy, `(holder, guid) ->
+    # lootpolicy route` (None when it could not be judged). When set, a stack
+    # is broken down only if the policy says DISENCHANT: the plan asks the one
+    # policy instead of judging "nobody wants it" on its own. None means the
+    # policy is not wired in (a pure test), and the plan judges alone.
+    loot_route: Callable | None = None
 
 
 @dataclass(frozen=True)
@@ -1284,13 +1293,38 @@ def _gear_surplus(w: _World, s: Stack, me: Member, why: str) -> list:
     return out
 
 
+def expected_auction_copper(quote, sell: int) -> int:
+    """What one unit is worth, the ONE price the loot policy judges "trash" by
+    and the plan defers to: the market quote `(copper per unit, live
+    listings)` net of the house cut, never below the vendor price (a quote
+    under what a vendor pays says the market is thin, not that the piece is
+    cheap); with no quote, the least the plan wants before it lists at all
+    (the vendor price times AUCTION_BEATS_VENDOR_BY)."""
+    vendor = max(0, int(sell or 0))
+    if quote:
+        return max(vendor, int(quote[0]) * (100 - AUCTION_CUT_PERCENT) // 100)
+    return vendor * AUCTION_BEATS_VENDOR_BY
+
+
 def _disenchant_option(w: _World, s: Stack, me: Member):
     if s.quality < 2 or s.quality > 4 or not s.gear:
+        return None
+    if (
+        w.ctx.loot_route is not None
+        and w.ctx.loot_route(s.holder, s.guid) != DISENCHANT
+    ):
+        # The guild loot policy decides what is trash: an upgrade for a
+        # guildmate, or a piece worth shelving, is not broken down here.
         return None
     need = disenchant_need(s)
     if need is None:
         return None
-    if me.skill("enchanting") >= need and s.value < DE_VENDOR_CEILING:
+    if w.ctx.loot_route is None and s.value >= DE_VENDOR_CEILING:
+        # Only a plan with no policy wired in judges worth itself. With the
+        # policy, its expected value and its one ceiling (lootpolicy.
+        # TRASH_CEILING) already decided, so the two cannot disagree.
+        return None
+    if me.skill("enchanting") >= need:
         return _opt(
             DISENCHANT,
             SURPLUS,
@@ -1298,7 +1332,31 @@ def _disenchant_option(w: _World, s: Stack, me: Member):
             % (me.skill("enchanting"), s.item_level),
             "R8",
         )
-    return None
+    return _give_to_enchanter(w, s, need)
+
+
+def _give_to_enchanter(w: _World, s: Stack, need: int):
+    """The policy named this copy trash but its holder cannot break it down:
+    hand it to the enchanter (highest skill, then name) whose Enchanting
+    reaches `need`, as the sale path's give does. Only a piece that can leave
+    the holder, and only an enchanter the plan knows."""
+    if not s.tradable or w.ctx.loot_route is None:
+        return None
+    able = sorted(
+        (-skill, name)
+        for name, skill, _family in w.enchanters
+        if name != s.holder and skill >= need
+    )
+    if not able:
+        return None
+    who = able[0][1]
+    return _opt(
+        GIVE,
+        SURPLUS,
+        "%s's Enchanting %d breaks down ilvl %d" % (who, -able[0][0], s.item_level),
+        "R8",
+        target=who,
+    )
 
 
 def _rule_gear(w: _World, s: Stack, me: Member):

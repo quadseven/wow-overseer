@@ -2,6 +2,9 @@
 # map before and after, or a named refusal (mod-overseer issue 410). Oz, the Zug family mage, casts a
 # portal with the cast verb and Zug stands beside it on Kalimdor.
 # Fix: mod-overseer pull 1057.
+# Scope: the map before and after the click is read from the character table. A crossing means the row is
+# applied AND the leader no longer stands on the start map; a refusal means an error row that carries a reason.
+# An unchanged row, or a bare applied row with no crossing, no longer passes.
 decree: v1
 id: portal-click-by-the-leader
 proves:
@@ -22,21 +25,29 @@ act:
   - at: 2m
     command: {who: Zug, kind: quest, text: "use-portal"}
 observe:
+  - name: leader-starts-on-map-1
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE name = 'Zug' AND map_id = 1
+    expect: {scalar: "= 1"}
   - name: the-mage-cast-a-portal
     role: precondition
     when: end
     sql: |
       SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Oz' AND kind = 'cast' AND created_at >= @t0 AND status IN ('applied', 'delivered')
     expect: {scalar: ">= 1"}
-  - name: use-portal-row-resolved
-    role: check
+  - name: use-portal-row-exists
+    role: precondition
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Zug' AND kind = 'quest' AND command LIKE 'use-portal%' AND created_at >= @t0 AND status IN ('applied', 'unchanged', 'error')
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Zug' AND kind = 'quest' AND command LIKE 'use-portal%' AND created_at >= @t0
     expect: {scalar: ">= 1"}
-  - name: leader-changed-maps-or-was-refused-by-name
+  - name: leader-crossed-or-was-refused-by-name
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Zug' AND command LIKE 'use-portal%' AND created_at >= @t0 AND (status = 'applied' OR detail <> '')
+      SELECT COUNT(*) FROM overseer_command c JOIN characters ch ON ch.name = c.target_name
+      WHERE c.target_name = 'Zug' AND c.kind = 'quest' AND c.command LIKE 'use-portal%' AND c.created_at >= @t0
+        AND ((c.status = 'applied' AND ch.map <> 1) OR (c.status = 'error' AND c.detail <> ''))
     expect: {scalar: ">= 1"}
