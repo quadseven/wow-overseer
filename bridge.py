@@ -44671,8 +44671,8 @@ def _fetch_death_discs() -> list:
 
 
 _KEYWORD_SPAWN_SQL = (
-    "SELECT s.map_id AS map_id, cr.position_x AS x, cr.position_y AS y "
-    "FROM overseer_snapshot s "
+    "SELECT s.map_id AS map_id, cr.position_x AS x, cr.position_y AS y, "
+    "cr.position_z AS z FROM overseer_snapshot s "
     "JOIN acore_world.creature cr ON cr.map = s.map_id "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
