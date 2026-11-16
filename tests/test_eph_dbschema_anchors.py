@@ -61,11 +61,34 @@ class CheckSelectTest(unittest.TestCase):
     def test_other_database_is_rejected(self):
         self.assertTrue(self.check("SELECT * FROM mysql.user"))
 
-    def test_a_derived_table_does_not_hide_its_inner_query(self):
-        self.assertTrue(self.check("SELECT x FROM (SELECT x FROM missing_table) q"))
+    def test_a_derived_table_is_refused_not_trusted(self):
+        for sql in (
+            "SELECT not_a_column FROM (SELECT guid FROM characters) q",
+            "SELECT x FROM (SELECT x FROM missing_table) q",
+            "SELECT guid FROM (SELECT guid FROM characters) q",
+        ):
+            self.assertTrue(any("derived table" in p for p in self.check(sql)), sql)
+
+    def test_an_unknown_outer_column_is_not_hidden_by_a_later_subquery(self):
+        sql = "SELECT not_a_column FROM characters WHERE guid IN (SELECT guid FROM character_skills)"
+        self.assertTrue(self.check(sql))
+
+    def test_a_database_qualifier_must_lead_to_a_table_and_column(self):
+        self.assertTrue(self.check("SELECT acore_world.no_such_column FROM characters"))
+        self.assertTrue(self.check("SELECT acore_characters.guid FROM characters"))
         self.assertEqual(
-            self.check("SELECT guid FROM (SELECT guid FROM characters) q"), []
+            self.check("SELECT acore_characters.characters.guid FROM characters"), []
         )
+
+    def test_a_query_that_reads_nothing_is_refused(self):
+        for sql in ("SELECT 1", "SELECT 1 = 1", "SELECT COUNT(*)", "SELECT @t0 > 0"):
+            self.assertTrue(
+                any("cannot fail" in p or "no FROM" in p for p in self.check(sql)), sql
+            )
+
+    def test_a_query_over_seeded_state_or_a_table_is_allowed(self):
+        self.assertEqual(self.check("SELECT @seed_skill_value = 75"), [])
+        self.assertEqual(self.check("SELECT COUNT(*) FROM characters"), [])
 
     def test_a_three_part_name_is_checked_down_to_the_column(self):
         self.assertTrue(self.check("SELECT acore_world.not_a_table.some_column"))

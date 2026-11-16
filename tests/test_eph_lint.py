@@ -298,6 +298,13 @@ class ObserveSqlTest(unittest.TestCase):
         d["observe"][1]["sql"] = "SELECT 1; DELETE FROM characters"
         self.assertIn("sql", rules(d))
 
+    def test_constant_only_observations_are_a_lint_error(self):
+        d = doc()
+        d["observe"][0]["sql"] = "SELECT 1"
+        d["observe"][1]["sql"] = "SELECT 1"
+        found = [f for f in errors(d) if f.rule == "sql"]
+        self.assertEqual(len(found), 2)
+
     def test_unknown_variable_is_rejected(self):
         d = doc()
         d["observe"][1]["sql"] = "SELECT guid FROM characters WHERE guid = @nobody"
