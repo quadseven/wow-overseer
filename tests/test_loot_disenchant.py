@@ -246,6 +246,131 @@ class TheBridgeGate(unittest.TestCase):
         self.assertTrue(self.bridge._epic_blocks("Og", "guid:7005", "disenchant"))
 
 
+class LedgerCursor:
+    """A cursor over a shared list of written overseer_command rows."""
+
+    def __init__(self, ledger):
+        self.ledger = ledger
+        self.lastrowid = 0
+        self._one = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=()):
+        if sql.startswith("INSERT INTO overseer_command"):
+            if "'disenchant'" in sql:
+                kind = "disenchant"
+            elif "'give'" in sql:
+                kind = "give"
+            else:
+                kind = params[2]
+            self.ledger.append(
+                {"kind": kind, "command": params[1], "status": "pending"}
+            )
+            self.lastrowid = len(self.ledger)
+        elif "status IN ('pending', 'claimed')" in sql and "command LIKE" in sql:
+            exact, like_a, like_b = params
+            prefixes = (like_a[:-1], like_b[:-1])
+            self._one = {
+                "n": sum(
+                    1
+                    for row in self.ledger
+                    if row["kind"] in ("give", "mail")
+                    and row["status"] in ("pending", "claimed")
+                    and (row["command"] == exact or row["command"].startswith(prefixes))
+                )
+            }
+        else:
+            self._one = None
+
+    def fetchone(self):
+        return self._one
+
+    def fetchall(self):
+        return []
+
+
+class LedgerConnection:
+    def __init__(self, ledger):
+        self.ledger = ledger
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def cursor(self):
+        return LedgerCursor(self.ledger)
+
+
+class OneGivePerCopy(unittest.TestCase):
+    """The plan's gift and the sale path's give never both move one copy."""
+
+    def setUp(self):
+        self.inner = base.WriterGateTest("test_an_ordinary_sale_is_untouched")
+        self.inner.setUp()
+        self.addCleanup(self.inner.doCleanups)
+        self.bridge = self.inner.bridge
+        self.ledger: list = []
+        patches = (
+            mock.patch.object(
+                self.bridge,
+                "_connect",
+                side_effect=lambda: LedgerConnection(self.ledger),
+            ),
+            mock.patch.object(self.bridge, "DISENCHANT_ROUTE", True),
+            mock.patch.object(
+                self.bridge, "_family_enchanters", return_value={"Og": 60}
+            ),
+            mock.patch.object(
+                self.bridge,
+                "_disenchant_facts",
+                return_value=bag_pressure.DisenchantFacts(4, 2, 60, 25, False),
+            ),
+        )
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        import guildshare
+
+        self.gift = guildshare.Gift(
+            holder="Grug",
+            taker="Oz",
+            item="Test Pants",
+            entry=500,
+            count=1,
+            guid=8001,
+            need="trash",
+            reason="trash",
+        )
+
+    def kinds(self):
+        return [row["kind"] for row in self.ledger]
+
+    def test_the_plan_gift_first_then_the_sale_path_writes_one_give(self):
+        self.assertTrue(self.bridge._insert_guild_gift(self.gift))
+        self.assertEqual(self.bridge._disenchant_instead("Grug", 8001), 0)
+        self.assertEqual(self.kinds(), ["give"])
+
+    def test_the_sale_path_first_then_the_plan_gift_writes_one_give(self):
+        self.assertTrue(self.bridge._disenchant_instead("Grug", 8001))
+        # The give and the enchanter's own disenchant, and no second give.
+        self.assertEqual(self.kinds(), ["give", "disenchant"])
+        self.assertEqual(self.bridge._insert_guild_gift(self.gift), 0)
+        self.assertEqual(self.kinds(), ["give", "disenchant"])
+
+    def test_a_delivered_give_does_not_block_a_later_one(self):
+        self.assertTrue(self.bridge._insert_guild_gift(self.gift))
+        self.ledger[0]["status"] = "delivered"
+        self.assertTrue(self.bridge._insert_guild_gift(self.gift))
+        self.assertEqual(len(self.ledger), 2)
+
+
 class ThePlannerAsksThePolicy(unittest.TestCase):
     """The item plan's disenchant step and the policy cannot disagree."""
 

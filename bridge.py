@@ -34238,6 +34238,10 @@ def _disenchant_instead(holder: str, item_guid: int):
                 DISENCHANT_ROUTE_SOURCE, holder, command, DISENCHANT_ROUTE_HOURS))
             if int((cur.fetchone() or {}).get("n") or 0):
                 return 0
+            if (kind == bag_pressure.GIVE_TO_ENCHANTER
+                    and _give_pending_for(cur, item_guid)):
+                # Another writer (the plan's gift) already moves this copy.
+                return 0
             cur.execute(
                 "INSERT INTO overseer_command "
                 "(target_name, command, kind, target_arg, source) "
@@ -34836,6 +34840,27 @@ def _recently_given_guids(hours: int) -> frozenset:
         return frozenset(out)
 
 
+# ONE GIVE PER ITEM COPY. The item plan's gift writer (`_insert_guild_gift`) and
+# the sale path's give-to-enchanter (`_disenchant_instead`) can both name the
+# same item instance in one tick; whichever writes second sees the first's row
+# still pending and writes nothing. Keyed on the instance guid in the command
+# (`guid:N` for a give, `send item:N ...` for a letter), not on the taker, so
+# two writers that picked different takers still move the piece once.
+_PENDING_GIVE_SQL = (
+    "SELECT COUNT(*) AS n FROM overseer_command "
+    "WHERE kind IN ('give', 'mail') AND status IN ('pending', 'claimed') "
+    "AND (command = %s OR command LIKE %s OR command LIKE %s)"
+)
+
+
+def _give_pending_for(cur, item_guid: int) -> bool:
+    """Is a give or letter for this item instance still waiting on the world?"""
+    guid = int(item_guid)
+    cur.execute(_PENDING_GIVE_SQL, (
+        "guid:%d" % guid, "guid:%d %%" % guid, "send item:%d %%" % guid))
+    return bool(int((cur.fetchone() or {}).get("n") or 0))
+
+
 def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
     """One overseer_command row handing one stack to a guildmate (infra#3908).
 
@@ -34857,6 +34882,11 @@ def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, gift.holder)
         return 0
     with _connect() as conn, conn.cursor() as cur:
+        if _give_pending_for(cur, gift.guid):
+            log.info("guildshare: item %s already has a give pending, so "
+                     "%s's gift to %s is not written", gift.guid, gift.holder,
+                     gift.taker)
+            return 0
         try:
             cur.execute(
                 "INSERT INTO overseer_command "
