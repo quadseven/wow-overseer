@@ -20,17 +20,20 @@ Shipped in this repository now:
 - `python3 -m ephemeral judge`, which runs a decree's `act` timeline, evaluates
   its `observe` assertions and writes a PASS, FAIL or INVALID verdict as a result
   ConfigMap (see Judge below);
+- `python3 -m ephemeral submit`, `dispatch` and `collect`, the PC-side runner
+  (see Runner below);
 - three worked example decrees in `data/decrees/`.
 
-Not shipped: the world itself. There is no runner, no template build and no
-cluster objects in this repository yet, so nothing starts a world. The seed step
-and the judge have only been run against fake connections in unit tests, never
-against a real database or cluster.
+Not shipped: the world itself. The cluster side and the world image live outside
+this repository, and the whole chain from decree file to a posted verdict has not
+been run end to end. The seed step, the judge and the runner have only been run
+against fake connections, a fake `kubectl` and a fake `gh` in unit tests, never
+against a real database, cluster or GitHub issue.
 
 ## Requesting a proving run
 
-The runner is out of scope for what this page documents, so a run cannot be
-requested yet. What you can do today is the part that comes first anyway:
+The runner is out of scope for the decree-writing steps below; its commands are
+under Runner. The part that comes first is writing the decree:
 
 1. Write the decree for the defect: a starting state, the action, and
    observations that fail on the broken image and hold on the fixed one.
@@ -39,14 +42,12 @@ requested yet. What you can do today is the part that comes first anyway:
 3. Open a pull request with the decree. A fix pull request should carry its
    decree, so the red-then-green evidence exists before the fix merges.
 
-When the runner exists, a run will be the decree executed against the image
-without the fix (control) and with it (treatment), several times each. That is
-planned and not built; this page will describe the request step when it is.
+A run is the decree executed against the image without the fix (control) and
+with it (treatment), several times each. Request one with `submit`.
 
 ## What a run can and cannot prove
 
-A proving run is a controlled experiment on a copy of the realm's data. When it
-exists, a pass is evidence for the live realm only when all of these hold:
+A proving run is a controlled experiment on a copy of the realm's data. A pass is evidence for the live realm only when all of these hold:
 
 - the treatment image is the one the live realm runs or will run;
 - the fix is present in the treatment image and absent from the control;
@@ -246,3 +247,59 @@ completion flag is never evidence, and a run with no credit is INVALID. The
 judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`; without them it prints an INVALID verdict and exits 2,
 because there is nowhere to write the result.
+
+## Runner: submit, dispatch, collect
+
+All three read one settings file, never the repository: copy
+`ephemeral/eph.config.example.json`, fill it in, and pass `--config` or set
+`EPH_CONFIG`. It names the namespace, the nodes a world may use (each with its
+client-data claim and a world cap), the nodes that are never used, and the
+digest-pinned tools image. A missing or malformed file is an error.
+
+    python3 -m ephemeral submit [--arm both] [--node N] --control-worldserver REF         --control-dbimport REF --control-pin SHA data/decrees/<name>.yaml
+    python3 -m ephemeral dispatch [--once]
+    python3 -m ephemeral collect [--dry-run]
+
+`submit` lints the decree, reads the Job skeleton ConfigMap and the base realm's
+running image digests and override files, merges the decree's config onto them
+(every changed key becomes a fidelity delta), and creates one SUSPENDED Job per
+run plus a ConfigMap of that run's inputs, owned by the Job. It starts nothing.
+It refuses: a decree that does not lint, an image other than `follow-dev`, a
+bridge-on decree (the skeleton has no bridge sidecar yet), a control arm without
+control images, and a fix that is wrongly present or absent in an arm's image
+(checked by asking GitHub whether the fix commit is an ancestor of the commit
+each image was built from; a `TODO` commit is recorded as unchecked, and an
+unchecked decree can never close or disprove anything). It saves a submission
+record under the results directory.
+
+`dispatch` is the only thing that starts worlds. One instance runs at a time,
+enforced by a Kubernetes Lease. Each pass it unsuspends the oldest queued Job
+that fits: the node is allowed and under its world cap, the namespace quota has
+room, and the node would keep at least 20 percent of its disk free after the
+Job's disk and every recently started world's disk are counted. If the node's
+stats cannot be read it refuses. A small Job may skip a larger one that does not
+fit, but nothing skips a head that has waited 30 minutes. Runs after the first
+control and treatment pair start only if the pair was control FAIL then
+treatment PASS; any other first pair stops the batch and removes its waiting
+Jobs. A finished Job with no result gets an INVALID result recorded for it.
+
+`collect` copies result ConfigMaps to the results directory, decides each batch
+and posts. A decree with any run count other than 3 control and 3 treatment can
+still post evidence (outcome `underpowered`, decided before any other outcome, so a
+single FAIL or PASS in a small decree is never a disproof) but never changes a
+label and never closes an issue. An issue closes only when the same decree FAILed on every control run
+and PASSed on every treatment run, every run valid, the fix verified present in
+the treatment image and absent from the control, the decree on the default
+branch byte for byte, that decree's pull request approved by someone other than
+its author or the posting App (each reviewer's latest formal review or approval marker decides, by time; a COMMENTED review changes nothing and any outstanding request for changes refuses), and no unticked box left in the issue body (the
+live-check boxes are ticked first, then the label is removed, then the issue is
+closed as completed). An epic is never closed. A disproven result comments,
+removes the label and leaves the issue open. A treatment pass without a usable
+control comments and leaves it open. A passing control and an INVALID run post
+nothing to the issue. A decree not yet merged posts to its own pull request when
+`--decree-pr` was given. The comment author is read back and must be the
+configured App, and `collect` refuses to write unless `GH_TOKEN` and
+`GH_CONFIG_DIR` are set.
+
+Not built: requeueing an INVALID first pair (resubmit instead), PR-built images,
+and the bridge sidecar.
