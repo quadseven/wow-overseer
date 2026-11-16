@@ -175,6 +175,47 @@ def _sample(rows):
 # -- the judge -------------------------------------------------------------------
 
 
+_TIME_BOUND = re.compile(r"^(?:\w+\.)?time\s*>=?\s*@t0$", re.I)
+_MAP_BOUND = re.compile(r"^(?:\w+\.)?map\s*=\s*(\d+)$", re.I)
+_WHERE_END = re.compile(r"\b(?:group\s+by|order\s+by|having|limit)\b", re.I)
+
+
+def _run_bound_problems(bare, maps):
+    """Why the WHERE clause may not bound every counted row to this run.
+
+    Accepts one shape only: a single SELECT whose WHERE is a flat AND chain with
+    no parentheses, OR, NOT, XOR, BETWEEN, UNION or subquery, and in which one
+    conjunct is `time >= @t0` (or `>`) and one is `map = <the arranged map>`.
+    Anything else could let a row from an earlier run satisfy the check.
+    """
+    flat = re.sub(r"\s+", " ", bare)
+    if len(re.findall(r"\bselect\b", flat, re.I)) != 1 or re.search(
+        r"\b(?:union|intersect|except)\b", flat, re.I
+    ):
+        return ["is not a single plain SELECT, so its bounds may be skipped"]
+    parts = re.split(r"\bwhere\b", flat, flags=re.I)
+    if len(parts) != 2:
+        return ["has no single WHERE clause bounding it to this run"]
+    where = _WHERE_END.split(parts[1], maxsplit=1)[0].strip()
+    if re.search(r"[()]|\|\||&&|\b(?:or|not|xor|between)\b", where, re.I):
+        return [
+            "has a WHERE clause that is not a flat AND chain "
+            "(no parentheses, OR, NOT, XOR or BETWEEN), so the bounds may not apply"
+        ]
+    conjuncts = [c.strip() for c in re.split(r"\band\b", where, flags=re.I)]
+    problems = []
+    if not any(_TIME_BOUND.match(c) for c in conjuncts):
+        problems.append(
+            "is not bounded to this run (needs time >= @t0 in its AND chain)"
+        )
+    found = {int(m.group(1)) for c in conjuncts if (m := _MAP_BOUND.match(c))}
+    if not found or (maps and not found & maps):
+        problems.append(
+            "is not bounded to this run's instance map (needs map = <id> in its AND chain)"
+        )
+    return problems
+
+
 class Judge:
     def __init__(
         self,
@@ -374,13 +415,7 @@ class Judge:
                 bad.append("holds at zero credits, so it needs a positive expectation")
         except JudgeError:
             bad.append("has an expectation the judge cannot evaluate")
-        if not re.search(r"\b(?:\w+\.)?time\s*>=?\s*@t0\b", bare, re.I):
-            bad.append("is not bounded to this run (needs time >= @t0)")
-        found = {
-            int(m) for m in re.findall(r"\b(?:\w+\.)?map\s*=\s*(\d+)\b", bare, re.I)
-        }
-        if not found or (maps and not found & maps):
-            bad.append("is not bounded to this run's instance map")
+        bad.extend(_run_bound_problems(bare, maps))
         return bad
 
     @staticmethod

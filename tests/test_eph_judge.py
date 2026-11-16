@@ -352,6 +352,46 @@ class ScalarAndCreditTest(unittest.TestCase):
             self.assertEqual(r["verdict"], "INVALID", sql)
             self.assertIn("this run", " ".join(r["reasons"]), sql)
 
+    def test_bounds_that_do_not_apply_to_every_row_are_refused(self):
+        head = "SELECT COUNT(*) FROM log_encounter "
+        widened = (
+            head + "WHERE map = 230 OR time >= @t0",
+            head + "WHERE time >= @t0 OR map = 230",
+            head + "WHERE (map = 230 OR 1 = 1) AND time >= @t0",
+            head + "WHERE map = 230 AND time >= @t0 OR difficulty = 0",
+            head + "WHERE NOT (map = 230 AND time >= @t0)",
+            head + "WHERE NOT map = 230 AND time >= @t0",
+            head + "WHERE map = 230 AND NOT time >= @t0",
+            head + "WHERE map = 230 XOR time >= @t0",
+            head + "WHERE (map = 230) AND (time >= @t0)",
+            head + "WHERE map = 230 AND time BETWEEN @t0 AND @t0",
+            head + "WHERE map = 230 AND time >= @t0 || 1",
+            head,
+            head
+            + "WHERE map = 230 AND time >= @t0 AND guid IN (SELECT guid FROM characters)",
+            head
+            + "WHERE map = 230 AND time >= @t0 UNION ALL "
+            + head
+            + "WHERE map = 230",
+            head + "WHERE map = 230 AND time >= @t0 UNION SELECT 9 FROM log_encounter",
+        )
+        for sql in widened:
+            r = self.credit_run(sql, {"scalar": ">= 1"})
+            self.assertEqual(r["verdict"], "INVALID", sql)
+            self.assertIn("encounter credit", " ".join(r["reasons"]), sql)
+
+    def test_a_plain_and_chain_with_both_bounds_passes(self):
+        head = "SELECT COUNT(*) FROM log_encounter "
+        chains = (
+            head + "WHERE map = 230 AND time >= @t0",
+            head + "WHERE time > @t0 AND map = 230",
+            head + "WHERE map = 230 AND difficulty = 0 AND time >= @t0",
+            head + "e WHERE e.map = 230 AND e.time >= @t0 ORDER BY e.time",
+        )
+        for sql in chains:
+            r = self.credit_run(sql, {"scalar": ">= 1"})
+            self.assertEqual(r["verdict"], "PASS", (sql, r["reasons"]))
+
     def test_a_bounded_positive_check_with_no_credit_is_invalid(self):
         r = self.credit_run(self.BOUNDED, {"scalar": ">= 1"}, credited=False)
         self.assertEqual(r["verdict"], "INVALID")
