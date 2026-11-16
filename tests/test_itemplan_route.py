@@ -317,5 +317,53 @@ class TheBridgeAsksForTheRoutes(unittest.TestCase):
         )
 
 
+class TheRoutesReachTheCommandWritingSeam(unittest.TestCase):
+    """End to end to the text the rows carry: plan, routes, merge, command."""
+
+    def test_a_proposed_route_ends_as_the_command_the_row_writer_sends(self):
+        personal = [green(1)]
+        vault = [green(2), green(3)]
+        who = [member(carried_slots=16, bank_slots=0)]
+        out = route.routes_for(plan_of(vault, None, who), pairs_of(vault), bank_it)
+        merged = route.merge(bank.Plan(), out)
+        self.assertEqual(
+            ["bank deposit-item guid:5000 tab:1", "bank deposit-item guid:5001 tab:1"],
+            [bank.command(m) for m in merged.guild],
+        )
+        self.assertEqual((), merged.moves)
+        plan = plan_of(
+            personal,
+            Context(fire_gear=frozenset()),
+            [member(carried_slots=16, bank_slots=24)],
+        )
+        merged = route.merge(
+            bank.Plan(), route.routes_for(plan, pairs_of(personal), bank_it)
+        )
+        self.assertEqual(["deposit guid:5000"], [bank.command(m) for m in merged.moves])
+
+    def test_a_stale_route_whose_piece_is_gone_is_skipped_cleanly(self):
+        stacks = [green(1), green(2)]
+        plan = plan_of(stacks)
+        # The second piece moved or was disposed of since the plan was read:
+        # its carried row is no longer there.
+        out = route.routes_for(plan, pairs_of(stacks[:1]), bank_it)
+        self.assertEqual([5000], [m.guid for m in out.moves])
+        self.assertEqual((), out.held)
+
+    def test_a_soulbound_piece_is_never_proposed_for_the_vault(self):
+        stacks = [green(1, bind=1, soulbound=True)]
+        plan = plan_of(stacks)
+        self.assertNotIn(itemplan.GUILD_BANK, {d.route for d in plan.decisions})
+        out = route.routes_for(plan, pairs_of(stacks), bank_it)
+        self.assertEqual([], [m for m in out.moves if m.to == bank.GUILD])
+
+    def test_the_vault_pass_writes_the_command_the_bank_formats(self):
+        source = TheBridgeAsksForTheRoutes.SOURCE
+        start = source.split("async def _queue_guild_items(", 1)[1]
+        body = start.split("async def ", 1)[0]
+        self.assertIn("bank.command(move)", body)
+        self.assertIn("_insert_guild", body)
+
+
 if __name__ == "__main__":
     unittest.main()
