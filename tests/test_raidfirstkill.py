@@ -195,6 +195,7 @@ class TheFlagRidesTheOrder(unittest.TestCase):
     def test_ordinary_words_come_back_unchanged(self):
         for words in (
             ["moltencore"],
+            ["a", "|hop"],
             ["first", "aid", "kit"],
             ["firstkiller", "moltencore"],
             ["unfirst", "kill"],
