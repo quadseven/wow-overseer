@@ -568,6 +568,8 @@ def _insert_guild(name: str, command: str, source: str, target_arg: str = "") ->
     whichever loop called it rather than skipping a pass. 1265 is a truncated
     ENUM value, 1146 a missing table, 1054 a missing column.
     """
+    if command.startswith("bank deposit") and _quest_log_holds(name, command):
+        return 0
     if command.startswith("bank deposit") and _KEEP.blocks(name, command):
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, name)
         return 0
@@ -34190,7 +34192,10 @@ _EPIC_FACTS_SQL = (
     "it.DisenchantID AS disenchant_id, "
     "it.RequiredDisenchantSkill AS disenchant_skill, "
     "it.SellPrice AS sell_price, "
-    "it.bonding AS bonding, c.class AS holder_class "
+    "it.bonding AS bonding, c.class AS holder_class, "
+    # A quest in the holder's log names the item: never sold, destroyed or
+    # disenchanted, whatever its class (lootpolicy.decide).
+    + bag_pressure.LOG_QUEST_NEEDED_SQL + " AS quest_needed "
     "FROM item_instance ii "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
     "LEFT JOIN characters c ON c.guid = ii.owner_guid "
@@ -34382,6 +34387,36 @@ def _loot_policy_blocks(holder: str, command: str, kind: str = "sell"):
             log.info("%s", lootpolicy.kept_line(row, holder, verdict, kind))
             return verdict
     return None
+
+
+def _quest_log_holds(holder: str, command: str) -> bool:
+    """Does a quest in the holder's log name an item this row moves out?
+
+    The movers that do not ask the loot policy (the guild gift by give or mail,
+    the personal bank and the guild bank deposit) ask this one fact: the item
+    is the source, drop or required item of a quest the holder is on, so it
+    stays in the bags. Fail closed: an unread fact, or an item with no row,
+    holds it. A row naming no item is not held.
+    """
+    guids, _entries = keep.items_named(command)
+    if not guids:
+        return False
+    try:
+        rows = _fetch_epic_facts(guids)
+    except Exception:
+        log.exception("quest log: cannot read the item in %r for %s, so the "
+                      "row is not written", command, holder)
+        return True
+    found = {int(r["item_guid"]): r for r in rows}
+    for guid in guids:
+        row = found.get(int(guid))
+        needed = None if row is None else row.get("quest_needed")
+        if needed is None or needed:
+            log.info("quest log: %s keeps item %s, a quest in the log names it "
+                     "or the log could not be read, so %r is not written",
+                     holder, guid, command)
+            return True
+    return False
 
 
 def _epic_blocks(holder: str, command: str, kind: str = "sell") -> bool:
@@ -35275,6 +35310,8 @@ def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
         log.warning("guildshare: refusing to write kind=%r for %s", verb, gift.item)
         return 0
     command = gift.post_command if verb == handover.MAIL else gift.command
+    if _quest_log_holds(gift.holder, command):
+        return 0
     if _KEEP.blocks(gift.holder, command):
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, gift.holder)
         return 0
@@ -41706,6 +41743,8 @@ def _insert_bank(move, command: str) -> int:
     worldserver whose image predates the bank migration must warn rather than
     take the whole pass down.
     """
+    if command.startswith("deposit") and _quest_log_holds(move.character, command):
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
