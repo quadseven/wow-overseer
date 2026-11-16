@@ -51,6 +51,6 @@ observe:
     when: end
     sql: |
       SELECT COUNT(*) FROM overseer_guild_ask a JOIN overseer_guild_run r ON r.id = a.run_id
-      WHERE a.created_at >= @t0 AND a.reason LIKE '%Recipe%'
+      WHERE a.created_at >= @t0 AND a.reason LIKE '%Recipe%' AND a.reason LIKE '%Fire Protection%'
         AND r.created_at >= @t0 AND r.keyword = 'blackrock-depths'
     expect: {scalar: ">= 1"}

@@ -7,13 +7,15 @@
 # with an exit hearth (an event row) before the guest is read off the dungeon map; the guest must be in no group
 # led by the family at the end (it left the party, read from the group tables); and no guest sends a second
 # hello whisper (one greeting per guest is the upstream behaviour, a repeat is the defect).
+# Issue 1450 (the guest leaves promptly, within about two minutes of its seat ending) is dropped from proves: no
+# row ties the guest's membership and seat end to the head's hearth, so the timing cannot be shown. The end-state
+# group check stays as supporting evidence for issues 1427 and 1437 only.
 # Fix: mod-overseer pull 1451 (a released stand-in guest leaves the family group).
 decree: v1
 id: standin-guest-hearths-and-leaves
 proves:
   - {repo: quadseven/mod-overseer, issue: 1427, criterion: "no stand-in guest is left on a dungeon map after its family's run ended with EXIT HEARTH"}
   - {repo: quadseven/mod-overseer, issue: 1437, criterion: "a stand-in released inside a finder group sends no repeated hello whispers"}
-  - {repo: quadseven/mod-overseer, issue: 1450, criterion: "a stand-in that ends while the head is mid-hearth is no longer grouped with the family at the end (the left the family party line is not asserted here)"}
 fix: {repo: quadseven/mod-overseer, commit: "96eac42ee9bc2d0116fe05d204ce973ae551fa07"}
 world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}

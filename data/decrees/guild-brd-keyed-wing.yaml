@@ -42,6 +42,8 @@ cast:
     ceiling: "nothing granted; the ghost beside Franclorn is the scenario"
 act:
   - at: 0s
+    command: {who: "cast[0]", kind: guild, text: "run blackrock-depths"}
+  - at: 0s
     command: {who: "cast[5]", kind: quest, text: "take 3801"}
 observe:
   - name: five-distinct-seats-carry-the-attunement-state
@@ -68,6 +70,15 @@ observe:
     sql: |
       SELECT COUNT(*) FROM characters ch JOIN corpse co ON co.guid = ch.guid WHERE ch.guid = @cast5 AND ch.level >= 48
     expect: {scalar: "= 1"}
+  - name: the-ghosts-corpse-lies-within-40-yards-of-franclorn
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM corpse co JOIN acore_world.creature c ON c.map = co.mapId
+      JOIN acore_world.creature_template t ON t.entry = c.id
+      WHERE co.guid = @cast5 AND t.name = 'Franclorn Forgewright'
+        AND POW(co.posX - c.position_x, 2) + POW(co.posY - c.position_y, 2) <= 1600
+    expect: {scalar: ">= 1"}
   - name: no-cast-member-held-the-key-at-the-start
     role: precondition
     when: start
