@@ -362,13 +362,18 @@ class Judge:
     def _credit_shape_problems(obs, maps):
         """Why this observation could hold without a credit earned in this run."""
         bad = []
-        zero = [] if "rows" in obs["expect"] else [(0,)]
+        bare = _STR.sub("''", obs["sql"])
+        # What the query returns when no credit was earned: an aggregate with no
+        # GROUP BY still returns ONE row (holding 0), a row list returns none.
+        aggregate = re.search(
+            r"\b(?:count|sum|min|max|avg)\s*\(", bare, re.I
+        ) and not re.search(r"\bgroup\s+by\b", bare, re.I)
+        zero = [(0,)] if aggregate else []
         try:
             if expectation_holds(obs["expect"], zero)[0]:
                 bad.append("holds at zero credits, so it needs a positive expectation")
         except JudgeError:
             bad.append("has an expectation the judge cannot evaluate")
-        bare = _STR.sub("''", obs["sql"])
         if not re.search(r"\b(?:\w+\.)?time\s*>=?\s*@t0\b", bare, re.I):
             bad.append("is not bounded to this run (needs time >= @t0)")
         found = {

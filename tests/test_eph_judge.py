@@ -316,9 +316,28 @@ class ScalarAndCreditTest(unittest.TestCase):
             self.assertIn("positive", " ".join(r["reasons"]), expect)
 
     def test_a_positive_bounded_expectation_passes(self):
-        for expect in ({"scalar": ">= 1"}, {"scalar": "> 0"}, {"rows": ">= 1"}):
+        for expect in ({"scalar": ">= 1"}, {"scalar": "> 0"}):
             r = self.credit_run(self.BOUNDED, expect)
             self.assertEqual(r["verdict"], "PASS", (expect, r["reasons"]))
+
+    def test_rows_over_a_count_is_vacuous_and_refused(self):
+        # COUNT(*) returns one row even at zero credits, so these always hold
+        for expect in ({"rows": ">= 1"}, {"rows": "= 1"}):
+            r = self.credit_run(self.BOUNDED, expect, credited=False)
+            self.assertEqual(r["verdict"], "INVALID", expect)
+            self.assertIn("positive", " ".join(r["reasons"]), expect)
+        # and these can never hold over an aggregate, so the run is INVALID anyway
+        for expect in ({"rows": 0}, {"rows": "<= 0"}):
+            r = self.credit_run(self.BOUNDED, expect, credited=False)
+            self.assertEqual(r["verdict"], "INVALID", expect)
+
+    def test_a_row_list_query_with_rows_at_least_one_passes(self):
+        sql = "SELECT creditEntry FROM log_encounter WHERE map = 230 AND time >= @t0"
+        r = self.credit_run(sql, {"rows": ">= 1"})
+        self.assertEqual(r["verdict"], "PASS", r["reasons"])
+        for expect in ({"rows": ">= 0"}, {"rows": 0}, {"rows": "<= 3"}):
+            r = self.credit_run(sql, expect)
+            self.assertEqual(r["verdict"], "INVALID", expect)
 
     def test_a_query_not_bounded_to_this_run_is_not_credit(self):
         unbounded = (
