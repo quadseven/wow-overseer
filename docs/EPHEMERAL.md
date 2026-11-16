@@ -1,0 +1,159 @@
+# Ephemeral worlds: decrees
+
+An ephemeral (proving) world is a throwaway copy of the realm that bots can play
+in without touching live progression. A decree is the one YAML file under
+`data/decrees/` that says who is in that world, where, in what state, what to do, and
+which SQL or log assertions decide the verdict. Tracking issue: #2343.
+
+Last checked: 2026-11-15.
+
+## What ships today, and what does not
+
+Shipped in this repository now:
+
+- the decree schema v1 and `python3 -m ephemeral lint`;
+- `data/decrees/anchors.yaml`, the only place coordinates may live;
+- `python3 -m ephemeral acts`, which prints a decree's `act` timeline as the
+  command rows it becomes;
+- three worked example decrees in `data/decrees/`.
+
+Not shipped: the world itself. There is no runner, no judge that samples a
+world and gives a verdict, no template build and no cluster objects in this
+repository yet. Nothing here starts a world or produces a PASS, FAIL or INVALID.
+The seed compiler (turning `cast` and `arrange` into SQL) is a separate change
+and is not described as available until it merges.
+
+## Requesting a proving run
+
+The runner is out of scope for what this page documents, so a run cannot be
+requested yet. What you can do today is the part that comes first anyway:
+
+1. Write the decree for the defect: a starting state, the action, and
+   observations that fail on the broken image and hold on the fixed one.
+2. Run `python3 -m ephemeral lint data/decrees/<name>.yaml` until it has no errors.
+   Fill the issue number and fix commit (a `TODO` is only a warning).
+3. Open a pull request with the decree. A fix pull request should carry its
+   decree, so the red-then-green evidence exists before the fix merges.
+
+When the runner exists, a run will be the decree executed against the image
+without the fix (control) and with it (treatment), several times each. That is
+planned and not built; this page will describe the request step when it is.
+
+## What a run can and cannot prove
+
+A proving run is a controlled experiment on a copy of the realm's data. When it
+exists, a pass is evidence for the live realm only when all of these hold:
+
+- the treatment image is the one the live realm runs or will run;
+- the fix is present in the treatment image and absent from the control;
+- the preconditions were observed in the same run, so "nothing bad happened"
+  cannot mean "nothing happened";
+- the same decree failed on the control, so the check can fail at all;
+- the evidence is state the game core wrote (respawn rows, skill rows, money and
+  slot changes), not a status flag.
+
+It cannot prove, and a decree for these should be refused or downgraded:
+
+- anything that lives in code the world does not run (bridge code with the bridge
+  off, language-model choices, the map site and UI);
+- behaviour that depends on a client-driven character, because every character
+  in a proving world is headless;
+- population effects such as the travel queue, dungeon-finder matching or the
+  auction house, which need the full bot population;
+- wall-clock effects over hours, unless the decree seeds timestamps, in which
+  case it tests only the seeded path;
+- a scenario made unreachable by over-granting, hand-placed state or config
+  changes on the path under test.
+
+Lint holds a few of these lines now (grants need a `ceiling`, no literal
+coordinates, a bridge-repo fix needs the bridge on). It does not check whether a
+decree can actually reach its scenario; only a run can.
+
+## How it complements fidelity (#2281) and liveproof (#2125)
+
+- The fidelity suite (#2281) replays captured realm truth offline in CI. It is
+  fast and needs no world, but it cannot show behaviour that only appears when
+  bots actually play: movement, rendezvous, party formation, combat.
+- Liveproof (#2125) probes the live realm on a schedule. It sees real play, but
+  only when the live guilds happen to reach the same state again, and it has no
+  control arm.
+- A proving run plays bots in a throwaway copy from a chosen starting state, with
+  a control arm. It complements both and replaces neither: use fidelity for
+  logic that can be replayed, liveproof for what the live realm does, and a
+  proving run for behaviour that needs bots playing from a known state.
+
+## Lint a decree
+
+    python3 -m ephemeral lint data/decrees/<name>.yaml        # warnings pass
+    python3 -m ephemeral lint --strict data/decrees/<name>.yaml  # warnings fail
+
+No cluster is needed. The reader is a strict YAML subset (`ephemeral/miniyaml.py`)
+because the unit suite has no YAML parser. Table and column names in observation
+SQL are checked against a snapshot of the game databases
+(`ephemeral/data/acore_schema.json`), so a mistyped name is a lint error.
+
+## Shape
+
+    decree: v1
+    id: <kebab-case>
+    proves: [{repo: owner/name, issue: <n or TODO>, criterion: "<live-check box text>"}]
+    fix: {repo: owner/name, commit: <sha or TODO>}
+    world: {class: lean|full, image: follow-dev, bridge: "off"|"on", random_bots: 0, config: {}}
+    runs: {control: 3, treatment: 3}
+    duration: 20m
+    cast:      # characters in the template, by name, family:<name> or guild:<Guild>:<role>
+    arrange:   # instances, groups, creatures, before the world loads
+    act:       # after load: roster or command steps, at a time or when an observation holds
+    observe:   # preconditions and checks: SQL or a log pattern
+
+## Rules lint enforces
+
+- No literal coordinates. `at`, `corpse_at` and `homebind` name an anchor:
+  `creature`, `gameobject`, `areatrigger`, `graveyard`, `with`, or `captured`
+  (a key in `data/decrees/anchors.yaml`). A coordinate column compared to a number
+  in observation SQL is also an error.
+- `kind: gm` is rejected: bot sessions are SEC_PLAYER, so it silently does nothing.
+- Auction rows and the auction house bot are refused unless the decree sets
+  `family: auction-house`.
+- A grant (level, money, skills, spells, items) needs a `ceiling`, and a grant
+  above what the ceiling text allows is rejected.
+- At least one precondition and one check. This only stops a decree with no
+  observations of one kind; whether the scenario is reached is shown by a run.
+- A fix in the bridge repo needs `world.bridge: "on"`.
+- A `roster` step is shorthand for a `command` of kind `job`: it is written as an
+  `overseer_command` row. Measured on a hand-made world, such a row was applied
+  within seconds with no bridge, while a direct update of `overseer_roster`
+  showed no effect. `ephemeral/acts.py` turns the timeline into those rows.
+- Observation SQL is one read-only SELECT. Every table and column must exist, a
+  derived table (`FROM (SELECT ...)`) is not supported, and a database qualifier
+  must lead to a table and column (`db.table.column`).
+- An observation must be able to fail: it has to read a known table or use a
+  seeded-state variable. `SELECT 1` is refused.
+- Variables are limited to a fixed vocabulary: `@t0`, `@cast`, `@cast<N>`,
+  `@<Name>`, `@<instance alias>`, `@money_start`, `@seed_skill_value`,
+  `@seed_skill_max`, `@skill_<name>`. The component that fills them is not built
+  yet, so today this only fixes the names a decree may use.
+
+`TODO` is allowed for an issue number or commit and is a warning, never an error.
+
+## Anchors
+
+`data/decrees/anchors.yaml` is the only file that may hold coordinates. Each entry is
+a position a real character stood at, copied from a row the game wrote, with
+`provenance: {source, ref, observed}`. Never type a position by hand. An entry
+whose row has not been copied is `pending`: lint warns when a decree uses it.
+Refusing a pending anchor at seed time belongs to the seed compiler, which is
+not part of this change.
+
+## Killing a creature whose death has a script
+
+Seeding a creature dead skips its death script. Where the script is the point
+(a bar that turns hostile when its owner dies), the kill belongs in `act`, and
+the window continues `when:` an observation shows the creature dead.
+
+## Where the decrees live
+
+Decrees and `anchors.yaml` are under `data/decrees/`, a path `check.yml` already
+watches (`data/**`), so a pull request that changes only a decree still runs the
+unit tests that lint every shipped decree. Keep new decrees there; a decree
+elsewhere would not start the tests.
