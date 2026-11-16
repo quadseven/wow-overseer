@@ -166,7 +166,9 @@ def main(argv=None):
         help="in a world pod: run the act timeline, decide PASS/FAIL/INVALID, write the result",
     )
     j.add_argument("decree")
-    j.add_argument("--anchors", help="anchors.yaml (default: data/decrees/anchors.yaml)")
+    j.add_argument(
+        "--anchors", help="anchors.yaml (default: data/decrees/anchors.yaml)"
+    )
     j.add_argument("--log", help="the worldserver log file log assertions read")
     j.set_defaults(func=_judge)
     cfg_help = "runner settings JSON (default: $EPH_CONFIG; see ephemeral/eph.config.example.json)"
@@ -175,7 +177,9 @@ def main(argv=None):
     )
     s.add_argument("decree")
     s.add_argument("--config", help=cfg_help)
-    s.add_argument("--anchors", help="anchors.yaml (default: data/decrees/anchors.yaml)")
+    s.add_argument(
+        "--anchors", help="anchors.yaml (default: data/decrees/anchors.yaml)"
+    )
     s.add_argument("--arm", choices=("control", "treatment", "both"), default="both")
     s.add_argument(
         "--node",
