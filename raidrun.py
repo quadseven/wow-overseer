@@ -511,6 +511,12 @@ def first_kill_roster(
             total += 1
             name = str(member["name"])
             why = _unavailable_reason(by_name.get(name.casefold()), floor)
+            if not why and member.get("respec"):
+                # A healer seat still in its old tree is a damage dealer until
+                # its talent reset is bought (healerrespec.py).
+                why = "its healer respec is not done yet; it plays %s" % (
+                    member.get("spec") or "another tree"
+                )
             if why:
                 left_out.append((name, why))
                 continue

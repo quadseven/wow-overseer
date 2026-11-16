@@ -88,12 +88,15 @@ class TheFirstKillLineupChange(unittest.TestCase):
 
 
 class TheTeams(unittest.TestCase):
-    def test_each_raid_is_8_tanks_11_healers_21_damage(self):
+    def test_each_raid_is_8_tanks_11_healers_21_damage_plus_the_respecs(self):
+        # The three Cave paladins sent to Holy (RESPEC_HEALERS) move from the
+        # damage seats to healer seats; every other seat count is the plan's.
         for team in raidteams.GROUPS:
+            moved = len(raidteams.RESPEC_HEALERS.get(team, ()))
             seats = [s.seat for s in raidteams.seats(team)]
             self.assertEqual(seats.count(raidroles.SEAT_TANK), 8, team)
-            self.assertEqual(seats.count(raidroles.SEAT_HEALER), 11, team)
-            self.assertEqual(seats.count(raidroles.SEAT_DAMAGE), 21, team)
+            self.assertEqual(seats.count(raidroles.SEAT_HEALER), 11 + moved, team)
+            self.assertEqual(seats.count(raidroles.SEAT_DAMAGE), 21 - moved, team)
 
     def test_every_group_has_a_fire_resistance_source(self):
         for team, groups in raidteams.GROUPS.items():

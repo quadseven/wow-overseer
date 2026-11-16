@@ -535,7 +535,9 @@ def plan_molten_core(members: list) -> dict:
 
 def _approved_seat(member: dict, seat, number: int) -> dict:
     """A member in the seat the approved lineup gives it, playing the tree
-    that seat names. Nobody respecs: the approved tree is the one it plays."""
+    that seat names. Nobody respecs, except the three paladins the owner sent
+    to Holy (raidteams.RESPEC_HEALERS): one of them still in its old tree is
+    marked `respec`, and a first-kill raid does not count it as a healer yet."""
     if seat.seat == raidroles.SEAT_TANK:
         duty = MAIN_TANK if number == 1 else OFF_TANK
     elif seat.seat == raidroles.SEAT_HEALER:
@@ -549,7 +551,9 @@ def _approved_seat(member: dict, seat, number: int) -> dict:
         duty=duty,
         target_spec=seat.tree,
         target_tab=raidroles.tree_tab(seat.class_id, seat.tree),
-        respec=False,
+        respec=raidteams.respec_to_heal(seat.name)
+        and bool(member.get("spec"))
+        and member.get("spec") != seat.tree,
         buff=BUFF_OF.get(seat.class_id, ""),
         approved_name=seat.name,
         fire_resistance=seat.fire_resistance,
@@ -676,7 +680,7 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
             "bankers": len(bankers),
             "surplus": len(surplus),
             "considered": len(members),
-            "respec": 0,
+            "respec": len([m for m in placed if m.get("respec")]),
         },
         "composition": _composition(placed),
         "roles_line": roles_line(groups, wanted),
