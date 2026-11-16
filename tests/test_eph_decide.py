@@ -144,5 +144,22 @@ class TickTest(unittest.TestCase):
         self.assertEqual((body, n), ("- [ ] other\n", 0))
 
 
+class StatisticsDisplayTest(unittest.TestCase):
+    def test_a_non_reciprocal_p_prints_as_a_decimal(self):
+        line = decide.statistics_line(
+            [("control", "FAIL")] * 3
+            + [("treatment", "FAIL")] * 2
+            + [("treatment", "PASS")] * 2
+        )
+        self.assertIn("p = 0.", line)
+        self.assertNotIn("p = 1/", line)
+
+    def test_a_tiny_exact_reciprocal_still_prints_as_one_over_n(self):
+        line = decide.statistics_line(
+            [("control", "FAIL")] * 20 + [("treatment", "PASS")] * 20
+        )
+        self.assertIn("p = 1/137846528820", line)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -343,5 +343,45 @@ class QuantityTest(unittest.TestCase):
             dispatch.quantity("lots")
 
 
+class ReviewFixesTest(Base):
+    def test_a_result_without_its_verdict_label_is_skipped_not_a_crash(self):
+        d = dispatch.Dispatcher(
+            self.cfg, self.kube, clock=lambda: self.now, out=self.logs.append
+        )
+        d.kube = type(
+            "K",
+            (),
+            {
+                "list": lambda s, kind, selector=None, namespace=None: [
+                    {"metadata": {"name": "eph-result-abc123-c1"}},
+                    {
+                        "metadata": {
+                            "name": "eph-result-abc123-t1",
+                            "labels": {"eph/verdict": "PASS"},
+                        }
+                    },
+                ]
+            },
+        )()
+        self.assertEqual(d._verdicts(), {"abc123-t1": "PASS"})
+
+    def test_a_head_that_can_never_fit_does_not_block_an_honest_job(self):
+        self.add("badbad-c1", "control", claim="client-data-organic", age=40 * 60)
+        self.add("abcabc-c1", "control", age=50)
+        self.tick()
+        self.assertFalse(self.suspended("abcabc-c1"))
+        self.assertTrue(self.suspended("badbad-c1"))
+
+    def test_unreadable_disk_stats_log_the_reason(self):
+        self.c.node_stats["node-a"] = {
+            "node": {"fs": {"availableBytes": {}, "capacityBytes": 5}}
+        }
+        self.add("112233-c1", "control")
+        self.tick()
+        self.assertTrue(
+            any("unreadable" in line and "112233" in line for line in self.logs)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

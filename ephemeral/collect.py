@@ -60,7 +60,7 @@ def _independent(gh, cfg, repo, pr):
     author, head = pr["user"]["login"], pr["head"]["sha"]
     n = pr["number"]
     other = lambda login: login not in (author, cfg.author_login)  # noqa: E731
-    for r in gh.api(f"repos/{repo}/pulls/{n}/reviews?per_page=100") or []:
+    for r in gh.reviews(repo, n):
         if (
             r.get("state") == "APPROVED"
             and r.get("commit_id") == head
@@ -68,7 +68,10 @@ def _independent(gh, cfg, repo, pr):
         ):
             return True
     verdict = None
-    for c in gh.comments(repo, n):
+    ordered = sorted(
+        gh.comments(repo, n), key=lambda c: (c.get("created_at", ""), c.get("id", 0))
+    )
+    for c in ordered:
         if not other(c["user"]["login"]):
             continue
         for line in (c.get("body") or "").splitlines():
@@ -250,7 +253,8 @@ class Collector:
     def _comment_once(self, repo, n, body, rec):
         mark = decide.marker(rec["decree_id"], rec["decree_sha256"])
         for c in self.gh.comments(repo, n):
-            if mark in (c.get("body") or ""):
+            mine = (c.get("user") or {}).get("login") == self.cfg.author_login
+            if mine and mark in (c.get("body") or ""):
                 return c.get("html_url", "")
         return self.gh.comment(repo, n, body).get("html_url", "")
 

@@ -193,7 +193,8 @@ class Dispatcher:
                 ]
                 avail, cap = int(fs["availableBytes"]), int(fs["capacityBytes"])
                 self._stats[node] = (avail, cap) if cap > 0 and avail >= 0 else None
-            except (KubeError, KeyError, TypeError, ValueError):
+            except (KubeError, KeyError, TypeError, ValueError) as exc:
+                self.log(f"node stats unreadable ({type(exc).__name__}): {exc}")
                 self._stats[node] = None
         return self._stats[node]
 
@@ -230,10 +231,9 @@ class Dispatcher:
         out = {}
         for cm in self.kube.list("configmaps", selector="eph/verdict"):
             name = cm["metadata"]["name"]
-            if name.startswith(RESULT_PREFIX):
-                out[name[len(RESULT_PREFIX) :]] = cm["metadata"]["labels"][
-                    "eph/verdict"
-                ]
+            verdict = (cm["metadata"].get("labels") or {}).get("eph/verdict")
+            if name.startswith(RESULT_PREFIX) and verdict:
+                out[name[len(RESULT_PREFIX) :]] = verdict
         return out
 
     def _synthesize(self, jobs, verdicts):
@@ -345,7 +345,7 @@ class Dispatcher:
             name, rid = j["metadata"]["name"], runids.run_of_job(j)
             if name in self._held:
                 continue
-            ok, why = self._fits(j, quota, used_extra, per_node, reserved)
+            ok, why, never = self._fits(j, quota, used_extra, per_node, reserved)
             if ok:
                 self.kube.patch_merge("jobs", name, {"spec": {"suspend": False}})
                 node = self.claim_node[job_claim(j)].name
@@ -359,7 +359,7 @@ class Dispatcher:
             else:
                 self.log(f"{rid}: waits, {why}")
                 waited = now - _ts(j["metadata"]["creationTimestamp"])
-                if waited > cfg.head_wait_seconds:
+                if waited > cfg.head_wait_seconds and not never:
                     self.log(f"{rid}: has waited {int(waited)}s, nothing may skip it")
                     break
         return started
@@ -368,25 +368,29 @@ class Dispatcher:
         cfg = self.cfg
         node = self.claim_node.get(job_claim(j))
         if node is None or node.name in cfg.never_nodes:
-            return False, "its node is not one the config allows"
+            return False, "its node is not one the config allows", True
         if job_class(j) not in node.classes:
-            return False, f"node does not take class {job_class(j)!r}"
+            return False, f"node does not take class {job_class(j)!r}", True
         if per_node.get(node.name, 0) >= node.max_worlds:
-            return False, f"node is at its cap of {node.max_worlds}"
+            return False, f"node is at its cap of {node.max_worlds}", False
         if quota is None:
-            return False, "the namespace quota could not be read"
+            return False, "the namespace quota could not be read", False
         cpu, mem = job_requests(j)
         (hc, uc), (hm, um) = quota["requests.cpu"], quota["requests.memory"]
         if uc + used_extra[0] + cpu > hc or um + used_extra[1] + mem > hm:
-            return False, "the namespace quota has no room"
+            return False, "the namespace quota has no room", False
         stats = self._node_disk(node.name)
         if stats is None:
-            return False, "disk stats unreadable, refusing"
+            return False, "disk stats unreadable, refusing", False
         avail, cap = stats
         left = avail - reserved.get(node.name, 0) - job_disk(j)
         if left * 100 < cfg.min_free_percent * cap:
-            return False, f"disk: node would drop under {cfg.min_free_percent}% free"
-        return True, ""
+            return (
+                False,
+                f"disk: node would drop under {cfg.min_free_percent}% free",
+                False,
+            )
+        return True, "", False
 
     # -- the loop --
     def run(self, interval=15, once=False, sleep=time.sleep):

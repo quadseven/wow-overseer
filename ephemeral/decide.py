@@ -35,7 +35,7 @@ def statistics_line(verdicts):
     cf, tf = c.count("FAIL"), t.count("FAIL")
     p = fisher_p(cf, len(c), tf, len(t))
     inv = round(1 / p) if p > 0 else 0
-    shown = f"p = 1/{inv}" if inv and abs(1 / inv - p) < 1e-9 else f"p = {p:.4f}"
+    shown = f"p = 1/{inv}" if inv and abs(1 / inv - p) <= 1e-9 * p else f"p = {p:.4f}"
     return (
         f"Statistics: control {cf} of {len(c)} FAIL, treatment {tf} of {len(t)} FAIL; "
         f"Fisher's exact test (one-sided) that the image made no difference: {shown}."

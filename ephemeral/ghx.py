@@ -29,12 +29,14 @@ class Gh:
         self.author = author
         self.write = write
 
-    def api(self, path, method="GET", body=None, missing_ok=False):
+    def api(self, path, method="GET", body=None, missing_ok=False, paginate=False):
         if method != "GET":
             if not self.write:
                 raise GhError("this client is read-only")
             require_identity(self.env)
         argv = ["gh", "api", path]
+        if paginate:
+            argv += ["--paginate", "--slurp"]
         if method != "GET":
             argv += ["-X", method]
         if body is not None:
@@ -44,7 +46,10 @@ class Gh:
             if missing_ok and "404" in err:
                 return None
             raise GhError(f"gh api {method} {path} failed: {err.strip()[:200]}")
-        return json.loads(out) if out.strip() else None
+        doc = json.loads(out) if out.strip() else None
+        if paginate and isinstance(doc, list) and all(isinstance(p, list) for p in doc):
+            doc = [item for page in doc for item in page]
+        return doc
 
     # -- reads
     def compare(self, repo, base, head):
@@ -55,7 +60,16 @@ class Gh:
         return self.api(f"repos/{repo}/issues/{n}")
 
     def comments(self, repo, n):
-        return self.api(f"repos/{repo}/issues/{n}/comments?per_page=100") or []
+        return (
+            self.api(f"repos/{repo}/issues/{n}/comments?per_page=100", paginate=True)
+            or []
+        )
+
+    def reviews(self, repo, n):
+        return (
+            self.api(f"repos/{repo}/pulls/{n}/reviews?per_page=100", paginate=True)
+            or []
+        )
 
     def label_exists(self, repo, name):
         return self.api(f"repos/{repo}/labels/{name}", missing_ok=True) is not None

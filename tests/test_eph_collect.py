@@ -337,5 +337,47 @@ class FetchTest(Base):
         self.assertIn("eph-result-abc123-c2", names)
 
 
+class ReviewFixesTest(Base):
+    def test_a_strangers_marker_comment_does_not_suppress_the_apps_own(self):
+        mark = "<!-- eph:demo-decree:" + SHA + " -->"
+        self.fg.comments[f"repos/{REPO}/issues/12/comments"] = [
+            {"user": {"login": "someone-else"}, "body": mark, "html_url": "u"}]  # fmt: skip
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        self.collect()
+        mine = [
+            c
+            for c in self.fg.comments[f"repos/{REPO}/issues/12/comments"]
+            if c["user"]["login"].endswith("[bot]")
+        ]
+        self.assertEqual(len(mine), 1)
+
+    def test_a_later_reject_marker_beats_an_earlier_approve_whatever_the_order(self):
+        self.main(approver=None)
+        ok = f"<!-- fleet:review v1 verdict=APPROVE head={HEAD} -->"
+        no = f"<!-- fleet:review v1 verdict=REQUEST_CHANGES head={HEAD} -->"
+        self.fg.comments[f"repos/{MAIN}/issues/7/comments"] = [
+            {"user": {"login": "luna[bot]"}, "body": no, "created_at": "2026-11-15T12:00:00Z", "id": 2},
+            {"user": {"login": "luna[bot]"}, "body": ok, "created_at": "2026-11-15T11:00:00Z", "id": 1},
+        ]  # fmt: skip
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        self.collect()
+        self.assertEqual(self.closes(), [])
+
+    def test_comments_are_read_across_pages(self):
+        pages = [[{"user": {"login": "a"}, "body": "x", "html_url": "p1"}],
+                 [{"user": {"login": "agent-anthropic-claude-code[bot]"}, "html_url": "p2",
+                   "body": "<!-- eph:demo-decree:" + SHA + " -->"}]]  # fmt: skip
+        calls = []
+
+        def runner(argv, text=None):
+            calls.append(argv)
+            return 0, json.dumps(pages), ""
+
+        got = ghx.Gh(runner).comments(REPO, 12)
+        self.assertEqual([c["html_url"] for c in got], ["p1", "p2"])
+        self.assertIn("--paginate", calls[0])
+        self.assertIn("--slurp", calls[0])
+
+
 if __name__ == "__main__":
     unittest.main()
