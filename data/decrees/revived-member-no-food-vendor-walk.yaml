@@ -49,6 +49,14 @@ observe:
       WHERE c.target_name = 'Og' AND c.kind = 'buy' AND c.status = 'delivered' AND c.created_at >= @t0
         AND t.class = 0 AND t.subclass = 5 AND t.spellcategory_1 = 11
     expect: {scalar: ">= 1"}
+  - name: og-holds-food-at-the-end
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM character_inventory i JOIN item_instance n ON n.guid = i.item
+      JOIN acore_world.item_template t ON t.entry = n.itemEntry
+      WHERE i.guid = @Og AND t.class = 0 AND t.subclass = 5 AND t.spellcategory_1 = 11
+    expect: {scalar: ">= 1"}
   - name: og-is-alive-at-the-end
     role: check
     when: end
