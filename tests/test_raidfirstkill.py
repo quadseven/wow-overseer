@@ -119,7 +119,7 @@ class AFirstKillOrderFormsFromTheEligibleSeats(unittest.TestCase):
         rows[0]["online"] = 1
         rows[0]["level"] = 49
         gone = rows.pop(1)["name"]
-        roster = raidrun.first_kill_roster("moltencore", self.lineup, rows, (1, 0, 0))
+        roster = raidrun.first_kill_roster("moltencore", self.lineup, rows, (1, 1, 1))
         why = dict(roster.left_out)
         self.assertIn("level 49", why[rows[0]["name"]])
         self.assertEqual("no current character row", why[gone])
@@ -141,6 +141,35 @@ class AFirstKillOrderFormsFromTheEligibleSeats(unittest.TestCase):
             "RAID_FIRST_KILL_QUORUM_HEALERS": "-2",
         }
         self.assertEqual((14, 3, 8), raidrun.first_kill_quorum(env))
+
+    def test_a_zero_or_negative_quorum_falls_back_to_the_defaults(self):
+        for env in (
+            {"RAID_FIRST_KILL_QUORUM_SEATS": "0"},
+            {"RAID_FIRST_KILL_QUORUM_TANKS": "-1"},
+            {"RAID_FIRST_KILL_QUORUM_HEALERS": "0"},
+        ):
+            self.assertEqual((30, 3, 8), raidrun.first_kill_quorum(env))
+        zeros = {k: "0" for k in raidrun.FIRST_KILL_ENV}
+        self.assertEqual((30, 3, 8), raidrun.first_kill_quorum(zeros))
+
+    def test_a_zero_quorum_is_logged_once(self):
+        zeros = {k: "0" for k in raidrun.FIRST_KILL_ENV}
+        raidrun._QUORUM_SAID.clear()
+        with self.assertLogs("raidrun", level="WARNING") as seen:
+            raidrun.first_kill_quorum(zeros)
+            raidrun.first_kill_quorum(zeros)
+        self.assertEqual(3, len(seen.output))  # one per key, not per call
+
+    def test_an_empty_lineup_with_zero_quorum_still_refuses(self):
+        empty = dict(self.lineup, groups=[])
+        roster = raidrun.first_kill_roster("moltencore", empty, [], (0, 0, 0))
+        self.assertTrue(roster.refusal)
+        self.assertEqual((), roster.seats)
+        offline = _rows(self.lineup, set())
+        roster = raidrun.first_kill_roster(
+            "moltencore", self.lineup, offline, (0, 0, 0)
+        )
+        self.assertIn("30 seats, 3 tanks and 8 healers", roster.refusal)
 
     def test_only_molten_core_has_a_first_kill_mode(self):
         roster = raidrun.first_kill_roster("ubrs", self.lineup, self.rows)

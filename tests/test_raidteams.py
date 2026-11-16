@@ -38,8 +38,8 @@ class TheFirstKillLineupChange(unittest.TestCase):
     """Cave's lineup after the first-kill decisions: two level 60 characters
     seated, four looping seats replaced by the closest to 60 in the same role."""
 
-    SEATED = {"Corvane": "tank", "Rubba": "dps", "Diggo": "dps", "Tugga": "healer"}
-    LOOPING = ("Crag", "Drogg", "Eggrok", "Fizzog")
+    SEATED = {"Rubba": "dps", "Diggo": "dps", "Tugga": "healer"}
+    LOOPING = ("Drogg", "Eggrok", "Fizzog")
 
     def test_the_four_looping_seats_are_gone_and_the_replacements_hold_their_role(self):
         by_name = {s.name: s for s in raidteams.seats("Cave")}
@@ -66,8 +66,17 @@ class TheFirstKillLineupChange(unittest.TestCase):
     ):
         upkeep = {n for _o, n in raidteams.MAINTENANCE["Cave"]}
         self.assertTrue({"Drogg", "Eggrok", "Fizzog"} <= upkeep)
-        self.assertIn("Crag", raidteams.BENCHED["Cave"])
         self.assertNotIn("Crag", {n for _o, n in raidteams.MAINTENANCE["Cave"]})
+
+    def test_corvane_keeps_questing_so_the_death_knight_class_quests_stay_covered(self):
+        by_name = {s.name for s in raidteams.seats("Cave")}
+        self.assertNotIn("Corvane", by_name)
+        self.assertIn("Corvane", raidteams.quester_names("Cave"))
+        self.assertEqual(10, len(raidteams.QUESTERS["Cave"]))
+
+    def test_crag_keeps_the_tank_seat_no_unseated_level_60_tank_exists(self):
+        crag = [s for s in raidteams.seats("Cave") if s.name == "Crag"]
+        self.assertEqual("tank", crag[0].seat)
 
     def test_a_group_that_lost_its_paladin_aura_has_a_shaman_totem(self):
         group4 = raidteams.GROUPS["Cave"][3]

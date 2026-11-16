@@ -21,6 +21,7 @@ nothing that talks to MySQL. bridge.py runs the statements named here.
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import re
@@ -28,6 +29,8 @@ from dataclasses import dataclass
 
 import jobs
 import raidroles
+
+log = logging.getLogger("raidrun")
 
 # The raid doors mod-overseer has (RaidDoorFor in overseer_decisions).
 MOLTEN_CORE = "moltencore"
@@ -407,6 +410,31 @@ def seat_eligibility_refusal(keyword: str, lineup: dict, current_rows: list) -> 
     )
 
 
+_QUORUM_SAID: set = set()
+
+
+def _positive_quorum(want: tuple) -> tuple:
+    """`want` with every value below 1 replaced by its default: a zero quorum
+    would form a raid from nobody. Said once per bad value, not per order."""
+    out = []
+    for value, default, key in zip(
+        want, FIRST_KILL_QUORUM, FIRST_KILL_ENV, strict=True
+    ):
+        if int(value) < 1:
+            if key not in _QUORUM_SAID:
+                _QUORUM_SAID.add(key)
+                log.warning(
+                    "first-kill quorum: %s is %s, which is not positive; using %d",
+                    key,
+                    value,
+                    default,
+                )
+            out.append(default)
+        else:
+            out.append(int(value))
+    return tuple(out)
+
+
 def first_kill_quorum(environ=None) -> tuple:
     """(seats, tanks, healers) a first-kill order needs, from the bridge's env,
     each falling back to FIRST_KILL_QUORUM when unset, unreadable or negative."""
@@ -417,8 +445,8 @@ def first_kill_quorum(environ=None) -> tuple:
             value = int(str(env.get(key, "")).strip())
         except ValueError:
             value = default
-        out.append(value if value >= 0 else default)
-    return tuple(out)
+        out.append(value)
+    return _positive_quorum(tuple(out))
 
 
 def strip_first_kill(words: list) -> tuple:
@@ -472,7 +500,7 @@ def first_kill_roster(
         return FirstKillRoster(
             lineup, (), [], "a first kill is an order for Molten Core only", ""
         )
-    want = tuple(quorum) if quorum is not None else FIRST_KILL_QUORUM
+    want = _positive_quorum(quorum) if quorum is not None else FIRST_KILL_QUORUM
     floor = MIN_LEVEL.get(keyword, 0)
     by_name = {str(r.get("name") or "").casefold(): r for r in current_rows or []}
     groups, kept, left_out, roles = [], [], [], []

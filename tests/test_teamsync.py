@@ -250,10 +250,10 @@ class StalledOnRenames(unittest.TestCase):
     def test_the_live_cave_numbers(self):
         members = _cave_live()
         self.assertEqual(len(members), 71)
-        # The 5 raid seats, the 9 questers' (Corvane was promoted to a raid
-        # seat) and the 2 bankers'.
+        # The 5 raid seats, the 10 questers' (5 since #927, 5 more since
+        # every class got one) and the 2 bankers'.
         self.assertEqual(
-            len(teamsync.open_seats("Cave", [m["name"] for m in members])), 16
+            len(teamsync.open_seats("Cave", [m["name"] for m in members])), 17
         )
         self.assertEqual(len(teamsync.recruits_in_guild("Cave", members)), 5)
 
@@ -295,7 +295,7 @@ class StalledOnRenames(unittest.TestCase):
             "or under), Mirra (level 60 or under), Velo (level 60 or under), "
             "Durga (level 60 or under), Fizzik (level 60 or under), Kellan (level "
             "60 or under), Bromli (level 60 or under), Sylvi (level 60 or under), "
-            "Pindle (level 60 or under), "
+            "Pindle (level 60 or under), Corvane (level 60 or under), "
             "Hoarg (level 60 or under), Stowk (level 60 or under)",
             why,
         )
@@ -375,11 +375,10 @@ class Questers(unittest.TestCase):
         # (operator, 2026-10-15): every race and every class of the faction.
         self.assertEqual(sorted(raidteams.QUESTERS), ["Bonkers", "Cave"])
         everyone = [q for g in raidteams.QUESTERS.values() for q in g]
-        self.assertEqual(len({q.name for q in everyone}), 19)
+        self.assertEqual(len({q.name for q in everyone}), 20)
         alliance = raidteams.QUESTERS["Cave"]
         horde = raidteams.QUESTERS["Bonkers"]
-        # Cave's death knight quester was promoted to a raid seat.
-        self.assertEqual(len(alliance), 9)
+        self.assertEqual(len(alliance), 10)
         self.assertEqual(len(horde), 10)
         self.assertEqual(
             {q.race for q in alliance},
@@ -389,11 +388,13 @@ class Questers(unittest.TestCase):
             {q.race for q in horde},
             {"Orc", "Undead", "Tauren", "Troll", "Blood Elf"},
         )
-        self.assertEqual({q.class_id for q in alliance}, {1, 2, 3, 4, 5, 7, 8, 9, 11})
+        self.assertEqual(
+            {q.class_id for q in alliance}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 11}
+        )
         self.assertEqual({q.class_id for q in horde}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 11})
         self.assertEqual(
             [(q.name, q.zone) for q in everyone if q.class_id == teamsync.DEATH_KNIGHT],
-            [("Saevor", "Acherus")],
+            [("Corvane", "Acherus"), ("Saevor", "Acherus")],
         )
 
     def test_a_death_knight_quester_is_reset_to_55(self):

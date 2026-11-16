@@ -72,7 +72,7 @@ GROUPS = {
             Seat("Bluk", "Aurehun", 7, "Enhancement", "dps", "Draenei", False),
         ),
         (  # group 3
-            Seat("Corvane", "", 6, "Blood", "tank", "Human", False),
+            Seat("Crag", "Annian", 1, "Protection", "tank", "Night Elf", False),
             Seat("Clobba", "Asvil", 2, "Retribution", "dps", "Draenei", True),
             Seat("Clunk", "Asparano", 5, "Holy", "healer", "Human", False),
             Seat("Cronk", "Ganras", 7, "Enhancement", "dps", "Draenei", False),
@@ -174,19 +174,16 @@ GROUPS = {
     ),
 }
 
-# SEATS PROMOTED FROM THE GUILD'S UPKEEP OR QUESTERS (first-kill lineup, 2026-11):
-# they keep the name the operator already gave them, so the letter-per-group
-# naming rule does not apply to them. Corvane (a level 60 death knight who had
-# been a quester) and Rubba (a level 60 mage) take the seats of two looping
-# characters; Diggo and Tugga are the nearest to 60 in the role of the other
-# two. The four displaced characters: Drogg, Eggrok and Fizzog take the three
-# maintenance places this freed; Crag, the one left over, is surplus.
-PROMOTED = {"Cave": ("Corvane", "Diggo", "Rubba", "Tugga")}
-
-# Members the lineup change displaced and no place was left for: still in the
-# guild (so its size holds), in no team, never on the kick list. Crag, a
-# looping level 35 warrior, was replaced by Corvane.
-BENCHED = {"Cave": ("Crag",)}
+# SEATS PROMOTED FROM THE GUILD'S UPKEEP (first-kill lineup, 2026-11): they keep
+# the name the operator already gave them, so the letter-per-group naming rule
+# does not apply to them. Rubba (a level 60 mage) and Diggo (a level 59 hunter)
+# take the seats of two looping damage characters; Tugga (a level 37 resto
+# shaman, the healer nearest to 50 outside the lineup) takes the healer's.
+# The three displaced characters take the three maintenance places this freed.
+# Crag keeps the tank seat: no unseated level 60 tank-capable character exists
+# (every level 60 warrior and paladin is seated, and Corvane, the only other
+# death knight, is the questers' only one), so nobody is nearer to 60 for it.
+PROMOTED = {"Cave": ("Diggo", "Rubba", "Tugga")}
 
 # (name now, approved name) for the 21 warlock summoners.
 SUMMONERS = {
@@ -281,6 +278,7 @@ QUESTERS = {
         Quester("Bromli", 2, "Dwarf", "healer", "Coldridge Valley"),
         Quester("Sylvi", 4, "Night Elf", "dps", "Shadowglen"),
         Quester("Pindle", 8, "Gnome", "dps", "Coldridge Valley"),
+        Quester("Corvane", 6, "Human", "tank", "Acherus"),
     ),
     "Bonkers": (
         Quester("Saelis", 2, "Blood Elf", "tank", "Sunstrider Isle"),
@@ -363,7 +361,6 @@ def names_of(guild: str) -> set:
         for old, new in pairs:
             out.update((old, new))
     out.update(LEAVING.get(guild, ()))
-    out.update(BENCHED.get(guild, ()))
     out.update(quester_names(guild))
     out.update(banker_names(guild))
     return out

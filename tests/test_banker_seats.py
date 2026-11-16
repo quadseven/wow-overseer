@@ -141,8 +141,7 @@ class TheTeamSyncSeatsThem(unittest.TestCase):
     def test_the_guild_has_room_for_the_bankers(self):
         self.assertEqual(83, teamsync.GUILD_SIZE)
         for guild in GUILDS:
-            benched = len(raidteams.BENCHED.get(guild, ()))
-            self.assertEqual(83, len(_full_guild(guild)) + 2 + benched)
+            self.assertEqual(83, len(_full_guild(guild)) + 2)
 
 
 if __name__ == "__main__":
