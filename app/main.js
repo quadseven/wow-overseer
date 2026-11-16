@@ -85,13 +85,23 @@ function loadView(name) {
 
 const isPhone = () => window.matchMedia(NARROW).matches;
 
-// A view's own stylesheet (paths under app/), linked once.
+// A view's own stylesheet (paths under app/), linked once and awaited before
+// first paint so dynamic view styles never shift initial skeletons.
 function useCss(path) {
   const href = api.appUrl(path);
-  if (document.querySelector('link[data-view-css="' + CSS.escape(path) + '"]')) return;
+  const existing = document.querySelector('link[data-view-css="' + CSS.escape(path) + '"]');
+  if (existing) return existing._ready || Promise.resolve();
   const link = document.createElement("link");
   link.rel = "stylesheet"; link.href = href; link.setAttribute("data-view-css", path);
+  link._ready = new Promise((resolve) => {
+    let settled = false;
+    const done = () => { if (!settled) { settled = true; resolve(); } };
+    link.addEventListener("load", done, { once: true });
+    link.addEventListener("error", done, { once: true });
+    window.setTimeout(done, 1500);
+  });
   document.head.appendChild(link);
+  return link._ready;
 }
 
 function banner(h) {
@@ -232,7 +242,8 @@ async function route() {
   // the page now, and drawing this one would put the wrong view under
   // the hash and poll its reads.
   if (location.hash !== hash) return;
-  (module.css || []).forEach(useCss);
+  await Promise.all((module.css || []).map(useCss));
+  if (location.hash !== hash) return;
   const ctx = {
     view: r.view, section: r.section, params: r.params, query: parsed.query, hash,
     get: api.peek, isPhone: isPhone(), previousVisit: previousVisit(),
