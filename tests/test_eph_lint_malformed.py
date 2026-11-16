@@ -10,7 +10,7 @@ from ephemeral.miniyaml import loads
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DECREES = sorted(
-    p for p in (ROOT / "decrees").glob("*.yaml") if p.name != "anchors.yaml"
+    p for p in (ROOT / "data" / "decrees").glob("*.yaml") if p.name != "anchors.yaml"
 )
 ANCHORS = anchors_mod.Anchors.load()
 SCHEMA = dbschema.Schema.load()
