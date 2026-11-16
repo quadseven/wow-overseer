@@ -25,8 +25,10 @@ from .miniyaml import YamlError, loads
 REALM_RANGE = range(100, 200)
 BASE_DEADLINE_PAD = 15 * 60
 BRIDGE = "bridge"  # the sidecar's container name in the template
-BRIDGE_PULL_SECRET = "ghcr"  # the bridge image is a private package
-BRIDGE_DEPLOYMENT = "wow-overseer"  # the base realm's bridge, where the live digest is read
+BRIDGE_PULL_NAME = "ghcr"  # the bridge image is a private package
+BRIDGE_DEPLOYMENT = (
+    "wow-overseer"  # the base realm's bridge, where the live digest is read
+)
 BRIDGE_CONTAINER = "overseer"
 # What fills {{BRIDGE_IMAGE}} on a bridge-off run, where the container is then removed.
 BRIDGE_OFF_IMAGE = "bridge-off.invalid/not-run@sha256:" + "0" * 64
@@ -123,12 +125,19 @@ def read_live(cfg, kube):
 def read_bridge_image(cfg, kube):
     """The base realm's running bridge image, by digest (the treatment arm's default)."""
     dep = kube.get(
-        "deployments", BRIDGE_DEPLOYMENT, namespace=cfg.source_namespace, missing_ok=True
+        "deployments",
+        BRIDGE_DEPLOYMENT,
+        namespace=cfg.source_namespace,
+        missing_ok=True,
     )
     if dep is None:
-        raise SubmitError("the base realm has no bridge Deployment to read the image from")
+        raise SubmitError(
+            "the base realm has no bridge Deployment to read the image from"
+        )
     spec = dep["spec"]["template"]["spec"]
-    c = next((c for c in spec.get("containers", []) if c["name"] == BRIDGE_CONTAINER), None)
+    c = next(
+        (c for c in spec.get("containers", []) if c["name"] == BRIDGE_CONTAINER), None
+    )
     if not c or not _DIGEST_REF.match(c.get("image", "")):
         raise SubmitError("the base realm's bridge image is not pinned by digest")
     return c["image"]
@@ -189,19 +198,29 @@ def _apply_bridge(job, image):
         spec["initContainers"] = [c for c in inits if c.get("name") != BRIDGE]
         if "imagePullSecrets" in spec:
             spec["imagePullSecrets"] = [
-                p for p in spec["imagePullSecrets"] if p.get("name") != BRIDGE_PULL_SECRET
+                p for p in spec["imagePullSecrets"] if p.get("name") != BRIDGE_PULL_NAME
             ]
         if BRIDGE_OFF_IMAGE in json.dumps(job):
-            raise SubmitError("the bridge placeholder image is outside the bridge sidecar")
+            raise SubmitError(
+                "the bridge placeholder image is outside the bridge sidecar"
+            )
         return
     if len(mine) != 1:
         raise SubmitError("the world template has no bridge sidecar")
     c = mine[0]
     text = json.dumps(c)
+    volumes = {v.get("name"): v for v in spec.get("volumes", [])}
+    secret_data = any(
+        "secretRef" in (src or {}) for src in c.get("envFrom", [])
+    ) or any(
+        {"secret", "projected"} & set(volumes.get(m.get("name"), {}))
+        for m in c.get("volumeMounts", [])
+    )
     if (
         c.get("image") != image
         or c.get("restartPolicy") != "Always"
         or "secretKeyRef" in text
+        or secret_data
         or "serviceaccount" in text
         or "api-token" in text
         or c.get("ports")

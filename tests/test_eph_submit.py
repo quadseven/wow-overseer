@@ -214,9 +214,7 @@ class BridgeTest(Base):
     """bridge: on adds the sidecar at the arm's own digest; bridge: off renders without it (#2776)."""
 
     def jobs_by_arm(self):
-        return {
-            j["metadata"]["labels"]["eph/arm"]: j for j in self.cluster.of("jobs")
-        }
+        return {j["metadata"]["labels"]["eph/arm"]: j for j in self.cluster.of("jobs")}
 
     def test_bridge_off_renders_no_sidecar_pull_secret_or_placeholder(self):
         self.submit(**CONTROL)
@@ -281,7 +279,9 @@ class BridgeTest(Base):
             c for c in spec["initContainers"] if c["name"] != "bridge"
         ]
         cm["data"]["job.yaml"] = json.dumps(doc).replace("{{BRIDGE_IMAGE}}", "")
-        cm["data"]["tokens.txt"] = cm["data"]["tokens.txt"].replace("BRIDGE_IMAGE: x", "")
+        cm["data"]["tokens.txt"] = cm["data"]["tokens.txt"].replace(
+            "BRIDGE_IMAGE: x", ""
+        )
         with self.assertRaisesRegex(submit.SubmitError, "no bridge sidecar"):
             self.submit(BRIDGE_ON, arm="treatment")
         self.assertEqual(self.cluster.of("jobs"), [])
@@ -289,7 +289,14 @@ class BridgeTest(Base):
     def test_a_sidecar_that_reaches_a_secret_or_the_api_is_refused(self):
         cm = self.cluster.objs[("configmaps", "wow-ephemeral", "eph-world-template")]
         for bad in (
-            {"env": [{"name": "T", "valueFrom": {"secretKeyRef": {"name": "s", "key": "k"}}}]},
+            {
+                "env": [
+                    {
+                        "name": "T",
+                        "valueFrom": {"secretKeyRef": {"name": "s", "key": "k"}},
+                    }
+                ]
+            },
             {"volumeMounts": [{"name": "api-token", "mountPath": "/x"}]},
             {"ports": [{"containerPort": 8080}]},
         ):
@@ -303,6 +310,63 @@ class BridgeTest(Base):
                 self.submit(BRIDGE_ON, arm="treatment")
             cm["data"]["job.yaml"] = saved
         self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_a_sidecar_with_any_other_path_to_secret_data_is_refused(self):
+        cm = self.cluster.objs[("configmaps", "wow-ephemeral", "eph-world-template")]
+        saved = cm["data"]["job.yaml"]
+        cases = {
+            "envFrom secret": (
+                {"envFrom": [{"secretRef": {"name": "s"}}]},
+                [],
+            ),
+            "mount of a secret volume": (
+                {"volumeMounts": [{"name": "creds", "mountPath": "/c"}]},
+                [{"name": "creds", "secret": {"secretName": "s"}}],
+            ),
+            "mount of a projected volume": (
+                {"volumeMounts": [{"name": "proj", "mountPath": "/p"}]},
+                [
+                    {
+                        "name": "proj",
+                        "projected": {"sources": [{"secret": {"name": "s"}}]},
+                    }
+                ],
+            ),
+        }
+        for label, (patch, volumes) in cases.items():
+            doc = json.loads(saved)
+            spec = doc["spec"]["template"]["spec"]
+            spec["volumes"] += volumes
+            for c in spec["initContainers"]:
+                if c["name"] == "bridge":
+                    c.update(patch)
+            cm["data"]["job.yaml"] = json.dumps(doc)
+            with self.assertRaisesRegex(
+                submit.SubmitError, "bridge sidecar must be", msg=label
+            ):
+                self.submit(BRIDGE_ON, arm="treatment")
+        cm["data"]["job.yaml"] = saved
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_a_sidecar_may_mount_the_run_and_tmp_volumes_and_a_plain_configmap_env(
+        self,
+    ):
+        cm = self.cluster.objs[("configmaps", "wow-ephemeral", "eph-world-template")]
+        doc = json.loads(cm["data"]["job.yaml"])
+        spec = doc["spec"]["template"]["spec"]
+        spec["volumes"] += [
+            {"name": "run", "emptyDir": {}},
+            {"name": "tmp", "emptyDir": {}},
+        ]
+        for c in spec["initContainers"]:
+            if c["name"] == "bridge":
+                c["volumeMounts"] = [
+                    {"name": "run", "mountPath": "/run/eph", "readOnly": True},
+                    {"name": "tmp", "mountPath": "/tmp"},
+                ]
+        cm["data"]["job.yaml"] = json.dumps(doc)
+        self.submit(BRIDGE_ON, arm="treatment")
+        self.assertEqual(len(self.cluster.of("jobs")), 3)
 
     def test_the_dispatcher_counts_the_sidecar_requests(self):
         self.submit(BRIDGE_ON, **WITH_BRIDGE)
