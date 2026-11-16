@@ -266,6 +266,21 @@ class TheFirstKill(unittest.TestCase):
         self.assertEqual("", out.refusal)
 
 
+class TheDecree(unittest.TestCase):
+    PATH = "data/decrees/paladin-respecs-to-holy-for-the-healer-seat.yaml"
+
+    def test_it_names_a_real_fix_commit_and_the_respec_issue(self):
+        with open(self.PATH, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertRegex(
+            text, r"fix: \{repo: quadseven/wow-overseer, commit: [0-9a-f]{40}\}"
+        )
+        self.assertNotIn("commit: TODO", text)
+        # 2572 is healer-first levelling and puts respeccing out of scope.
+        self.assertIn("issue: 2770,", text)
+        self.assertNotIn("issue: 2572", text)
+
+
 class TheBridge(unittest.TestCase):
     def _text(self, path):
         with open(path, encoding="utf-8") as fh:

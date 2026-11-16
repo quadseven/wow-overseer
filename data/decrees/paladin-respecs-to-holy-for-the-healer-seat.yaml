@@ -1,6 +1,6 @@
 # A level 60 Retribution paladin who holds a Holy healer seat walks to a paladin
 # trainer, pays the talent reset from its own gold, ends in the Holy tree and
-# plays the healing strategy (wow-overseer issue 2572, the Molten Core healer gap).
+# plays the healing strategy (wow-overseer issue 2770, the Molten Core healer gap).
 #
 # Cave had two healers at level 50 or more against a first-kill quorum of eight,
 # and all six of its level 60 paladins were seated Retribution. The owner chose
@@ -20,8 +20,8 @@
 decree: v1
 id: paladin-respecs-to-holy-for-the-healer-seat
 proves:
-  - {repo: quadseven/wow-overseer, issue: 2572, criterion: "a level 60 paladin with gold ends Holy with the heal strategy and less gold"}
-fix: {repo: quadseven/wow-overseer, commit: TODO}
+  - {repo: quadseven/wow-overseer, issue: 2770, criterion: "a level 60 paladin with gold ends Holy with the heal strategy and less gold"}
+fix: {repo: quadseven/wow-overseer, commit: b65086a717e959ee17bce5a25771c0b07ab2cff1}
 world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
 duration: 30m
