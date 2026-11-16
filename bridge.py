@@ -22485,7 +22485,8 @@ class Bridge(discord.Client):
             deaths = (await asyncio.to_thread(died_of, list(names))
                       if died_of else ())
             here = {"map_id": standing.get("map_id"),
-                    "x": standing.get("pos_x"), "y": standing.get("pos_y")}
+                    "x": standing.get("pos_x"), "y": standing.get("pos_y"),
+                    "z": standing.get("pos_z")}
             # EVERY STOP PASSED OVER IS SAID, whether another vendor is chosen
             # or the hub stands; at most three lines.
             for stop, count in townerrand.lethal_stops(
@@ -32674,7 +32675,7 @@ def _fetch_family_levels(names: list) -> dict:
 # gathering survey already calls `_fetch_positions([leader])` for the map it
 # stands on, so the zone arrives in a query that was already being run.
 _FAMILY_POSITION_SQL = (
-    "SELECT name, map_id, instance_id, zone_id, pos_x, pos_y FROM overseer_snapshot "
+    "SELECT name, map_id, instance_id, zone_id, pos_x, pos_y, pos_z FROM overseer_snapshot "
     "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND"
 )
 
@@ -40843,7 +40844,7 @@ def _forge_refusal(names: list, leader: str, spawn, aim: str) -> str:
     if not here:
         return ""
     start = {"map_id": here.get("map_id"), "x": here.get("pos_x"),
-             "y": here.get("pos_y")}
+             "y": here.get("pos_y"), "z": here.get("pos_z")}
     discs = _fetch_death_discs()
     if discs:
         goal = {"map_id": spawn.get("map_id"), "x": spawn.get("x"),
@@ -44585,7 +44586,7 @@ def _death_disc_refusal(leader: str, aim: str) -> str:
     if not row:
         return ""
     here = {"map_id": row.get("map_id"), "x": row.get("pos_x"),
-            "y": row.get("pos_y")}
+            "y": row.get("pos_y"), "z": row.get("pos_z")}
     spawn = None if ground else _nearest_keyword_spawn(leader, aim)
     return deathcells.aim_refusal(discs, here, aim, spawn=spawn)
 
@@ -44626,7 +44627,7 @@ def _deadly_standing_aims(names: list, aims: dict) -> dict:
         if not row:
             continue
         here = {"map_id": row.get("map_id"), "x": row.get("pos_x"),
-                "y": row.get("pos_y")}
+                "y": row.get("pos_y"), "z": row.get("pos_z")}
         spawn = (None if places.parse_ground_aim(aim)
                  else _nearest_keyword_spawn(name, aim))
         why = deathcells.standing_aim_refusal(discs, deaths, here, aim,
@@ -44648,7 +44649,8 @@ def _member_death_disc_refusals(names: list, aim: str) -> dict:
         return {}
     rows = _fetch_positions(list(names))
     here = {
-        n: {"map_id": r.get("map_id"), "x": r.get("pos_x"), "y": r.get("pos_y")}
+        n: {"map_id": r.get("map_id"), "x": r.get("pos_x"), "y": r.get("pos_y"),
+            "z": r.get("pos_z")}
         for n, r in rows.items()
     }
     spawns = {}

@@ -44,6 +44,14 @@ HEAVY_DEATHS = 50
 # many yards of a heavy disc's centre: the worldserver picks the road, and the
 # road around the world's walls bends through such ground.
 CORRIDOR_YARDS = 1500.0
+# A walker this close to its goal is at the counter already: the walk is a few
+# steps, not a crossing of anything (the Undercity mailbox hold, #1261).
+INTERACT_YARDS = 12.0
+# A fall disc condemns only walkers standing near the height the fall began.
+# The death row's z is where the character LANDED; z + yards_fallen is the
+# ledge it dropped from. A walker whose own z is this far (or more) below
+# that ledge is on the floor under it, and the floor does not kill.
+FALL_CLEARANCE_YARDS = MIN_FALL_YARDS
 # How far back the rows are read, in days.
 DEATH_DAYS = 7
 
@@ -95,6 +103,10 @@ class Disc:
     radius: float
     kind: str
     deaths: int
+    # The lowest ledge the disc's falls began from, set only when EVERY death
+    # in it is a fall with a known landing z; None for lava, slime or a fall
+    # with no z (those condemn the ground whatever height the walker is at).
+    top_z: float | None = None
 
     def said(self) -> str:
         return "%d %s death%s within %d yards of (%d, %d) on map %d" % (
@@ -139,7 +151,11 @@ def discs(rows) -> list:
     for r in rows or ():
         kind = kind_of(r)
         if kind:
-            spots.append((int(_num(r, "map_id")), _num(r, "x"), _num(r, "y"), kind))
+            z, fell = _num(r, "z"), _num(r, "yards_fallen")
+            top = z + fell if kind == "fall" and z is not None and fell else None
+            spots.append(
+                (int(_num(r, "map_id")), _num(r, "x"), _num(r, "y"), kind, top)
+            )
     parent = list(range(len(spots)))
 
     def find(i):
@@ -164,6 +180,8 @@ def discs(rows) -> list:
         cy = sum(m[2] for m in members) / len(members)
         reach = max(math.hypot(m[1] - cx, m[2] - cy) for m in members)
         kinds = sorted({m[3] for m in members})
+        tops = [m[4] for m in members]
+        top_z = min(tops) if all(t is not None for t in tops) else None
         out.append(
             Disc(
                 map_id=members[0][0],
@@ -172,6 +190,7 @@ def discs(rows) -> list:
                 radius=min(MAX_RADIUS, max(MIN_RADIUS, reach + MARGIN_YARDS)),
                 kind="/".join(kinds),
                 deaths=len(members),
+                top_z=top_z,
             )
         )
     return sorted(out, key=lambda d: (d.map_id, d.x, d.y))
@@ -184,6 +203,19 @@ def _point(p):
     if m is None or x is None or y is None:
         return None
     return int(m), x, y
+
+
+def _on_the_floor(disc, start) -> bool:
+    """Whether the walker at `start` ({.., z}) stands well below the ledge a
+    fall disc's deaths began from, so that its ground is the floor under the
+    drop and not the drop. Needs the walker's z and the disc's ledge: with
+    either missing the disc stands and refuses, as it always did."""
+    z = _num(start, "z")
+    return (
+        disc.top_z is not None
+        and z is not None
+        and z <= disc.top_z - FALL_CLEARANCE_YARDS
+    )
 
 
 def _to_segment(disc, a, b) -> float:
@@ -207,8 +239,13 @@ def crossing(all_discs, start, goal):
     a, b = _point(start), _point(goal)
     if a is None or b is None or a[0] != b[0]:
         return None
+    # At the counter already: a few steps are no crossing.
+    if math.hypot(b[1] - a[1], b[2] - a[2]) <= INTERACT_YARDS:
+        return None
     for disc in all_discs or ():
         if disc.map_id != a[0]:
+            continue
+        if _on_the_floor(disc, start):
             continue
         if math.hypot(disc.x - a[1], disc.y - a[2]) <= disc.radius:
             continue
