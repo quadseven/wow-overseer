@@ -1,0 +1,58 @@
+# Blackrock Depths, the Emperor's throne room: (a) after the room clear gives up,
+# no advanced-pull plan is made for a pack inside the sleeping Emperor's wake
+# sphere (no. 132); (b) a party that is not ready at the Emperor with room trash up
+# goes on or ends at the wait ceiling instead of standing for 20 minutes (no. 154).
+#
+# The family is placed at the Emperor and starts below full health so the
+# not-ready wait is real. Nothing is granted.
+# Fixes: mod-dungeon-clear pull 133 (pull planner) and no. 155 (wait ceiling);
+# the commit below is no. 155, the later of the two.
+decree: v1
+id: brd-emperor-room-trash-and-ceiling
+proves:
+  - {repo: quadseven/mod-dungeon-clear, issue: 132, criterion: "a BRD run that gives up its Emperor room clear logs no advanced-pull plan on a pack inside the throne sphere and reaches the Emperor through the at-boss gate"}
+  - {repo: quadseven/mod-dungeon-clear, issue: 154, criterion: "a BRD party not ready at the Emperor with room trash up goes on or ends at the wait ceiling instead of standing for 20 minutes"}
+fix: {repo: quadseven/mod-dungeon-clear, commit: "cf838707f5806ff7040b0f337aeb7ca2027d3efc"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 45m
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 60, at: {creature: "Emperor Dagran Thaurissan"}}
+    ceiling: "nothing granted but position and a lowered health"
+arrange:
+  - instance: {map: "Blackrock Depths", as: brd, bind: family:grug}
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+observe:
+  - name: party-is-at-the-throne-room
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid IN (@cast) AND map = 230
+    expect: {scalar: ">= 1"}
+  - name: party-starts-hurt
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND health < max_health
+    expect: {scalar: ">= 1"}
+  - name: run-did-not-stand-twenty-minutes
+    role: check
+    when: end
+    sql: |
+      SELECT id, outcome, ended_reason FROM overseer_dungeon_run
+      WHERE map_id = 230 AND started_at >= @t0 AND outcome = 'stalled'
+    expect: {rows: 0}
+  - name: emperor-reached-or-run-ended-at-ceiling
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run_event
+      WHERE family = 'Grug' AND created_at >= @t0 AND kind IN ('boss', 'ended', 'busy_ceiling')
+    expect: {scalar: ">= 1"}
+  - name: no-advanced-pull-inside-the-sphere
+    role: check
+    log: {pattern: "advanced.pull.*(throne|sphere|Emperor)", expect: {count: 0}}

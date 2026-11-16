@@ -1,0 +1,47 @@
+# Blackrock Depths: the Grim Guzzler ale run rests the party first (a hold line
+# before the run), and a failed mug purchase names its reason.
+#
+# The family starts hurt (50 percent health), so the hold is the thing that has
+# to happen. Health is the only state changed; nothing is granted.
+# Fix: mod-dungeon-clear pull 127.
+decree: v1
+id: brd-ale-run-rested-party
+proves:
+  - {repo: quadseven/mod-dungeon-clear, issue: 126, criterion: "a BRD run's log shows the hold line before the ale run, and the next purchase failure names its reason"}
+fix: {repo: quadseven/mod-dungeon-clear, commit: "481802b963e57776afc114005a9a9492709bfc2b"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 40m
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 50, at: {creature: "Ribbly Screwspigot"}}
+    ceiling: "nothing granted but position and a lowered health"
+arrange:
+  - instance: {map: "Blackrock Depths", as: brd, bind: family:grug}
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+observe:
+  - name: party-starts-hurt
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND health < max_health
+    expect: {scalar: ">= 1"}
+  - name: run-opened-in-brd
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run
+      WHERE map_id = 230 AND started_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: no-purchase-failure-without-a-reason
+    role: check
+    log: {pattern: "mug purchase failed with no reason", expect: {count: 0}}
+  - name: no-family-death-in-the-bar
+    role: check
+    when: end
+    sql: |
+      SELECT character_name, created_at FROM overseer_death WHERE created_at >= @t0 AND map = 230
+    expect: {rows: 0}

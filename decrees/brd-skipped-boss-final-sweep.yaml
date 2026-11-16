@@ -1,0 +1,53 @@
+# Blackrock Depths: a run that skips a boss mid-run revisits it in a bounded
+# final sweep before the run ends, so a full clear is not lost.
+# The skip is the operator's own verb ('dc skip 1', the module's skip command),
+# sent as a bot command row ten minutes in.
+# Fix: mod-dungeon-clear pull 153.
+decree: v1
+id: brd-skipped-boss-final-sweep
+proves:
+  - {repo: quadseven/mod-dungeon-clear, issue: 152, criterion: "a run that skips a boss mid-run revisits it before the run ends"}
+fix: {repo: quadseven/mod-dungeon-clear, commit: "467b53ceb29387d244f37880326a21e40dfd1036"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 1h
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, at: {areatrigger: 1466}}
+    ceiling: "nothing granted but position"
+arrange:
+  - instance: {map: "Blackrock Depths", as: brd, bind: family:grug}
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+  - at: 10m
+    command: {who: "cast[0]", kind: bot, text: "dc skip 1"}
+observe:
+  - name: run-opened-in-brd
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run WHERE map_id = 230 AND started_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: a-boss-was-skipped
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run_event
+      WHERE family = 'Grug' AND created_at >= @t0 AND kind = 'dc_skip'
+    expect: {scalar: ">= 1"}
+  - name: every-credited-boss-is-in-the-run-events
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run_event
+      WHERE family = 'Grug' AND created_at >= @t0 AND kind = 'boss'
+    expect: {scalar: ">= 2"}
+  - name: run-ended-complete
+    role: check
+    when: end
+    sql: |
+      SELECT id, outcome FROM overseer_dungeon_run
+      WHERE map_id = 230 AND started_at >= @t0 AND state = 'ended' AND outcome = 'complete'
+    expect: {rows: ">= 1"}

@@ -1,0 +1,49 @@
+# Blackrock Depths: a paladin who does not know Redemption is not elected the
+# healer's resurrector, so the run does not hold on 30 refused casts.
+# Grog is the family paladin; the five Redemption ranks are removed from his
+# book (spell ids 7328, 10322, 10324, 20772, 20773).
+# Fix: mod-dungeon-clear pull 143.
+decree: v1
+id: brd-paladin-without-redemption
+proves:
+  - {repo: quadseven/mod-dungeon-clear, issue: 142, criterion: "a paladin with no resurrect spell is not elected rezzer and no run holds over 30 refused casts"}
+fix: {repo: quadseven/mod-dungeon-clear, commit: "2495da96a3c036e834988103aaf116fd5711e825"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 40m
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, at: {areatrigger: 1466}}   # Blackrock Depths Entrance
+    ceiling: "nothing granted but position"
+  - who: Grog
+    set: {spells_remove: [7328, 10322, 10324, 20772, 20773]}
+    ceiling: "Redemption removed, nothing granted"
+arrange:
+  - instance: {map: "Blackrock Depths", as: brd, bind: family:grug}
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+observe:
+  - name: paladin-has-no-redemption
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_spell WHERE guid = @Grog AND spell IN (7328, 10322, 10324, 20772, 20773)
+    expect: {scalar: "= 0"}
+  - name: run-opened-in-brd
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run WHERE map_id = 230 AND started_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: no-run-closed-stalled
+    role: check
+    when: end
+    sql: |
+      SELECT id, outcome FROM overseer_dungeon_run
+      WHERE map_id = 230 AND started_at >= @t0 AND outcome = 'stalled'
+    expect: {rows: 0}
+  - name: no-refused-cast-storm
+    role: check
+    log: {pattern: "Grog.*(cannot|refused).*(Redemption|resurrect)", expect: {count: 0}}
