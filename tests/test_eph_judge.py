@@ -348,6 +348,28 @@ class LogAssertionTest(unittest.TestCase):
         self.assertEqual(row["observed"], "count=2")
         self.assertEqual(row["matched"], ["ghost loop retry 1", "ghost loop retry 2"])
 
+    def test_an_unreadable_log_is_invalid_never_zero_matches(self):
+        def broken():
+            raise judge.JudgeError("worldserver log unreadable")
+
+        clock = Clock()
+        r = judge.Judge(
+            self.decree(0),
+            guzzler_world(clock),
+            HANDOFF,
+            log_text=broken,
+            clock=clock.monotonic,
+            sleep=clock.sleep,
+        ).run()
+        self.assertEqual(r["verdict"], "INVALID")
+        self.assertEqual(named(r, "no-ghost-loop")["status"], "error")
+
+    def test_a_missing_log_path_refuses(self):
+        with self.assertRaises(judge.JudgeError):
+            judge._read_log(None)
+        with self.assertRaises(judge.JudgeError):
+            judge._read_log("/no/such/world.log")
+
     def test_a_clean_log_passes(self):
         clock = Clock()
         r = run(self.decree(0), guzzler_world(clock), clock, log="all quiet\n")

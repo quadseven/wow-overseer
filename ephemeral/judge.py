@@ -383,7 +383,12 @@ class Judge:
         if "log" in o:
             rec["when"] = "log"
             pattern = re.compile(o["log"]["pattern"])
-            lines = [ln for ln in self.log_text().splitlines() if pattern.search(ln)]
+            try:
+                text = self.log_text()
+            except JudgeError as exc:
+                rec["status"], rec["detail"] = "error", str(exc)[:MAX_CELL_CHARS]
+                return rec
+            lines = [ln for ln in text.splitlines() if pattern.search(ln)]
             rec["pattern"] = o["log"]["pattern"]
             rec["matched"] = [ln[:MAX_CELL_CHARS] for ln in lines[:MAX_MATCHED_LINES]]
             rec["observed"] = f"count={len(lines)}"
@@ -565,10 +570,13 @@ def _invalid(decree_id, env, sha, reason):
 
 
 def _read_log(path):
+    """The worldserver log, or a refusal: a log we cannot read must never read as zero matches."""
+    if not path:
+        raise JudgeError("no worldserver log file was given")
     try:
         return pathlib.Path(path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
+    except OSError as exc:
+        raise JudgeError(f"worldserver log unreadable: {exc}") from exc
 
 
 def run(
@@ -647,7 +655,7 @@ def _judge(raw, sha, env, connect, log_path, clock, anchors_path):
         g.set_query_timeout(QUERY_TIMEOUT_SECONDS)
         return Judge(
             decree, GuardedWorldDb(g, live), handoff,
-            log_text=lambda: _read_log(log_path) if log_path else "",
+            log_text=lambda: _read_log(log_path),
             clock=clock.monotonic, sleep=clock.sleep,
             run_id=env.get("EPH_RUN_ID", ""), sha=sha, arm=env.get("EPH_ARM", ""),
             schema=live,
