@@ -379,5 +379,67 @@ class ReviewFixesTest(Base):
         self.assertIn("--slurp", calls[0])
 
 
+class LatestReviewDecidesTest(Base):
+    def reviews(self, *rows):
+        out = []
+        for n, (who, state, at) in enumerate(rows):
+            out.append({"id": n + 1, "state": state, "user": {"login": who},
+                        "commit_id": HEAD, "submitted_at": at})  # fmt: skip
+        self.fg.answers[("GET", f"repos/{MAIN}/pulls/7/reviews?per_page=100")] = out
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        self.collect()
+
+    def test_approve_then_request_changes_refuses(self):
+        self.reviews(("luna[bot]", "APPROVED", "2026-11-15T10:00:00Z"),
+                     ("luna[bot]", "CHANGES_REQUESTED", "2026-11-15T11:00:00Z"))  # fmt: skip
+        self.assertEqual(self.closes(), [])
+
+    def test_approve_then_dismissed_refuses(self):
+        self.reviews(("luna[bot]", "APPROVED", "2026-11-15T10:00:00Z"),
+                     ("luna[bot]", "DISMISSED", "2026-11-15T11:00:00Z"))  # fmt: skip
+        self.assertEqual(self.closes(), [])
+
+    def test_request_changes_then_approve_passes(self):
+        self.reviews(("luna[bot]", "CHANGES_REQUESTED", "2026-11-15T10:00:00Z"),
+                     ("luna[bot]", "APPROVED", "2026-11-15T11:00:00Z"))  # fmt: skip
+        self.assertEqual(len(self.closes()), 1)
+
+    def test_approve_then_comment_still_passes(self):
+        self.reviews(("luna[bot]", "APPROVED", "2026-11-15T10:00:00Z"),
+                     ("luna[bot]", "COMMENTED", "2026-11-15T11:00:00Z"))  # fmt: skip
+        self.assertEqual(len(self.closes()), 1)
+
+    def test_order_is_by_timestamp_not_list_position(self):
+        self.reviews(("luna[bot]", "CHANGES_REQUESTED", "2026-11-15T11:00:00Z"),
+                     ("luna[bot]", "APPROVED", "2026-11-15T10:00:00Z"))  # fmt: skip
+        self.assertEqual(self.closes(), [])
+
+    def test_another_reviewers_outstanding_request_blocks(self):
+        self.reviews(("luna[bot]", "APPROVED", "2026-11-15T10:00:00Z"),
+                     ("gemini[bot]", "CHANGES_REQUESTED", "2026-11-15T11:00:00Z"))  # fmt: skip
+        self.assertEqual(self.closes(), [])
+
+    def test_a_marker_after_a_formal_approval_decides_for_that_reviewer(self):
+        self.main(approver=None)
+        self.fg.answers[("GET", f"repos/{MAIN}/pulls/7/reviews?per_page=100")] = [
+            {"id": 1, "state": "APPROVED", "user": {"login": "luna[bot]"},
+             "commit_id": HEAD, "submitted_at": "2026-11-15T10:00:00Z"}]  # fmt: skip
+        no = f"<!-- fleet:review v1 verdict=REQUEST_CHANGES head={HEAD} -->"
+        self.fg.comments[f"repos/{MAIN}/issues/7/comments"] = [
+            {"id": 5, "user": {"login": "luna[bot]"}, "body": no, "created_at": "2026-11-15T12:00:00Z"}]  # fmt: skip
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        self.collect()
+        self.assertEqual(self.closes(), [])
+
+    def test_an_approval_of_an_older_commit_after_a_newer_one_does_not_count(self):
+        self.main(approver=None)
+        self.fg.answers[("GET", f"repos/{MAIN}/pulls/7/reviews?per_page=100")] = [
+            {"id": 1, "state": "APPROVED", "user": {"login": "luna[bot]"},
+             "commit_id": "z" * 40, "submitted_at": "2026-11-15T10:00:00Z"}]  # fmt: skip
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        self.collect()
+        self.assertEqual(self.closes(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

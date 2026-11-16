@@ -56,28 +56,48 @@ def decree_status(gh, cfg, rec):
     )
 
 
-def _independent(gh, cfg, repo, pr):
-    author, head = pr["user"]["login"], pr["head"]["sha"]
-    n = pr["number"]
-    other = lambda login: login not in (author, cfg.author_login)  # noqa: E731
+def _decisions(gh, repo, pr):
+    """[(time, id, reviewer, 'approve' | 'block' | 'stale')] from formal reviews and markers.
+
+    A COMMENTED review decides nothing. An approval of another commit than the
+    head is 'stale': it replaces that reviewer's earlier verdict without approving.
+    """
+    head, n = pr["head"]["sha"], pr["number"]
+    out = []
     for r in gh.reviews(repo, n):
-        if (
-            r.get("state") == "APPROVED"
-            and r.get("commit_id") == head
-            and other(r["user"]["login"])
-        ):
-            return True
-    verdict = None
-    ordered = sorted(
-        gh.comments(repo, n), key=lambda c: (c.get("created_at", ""), c.get("id", 0))
-    )
-    for c in ordered:
-        if not other(c["user"]["login"]):
+        state = r.get("state")
+        if state == "APPROVED":
+            kind = "approve" if r.get("commit_id") == head else "stale"
+        elif state in ("CHANGES_REQUESTED", "DISMISSED"):
+            kind = "block"
+        else:
             continue
+        out.append(
+            (r.get("submitted_at", ""), r.get("id", 0), r["user"]["login"], kind)
+        )
+    for c in gh.comments(repo, n):
         for line in (c.get("body") or "").splitlines():
-            if line.startswith(APPROVE_MARK) and f"head={head}" in line:
-                verdict = "verdict=APPROVE" in line
-    return bool(verdict)
+            if not line.startswith(APPROVE_MARK):
+                continue
+            if f"head={head}" not in line:
+                kind = "stale"
+            else:
+                kind = "approve" if "verdict=APPROVE" in line else "block"
+            out.append(
+                (c.get("created_at", ""), c.get("id", 0), c["user"]["login"], kind)
+            )
+    return sorted(out)
+
+
+def _independent(gh, cfg, repo, pr):
+    """Each other reviewer's LATEST decision counts; any outstanding block refuses."""
+    skip = (pr["user"]["login"], cfg.author_login)
+    latest = {}
+    for _, _, who, kind in _decisions(gh, repo, pr):
+        if who not in skip:
+            latest[who] = kind
+    kinds = set(latest.values())
+    return "approve" in kinds and "block" not in kinds
 
 
 class Collector:

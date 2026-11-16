@@ -281,7 +281,7 @@ and posts. An issue closes only when the same decree FAILed on every control run
 and PASSed on every treatment run, every run valid, the fix verified present in
 the treatment image and absent from the control, the decree on the default
 branch byte for byte, that decree's pull request approved by someone other than
-its author or the posting App, and no unticked box left in the issue body (the
+its author or the posting App (each reviewer's latest formal review or approval marker decides, by time; a COMMENTED review changes nothing and any outstanding request for changes refuses), and no unticked box left in the issue body (the
 live-check boxes are ticked first, then the label is removed, then the issue is
 closed as completed). An epic is never closed. A disproven result comments,
 removes the label and leaves the issue open. A treatment pass without a usable
