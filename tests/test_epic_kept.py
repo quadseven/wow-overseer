@@ -459,9 +459,11 @@ class WriterGateTest(unittest.TestCase):
         wrote = self.bridge._insert_sell(self.candidate("Zork", TARAN_GUID))
         self.assertFalse(wrote)
         self.assertEqual(self.inserts(), [])
-        self.assertIn(
-            "kept Taran Icebreaker: an epic a guild member can wear; "
-            "it stays in Zork's bags until gear routing places it",
+        self.assertTrue(
+            any(
+                line.startswith("kept Taran Icebreaker for Zork, no vendor sale")
+                for line in self.lines
+            ),
             self.lines,
         )
 
@@ -471,23 +473,23 @@ class WriterGateTest(unittest.TestCase):
         wrote = self.bridge._insert_sell(self.candidate("Ugga", FLEETFOOT_GUID, 3))
         self.assertFalse(wrote)
         self.assertEqual(self.inserts(), [])
-        self.assertIn(
-            "kept Fleetfoot Greaves: a bind-on-equip rare that is an upgrade for "
-            "Zrog; it stays in Ugga's bags until gear routing places it",
+        self.assertTrue(
+            any("an upgrade for Zrog (UPGRADE)" in line for line in self.lines),
             self.lines,
         )
 
-    def test_the_sale_pass_sells_a_boe_rare_nobody_would_wear(self):
+    def test_the_sale_pass_never_vendors_a_boe_rare_nobody_would_wear(self):
+        """It goes to the guild bank or the auction house instead."""
         self.facts[FLEETFOOT_GUID] = boe_rare()
         wrote = self.bridge._insert_sell(self.candidate("Ugga", FLEETFOOT_GUID, 3))
-        self.assertTrue(wrote)
-        self.assertEqual(len(self.inserts()), 1)
+        self.assertFalse(wrote)
+        self.assertEqual(self.inserts(), [])
 
-    def test_the_sale_pass_sells_a_soulbound_rare_as_today(self):
+    def test_the_sale_pass_never_vendors_a_soulbound_rare(self):
         self.facts[FLEETFOOT_GUID] = boe_rare(instance_flags=1)
         self.wanted[FLEETFOOT_GUID] = ("Zrog",)
         wrote = self.bridge._insert_sell(self.candidate("Ugga", FLEETFOOT_GUID, 3))
-        self.assertTrue(wrote)
+        self.assertFalse(wrote)
 
     def test_a_failed_upgrade_read_keeps_the_rare(self):
         self.facts[FLEETFOOT_GUID] = boe_rare()
@@ -495,13 +497,17 @@ class WriterGateTest(unittest.TestCase):
         wrote = self.bridge._insert_sell(self.candidate("Ugga", FLEETFOOT_GUID, 3))
         self.assertFalse(wrote)
 
-    def test_the_sale_pass_still_sells_shriveled_heart(self):
+    def test_the_sale_pass_never_vendors_shriveled_heart(self):
+        """An epic nobody can wear is still an epic: bank or auction."""
         self.facts[HEART_GUID] = shriveled_heart()
         wrote = self.bridge._insert_sell(self.candidate("Grog", HEART_GUID))
-        self.assertTrue(wrote)
-        self.assertEqual(len(self.inserts()), 1)
+        self.assertFalse(wrote)
+        self.assertEqual(self.inserts(), [])
 
     def test_an_ordinary_sale_is_untouched(self):
+        self.facts[4242] = epic(
+            item_guid=4242, quality=0, bonding=0, name="Linen Scrap"
+        )
         wrote = self.bridge._insert_sell(self.candidate("Grog", 4242, quality=0))
         self.assertTrue(wrote)
         self.assertEqual(len(self.inserts()), 1)
@@ -577,7 +583,7 @@ class WritersAskTest(unittest.TestCase):
         for name in self.WRITERS:
             with self.subTest(writer=name):
                 body = self.body(name)
-                ask = body.find("_epic_blocks(")
+                ask = max(body.find("_epic_blocks("), body.find("_loot_policy_blocks("))
                 write = body.find("INSERT INTO overseer_command")
                 self.assertGreater(ask, 0, name)
                 self.assertLess(ask, write, name)

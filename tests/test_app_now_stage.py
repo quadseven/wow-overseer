@@ -651,5 +651,265 @@ class CrossingTheBreakpointRedrawsOnce(unittest.TestCase):
         self.assertNotIn("759.98", stage)
 
 
+@needs_node
+class PhoneStageCompactAndReservedLayoutTests(unittest.TestCase):
+    def test_shell_has_compact_strip_and_retry_button(self):
+        shell = (APP / "shell.js").read_text(encoding="utf-8")
+        self.assertIn("stage-strip", shell)
+        self.assertIn("data-stage-retry", shell)
+
+    def test_css_reserves_stage_height_and_shares_skeleton_heights(self):
+        css = (APP / "views" / "now.css").read_text(encoding="utf-8")
+        self.assertIn("--now-agenda-h:", css)
+        self.assertIn("--now-cap-top-h:", css)
+        self.assertIn("--now-cap-acts-h:", css)
+        self.assertIn(".stage[data-compact]", css)
+        self.assertIn(".stage-strip", css)
+        self.assertIn("min-height: var(--now-agenda-h)", css)
+        self.assertIn("height: var(--now-agenda-h)", css)
+        self.assertIn("min-height: var(--now-cap-top-h)", css)
+        self.assertIn("height: var(--now-cap-top-h)", css)
+        self.assertIn("min-height: var(--now-cap-acts-h)", css)
+        self.assertIn("height: var(--now-cap-acts-h)", css)
+
+    def test_narrow_loading_reserves_caption_and_action_skeletons(self):
+        script = r"""
+globalThis.document = {
+  addEventListener() {},
+  querySelector: () => null,
+};
+globalThis.window = {
+  matchMedia: () => ({ matches: true, addEventListener() {} }),
+  localStorage: { getItem: () => null, setItem() {} },
+  setInterval() { return 1; },
+  addEventListener() {},
+};
+globalThis.location = { hash: "#/now" };
+const { learn } = await import("./app/families.js");
+learn({
+  families: [
+    { key: "Grug", names: ["Grugling"] },
+    { key: "Zug", names: ["Zugling"] },
+  ],
+  guilds: [{ name: "Cave", family: "Grug" }],
+});
+const { default: view } = await import("./app/views/now.js");
+const ctx = (wall) => ({
+  width: 375,
+  get: (p) => p === "/api/wall" ? wall : { state: "loading" },
+});
+const loadingHtml = String(view.render(ctx({ loading: true })));
+const errHtml = String(view.render(ctx({ error: "failed" })));
+console.log(JSON.stringify({ loadingHtml, errHtml }));
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp) / "app"
+            shutil.copytree(APP, root)
+            (pathlib.Path(tmp) / "package.json").write_text(
+                '{"type":"module"}', encoding="utf-8"
+            )
+            runner = pathlib.Path(tmp) / "run_now.mjs"
+            runner.write_text(script, encoding="utf-8")
+            out = subprocess.run(
+                [NODE, str(runner)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            if out.returncode != 0:
+                self.fail(out.stderr or out.stdout)
+            got = json.loads(out.stdout.strip().splitlines()[-1])
+        self.assertIn("st-cap-wait", got["loadingHtml"])
+        self.assertIn("st-acts-wait", got["loadingHtml"])
+        self.assertNotIn("st-cap-wait", got["errHtml"])
+
+    def test_stage_starts_as_compact_strip_retries_and_scroll_anchors_on_expand(self):
+        script = r"""
+const makeEl = (tag, cls) => {
+  const attrs = {};
+  const listeners = {};
+  const dataset = {};
+  const node = {
+    tagName: tag,
+    className: cls || "",
+    hidden: false,
+    textContent: "",
+    innerHTML: "",
+    children: [],
+    dataset,
+    _rectHeight: 48,
+    getBoundingClientRect() {
+      const compact = Boolean(dataset.compact);
+      if (node.id === "stage") {
+        if (node.hidden) return { top: 0, height: 0 };
+        return { top: 0, height: compact ? 48 : 259 };
+      }
+      if (cls === "fam") {
+        const st = doc.getElementById("stage");
+        const stH = st && !st.hidden ? st.getBoundingClientRect().height : 0;
+        return { top: stH + 60 + 14, height: 420 };
+      }
+      return { top: 0, height: node._rectHeight };
+    },
+    setAttribute(k, v) {
+      attrs[k] = String(v);
+      if (k.startsWith("data-")) {
+        const key = k.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+        dataset[key] = String(v);
+      }
+    },
+    getAttribute(k) { return k in attrs ? attrs[k] : null; },
+    removeAttribute(k) {
+      delete attrs[k];
+      if (k.startsWith("data-")) {
+        const key = k.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+        delete dataset[key];
+      }
+    },
+    addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+    dispatch(type, target) {
+      for (const fn of listeners[type] || []) fn({ target, preventDefault() {} });
+    },
+    closest(sel) {
+      if (sel === "[data-stage-pick]" && "stagePick" in dataset) return node;
+      if (sel === "[data-stage-retry]" && "stageRetry" in dataset) return node;
+      return null;
+    },
+    querySelector(sel) { return map[sel] || null; },
+    querySelectorAll() { return []; },
+    replaceChildren() {},
+  };
+  return node;
+};
+
+const slot = makeEl("DIV", "st-slot stage-slot");
+const bar = makeEl("DIV", "stage-switch");
+const strip = makeEl("DIV", "stage-strip");
+const label = makeEl("SPAN", "stage-msg");
+const retryBtn = makeEl("BUTTON", "stage-retry");
+retryBtn.setAttribute("data-stage-retry", "");
+const stage = makeEl("SECTION", "stage");
+stage.id = "stage";
+stage.hidden = true;
+const fam = makeEl("DIV", "fam");
+const map = {
+  ".stage-slot": slot,
+  ".stage-switch": bar,
+  ".stage-strip": strip,
+  ".stage-msg": label,
+  "[data-stage-retry]": retryBtn,
+  ".stage-retry": retryBtn,
+};
+const docListeners = {};
+const winListeners = {};
+const scrolled = [];
+const doc = {
+  hidden: false,
+  documentElement: { toggleAttribute() {} },
+  getElementById: (id) => (id === "stage" ? stage : null),
+  querySelector: () => null,
+  querySelectorAll: () => [],
+  addEventListener: (t, fn) => ((docListeners[t] = docListeners[t] || []).push(fn)),
+  dispatch: (t, detail) => {
+    for (const fn of docListeners[t] || []) fn({ detail });
+  },
+};
+globalThis.location = { hash: "#/now" };
+globalThis.document = doc;
+globalThis.window = {
+  scrollY: 0,
+  scrollBy(x, y) { this.scrollY += y; scrolled.push([x, y]); },
+  matchMedia: () => ({ matches: true, addEventListener() {} }),
+  localStorage: { getItem: () => null, setItem() {} },
+  setInterval() { return 1; },
+  addEventListener: (t, fn) => ((winListeners[t] = winListeners[t] || []).push(fn)),
+};
+
+const retried = [];
+globalThis.__overseerStageTest = true;
+
+const stageMod = await import("./app/views/now/stage.js");
+stageMod.sync([], null, true, { streamState: () => "off" });
+const beforeData = {
+  hidden: stage.hidden,
+  compact: stage.dataset.compact || "",
+  stageH: stage.getBoundingClientRect().height,
+  firstFamTop: fam.getBoundingClientRect().top,
+  msg: label.textContent,
+  retryHidden: retryBtn.hidden,
+};
+
+const opts = [{ fam: "Grug", name: "grug", label: "Grug", url: "/whep/grug", state: "off" }];
+stageMod.sync(opts, "Grug", true, {
+  streamState: () => "off",
+  mount() {},
+  retry(name) { retried.push(name); },
+});
+const afterNeverAnswers = {
+  hidden: stage.hidden,
+  compact: stage.dataset.compact || "",
+  stageH: stage.getBoundingClientRect().height,
+  firstFamTop: fam.getBoundingClientRect().top,
+  retryHidden: retryBtn.hidden,
+};
+
+stageMod.wire(stage, { retry(name) { retried.push(name); } });
+stage.dispatch("click", retryBtn);
+
+globalThis.window.scrollY = 200;
+stageMod.sync(opts, "Grug", true, {
+  streamState: () => "live",
+  mount() {},
+  retry(name) { retried.push(name); },
+});
+const afterLive = {
+  hidden: stage.hidden,
+  compact: stage.dataset.compact || "",
+  stageH: stage.getBoundingClientRect().height,
+  scrolled,
+  scrollY: globalThis.window.scrollY,
+};
+
+console.log(JSON.stringify({ beforeData, afterNeverAnswers, retried, afterLive }));
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp) / "app"
+            shutil.copytree(APP, root)
+            (pathlib.Path(tmp) / "package.json").write_text(
+                '{"type":"module"}', encoding="utf-8"
+            )
+            runner = pathlib.Path(tmp) / "run_stage.mjs"
+            runner.write_text(script, encoding="utf-8")
+            out = subprocess.run(
+                [NODE, str(runner)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            if out.returncode != 0:
+                self.fail(out.stderr or out.stdout)
+            got = json.loads(out.stdout.strip().splitlines()[-1])
+
+        self.assertFalse(got["beforeData"]["hidden"])
+        self.assertEqual(got["beforeData"]["compact"], "1")
+        self.assertLess(got["beforeData"]["firstFamTop"], 300)
+
+        self.assertFalse(got["afterNeverAnswers"]["hidden"])
+        self.assertEqual(got["afterNeverAnswers"]["compact"], "1")
+        self.assertEqual(got["afterNeverAnswers"]["stageH"], 48)
+        self.assertLess(got["afterNeverAnswers"]["firstFamTop"], 300)
+        self.assertFalse(got["afterNeverAnswers"]["retryHidden"])
+
+        self.assertEqual(got["retried"], ["grug"])
+
+        self.assertFalse(got["afterLive"]["hidden"])
+        self.assertEqual(got["afterLive"]["compact"], "")
+        self.assertEqual(got["afterLive"]["stageH"], 259)
+        self.assertEqual(got["afterLive"]["scrolled"], [[0, 211]])
+        self.assertEqual(got["afterLive"]["scrollY"], 411)
+
+
 if __name__ == "__main__":
     unittest.main()

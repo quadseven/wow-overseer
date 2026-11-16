@@ -19,10 +19,15 @@ or modification time, so the realm poll does not hash forty files each time.
 from __future__ import annotations
 
 import hashlib
+from html.parser import HTMLParser
+import json
 import os
+import re
 
 BUILD_PLACEHOLDER = "__OVERSEER_BUILD__"
+SHELL_PLACEHOLDER = "__OVERSEER_SHELL__"
 APP_KINDS = (".js", ".css")
+_APP_LINK_PREFIX = re.compile(r"/app/(?:__OVERSEER_BUILD__|[0-9a-f]{12})/(.+)$")
 
 _memo: dict[str, tuple[tuple, str]] = {}
 
@@ -75,3 +80,38 @@ def fingerprint(root: str) -> str:
 def stamp(html: bytes, build: str) -> bytes:
     """The page with its build substituted in, where it asks for one."""
     return html.replace(BUILD_PLACEHOLDER.encode(), build.encode())
+
+
+class _ShellLinkParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.assets: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "link":
+            return
+        by_name = {k.lower(): (v or "") for k, v in attrs}
+        rels = set(by_name.get("rel", "").split())
+        if not rels.intersection(("stylesheet", "modulepreload")):
+            return
+        href = by_name.get("href", "")
+        matched = _APP_LINK_PREFIX.search(href)
+        if not matched:
+            return
+        rel_path = matched.group(1)
+        if rel_path not in self.assets:
+            self.assets.append(rel_path)
+
+
+def shell_assets(html: bytes) -> list[str]:
+    """Relative paths under app/<build>/ from the page's style and modulepreload links."""
+    parser = _ShellLinkParser()
+    parser.feed(html.decode("utf-8"))
+    parser.close()
+    return parser.assets
+
+
+def stamp_worker(sw: bytes, build: str, index_html: bytes) -> bytes:
+    """Stamp build fingerprint and precache shell list into sw.js."""
+    assets = json.dumps(shell_assets(index_html)).encode("utf-8")
+    return stamp(sw, build).replace(SHELL_PLACEHOLDER.encode(), assets)
