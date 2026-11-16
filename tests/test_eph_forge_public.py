@@ -27,12 +27,8 @@ SELF = pathlib.Path(__file__).resolve()
 
 FORBIDDEN = {
     "a realm or namespace name": re.compile(r"wow-(?:dev|rehearsal|ephemeral)"),
-    "an internal host suffix": re.compile(
-        r"\.(?:svc|local|internal|lan|ts\.net)\b"
-    ),
-    "a node or machine name": re.compile(
-        r"\b(?:srv|nuc)-?[0-9a-z]+\b"
-    ),
+    "an internal host suffix": re.compile(r"\.(?:svc|local|internal|lan|ts\.net)\b"),
+    "a node or machine name": re.compile(r"\b(?:srv|nuc)-?[0-9a-z]+\b"),
     "a private-range address": re.compile(
         r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}"
         r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b"
