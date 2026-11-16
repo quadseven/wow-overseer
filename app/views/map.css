@@ -8,3 +8,4 @@
 @media (pointer: coarse) {
   .where-who a { min-width: 44px; justify-content: center; }
 }
+.where-one { display: inline-flex; align-items: center; gap: 6px; }

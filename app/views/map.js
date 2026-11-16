@@ -5,10 +5,11 @@
 import { html, raw, plural, state, classVar } from "../ui.js";
 import * as D from "./now/data.js";
 import * as wm from "./now/worldmap.js";
+import { charButton, notice as watchNotice, bind as bindWatch, CSS as WATCH_CSS, READ as WATCH_READ, OPERATOR as WATCH_OPERATOR } from "./_spectate.js";
 import { roster as rosterModel } from "../models/roster.js";
 import { wall as wallModel } from "../models/wall.js";
 
-const READS = ["/shapes.json", "/api/map", "/api/wall", "/api/guildgear", "/api/v2/roster"];
+const READS = ["/shapes.json", "/api/map", "/api/wall", "/api/guildgear", "/api/v2/roster", WATCH_READ, WATCH_OPERATOR];
 const PICK = [["kal", "Kalimdor"], ["ek", "Eastern Kingdoms"]];
 
 const pickOf = (ctx) => (ctx.params.continent === "ek" ? "ek" : "kal");
@@ -57,7 +58,7 @@ function familyLine(m) {
   return parts.join(", ") + ". Drag to pan, scroll or use the buttons to zoom, tap a dot to open the member.";
 }
 
-function whereList(m) {
+function whereList(m, cam) {
   const byZone = new Map();
   m.dots.forEach((d) => {
     const label = wm.zoneLabel(m.shape, d.zone);
@@ -68,12 +69,12 @@ function whereList(m) {
   if (!zones.length) return state("empty", "None of ours is on this continent right now.");
   return html`<div class="where">${zones.map(([zone, ds]) => html`<div class="card where-card"><span class="b">${zone}</span><span class="where-who">${ds.sort((a, b) => Number(b.family) - Number(a.family)).map((d) => {
     const p = m.who.get(d.name) || {};
-    return html`<a href="#/m/${encodeURIComponent(d.name)}" style="color:${p.cls || "var(--color-text)"}"${d.family ? raw(' class="b"') : ""}>${d.name}${d.ghost ? " (ghost)" : ""}${d.fallback ? " (zone centre, position not read)" : ""}</a>`;
+    return html`<span class="where-one"><a href="#/m/${encodeURIComponent(d.name)}" style="color:${p.cls || "var(--color-text)"}"${d.family ? raw(' class="b"') : ""}>${d.name}${d.ghost ? " (ghost)" : ""}${d.fallback ? " (zone centre, position not read)" : ""}</a>${d.ghost || d.fallback ? "" : charButton(d.name, cam.sp, cam.op)}</span>`;
   })}</span></div>`)}</div>`;
 }
 
 export default {
-  css: ["views/now.css", "views/map.css"],
+  css: ["views/now.css", "views/map.css", WATCH_CSS],
   reads: () => READS,
   every: 15000,
   title: () => "World map",
@@ -92,9 +93,10 @@ export default {
 <div class="wm" data-map-box="full"></div>
 ${D.ok(gear) ? "" : html`<p class="dim small">Guildmates are not marked: the guild roster read did not answer.</p>`}
 ${m.map.unplaced ? html`<p class="dim small">${plural(m.map.unplaced, "character")} in the world could not be placed on any map.</p>` : ""}
-${whereList(m)}`;
+${watchNotice()}${whereList(m, { sp: ctx.get(WATCH_READ), op: ctx.get(WATCH_OPERATOR) })}`;
   },
   after(main, ctx) {
+    bindWatch(main);
     const box = main.querySelector('[data-map-box="full"]');
     const m = model(ctx);
     if (!box || !m || m.missing) return;

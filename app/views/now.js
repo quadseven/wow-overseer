@@ -20,8 +20,10 @@ import { reportSection } from "./now/report.js";
 import * as stage from "./now/stage.js";
 import { pickStaged, connectPlan } from "./now/stagechoice.js";
 import { savedStage } from "../store.js";
+import { stage as watchStage, bind as bindWatch, CSS as WATCH_CSS, READ as WATCH_READ, OPERATOR as WATCH_OPERATOR } from "./_spectate.js";
+import { section as liveSection, READ as LIVE_READ } from "./now/live.js";
 
-const READS = ["/api/eye", "/api/v2/roll", "/api/wall", "/api/guildruns", "/api/v2/stuck", "/api/v2/roster", "/api/map", "/shapes.json", "/api/v2/achievements"];
+const READS = ["/api/eye", "/api/v2/roll", "/api/wall", "/api/guildruns", "/api/v2/stuck", "/api/v2/roster", "/api/map", "/shapes.json", "/api/v2/achievements", LIVE_READ, WATCH_READ, WATCH_OPERATOR];
 // The realm strip's two reads are the cheap ones, so they are asked for every
 // 5s while the rest keep 15s. Measured on the dev realm: /api/eye runs 9 SQL
 // statements in about 1KB, /api/v2/roll 5 in under 0.5KB, against 16 to 18
@@ -324,7 +326,7 @@ function fold(ctx, agendas, need) {
 
 export default {
   // The tile panels draw the profile's and the guild bank's frames, in their styles.
-  css: ["views/now.css", "views/members.css", "views/economy.css", ACH_CSS],
+  css: ["views/now.css", "views/members.css", "views/economy.css", ACH_CSS, WATCH_CSS],
   reads: () => READS.concat(D.familyKeys().map(D.agendaPath), allGuilds().map((g) => "/api/v2/guild?guild=" + g.slug), allGuilds().map((g) => "/api/v2/series?guild=" + g.slug)),
   every: 30000,
   quick: QUICK,
@@ -335,7 +337,8 @@ export default {
     const head = html`<header class="page-head now-head"><h1>Now</h1>${realmLine(ctx)}</header>
 ${chips(ctx, agendas, need)}`;
     const fams = familiesSection(ctx, agendas);
-    const rest = html`${fold(ctx, agendas, need)}
+    const watcher = html`<section aria-label="Watcher">${watchStage(ctx.get(WATCH_READ), (ctx.get("/api/guildruns").data || {}).active || [], ctx.get(WATCH_OPERATOR), true)}${liveSection(ctx.get(LIVE_READ), ctx.get(WATCH_READ), ctx.get(WATCH_OPERATOR))}</section>`;
+    const rest = html`${watcher}${fold(ctx, agendas, need)}
 ${reportSection(ctx, allGuilds())}`;
     // On a phone the families lead, under the stage; the realm facts and the
     // chips follow them.
@@ -368,6 +371,7 @@ ${reportSection(ctx, allGuilds())}`;
     stage.sync(options, staged, narrow);
     streams.mount(main);
     streams.bind(main, openPanel);
+    bindWatch(main);
     pressed();
     main.querySelectorAll("button[data-read-aloud]").forEach((b) => b.addEventListener("click", () => {
       showReadAloud(b, streams.toggleReadAloud());
