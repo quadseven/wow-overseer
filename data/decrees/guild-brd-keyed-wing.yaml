@@ -8,6 +8,9 @@
 # a decree can read as a number and the second is text a decree can only forbid. Issue 811 is shown on a SIXTH
 # member who has neither quest, is a ghost beside Franclorn and is ordered to take 3801: the quest must be on
 # that member afterwards, no cast member held the key at the start, and one holds it at the end.
+# The taker must hold neither an ACTIVE nor a rewarded 3801 or 3802 at the start, be level 48 or more, and be a
+# ghost (a corpse row), so an ineligible fixture is INVALID and not a treatment failure; the take row must be
+# applied, so a rejected command cannot pass on a pre-existing row. The naming line: wow-overseer#2767.
 # Fixes: wow-overseer pulls 1966 and 1625; the commit is 1966.
 decree: v1
 id: guild-brd-keyed-wing
@@ -53,6 +56,18 @@ observe:
     sql: |
       SELECT COUNT(*) FROM character_queststatus_rewarded WHERE guid = @cast5 AND quest IN (3801, 3802)
     expect: {scalar: "= 0"}
+  - name: the-taker-has-no-active-quest-either
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_queststatus WHERE guid = @cast5 AND quest IN (3801, 3802)
+    expect: {scalar: "= 0"}
+  - name: the-taker-is-eligible-level-48-and-a-ghost
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters ch JOIN corpse co ON co.guid = ch.guid WHERE ch.guid = @cast5 AND ch.level >= 48
+    expect: {scalar: "= 1"}
   - name: no-cast-member-held-the-key-at-the-start
     role: precondition
     when: start
@@ -65,6 +80,12 @@ observe:
     sql: |
       SELECT id, bosses_done FROM overseer_guild_run WHERE keyword = 'blackrock-depths' AND created_at >= @t0 AND bosses_done > 1
     expect: {rows: ">= 1"}
+  - name: the-take-command-was-applied
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = (SELECT name FROM characters WHERE guid = @cast5) AND kind = 'quest' AND command LIKE 'take 3801%' AND created_at >= @t0 AND status = 'applied'
+    expect: {scalar: ">= 1"}
   - name: the-ghost-took-3801-from-franclorn
     role: check
     when: end
