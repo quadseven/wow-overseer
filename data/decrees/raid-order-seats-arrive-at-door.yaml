@@ -5,13 +5,19 @@
 # Half the seats start on Kalimdor, half on the Eastern Kingdoms. The order names how each raider not at
 # Blackrock Mountain arrives (summon or walk) in the bridge log (issue 762), the summoner waits on call at
 # the meeting stone of the door (issue 890), and every seated raider reaches the door before ENTER (issue 765).
+# Scope: the arrival line per raider (issue 762), the waiting-on-call line (890), the per-seat walking line and
+# the line naming a seat still away at ENTER (765) are bridge log text. A log assertion is an exact count and
+# cannot demand presence, so none is asserted. The ENTER count on the raid timeline is not built (its own
+# mod-overseer ticket carries it), and the issue 762 box on the time from order to all inside is not
+# asserted either. What is proven by rows: a summon row is applied for a seated raider and no summon was
+# refused, and at the end of the window every seated raider is inside Molten Core or within 40 yards of the door.
 # Fix: wow-overseer pull 902 (summoner waits on call at the stone).
 decree: v1
 id: raid-order-seats-arrive-at-door
 proves:
-  - {repo: quadseven/wow-overseer, issue: 762, criterion: "a raid order names how each raider not at Blackrock Mountain arrives and a live summon moves a raider there by position"}
-  - {repo: quadseven/wow-overseer, issue: 765, criterion: "every seated raider is within 40 yards of the door before ENTER and the ENTER count is on the raid timeline"}
-  - {repo: quadseven/wow-overseer, issue: 890, criterion: "a summoner waits on call at the meeting stone, then a run-recovery summon row is applied with no refusals"}
+  - {repo: quadseven/wow-overseer, issue: 762, criterion: "a live summon is applied for a seated raider and the raider ends at the door by position (the arrival log line is not asserted here)"}
+  - {repo: quadseven/wow-overseer, issue: 765, criterion: "every seated raider ends inside Molten Core or within 40 yards of the door (the ENTER count and the per-seat log lines are not asserted here)"}
+  - {repo: quadseven/wow-overseer, issue: 890, criterion: "a summon row for a seated raider is applied and no summon is refused for want of a stone (the waiting line is not asserted here)"}
 fix: {repo: quadseven/wow-overseer, commit: "17ee5b80848910b3142434cf71648c6270363275"}
 world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -45,21 +51,40 @@ observe:
     sql: |
       SELECT COUNT(*) FROM characters WHERE guid IN (@cast) AND map = 1
     expect: {scalar: ">= 5"}
-  - name: summon-applied-for-run-recovery
+  - name: summon-applied-for-a-seated-raider
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_command WHERE kind = 'summon' AND created_at >= @t0 AND status = 'applied'
+      SELECT COUNT(*) FROM overseer_command c
+      JOIN characters ch ON ch.name = c.target_name
+      JOIN overseer_raid_seat rs ON rs.name = ch.name
+      WHERE ch.guid IN (@cast) AND rs.family IN ('Grug', 'Zug')
+        AND c.kind = 'summon' AND c.created_at >= @t0 AND c.status = 'applied'
     expect: {scalar: ">= 1"}
-  - name: no-no-meeting-stone-refusal
+  - name: no-summon-for-a-seat-was-refused
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_command WHERE kind = 'summon' AND created_at >= @t0 AND detail LIKE '%no meeting stone%'
+      SELECT COUNT(*) FROM overseer_command c
+      JOIN characters ch ON ch.name = c.target_name
+      WHERE ch.guid IN (@cast) AND c.kind = 'summon' AND c.created_at >= @t0
+        AND (c.status = 'error' OR c.detail LIKE '%no meeting stone%')
     expect: {scalar: "= 0"}
-  - name: seated-raiders-reached-the-door-map
+  - name: seated-raiders-are-in-the-raid-or-at-the-door
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM characters WHERE guid IN (@cast) AND map IN (230, 409)
+      SELECT COUNT(*) FROM characters ch
+      JOIN overseer_raid_seat rs ON rs.name = ch.name
+      JOIN acore_world.areatrigger a ON a.entry = 2886
+      WHERE ch.guid IN (@cast) AND rs.family IN ('Grug', 'Zug') AND ch.map <> 409
+        AND (ch.map <> a.map OR POW(ch.position_x - a.x, 2) + POW(ch.position_y - a.y, 2) > 1600)
+    expect: {scalar: "= 0"}
+  - name: at-least-eight-seated-raiders-were-checked
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM characters ch
+      JOIN overseer_raid_seat rs ON rs.name = ch.name
+      WHERE ch.guid IN (@cast) AND rs.family IN ('Grug', 'Zug')
     expect: {scalar: ">= 8"}

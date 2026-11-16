@@ -2,10 +2,14 @@
 # the quest drive re-aim it into the guarded zone for 30 minutes (mod-overseer issue 163). Ugga is bound
 # at Ratchet and stands in Burning Steppes, the zone the guard names.
 # Fix: mod-overseer pull 362 (the shared hold takes the motion slot).
+# Scope: the final snapshot cannot show a re-entry that happened and ended before the window closed, so the
+# decree also reads every event written for Ugga in the guarded zones after the guard row was applied: a
+# re-entry that does anything leaves one. A re-entry that leaves no row at all stays unseen (a world samples
+# positions only at the end), so the claim is narrowed to re-entry that is recorded.
 decree: v1
 id: guard-follower-homebound-elsewhere
 proves:
-  - {repo: quadseven/mod-overseer, issue: 163, criterion: "no roster character re-enters the zone it was pulled out of while the guard is held, for a follower bound on another map"}
+  - {repo: quadseven/mod-overseer, issue: 163, criterion: "no event is recorded for the follower in the guarded zone after the guard is applied, and it ends outside it, for a follower bound on another map (an unrecorded re-entry is not seen)"}
 fix: {repo: quadseven/mod-overseer, commit: "fcc79f62c9b0d0103e8cd5fb055e9595ada4d2f0"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -32,6 +36,21 @@ observe:
     sql: |
       SELECT COUNT(*) FROM character_homebind WHERE guid = @Ugga AND mapId = 1
     expect: {scalar: "= 1"}
+  - name: the-guard-row-was-applied
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Ugga' AND kind = 'bot' AND command LIKE 'guard%' AND created_at >= @t0 AND status = 'applied'
+    expect: {scalar: ">= 1"}
+  - name: no-event-in-the-guarded-zone-after-the-guard
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_event e JOIN overseer_command c ON c.target_name = e.character_name
+      WHERE e.character_name = 'Ugga' AND e.zone IN (46, 25)
+        AND c.kind = 'bot' AND c.command LIKE 'guard%' AND c.status = 'applied' AND c.created_at >= @t0
+        AND e.last_seen > c.updated_at
+    expect: {scalar: "= 0"}
   - name: ugga-never-died-in-the-zone
     role: check
     when: end

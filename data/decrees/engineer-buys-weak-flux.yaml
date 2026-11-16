@@ -2,6 +2,8 @@
 # 2880) in reach, buys it and still buys food and drink in the same window (wow-overseer issue 39). Grog's
 # Engineering is 25 in the template, so the rank is a bounded grant for this scenario only. No merged pull
 # references this issue, so the fix commit is TODO.
+# Scope: food and drink are told apart by the item's own spell category (11 food, 59 drink) and each must be
+# a delivered buy within ten minutes of the flux buy, so two food buys can no longer stand in for both.
 decree: v1
 id: engineer-buys-weak-flux
 proves:
@@ -30,9 +32,23 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_command WHERE kind = 'buy' AND target_name = 'Grog' AND target_arg = '2880' AND status = 'delivered' AND created_at >= @t0
     expect: {scalar: ">= 1"}
-  - name: food-and-drink-still-bought
+  - name: food-bought-in-the-flux-window
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_event WHERE character_name = 'Grog' AND last_seen >= @t0 AND kind = 'vendor_buy'
-    expect: {scalar: ">= 2"}
+      SELECT COUNT(*) FROM overseer_command f
+      JOIN overseer_command d ON d.target_name = f.target_name AND d.kind = 'buy' AND d.status = 'delivered'
+      JOIN acore_world.item_template t ON t.entry = CAST(d.target_arg AS UNSIGNED)
+      WHERE f.kind = 'buy' AND f.target_name = 'Grog' AND f.target_arg = '2880' AND f.status = 'delivered' AND f.created_at >= @t0
+        AND t.spellcategory_1 = 11 AND ABS(TIMESTAMPDIFF(SECOND, f.created_at, d.created_at)) <= 600
+    expect: {scalar: ">= 1"}
+  - name: drink-bought-in-the-flux-window
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command f
+      JOIN overseer_command d ON d.target_name = f.target_name AND d.kind = 'buy' AND d.status = 'delivered'
+      JOIN acore_world.item_template t ON t.entry = CAST(d.target_arg AS UNSIGNED)
+      WHERE f.kind = 'buy' AND f.target_name = 'Grog' AND f.target_arg = '2880' AND f.status = 'delivered' AND f.created_at >= @t0
+        AND t.spellcategory_1 = 59 AND ABS(TIMESTAMPDIFF(SECOND, f.created_at, d.created_at)) <= 600
+    expect: {scalar: ">= 1"}

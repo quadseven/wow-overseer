@@ -3,12 +3,18 @@
 # closer than it started (mod-overseer issues 396 and 1153). The leader starts at the overhead rim anchor.
 # That anchor is pending: its position has to be copied from the quarantine row the issue cites, so lint
 # warns and the seed step refuses until it is.
+# Scope: this decree cannot run until the ragefire-overhead-rim anchor is captured (lint warns and the seed
+# refuses a pending anchor, so today it is INVALID, never a pass). Nothing is guessed to unblock it. The refusal
+# line that names the position is worldserver log text and a log assertion cannot demand presence, so it is not
+# asserted; the persisted quarantine row stands in for it: the row exists, names the leader, and carries the
+# refused position. The retry is queued a second time at 15 minutes, and a second opened run would show as a
+# second staging_failed outcome, so one at most proves the quarantine blocked it. The 1153 box (the leader ends
+# closer than it started) needs a start-position variable a decree does not have, so it is not claimed.
 # Fix: mod-overseer pull 1273 (criteria left from the earlier far-leader pull).
 decree: v1
 id: ragefire-leader-above-corridor
 proves:
-  - {repo: quadseven/mod-overseer, issue: 396, criterion: "a run opened with the leader above the corridor is refused with the position, and the retry is blocked by the quarantine row"}
-  - {repo: quadseven/mod-overseer, issue: 1153, criterion: "a run whose leader starts far away ends closer than it started or fails with a retreat line"}
+  - {repo: quadseven/mod-overseer, issue: 396, criterion: "a run opened with the leader above the corridor leaves a quarantine row holding the refused position, and a second attempt is blocked by it (the refusal log line is not asserted here)"}
 fix: {repo: quadseven/mod-overseer, commit: "16fb9e2623c540389a97e78d195c0284feb12bd6"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -23,6 +29,8 @@ cast:
 act:
   - at: 0s
     roster: {who: family:zug, job: "dungeon:ragefire"}
+  - at: 15m
+    roster: {who: family:zug, job: "dungeon:ragefire"}
 observe:
   - name: leader-starts-above-the-corridor
     role: precondition
@@ -30,13 +38,14 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_snapshot WHERE guid = @Zug AND map_id = 389
     expect: {scalar: "= 1"}
-  - name: retry-blocked-by-quarantine
+  - name: refusal-left-a-quarantine-row-with-the-position
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_approach_quarantine WHERE since >= @t0
+      SELECT COUNT(*) FROM overseer_approach_quarantine
+      WHERE leader_name = 'Zug' AND since >= @t0 AND x IS NOT NULL AND y IS NOT NULL AND z IS NOT NULL
     expect: {scalar: ">= 1"}
-  - name: no-staging-failed-loop
+  - name: the-second-attempt-was-blocked-by-the-row
     role: check
     when: end
     sql: |
