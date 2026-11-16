@@ -12,7 +12,13 @@ PAGE = (
 class EphemeralDocsTest(unittest.TestCase):
     def test_says_how_to_request_a_run(self):
         self.assertIn("## Requesting a proving run", PAGE)
-        self.assertRegex(PAGE, r"runner is out of scope")
+        self.assertRegex(PAGE, r"## Runner: submit, dispatch, collect")
+
+    def test_describes_the_judge_and_its_three_verdicts(self):
+        self.assertIn("## Judge:", PAGE)
+        for word in ("PASS", "FAIL", "INVALID", "eph-result-<run-id>"):
+            self.assertIn(word, PAGE)
+        self.assertNotRegex(PAGE, r"no judge")
 
     def test_says_what_a_run_can_and_cannot_prove(self):
         self.assertIn("## What a run can and cannot prove", PAGE)
@@ -25,11 +31,19 @@ class EphemeralDocsTest(unittest.TestCase):
 
     def test_states_what_does_not_ship(self):
         self.assertIn("Not shipped", PAGE)
-        self.assertRegex(PAGE, r"no runner")
+        self.assertRegex(PAGE, r"has not\s+been run end to end")
 
     def test_does_not_claim_a_world_refuses_anything_yet(self):
         self.assertNotRegex(PAGE, r"a world refuses")
         self.assertNotRegex(PAGE, r"(?i)vacuous pass is impossible")
+
+    def test_no_merge_markers_and_paths_are_under_data(self):
+        self.assertNotRegex(PAGE, r"(?m)^(<<<<<<<|=======|>>>>>>>)")
+        self.assertNotRegex(PAGE, r"(?<!data/)decrees/(anchors|<name>|\*)")
+        self.assertNotIn(
+            "ephemeral/config.example.env",
+            PAGE.replace("data/ephemeral/config.example.env", ""),
+        )
 
     def test_no_em_dash(self):
         self.assertNotIn(chr(0x2014), PAGE)

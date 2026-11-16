@@ -6,12 +6,18 @@
 # the family is placed at Golemagg and the run must reach him. At the encounter, casters hold on the Magic
 # Reflection shield (issue 767) including for an area spell (issue 1659), and no raider dies to reflected
 # damage. The Majordomo precondition fails the run as INVALID if the encounter is never reached.
+# Scope: what a throwaway world cannot show is NOT claimed here. The holding line ("casters holding,
+# magic reflection on <add>") and the tank retaking adds after Teleport Target (patch 0020 logs nothing) leave no
+# database row, and a log assertion is an exact count that cannot demand presence, so neither is asserted. The
+# damage-target path and the area-target path (issue 1659) write the same line, so a world cannot tell them
+# apart. What is proven: the encounter is reached and credited by the core, and no raider is killed by the
+# shielded adds or by Majordomo, at most three raiders die at the encounter, and no death line names reflection.
 # Fix: wow-overseer pull 1663 (area-target reflect hold).
 decree: v1
 id: majordomo-reflect-hold
 proves:
-  - {repo: quadseven/wow-overseer, issue: 767, criterion: "casters hold on the reflection shield, no raider dies to reflected damage, and the tank re-takes adds after Teleport Target"}
-  - {repo: quadseven/wow-overseer, issue: 1659, criterion: "no raider dies to reflected damage from an area spell and the holding line appears for area targeting"}
+  - {repo: quadseven/wow-overseer, issue: 767, criterion: "no raider dies to reflected damage at Majordomo (the holding line and the tank re-take are not asserted here)"}
+  - {repo: quadseven/wow-overseer, issue: 1659, criterion: "no raider dies to the shielded adds in a credited Majordomo encounter (area versus damage targeting is not distinguishable here)"}
 fix: {repo: quadseven/wow-overseer, commit: "e40c8878685ccac66320288a253eb4c3b0d7ac18"}
 world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -39,12 +45,26 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_dungeon_run_event WHERE family = 'Grug' AND created_at >= @t0 AND kind = 'boss' AND detail LIKE '%Majordomo%'
     expect: {scalar: ">= 1"}
+  # The judge needs the core's own credited-encounter record when an instance is arranged.
+  - name: encounter-credited
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM log_encounter
+      WHERE map = 409 AND time >= @t0
+    expect: {scalar: ">= 1"}
   - name: no-raider-died-to-reflected-damage
     role: check
     when: end
     sql: |
-      SELECT character_name, killer_name FROM overseer_death WHERE created_at >= @t0 AND map = 409 AND killer_name LIKE '%Flamewaker%'
+      SELECT character_name, killer_name FROM overseer_death WHERE created_at >= @t0 AND map = 409 AND (killer_name LIKE '%Flamewaker%' OR killer_name LIKE '%Majordomo%')
     expect: {rows: 0}
+  - name: few-raiders-died-at-the-encounter
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_death WHERE created_at >= @t0 AND map = 409
+    expect: {scalar: "<= 3"}
   - name: no-reflected-damage-death-line
     role: check
     log: {pattern: "died to (reflected|its own) (damage|spell)", expect: {count: 0}}

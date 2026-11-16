@@ -342,5 +342,175 @@ class TheGate(unittest.TestCase):
         self.assertFalse(self.bridge._epic_blocks("Zrog", "guid:5007", "disenchant"))
 
 
+def trade_good(**kw):
+    """A common trade good, the shape of an engineering bomb a quest names."""
+    row = piece(
+        entry=10562,
+        name="Hi-Explosive Bomb",
+        quality=1,
+        item_class=7,
+        subclass=0,
+        inventory_type=0,
+        required_level=0,
+        bonding=0,
+        disenchant_id=0,
+    )
+    row.update(kw)
+    return row
+
+
+class AQuestInTheLogNamesIt(unittest.TestCase):
+    """A holder's open quest names the item: it never leaves the bags.
+
+    The case: a quest-log entry whose usable item the client shows as a button
+    lost the item to a vendor sale, because a common trade good with no wearer
+    was filed as "a common item no guild rule claims" and the quest test only
+    ever covered class 12.
+    """
+
+    def test_a_common_item_no_quest_names_is_still_vendored(self):
+        v = lootpolicy.decide(trade_good(quest_needed=False), EVERY_CLASS)
+        self.assertEqual(v.route, VENDOR)
+
+    def test_a_common_item_a_logged_quest_names_is_held(self):
+        v = lootpolicy.decide(trade_good(quest_needed=True), EVERY_CLASS)
+        self.assertEqual(v.route, HOLD)
+        self.assertIn("quest", v.why)
+
+    def test_a_gray_item_a_logged_quest_names_is_held(self):
+        v = lootpolicy.decide(trade_good(quest_needed=True, quality=0), EVERY_CLASS)
+        self.assertEqual(v.route, HOLD)
+
+    def test_an_unread_quest_log_holds_the_item(self):
+        v = lootpolicy.decide(trade_good(quest_needed=None), EVERY_CLASS)
+        self.assertEqual(v.route, HOLD)
+
+    def test_a_held_quest_item_allows_no_sell_destroy_or_disenchant(self):
+        v = lootpolicy.decide(trade_good(quest_needed=True), EVERY_CLASS)
+        self.assertFalse(lootpolicy.allowed(v, "sell"))
+        self.assertFalse(lootpolicy.allowed(v, "disenchant"))
+
+    def test_a_quest_named_bound_piece_is_not_disenchanted(self):
+        row = piece(quest_needed=True, instance_flags=1, **UNWEARABLE)
+        v = lootpolicy.decide(row, EVERY_CLASS, nobody)
+        self.assertEqual(v.route, HOLD)
+
+    def test_the_fact_query_reads_the_holders_open_quests(self):
+        import bag_pressure
+
+        sql = bag_pressure.LOG_QUEST_NEEDED_SQL
+        self.assertIn("character_queststatus", sql)
+        self.assertIn("qs.guid = ii.owner_guid", sql)
+        self.assertIn("qs.status <> 0", sql)
+        for column in ("RequiredItemId1", "RequiredItemId6", "ItemDrop4", "StartItem"):
+            self.assertIn(column, sql)
+
+
+class TheGateHoldsAQuestItem(unittest.TestCase):
+    def setUp(self):
+        self.inner = base.WriterGateTest("test_an_ordinary_sale_is_untouched")
+        self.inner.setUp()
+        self.addCleanup(self.inner.doCleanups)
+        self.bridge = self.inner.bridge
+
+    def test_the_facts_query_carries_the_quest_flag(self):
+        self.assertIn("quest_needed", self.bridge._EPIC_FACTS_SQL)
+
+    def test_a_sale_of_a_quest_named_common_item_is_refused(self):
+        self.inner.facts[5030] = trade_good(item_guid=5030, quest_needed=True)
+        self.assertFalse(
+            self.bridge._insert_sell(self.inner.candidate("Grug", 5030, 1))
+        )
+        self.assertEqual(self.inner.inserts(), [])
+        self.assertTrue(self.bridge._epic_blocks("Grug", "guid:5030", "sell"))
+
+    def test_a_sale_of_the_same_item_with_no_quest_is_not_blocked(self):
+        self.inner.facts[5031] = trade_good(item_guid=5031, quest_needed=False)
+        self.assertFalse(self.bridge._epic_blocks("Grug", "guid:5031", "sell"))
+
+
+class TheMoversHoldAQuestItem(unittest.TestCase):
+    """The guild gift (give and mail), the personal bank and the guild bank
+    deposit never move an item a quest in the holder's log names."""
+
+    def setUp(self):
+        self.inner = base.WriterGateTest("test_an_ordinary_sale_is_untouched")
+        self.inner.setUp()
+        self.addCleanup(self.inner.doCleanups)
+        self.bridge = self.inner.bridge
+
+    def named(self, guid, needed):
+        self.inner.facts[guid] = trade_good(item_guid=guid, quest_needed=needed)
+
+    def gift(self, guid):
+        import guildshare
+
+        return guildshare.Gift(
+            holder="Grug",
+            taker="Fizzog",
+            item="Runecloth",
+            entry=14047,
+            count=19,
+            guid=guid,
+            need="a quest",
+            reason="surplus",
+        )
+
+    def move(self, guid, verb="deposit"):
+        import bank
+
+        return bank.Move(
+            character="Grug",
+            verb=verb,
+            guid=guid,
+            item="Runecloth",
+            count=19,
+            why="room",
+        )
+
+    def test_a_guild_gift_by_mail_of_a_quest_item_is_not_written(self):
+        self.named(5040, True)
+        wrote = self.bridge._insert_guild_gift(self.gift(5040), "mail")
+        self.assertEqual(wrote, 0)
+        self.assertEqual(self.inner.inserts(), [])
+
+    def test_a_guild_gift_by_give_of_a_quest_item_is_not_written(self):
+        self.named(5041, True)
+        self.assertEqual(self.bridge._insert_guild_gift(self.gift(5041)), 0)
+        self.assertEqual(self.inner.inserts(), [])
+
+    def test_a_guild_gift_of_a_free_item_is_written(self):
+        self.named(5042, False)
+        self.assertTrue(self.bridge._insert_guild_gift(self.gift(5042), "mail"))
+
+    def test_an_unreadable_gift_fact_is_not_written(self):
+        self.assertEqual(self.bridge._insert_guild_gift(self.gift(5043)), 0)
+        self.assertEqual(self.inner.inserts(), [])
+
+    def test_a_personal_bank_deposit_of_a_quest_item_is_not_written(self):
+        self.named(5044, True)
+        move = self.move(5044)
+        self.assertEqual(self.bridge._insert_bank(move, "deposit guid:5044"), 0)
+        self.assertEqual(self.inner.inserts(), [])
+
+    def test_a_personal_bank_deposit_of_a_free_item_is_written(self):
+        self.named(5045, False)
+        move = self.move(5045)
+        self.assertTrue(self.bridge._insert_bank(move, "deposit guid:5045"))
+
+    def test_a_withdraw_of_a_quest_item_is_never_held(self):
+        self.named(5046, True)
+        move = self.move(5046, "withdraw")
+        self.assertTrue(self.bridge._insert_bank(move, "withdraw guid:5046"))
+
+    def test_a_guild_bank_deposit_of_a_quest_item_is_not_written(self):
+        self.named(5047, True)
+        wrote = self.bridge._insert_guild(
+            "Grug", "bank deposit-item guid:5047", "guildbank"
+        )
+        self.assertEqual(wrote, 0)
+        self.assertEqual(self.inner.inserts(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

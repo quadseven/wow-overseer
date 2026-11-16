@@ -138,7 +138,11 @@ class WritersTest(unittest.TestCase):
                 self.assertIsNotNone(match, name)
                 body = match.group(0)
                 ask = body.find("_KEEP.blocks(")
-                write = body.find("INSERT INTO overseer_command")
+                # The give writers insert through the one atomic helper.
+                write = max(
+                    body.find("INSERT INTO overseer_command"),
+                    body.find("_insert_give_once("),
+                )
                 self.assertGreater(ask, 0, name)
                 self.assertLess(ask, write, name)
 
