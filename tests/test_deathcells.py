@@ -190,11 +190,16 @@ class AFallFromALedgeDoesNotCondemnTheFloor(unittest.TestCase):
         self.assertIsNone(mixed[0].top_z)
         self.assertIsNotNone(dc.crossing(mixed, CITY_FLOOR, VENDOR_PAST))
 
-    def test_an_unsampled_fall_height_keeps_the_disc(self):
-        bare = dc.discs([row(1595.0, 188.0, z=-41.4, liquid="none", fell=30)] * 2)
-        self.assertIsNotNone(bare[0].top_z)
-        nothing = dc.discs([row(1, 1, liquid="none", fell=30)] * 2)
-        self.assertEqual(len(nothing), 1)
+    def test_a_fall_row_with_no_landing_height_keeps_the_disc_for_a_low_walker(self):
+        unsampled = []
+        for x, y in ((1595.0, 188.0), (1551.0, 244.0)):
+            r = row(x, y, liquid="none", fell=85.0)
+            del r["z"]
+            unsampled.append(r)
+        discs = dc.discs(unsampled)
+        self.assertEqual(len(discs), 1)
+        self.assertIsNone(discs[0].top_z)
+        self.assertIsNotNone(dc.crossing(discs, CITY_FLOOR, VENDOR_PAST))
 
     def test_a_standing_keyword_aim_from_the_floor_is_not_refused(self):
         why = dc.aim_refusal(self.discs, CITY_FLOOR, "vendor", spawn=VENDOR_PAST)

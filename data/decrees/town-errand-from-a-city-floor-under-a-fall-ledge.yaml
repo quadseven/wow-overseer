@@ -27,11 +27,18 @@ act:
   - at: 0s
     roster: {who: family:zug, job: "quest"}
 observe:
-  - name: template-carries-two-recent-fall-deaths-in-the-city
+  - name: template-carries-two-sampled-falls-onto-the-city-floor
     role: precondition
     when: start
     sql: |
-      SELECT COUNT(*) FROM overseer_death WHERE map = 0 AND killer_type = 'self' AND yards_fallen >= 20 AND created_at > NOW() - INTERVAL 7 DAY
+      SELECT COUNT(DISTINCT d.id) FROM overseer_death d
+      JOIN acore_world.gameobject g ON g.map = d.map
+      JOIN acore_world.gameobject_template t ON t.entry = g.id
+      WHERE d.zone = 1497 AND d.killer_type = 'self' AND d.liquid_type <> 'water'
+        AND d.yards_fallen >= 20 AND d.pos_z IS NOT NULL
+        AND d.created_at > NOW() - INTERVAL 7 DAY
+        AND t.name = 'Mailbox' AND t.type = 19
+        AND SQRT(POW(d.pos_x - g.position_x, 2) + POW(d.pos_y - g.position_y, 2)) <= 100
     expect: {scalar: ">= 2"}
   - name: head-has-no-free-bag-slot
     role: precondition
