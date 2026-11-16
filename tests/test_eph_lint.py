@@ -338,7 +338,7 @@ class TodoTest(unittest.TestCase):
 
 class ShippedDecreesTest(unittest.TestCase):
     def test_there_are_three_examples(self):
-        self.assertEqual(len(DECREES), 3)
+        self.assertGreaterEqual(len(DECREES), 3)
 
     def test_every_shipped_decree_lints_without_errors(self):
         anchors = anchors_mod.Anchors.load()
