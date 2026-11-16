@@ -27,6 +27,7 @@ PURE. Decisions and rows in, moves out. No MySQL, no clock.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, replace
 
@@ -34,6 +35,8 @@ import bank
 import bag_pressure
 import itemplan
 import lootpolicy
+
+log = logging.getLogger("wow-overseer.itemplan")
 
 ENV_SWITCH = "ITEMPLAN_BANK"
 PREFIX = "item plan bank route:"
@@ -44,6 +47,15 @@ def enabled(environ=None) -> bool:
     env = os.environ if environ is None else environ
     raw = str(env.get(ENV_SWITCH, "") or "").strip().lower()
     return raw not in ("off", "0", "false", "no")
+
+
+class JudgeError(Exception):
+    """The policy judge could not read what it needs (a database or OS read).
+
+    The one failure that keeps a stack in the bags and lets the pass go on. Any
+    other exception is a bug: it propagates to the caller, which logs it and
+    moves nothing for the whole pass.
+    """
 
 
 @dataclass(frozen=True)
@@ -118,7 +130,13 @@ def _refusal(stack, row, d, judge, to_guild) -> str:
         return "the loot policy could not be judged"
     try:
         verdict = judge(row, d.holder)
-    except Exception:
+    except (JudgeError, OSError):
+        log.exception(
+            "%s the loot policy could not be read for %s's %s, so it stays",
+            PREFIX,
+            d.holder,
+            d.name,
+        )
         return "the loot policy could not be judged (the read failed)"
     kind = lootpolicy.GUILD_DEPOSIT if to_guild else lootpolicy.BANK_DEPOSIT
     if lootpolicy.allowed(verdict, kind):

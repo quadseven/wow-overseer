@@ -39160,7 +39160,10 @@ def _itemplan_bank_routes(names: list) -> "itemplan_route.Routed":
             if fact is None:
                 return lootpolicy.Verdict(
                     lootpolicy.HOLD, "its facts could not be read")
-            return _policy_verdict(holder, fact, classes)
+            try:
+                return _policy_verdict(holder, fact, classes)
+            except (pymysql.err.MySQLError, OSError) as exc:
+                raise itemplan_route.JudgeError(str(exc)) from exc
 
         routed = itemplan_route.routes_for(
             report.plan, pairs, judge, keep_names=OWNER_KEEPS)

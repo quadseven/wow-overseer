@@ -222,6 +222,33 @@ class TheBankRoutesAreCarriedOut(unittest.TestCase):
         self.assertEqual((), out.moves)
         self.assertIn("could not be judged", out.held[0].why)
 
+    def test_a_judge_read_failure_is_held_but_a_bug_is_not_swallowed(self):
+        stacks = [green(1)]
+        plan = plan_of(stacks)
+
+        def unreadable(row, holder):
+            raise route.JudgeError("database down")
+
+        out = route.routes_for(plan, pairs_of(stacks), unreadable)
+        self.assertEqual((), out.moves)
+        self.assertIn("could not be judged", out.held[0].why)
+
+        def bug(row, holder):
+            raise TypeError("a bug in the judge")
+
+        with self.assertRaises(TypeError):
+            route.routes_for(plan, pairs_of(stacks), bug)
+
+    def test_the_bridge_turns_read_errors_into_judge_errors_and_a_bug_moves_nothing(
+        self,
+    ):
+        start = TheBridgeAsksForTheRoutes.SOURCE.split("def _itemplan_bank_routes(", 1)[
+            1
+        ]
+        body = start.split("def _plan_bank(", 1)[0]
+        self.assertIn("itemplan_route.JudgeError", body)
+        self.assertIn("log.exception", body)
+
     def test_the_owners_never_dispose_mark_keeps_the_stack(self):
         stacks = [green(1, name="Keepsake")]
         out = route.routes_for(
