@@ -162,7 +162,17 @@ class EverythingElseIsListed(unittest.TestCase):
             failed_listings={("Uzza", r.entry): itemplan.FAILED_LISTINGS_BEFORE_VENDOR}
         )
         d = one([r], [UZZA], r, twice)
-        self.assertEqual(d.route, SELL_VENDOR)
+        # The guild loot policy: an uncommon recipe is never vendored.
+        self.assertNotEqual(d.route, SELL_VENDOR)
+
+    def test_two_failed_listings_of_a_common_recipe_go_to_the_guild_bank(self):
+        r = recipe(subclass=10, skill=JEWELCRAFTING, quality=1, sell=300)
+        twice = ctx(
+            failed_listings={("Uzza", r.entry): itemplan.FAILED_LISTINGS_BEFORE_VENDOR}
+        )
+        d = one([r], [UZZA], r, twice)
+        self.assertNotEqual(d.route, SELL_VENDOR)
+        self.assertIn(d.route, (itemplan.GUILD_BANK, itemplan.BANK_PERSONAL))
 
     def test_two_failed_listings_of_a_dear_recipe_still_wait_for_a_release(self):
         r = recipe(subclass=10, skill=JEWELCRAFTING, sell=40_000)
@@ -170,8 +180,7 @@ class EverythingElseIsListed(unittest.TestCase):
             failed_listings={("Uzza", r.entry): itemplan.FAILED_LISTINGS_BEFORE_VENDOR}
         )
         d = one([r], [UZZA], r, twice)
-        self.assertEqual(d.route, SELL_VENDOR)
-        self.assertTrue(d.confirm)
+        self.assertNotEqual(d.route, SELL_VENDOR)
 
 
 def row(guid, entry, name, sell=2000, quality=2):
@@ -308,7 +317,7 @@ class TheListingHistory(unittest.TestCase):
             fire_gear=frozenset(),
         )
         report = shadow.shadow(["Ana"], "Fam", rows, {"Ana": 10}, extras=extras)
-        self.assertEqual(report.plan.decisions[0].route, SELL_VENDOR)
+        self.assertNotEqual(report.plan.decisions[0].route, SELL_VENDOR)
 
 
 if __name__ == "__main__":
