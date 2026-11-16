@@ -5,6 +5,9 @@
 # Scope: `dc on ubrs` being accepted is worldserver log text and a log assertion is an exact count that
 # cannot demand presence, so it is not asserted. A run still active when the window closes does NOT pass:
 # every Spire run started in the window must have ended, with a named reason or an outcome.
+# The raid arranges no instance row, but its run is credited by the core: a Spire encounter credit is a
+# precondition, so a run that earns none is INVALID and not a pass. `dc on ubrs` acceptance is log text; see
+# wow-overseer#2767 (positive log assertions).
 # Fix: mod-overseer pull 1310.
 decree: v1
 id: ubrs-ten-seat-run
@@ -39,6 +42,14 @@ observe:
     when: end
     sql: |
       SELECT COUNT(*) FROM overseer_dungeon_run WHERE map_id = 229 AND started_at >= @t0
+    expect: {scalar: ">= 1"}
+  # The judge needs the core's own credited-encounter record when an instance is arranged.
+  - name: encounter-credited
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM log_encounter
+      WHERE map = 229 AND time >= @t0
     expect: {scalar: ">= 1"}
   - name: no-run-is-still-active-or-ended-without-a-reason
     role: check
