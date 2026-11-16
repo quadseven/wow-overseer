@@ -52,21 +52,24 @@ observe:
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_command WHERE kind = 'quest' AND created_at >= @t0 AND command LIKE 'at:1:%'
+      SELECT COUNT(*) FROM overseer_command c JOIN characters ch ON ch.name = c.target_name
+      WHERE ch.guid IN (@cast) AND c.kind = 'quest' AND c.created_at >= @t0 AND c.command LIKE 'at:1:%'
     expect: {scalar: ">= 1"}
   - name: family-was-back-in-a-run-within-the-hour-of-the-errand
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_command c JOIN overseer_dungeon_run r ON r.map_id = 129
-      WHERE c.kind = 'quest' AND c.command LIKE 'at:1:%' AND c.created_at >= @t0
+      SELECT COUNT(*) FROM overseer_command c JOIN characters ch ON ch.name = c.target_name
+      JOIN overseer_dungeon_run r ON r.map_id = 129 AND r.family = 'Grug'
+      WHERE ch.guid IN (@cast) AND c.kind = 'quest' AND c.command LIKE 'at:1:%' AND c.created_at >= @t0
         AND r.started_at > c.created_at AND r.started_at <= DATE_ADD(c.created_at, INTERVAL 1 HOUR)
     expect: {scalar: ">= 1"}
   - name: errand-never-aimed-at-map-0
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_command WHERE kind = 'quest' AND created_at >= @t0 AND command LIKE 'at:0:%'
+      SELECT COUNT(*) FROM overseer_command c JOIN characters ch ON ch.name = c.target_name
+      WHERE ch.guid IN (@cast) AND c.kind = 'quest' AND c.created_at >= @t0 AND c.command LIKE 'at:0:%'
     expect: {scalar: "= 0"}
   - name: family-back-in-kalimdor-or-the-door
     role: check

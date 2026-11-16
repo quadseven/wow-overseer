@@ -46,7 +46,7 @@ observe:
     role: check
     when: end
     sql: |
-      SELECT character_name, created_at FROM overseer_death WHERE created_at >= @t0
+      SELECT character_name, created_at FROM overseer_death WHERE created_at >= @t0 AND character_guid IN (@cast)
     expect: {rows: 0}
   - name: no-family-member-on-another-map
     role: check
