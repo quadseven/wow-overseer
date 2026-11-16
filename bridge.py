@@ -81,6 +81,7 @@ import classask
 import deathask
 import deathparty
 import classtrain
+import healerrespec
 import taughtspells
 import classparty
 import classhunt
@@ -19399,6 +19400,11 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("%s pass failed; retrying next cycle", classtrain.LOG_PREFIX)
             await self._for_other_families("guild training", self._guild_train_once)
+            try:
+                await self._guild_respec_once()
+            except Exception:
+                log.exception("%s pass failed; retrying next cycle", healerrespec.LOG_PREFIX)
+            await self._for_other_families("guild respec", self._guild_respec_once)
             await asyncio.sleep(cycle)
 
     async def _guild_train_once(self, cohort=None) -> None:
@@ -19450,6 +19456,40 @@ class Bridge(discord.Client):
         for walk in walks:
             started += await self._start_train_walk(walk, now)
         log.info("%s%s", classtrain.pass_line(trainees, started), _family_label(cohort))
+
+    async def _guild_respec_once(self, cohort=None) -> None:
+        """Walk the paladins the owner sent to Holy to a class trainer for the
+        talent reset (healerrespec.py).
+
+        healerrespec decides who; the row is the module's own
+        `walk-to-trainer talents:<tree>`, which buys the reset at the core's
+        price from the member's own purse, spends the points in the tree and
+        rebuilds the playerbot strategies from them. Never a grant, never a
+        GM command.
+        """
+        names = await asyncio.to_thread(_names_of, cohort)
+        guild = raidteams.guild_of(names)
+        wanted = healerrespec.names(guild) if guild else ()
+        if not wanted:
+            return
+        rows = await asyncio.to_thread(_fetch_respec_rows, guild)
+        roster = await asyncio.to_thread(_roster_names)
+        cands, notes = healerrespec.candidates(guild, rows, roster)
+        if not cands:
+            _log_capped("healer respec", notes)
+            return
+        now = time.monotonic()
+        recent = healerrespec.recent_walkers(await asyncio.to_thread(_respec_walk_rows))
+        busy = self._guild_walkers_busy(now)
+        row_walks = now >= self._mail_walk_unsupported_until
+        walkers = await asyncio.to_thread(
+            _route_walkers, [c.name for c in cands], names, row_walks)
+        walks, plan_notes = healerrespec.plan(cands, walkers, recent, busy)
+        _log_capped("healer respec", notes + plan_notes)
+        started = 0
+        for walk in walks:
+            started += await self._start_train_walk(walk, now)
+        log.info("%s%s", healerrespec.pass_line(cands, started), _family_label(cohort))
 
     def _guild_walkers_busy(self, now: float) -> set:
         """Every member another guild pass has on a walk, after the class
@@ -36083,6 +36123,32 @@ def _roster_names() -> set:
     with _connect() as conn, conn.cursor() as cur:
         rows = _corps_read(cur, "roster names", "SELECT name FROM overseer_roster")
     return {str(r["name"]) for r in rows if r.get("name")}
+
+
+def _fetch_respec_rows(guild: str) -> list:
+    """The named paladins' current rows (healerrespec.candidates), under the
+    approved name or the one they had before the rename."""
+    wanted = set(healerrespec.names(guild))
+    called = sorted(
+        {n for s in raidteams.seats(guild) if s.name in wanted for n in (s.name, s.was) if n})
+    if not called:
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        return _corps_read(
+            cur, "healer respec members",
+            healerrespec.MEMBERS_SQL.format(holes=",".join(["%s"] * len(called))),  # noqa: S608
+            tuple(called))
+
+
+def _respec_walk_rows() -> list:
+    """The talent reset walks of the last day, for healerrespec."""
+    with _connect() as conn, conn.cursor() as cur:
+        return _corps_read(
+            cur, "healer respec walks",
+            "SELECT target_name, source, "
+            "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
+            "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY",
+            (healerrespec.SOURCE + ":%",))
 
 
 def _guild_train_rows() -> list:
