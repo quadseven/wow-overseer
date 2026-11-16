@@ -61,8 +61,13 @@ def run(decree_path, env, dry_run=False, anchors_path=None, connect=None, out=pr
     anchors = anchors_mod.Anchors(anchors_doc.get("anchors") or {})
     snapshot = dbschema.Schema.load()
     try:
+        inputs = inputs_from_env(env)
+    except ValueError:
+        out("INVALID: EPH_MYSQL_PORT must be an integer")
+        return 3
+    try:
         g = guard.open_guarded(
-            inputs_from_env(env),
+            inputs,
             connect or _default_connect,
             snapshot,
             user=env.get("EPH_MYSQL_USER", "root"),

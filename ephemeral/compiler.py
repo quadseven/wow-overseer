@@ -232,6 +232,8 @@ class Compiler:
             v.setdefault("seed_skill_max", mx)
 
     def _instance(self, spec, by_entry):
+        if spec["as"] in self.instances:
+            raise SeedError(f"instance alias {spec['as']!r} is used twice")
         mp = gamedata.INSTANCE_MAPS[spec["map"]]
         iid = (
             max(self.r.max_instance_id(), *(i for i, _ in self.instances.values()), 0)

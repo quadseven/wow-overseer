@@ -167,7 +167,8 @@ passes the guard, resolves every name and anchor in the world's own database
 (zero or several matches is INVALID), compiles the statements and applies them
 in one transaction. Settings come from the pod environment, never the decree:
 `EPH_MYSQL_HOST`, `EPH_MYSQL_PORT`, `EPH_MYSQL_USER`, `EPH_MYSQL_PASSWORD`,
-`EPH_WORLD_LABEL`, `EPH_HARNESS_GRANTS`. Exit 3 is INVALID. Exit 0 means the
+`EPH_WORLD_LABEL`, `EPH_HARNESS_GRANTS` (placeholders in
+`ephemeral/config.example.env`). Exit 3 is INVALID. Exit 0 means the
 plan compiled, and also that it was applied unless `--dry-run` was given, which
 prints the SQL and applies nothing.
 
