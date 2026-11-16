@@ -50,7 +50,7 @@ class PodPathsTest(unittest.TestCase):
 
     def test_the_default_handoff_is_on_the_volume_both_containers_mount(self):
         # the template mounts `tmp` (read-write) in the seed and in the judge
-        self.assertTrue(podpaths.VARS_FILE.startswith("/tmp/"))
+        self.assertTrue(podpaths.VARS_FILE.startswith("/tmp/"))  # noqa: S108 - the pod volume's mount point
 
     def test_the_judge_resolves_the_log_from_the_logs_dir(self):
         got = {}
