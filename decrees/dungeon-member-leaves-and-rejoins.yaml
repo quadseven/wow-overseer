@@ -1,0 +1,48 @@
+# A family run where a member leaves the instance mid-run: the member is walked back in and the census
+# reaches STAGED_INSIDE before CLEARING resumes (mod-overseer issue 384). Og hearths out five minutes in.
+# Fix: mod-overseer pull 385.
+decree: v1
+id: dungeon-member-leaves-and-rejoins
+proves:
+  - {repo: quadseven/mod-overseer, issue: 384, criterion: "a member who leaves the instance mid-run rejoins and the census reaches STAGED_INSIDE before CLEARING resumes"}
+fix: {repo: quadseven/mod-overseer, commit: "8d6d8a15a569a50d82634846ae88ea8756702ad5"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 45m
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, at: {areatrigger: 1466}}
+    ceiling: "nothing granted but position"
+arrange:
+  - instance: {map: "Blackrock Depths", as: brd, bind: family:grug}
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+  - at: 5m
+    command: {who: Og, kind: hearth, text: "hearth"}
+observe:
+  - name: run-opened-in-brd
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run WHERE map_id = 230 AND started_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: og-left-the-instance
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run_event WHERE family = 'Grug' AND character_name = 'Og' AND created_at >= @t0 AND kind IN ('exit_hearth', 'dc_off')
+    expect: {scalar: ">= 1"}
+  - name: census-restored-before-clearing
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run_event WHERE family = 'Grug' AND created_at >= @t0 AND kind = 'phase' AND detail LIKE '%-> STAGED_INSIDE%'
+    expect: {scalar: ">= 1"}
+  - name: no-split-failed
+    role: check
+    when: end
+    sql: |
+      SELECT id FROM overseer_dungeon_run WHERE map_id = 230 AND started_at >= @t0 AND outcome = 'split_failed'
+    expect: {rows: 0}

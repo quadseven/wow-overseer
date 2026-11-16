@@ -1,0 +1,46 @@
+# Blackrock Depths: after Magmus dies the Ironhand Guardians stop flaming the Iron Hall, so a party
+# that waits there does not burn (mod-overseer issue 1485).
+# Magmus is NOT seeded dead on a guess: the arrange row seeds him dead, the family stands in the hall
+# and waits (job quest keeps it from walking on). A burn death would be an overseer_death row.
+# Fix: mod-overseer pull 1486.
+decree: v1
+id: brd-magmus-dead-iron-hall-wait
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1485, criterion: "a BRD run waiting in the Iron Hall after Magmus dies takes no flame damage"}
+fix: {repo: quadseven/mod-overseer, commit: "359548acbaacf57ad8550da38cc853b670531403"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 20m
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, at: {creature: "Magmus"}}
+    ceiling: "nothing granted but position"
+arrange:
+  - instance: {map: "Blackrock Depths", as: brd, bind: family:grug}
+  - group: {members: family:grug, leader: Grug}
+  - creature: {name: "Magmus", in: brd, state: dead}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "quest"}
+observe:
+  - name: magmus-is-dead
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM creature_respawn r JOIN acore_world.creature c ON c.guid = r.guid JOIN acore_world.creature_template t ON t.entry = c.id WHERE r.instanceId = @brd AND t.name = 'Magmus'
+    expect: {scalar: "= 1"}
+  - name: family-is-in-the-hall
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid IN (@cast) AND map = 230
+    expect: {scalar: ">= 1"}
+  - name: no-flame-death
+    role: check
+    when: end
+    sql: |
+      SELECT character_name, created_at FROM overseer_death WHERE created_at >= @t0 AND map = 230
+    expect: {rows: 0}
+  - name: no-guardian-burn-line
+    role: check
+    log: {pattern: "Ironhand Guardian.*(burn|flame).*(party|member)", expect: {count: 0}}

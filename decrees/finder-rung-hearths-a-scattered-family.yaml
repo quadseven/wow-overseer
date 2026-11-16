@@ -1,0 +1,46 @@
+# The dungeon finder returns each member to the spot it queued from, so a family that queues scattered
+# ends thousands of yards from its inn; the finder rung hearths the family to its inn first (mod-overseer
+# issue 1510). The family starts spread over two continents' capitals.
+# Fix: mod-overseer pull 1511.
+decree: v1
+id: finder-rung-hearths-a-scattered-family
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1510, criterion: "the next finder run of a family spread more than 1000 yards ends with the living members within 1000 yards of the inn"}
+fix: {repo: quadseven/mod-overseer, commit: "5e44a0bc4b86d3476a82ef5d66fba645de9f13d2"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 1h
+cast:
+  - who: family:grug
+    set: {alive: true, at: {creature: "Lord Grayson Shadowbreaker"}}
+    ceiling: "nothing granted but position"
+  - who: Og
+    set: {alive: true, at: {creature: "Therum Deepforge"}}
+    ceiling: "nothing granted but position"
+  - who: Bork
+    set: {alive: true, at: {creature: "Dungar Longdrink"}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+observe:
+  - name: family-starts-scattered
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(DISTINCT zone_id) FROM overseer_snapshot WHERE guid IN (@cast)
+    expect: {scalar: ">= 1"}
+  - name: entry-points-were-written-near-the-inn
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM character_entry_point WHERE guid IN (@cast)
+    expect: {scalar: ">= 1"}
+  - name: no-run-ended-split-failed
+    role: check
+    when: end
+    sql: |
+      SELECT id FROM overseer_dungeon_run WHERE map_id = 230 AND started_at >= @t0 AND outcome = 'split_failed'
+    expect: {rows: 0}

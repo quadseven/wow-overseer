@@ -1,0 +1,50 @@
+# A walk-in run (dungeon finder off): one member is already inside when the rest arrive. The staging
+# barrier names the member as inside and the run reaches CLEARING without operator input (mod-overseer
+# issue 165). Og starts beside the first boss; the others at the door.
+# Fix: mod-overseer pull 166.
+decree: v1
+id: dungeon-early-entrant-barrier
+proves:
+  - {repo: quadseven/mod-overseer, issue: 165, criterion: "a BARRIER line names a member as inside already while others arrive, and the run reaches CLEARING without operator input"}
+fix: {repo: quadseven/mod-overseer, commit: "6916f1acd4ee1bac6211390435f892dff33d250a"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 30m
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, at: {areatrigger: 1466}}
+    ceiling: "nothing granted but position"
+  - who: Og
+    set: {alive: true, at: {creature: "Lord Roccor"}}
+    ceiling: "nothing granted but position"
+arrange:
+  - instance: {map: "Blackrock Depths", as: brd, bind: family:grug}
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+observe:
+  - name: one-member-starts-inside
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid = @Og AND map = 230
+    expect: {scalar: "= 1"}
+  - name: others-start-outside
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid IN (@cast) AND map != 230
+    expect: {scalar: ">= 1"}
+  - name: run-reached-clearing
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run_event WHERE family = 'Grug' AND created_at >= @t0 AND kind = 'phase' AND detail LIKE '%CLEARING%'
+    expect: {scalar: ">= 1"}
+  - name: run-did-not-hold-barrier-twelve-minutes
+    role: check
+    when: end
+    sql: |
+      SELECT id, ended_reason FROM overseer_dungeon_run WHERE map_id = 230 AND started_at >= @t0 AND ended_reason LIKE 'BARRIER held%'
+    expect: {rows: 0}

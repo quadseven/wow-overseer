@@ -1,0 +1,56 @@
+# A guild stand-in seated in a family: when the walk out fails the guest hearths home (mod-overseer issue
+# 1427), when it is released inside a finder group it does not whisper the head every poll (issue 1437), and
+# when its seat ends while the head is mid-hearth it leaves the family party and hearths within two minutes
+# (issue 1450). Og is dead beside the first boss, so the bridge's stand-in pass seats a guild guest; the
+# head hearths mid-run to end the seat.
+# Fix: mod-overseer pull 1451 (a released stand-in guest leaves the family group).
+decree: v1
+id: standin-guest-hearths-and-leaves
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1427, criterion: "no stand-in guest is left on a dungeon map after its family's run ended with EXIT HEARTH"}
+  - {repo: quadseven/mod-overseer, issue: 1437, criterion: "a stand-in released inside a finder group sends no repeated hello whispers"}
+  - {repo: quadseven/mod-overseer, issue: 1450, criterion: "a stand-in that ends while the head is mid-hearth logs left the family party and is no longer grouped on its next poll"}
+fix: {repo: quadseven/mod-overseer, commit: "96eac42ee9bc2d0116fe05d204ce973ae551fa07"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 1h
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, at: {areatrigger: 1466}}
+    ceiling: "nothing granted but position"
+  - who: Og
+    set: {alive: false, corpse_at: {creature: "Lord Roccor"}, at: {graveyard: 1469}}
+    ceiling: "nothing granted; the missing seat is the scenario"
+arrange:
+  - instance: {map: "Blackrock Depths", as: brd, bind: family:grug}
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+  - at: 15m
+    command: {who: Grug, kind: hearth, text: "hearth"}
+observe:
+  - name: a-seat-is-empty
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM corpse WHERE guid = @Og
+    expect: {scalar: "= 1"}
+  - name: a-stand-in-was-seated
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_family_standin WHERE family = 'Grug' AND created_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: no-repeated-hello-whispers
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_chat WHERE created_at >= @t0 AND text LIKE '%I follow you%'
+    expect: {scalar: "<= 3"}
+  - name: no-guest-left-on-the-dungeon-map
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot s JOIN overseer_family_standin f ON f.in_name = s.name WHERE f.family = 'Grug' AND f.created_at >= @t0 AND s.map_id = 230
+    expect: {scalar: "= 0"}

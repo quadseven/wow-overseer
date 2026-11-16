@@ -1,0 +1,53 @@
+# Blackrock Depths: a member who died inside the run releases at the mountain graveyard and the run
+# is not closed split_failed mid-fight (mod-overseer issue 1472), and a dungeon module that stopped on a
+# party wait is armed again while the party reassembles (issue 1500).
+# Og starts dead beside the first boss and releases at the mountain graveyard (graveyard 1469), so the
+# walk back and the stopped-module path are both reached. Nothing is granted.
+# Fixes: mod-overseer pulls 1473 (walk back) and 1501 (re-arm); the commit below is 1501, the later.
+decree: v1
+id: brd-member-dies-and-releases
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1472, criterion: "a dead BRD member released at the mountain graveyard walks back or uses the stone and no run closes split_failed"}
+  - {repo: quadseven/mod-overseer, issue: 1500, criterion: "a BRD member who dies and releases while the module has stopped on a party wait keeps clearing and is not closed split_failed"}
+fix: {repo: quadseven/mod-overseer, commit: "864b71ec085fcaaf75cac98b520ef5c6fbc9347b"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 45m
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, at: {areatrigger: 1466}}
+    ceiling: "nothing granted but position"
+  - who: Og
+    set: {alive: false, corpse_at: {creature: "Lord Roccor"}, at: {graveyard: 1469}}
+    ceiling: "nothing granted; the death is the scenario"
+arrange:
+  - instance: {map: "Blackrock Depths", as: brd, bind: family:grug}
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+observe:
+  - name: og-started-dead
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM corpse WHERE guid = @Og
+    expect: {scalar: "= 1"}
+  - name: run-opened-in-brd
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run WHERE map_id = 230 AND started_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: no-run-closed-split-failed
+    role: check
+    when: end
+    sql: |
+      SELECT id, outcome FROM overseer_dungeon_run WHERE map_id = 230 AND started_at >= @t0 AND outcome = 'split_failed'
+    expect: {rows: 0}
+  - name: og-is-alive-again
+    role: check
+    when: end
+    sql: |
+      SELECT name FROM characters WHERE guid = @Og AND health = 0
+    expect: {rows: 0}
