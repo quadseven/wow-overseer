@@ -148,6 +148,9 @@ class TheExpectedAuctionValue(unittest.TestCase):
             100 * itemplan.AUCTION_BEATS_VENDOR_BY,
         )
 
+    def test_a_quote_under_the_vendor_price_never_lowers_the_value(self):
+        self.assertEqual(itemplan.expected_auction_copper((100, 2), 20_000), 20_000)
+
     def test_the_ceiling_is_twice_the_least_listing_gain(self):
         self.assertEqual(lootpolicy.TRASH_CEILING, 2 * itemplan.AUCTION_MIN_GAIN)
 
@@ -466,6 +469,29 @@ class ThePlannerAsksThePolicy(unittest.TestCase):
         d = self.decision(lambda holder, guid: UPGRADE, [holder, other])
         self.assertNotEqual(d.target, "Oz")
         self.assertNotEqual(d.route, itemplan.DISENCHANT)
+
+    def test_a_cheap_quote_with_a_high_vendor_value_gives_one_verdict(self):
+        """Policy and plan share one expected value and one ceiling."""
+        for sell, quote, trash in (
+            (20_000, (100, 1), False),  # thin market, dear vendor price
+            (30, (100, 1), True),  # cheap on both counts
+            (60_000, None, False),
+        ):
+            with self.subTest(sell=sell, quote=quote):
+                verdict = decide(
+                    green(item_guid=9001),
+                    value=lambda row, q=quote, v=sell: itemplan.expected_auction_copper(
+                        q, v
+                    ),
+                )
+                self.assertEqual(verdict.route == DISENCHANT, trash)
+                who = member(name="Og", skills=[(ENCHANTING, 60, 75)])
+                ctx = itemplan.Context(
+                    fire_gear=frozenset(),
+                    loot_route=lambda holder, guid, v=verdict: v.route,
+                )
+                got = itemplan.plan([self.pants(sell=sell)], [who], ctx)
+                self.assertEqual(got.decisions[0].route == itemplan.DISENCHANT, trash)
 
     def test_a_plan_with_no_policy_wired_in_judges_alone_as_before(self):
         self.assertEqual(self.route(None), itemplan.DISENCHANT)

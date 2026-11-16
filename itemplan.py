@@ -1294,13 +1294,16 @@ def _gear_surplus(w: _World, s: Stack, me: Member, why: str) -> list:
 
 
 def expected_auction_copper(quote, sell: int) -> int:
-    """What one unit would fetch at auction, net of the house cut: the market
-    quote `(copper per unit, live listings)` when there is one, else the least
-    the plan wants before it lists at all (the vendor price times
-    AUCTION_BEATS_VENDOR_BY). The one price the loot policy judges "trash" by."""
+    """What one unit is worth, the ONE price the loot policy judges "trash" by
+    and the plan defers to: the market quote `(copper per unit, live
+    listings)` net of the house cut, never below the vendor price (a quote
+    under what a vendor pays says the market is thin, not that the piece is
+    cheap); with no quote, the least the plan wants before it lists at all
+    (the vendor price times AUCTION_BEATS_VENDOR_BY)."""
+    vendor = max(0, int(sell or 0))
     if quote:
-        return int(quote[0]) * (100 - AUCTION_CUT_PERCENT) // 100
-    return max(0, int(sell or 0)) * AUCTION_BEATS_VENDOR_BY
+        return max(vendor, int(quote[0]) * (100 - AUCTION_CUT_PERCENT) // 100)
+    return vendor * AUCTION_BEATS_VENDOR_BY
 
 
 def _disenchant_option(w: _World, s: Stack, me: Member):
@@ -1316,7 +1319,10 @@ def _disenchant_option(w: _World, s: Stack, me: Member):
     need = disenchant_need(s)
     if need is None:
         return None
-    if s.value >= DE_VENDOR_CEILING:
+    if w.ctx.loot_route is None and s.value >= DE_VENDOR_CEILING:
+        # Only a plan with no policy wired in judges worth itself. With the
+        # policy, its expected value and its one ceiling (lootpolicy.
+        # TRASH_CEILING) already decided, so the two cannot disagree.
         return None
     if me.skill("enchanting") >= need:
         return _opt(
