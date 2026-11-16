@@ -955,7 +955,7 @@ class TheDoorsRecordGatesTheAsk(unittest.TestCase):
         temple = gs.Need("Auren", "sunken-temple", "Ring", entry=4, gain=9.0)
         spire = gs.Need("Auren", "lower-blackrock-spire", "Belt", entry=5, gain=3.0)
         out = plan(
-            [mate("Auren", 56, ROGUE)],
+            [mate("Auren", 55, ROGUE)],
             needs={"Auren": [temple, spire]},
             records=guildrun.shape_records([], NOW),
             recipes=recipes,
