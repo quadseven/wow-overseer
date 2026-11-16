@@ -54,7 +54,10 @@ def _seed(args):
     from . import podpaths, seedrun
 
     return seedrun.run(
-        args.decree, podpaths.with_vars_file(os.environ), dry_run=args.dry_run, anchors_path=args.anchors
+        args.decree,
+        podpaths.with_vars_file(os.environ),
+        dry_run=args.dry_run,
+        anchors_path=args.anchors,
     )
 
 
@@ -167,7 +170,14 @@ def main(argv=None):
     )
     j.add_argument("decree")
     j.add_argument("--anchors", help="anchors.yaml (default: decrees/anchors.yaml)")
+<<<<<<< HEAD
     j.add_argument("--log", help="the worldserver log file log assertions read (default: $EPH_LOG_FILE, else $EPH_LOGS_DIR/Module.log)")
+=======
+    j.add_argument(
+        "--log",
+        help="the worldserver log file log assertions read (default: $EPH_LOG_FILE, else $EPH_LOGS_DIR/Server.log)",
+    )
+>>>>>>> eph-pod-handoff-and-log
     j.set_defaults(func=_judge)
     cfg_help = "runner settings JSON (default: $EPH_CONFIG; see ephemeral/eph.config.example.json)"
     s = sub.add_parser(

@@ -17,7 +17,9 @@ the same on both (the infra manifest tests hold that).
 import posixpath
 
 VARS_FILE = "/tmp/eph-vars.json"
-LOG_NAME = "Module.log"  # the file appender submit adds to every world (submit.BASELINE)
+LOG_NAME = (
+    "Module.log"  # the file appender submit adds to every world (submit.BASELINE)
+)
 
 
 def with_vars_file(env):
