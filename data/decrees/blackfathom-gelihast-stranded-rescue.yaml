@@ -64,6 +64,12 @@ observe:
     sql: |
       SELECT COUNT(*) FROM characters WHERE guid IN (@Zork, @Zrog) AND map = 1
     expect: {scalar: "= 2"}
+  - name: both-stranded-members-ended-inside-the-instance
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid IN (@Zork, @Zrog) AND map = 48
+    expect: {scalar: "= 2"}
   - name: no-run-is-active-with-no-progress-for-twenty-minutes
     role: check
     when: end
