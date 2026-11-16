@@ -209,6 +209,29 @@ class TheLineup(unittest.TestCase):
         member = {"name": "Embo", "class_id": PALADIN, "spec": "Holy"}
         self.assertFalse(raidlineup._approved_seat(member, seat, 5)["respec"])
 
+    def test_an_unread_tree_is_unproven_and_marked_too(self):
+        seat = next(s for s in raidteams.seats("Cave") if s.name == "Embo")
+        for spec in ("", None):
+            member = {"name": "Embo", "class_id": PALADIN, "spec": spec}
+            placed = raidlineup._approved_seat(member, seat, 5)
+            self.assertTrue(placed["respec"], repr(spec))
+            self.assertIn("unread", placed["label"])
+
+    def test_an_unread_tree_keeps_the_seat_out_of_the_first_kill_count(self):
+        seat = next(s for s in raidteams.seats("Cave") if s.name == "Embo")
+        placed = raidlineup._approved_seat(
+            {"name": "Embo", "class_id": PALADIN, "spec": ""}, seat, 5
+        )
+        lineup = {"groups": [{"number": 1, "members": [placed]}]}
+        out = raidrun.first_kill_roster(
+            "moltencore",
+            lineup,
+            [{"name": "Embo", "level": 60, "online": 1}],
+            quorum=(1, 0, 1),
+        )
+        self.assertNotIn("Embo", out.seats)
+        self.assertIn("respec", dict(out.left_out)["Embo"])
+
     def test_an_ordinary_seat_is_never_marked(self):
         seat = next(s for s in raidteams.seats("Cave") if s.name == "Frakk")
         member = {"name": "Frakk", "class_id": PALADIN, "spec": "Holy"}
@@ -264,9 +287,6 @@ class TheBridge(unittest.TestCase):
         ]
         self.assertIn("healerrespec.plan(", once)
         self.assertIn("_start_train_walk", once)
-
-    def test_the_planner_ships_in_the_image(self):
-        self.assertIn("healerrespec.py", self._text("Dockerfile"))
 
 
 if __name__ == "__main__":

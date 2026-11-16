@@ -165,9 +165,16 @@ class TheLineupSeatsTheApprovedTeams(unittest.TestCase):
             sorted(raidteams.LEAVING["Cave"]),
         )
 
-    def test_nobody_respecs(self):
+    def test_nobody_respecs_but_the_three_named_paladins(self):
         lineup = raidlineup.build_lineup(_guild("Cave", recruits_joined=True))
-        self.assertEqual(lineup["counts"]["respec"], 0)
+        marked = {
+            m["approved_name"] for g in lineup["groups"] for m in g["members"] if m.get("respec")
+        }
+        # This read carries no talents, so only the named seats are unproven.
+        self.assertEqual(marked, set(raidteams.RESPEC_HEALERS["Cave"]))
+        self.assertEqual(lineup["counts"]["respec"], 3)
+        bonkers = raidlineup.build_lineup(_guild("Bonkers", recruits_joined=True))
+        self.assertEqual(bonkers["counts"]["respec"], 0)
 
     def test_the_family_is_group_one(self):
         lineup = raidlineup.build_lineup(_guild("Cave"))

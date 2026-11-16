@@ -515,7 +515,7 @@ def first_kill_roster(
                 # A healer seat still in its old tree is a damage dealer until
                 # its talent reset is bought (healerrespec.py).
                 why = "its healer respec is not done yet; it plays %s" % (
-                    member.get("spec") or "another tree"
+                    member.get("spec") or "a tree not read yet"
                 )
             if why:
                 left_out.append((name, why))

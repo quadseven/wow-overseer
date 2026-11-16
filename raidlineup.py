@@ -266,7 +266,7 @@ def _label(member: dict) -> str:
     if not target:
         return duty
     if member.get("respec"):
-        return "%s, %s (now %s)" % (duty, target, spec)
+        return "%s, %s (now %s)" % (duty, target, spec or "unread")
     return "%s, %s" % (duty, target)
 
 
@@ -551,9 +551,7 @@ def _approved_seat(member: dict, seat, number: int) -> dict:
         duty=duty,
         target_spec=seat.tree,
         target_tab=raidroles.tree_tab(seat.class_id, seat.tree),
-        respec=raidteams.respec_to_heal(seat.name)
-        and bool(member.get("spec"))
-        and member.get("spec") != seat.tree,
+        respec=raidteams.respec_to_heal(seat.name) and member.get("spec") != seat.tree,
         buff=BUFF_OF.get(seat.class_id, ""),
         approved_name=seat.name,
         fire_resistance=seat.fire_resistance,
