@@ -63,7 +63,9 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("lint", help="check decrees against schema v1 and its rules")
     p.add_argument("decrees", nargs="+")
-    p.add_argument("--anchors", help="anchors.yaml (default: decrees/anchors.yaml)")
+    p.add_argument(
+        "--anchors", help="anchors.yaml (default: data/decrees/anchors.yaml)"
+    )
     p.add_argument("--schema", help="schema snapshot JSON (default: the bundled one)")
     p.add_argument("--strict", action="store_true", help="warnings fail too")
     p.set_defaults(func=_lint)
@@ -77,7 +79,9 @@ def main(argv=None):
         help="in a world pod: guard, compile and apply a decree's cast and arrange",
     )
     q.add_argument("decree")
-    q.add_argument("--anchors", help="anchors.yaml (default: decrees/anchors.yaml)")
+    q.add_argument(
+        "--anchors", help="anchors.yaml (default: data/decrees/anchors.yaml)"
+    )
     q.add_argument(
         "--dry-run", action="store_true", help="print the SQL, apply nothing"
     )
