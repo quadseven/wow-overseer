@@ -184,6 +184,11 @@ def _wearable_verdict(row: dict, quality: int, upgrade) -> Verdict:
     wanted = upgrade(row) if upgrade is not None else None
     if wanted is None:
         return Verdict(HOLD, "the guild's upgrade judge could not answer")
+    if wanted and is_bound(row):
+        # A bound copy cannot be handed on (gear routing skips it): it can
+        # only upgrade the member who holds it, who equips it themselves.
+        holder = row.get("holder")
+        wanted = tuple(name for name in wanted if holder and name == holder)
     if wanted:
         return Verdict(UPGRADE, "an upgrade for %s" % ", ".join(wanted), tuple(wanted))
     if quality == COMMON:

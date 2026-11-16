@@ -34079,7 +34079,10 @@ def _loot_policy_blocks(holder: str, command: str, kind: str = "sell"):
     classes = _guild_classes() if rows else frozenset()
     for row in rows:
         verdict = lootpolicy.decide(
-            row, classes, upgrade=lambda item: _rare_wanted_by(holder, item))
+            dict(row, holder=holder),
+            classes,
+            upgrade=lambda item: _rare_wanted_by(holder, item),
+        )
         if not lootpolicy.allowed(verdict, kind):
             log.info("%s", lootpolicy.kept_line(row, holder, verdict, kind))
             return verdict

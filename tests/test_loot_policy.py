@@ -75,6 +75,26 @@ class RuleOneUpgrade(unittest.TestCase):
         v = lootpolicy.decide(piece(quality=4), EVERY_CLASS, yes(["Zrog"]))
         self.assertEqual(v.route, UPGRADE)
 
+    def test_a_soulbound_copy_cannot_be_passed_to_a_guildmate(self):
+        row = piece(instance_flags=1, holder="Bork")
+        v = lootpolicy.decide(row, EVERY_CLASS, yes(["Zrog"]))
+        self.assertNotEqual(v.route, UPGRADE)
+        self.assertEqual(v.wanted_by, ())
+
+    def test_a_bind_on_pickup_copy_cannot_be_passed_either(self):
+        row = piece(bonding=1, holder="Bork")
+        v = lootpolicy.decide(row, EVERY_CLASS, yes(["Zrog", "Oz"]))
+        self.assertNotEqual(v.route, UPGRADE)
+
+    def test_a_soulbound_copy_can_upgrade_its_own_holder(self):
+        row = piece(instance_flags=1, holder="Bork")
+        v = lootpolicy.decide(row, EVERY_CLASS, yes(["Zrog", "Bork"]))
+        self.assertEqual((v.route, v.wanted_by), (UPGRADE, ("Bork",)))
+
+    def test_a_soulbound_copy_with_no_known_holder_names_nobody(self):
+        v = lootpolicy.decide(piece(instance_flags=1), EVERY_CLASS, yes(["Zrog"]))
+        self.assertNotEqual(v.route, UPGRADE)
+
     def test_an_unread_judge_holds_it(self):
         self.assertEqual(lootpolicy.decide(piece(), EVERY_CLASS, unread).route, HOLD)
 
@@ -292,6 +312,24 @@ class TheGate(unittest.TestCase):
             self.bridge._insert_sell(self.inner.candidate("Zrog", 6000, 0))
         )
         self.assertEqual(self.inner.inserts(), [])
+
+    def test_a_quality_one_recipe_is_never_vendored_by_the_writers(self):
+        recipe = dict(item_class=9, inventory_type=0, subclass=0, quality=1)
+        self.facts(5020, **recipe)
+        self.assertFalse(
+            self.bridge._insert_sell(self.inner.candidate("Zrog", 5020, 1))
+        )
+        row = base.guildcorps.Row("sell", "guid:5020", "", "guildjobs:sell:Zrog")
+        self.assertFalse(self.bridge._insert_corps_row("Zrog", row))
+        self.assertEqual(self.inner.inserts(), [])
+
+    def test_a_soulbound_upgrade_for_a_guildmate_is_not_called_an_upgrade(self):
+        self.facts(5021, instance_flags=1)
+        self.inner.wanted[5021] = ("Bluk",)
+        self.assertTrue(self.bridge._epic_blocks("Zrog", "guid:5021", "disenchant"))
+        self.assertFalse(
+            self.bridge._insert_sell(self.inner.candidate("Zrog", 5021, 3))
+        )
 
     def test_a_disenchant_of_an_upgrade_is_refused(self):
         self.facts(5006)

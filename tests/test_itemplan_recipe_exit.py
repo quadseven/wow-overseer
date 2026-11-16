@@ -165,6 +165,15 @@ class EverythingElseIsListed(unittest.TestCase):
         # The guild loot policy: an uncommon recipe is never vendored.
         self.assertNotEqual(d.route, SELL_VENDOR)
 
+    def test_two_failed_listings_of_a_common_recipe_go_to_the_guild_bank(self):
+        r = recipe(subclass=10, skill=JEWELCRAFTING, quality=1, sell=300)
+        twice = ctx(
+            failed_listings={("Uzza", r.entry): itemplan.FAILED_LISTINGS_BEFORE_VENDOR}
+        )
+        d = one([r], [UZZA], r, twice)
+        self.assertNotEqual(d.route, SELL_VENDOR)
+        self.assertIn(d.route, (itemplan.GUILD_BANK, itemplan.BANK_PERSONAL))
+
     def test_two_failed_listings_of_a_dear_recipe_still_wait_for_a_release(self):
         r = recipe(subclass=10, skill=JEWELCRAFTING, sell=40_000)
         twice = ctx(
