@@ -67,7 +67,7 @@ observe:
       WHERE t.name IN ("Heavy Mithril Shoulder", "Heavy Mithril Gauntlet", "Heavy Mithril Pants", "Ornate Mithril Pants", "Ornate Mithril Gloves", "Ornate Mithril Shoulder", "Heavy Mithril Breastplate", "Heavy Mithril Boots")
         AND c.target_name = 'Uzza' AND c.created_at >= @t0 AND c.command LIKE '%deposit%'
         AND (ci.slot BETWEEN 39 AND 66 OR gbi.item_guid IS NOT NULL)
-        AND NOT (ci.bag = 0 AND ci.slot BETWEEN 23 AND 38)
+        AND COALESCE(ci.bag = 0 AND ci.slot BETWEEN 23 AND 38, 0) = 0
     expect: {scalar: ">= 4"}
   - name: no-target-green-was-sold
     role: check
