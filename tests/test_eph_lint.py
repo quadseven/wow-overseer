@@ -12,7 +12,7 @@ from ephemeral.miniyaml import loads
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DECREES = sorted(
-    p for p in (ROOT / "decrees").glob("*.yaml") if p.name != "anchors.yaml"
+    p for p in (ROOT / "data" / "decrees").glob("*.yaml") if p.name != "anchors.yaml"
 )
 
 BASE = """
@@ -355,12 +355,12 @@ class ShippedDecreesTest(unittest.TestCase):
             self.assertEqual([f for f in findings if f.level == "error"], [], path.name)
 
     def test_anchors_file_is_valid(self):
-        text = (ROOT / "decrees" / "anchors.yaml").read_text(encoding="utf-8")
+        text = (ROOT / "data" / "decrees" / "anchors.yaml").read_text(encoding="utf-8")
         self.assertEqual(anchors_mod.validate(loads(text)), [])
 
     def test_guzzler_kills_plugger_in_act_not_in_arrange(self):
         text = (
-            ROOT / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml"
+            ROOT / "data" / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml"
         ).read_text(encoding="utf-8")
         d = loads(text)
         self.assertNotIn("creature", [k for e in d.get("arrange", []) for k in e])
@@ -368,7 +368,7 @@ class ShippedDecreesTest(unittest.TestCase):
 
     def test_guzzler_uses_the_real_column_names(self):
         text = (
-            ROOT / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml"
+            ROOT / "data" / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml"
         ).read_text(encoding="utf-8")
         self.assertIn("t.entry = c.id\n", text)
         self.assertNotIn("id1", text)
@@ -387,7 +387,9 @@ class CliTest(unittest.TestCase):
     def test_exit_codes(self):
         from ephemeral.__main__ import main
 
-        good = str(ROOT / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml")
+        good = str(
+            ROOT / "data" / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml"
+        )
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(["lint", good]), 0)
             self.assertEqual(
