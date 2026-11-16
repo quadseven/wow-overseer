@@ -96,11 +96,14 @@ class TheTrashRule(unittest.TestCase):
 
     def test_an_unreadable_price_or_enchanter_list_is_not_trash(self):
         self.assertEqual(decide(green(), value=unread).route, BANK_OR_AUCTION)
+        self.assertEqual(decide(green(), who=lambda: None).route, BANK_OR_AUCTION)
 
+    def test_a_bug_in_the_enchanter_judge_is_not_swallowed(self):
         def broken():
-            raise OSError("db down")
+            raise TypeError("a bug")
 
-        self.assertEqual(decide(green(), who=broken).route, BANK_OR_AUCTION)
+        with self.assertRaises(TypeError):
+            decide(green(), who=broken)
 
     def test_a_piece_the_core_cannot_break_down_is_never_trash(self):
         for why, row in (
@@ -215,6 +218,26 @@ class TheBridgeGate(unittest.TestCase):
         self.bridge._insert_sell(self.inner.candidate("Grug", 7004, 2))
         self.assertEqual(self.inner.inserts(), [])
 
+    def test_an_unreadable_enchanter_list_is_neither_given_nor_sold(self):
+        self.inner.facts[7006] = green(item_guid=7006)
+        self.inner.wanted[7006] = ()
+        with mock.patch.object(
+            self.bridge, "_family_enchanters", side_effect=OSError("db down")
+        ):
+            self.bridge._insert_sell(self.inner.candidate("Grug", 7006, 2))
+        self.assertEqual(self.inner.inserts(), [])
+
+    def test_a_bug_reading_the_enchanters_is_not_swallowed(self):
+        self.inner.facts[7007] = green(item_guid=7007)
+        self.inner.wanted[7007] = ()
+        with (
+            mock.patch.object(
+                self.bridge, "_family_enchanters", side_effect=TypeError("bug")
+            ),
+            self.assertRaises(TypeError),
+        ):
+            self.bridge._insert_sell(self.inner.candidate("Grug", 7007, 2))
+
     def test_the_disenchant_writer_is_allowed_for_trash_only(self):
         self.inner.facts[7005] = green(item_guid=7005)
         self.inner.wanted[7005] = ()
@@ -245,10 +268,13 @@ class ThePlannerAsksThePolicy(unittest.TestCase):
         fields.update(kw)
         return stack(holder="Og", **fields)
 
+    def decision(self, route_for, members):
+        ctx = itemplan.Context(fire_gear=frozenset(), loot_route=route_for)
+        return itemplan.plan([self.pants()], members, ctx).decisions[0]
+
     def route(self, route_for):
         who = member(name="Og", skills=[(ENCHANTING, 60, 75)])
-        ctx = itemplan.Context(fire_gear=frozenset(), loot_route=route_for)
-        return itemplan.plan([self.pants()], [who], ctx).decisions[0].route
+        return self.decision(route_for, [who]).route
 
     def test_an_upgrade_the_policy_names_is_not_broken_down(self):
         verdict = decide(green(item_guid=9001), wanted=["Zrog"])
@@ -292,6 +318,29 @@ class ThePlannerAsksThePolicy(unittest.TestCase):
                 self.assertEqual(
                     planned == itemplan.DISENCHANT, verdict.route == DISENCHANT
                 )
+
+    def test_a_low_skill_holder_gives_to_the_qualified_enchanter(self):
+        """The policy says DISENCHANT because another enchanter reaches the
+        skill: the plan follows it with the give, not with silence."""
+        holder = member(name="Og", skills=[(ENCHANTING, 5, 75)])
+        other = member(name="Oz", skills=[(ENCHANTING, 60, 75)])
+        verdict = decide(green(item_guid=9001), who=enchanters(Og=5, Oz=60))
+        self.assertEqual(verdict.route, DISENCHANT)
+        d = self.decision(lambda holder, guid: verdict.route, [holder, other])
+        self.assertEqual((d.route, d.target), (itemplan.GIVE, "Oz"))
+
+    def test_a_low_skill_holder_with_no_qualified_enchanter_gets_no_give(self):
+        holder = member(name="Og", skills=[(ENCHANTING, 5, 75)])
+        other = member(name="Oz", skills=[(ENCHANTING, 10, 75)])
+        d = self.decision(lambda holder, guid: DISENCHANT, [holder, other])
+        self.assertNotIn(d.route, (itemplan.GIVE, itemplan.DISENCHANT))
+
+    def test_a_low_skill_holder_is_not_given_a_piece_the_policy_keeps(self):
+        holder = member(name="Og", skills=[(ENCHANTING, 5, 75)])
+        other = member(name="Oz", skills=[(ENCHANTING, 60, 75)])
+        d = self.decision(lambda holder, guid: UPGRADE, [holder, other])
+        self.assertNotEqual(d.target, "Oz")
+        self.assertNotEqual(d.route, itemplan.DISENCHANT)
 
     def test_a_plan_with_no_policy_wired_in_judges_alone_as_before(self):
         self.assertEqual(self.route(None), itemplan.DISENCHANT)

@@ -240,10 +240,9 @@ def _truly_trash(row: dict, auction_value, enchanters):
     value = auction_value(row)
     if value is None or value >= TRASH_CEILING:
         return None
-    try:
-        skills = enchanters() if enchanters is not None else None
-    except Exception:
-        return None
+    # The judge answers a read failure itself (an empty answer); a bug in it
+    # is not caught here.
+    skills = enchanters() if enchanters is not None else None
     return _breakable_by(row, skills)
 
 

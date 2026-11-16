@@ -1316,7 +1316,9 @@ def _disenchant_option(w: _World, s: Stack, me: Member):
     need = disenchant_need(s)
     if need is None:
         return None
-    if me.skill("enchanting") >= need and s.value < DE_VENDOR_CEILING:
+    if s.value >= DE_VENDOR_CEILING:
+        return None
+    if me.skill("enchanting") >= need:
         return _opt(
             DISENCHANT,
             SURPLUS,
@@ -1324,7 +1326,31 @@ def _disenchant_option(w: _World, s: Stack, me: Member):
             % (me.skill("enchanting"), s.item_level),
             "R8",
         )
-    return None
+    return _give_to_enchanter(w, s, need)
+
+
+def _give_to_enchanter(w: _World, s: Stack, need: int):
+    """The policy named this copy trash but its holder cannot break it down:
+    hand it to the enchanter (highest skill, then name) whose Enchanting
+    reaches `need`, as the sale path's give does. Only a piece that can leave
+    the holder, and only an enchanter the plan knows."""
+    if not s.tradable or w.ctx.loot_route is None:
+        return None
+    able = sorted(
+        (-skill, name)
+        for name, skill, _family in w.enchanters
+        if name != s.holder and skill >= need
+    )
+    if not able:
+        return None
+    who = able[0][1]
+    return _opt(
+        GIVE,
+        SURPLUS,
+        "%s's Enchanting %d breaks down ilvl %d" % (who, -able[0][0], s.item_level),
+        "R8",
+        target=who,
+    )
 
 
 def _rule_gear(w: _World, s: Stack, me: Member):

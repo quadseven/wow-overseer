@@ -34067,7 +34067,7 @@ def _expected_auction_copper(holder: str, row: dict):
             prices, _absent = itemplan_reads._prices(cur, [holder], [entry])
         return itemplan.expected_auction_copper(
             (prices or {}).get(entry), int(row.get("sell_price") or 0))
-    except Exception:
+    except (pymysql.err.MySQLError, OSError):
         log.exception("loot policy: cannot price %s for %s, so it is shelved",
                       row.get("name") or row.get("item_guid"), holder)
         return None
@@ -34080,7 +34080,11 @@ def _policy_verdict(holder: str, row: dict, classes) -> "lootpolicy.Verdict":
 
     def guild_enchanters():
         if not enchanters:
-            enchanters.update(_family_enchanters(holder))
+            try:
+                enchanters.update(_family_enchanters(holder))
+            except (pymysql.err.MySQLError, OSError):
+                log.exception("loot policy: cannot read the guild enchanters "
+                              "for %s, so nothing is called trash", holder)
         return enchanters
 
     return lootpolicy.decide(
