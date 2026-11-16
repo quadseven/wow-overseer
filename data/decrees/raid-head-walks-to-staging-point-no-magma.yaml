@@ -1,0 +1,71 @@
+# The raid head walks from the Blackrock Mountain approach to the Molten Core
+# staging point and does not die in liquid magma on the way.
+#
+# On a rehearsal roll the head died in the cavern's magma on the final approach
+# and the plan stopped short of the staging point. The cavern's magma is
+# world-model liquid, which the footing check did not see when the bed under it
+# was out of the core's reach (mod-overseer issue 1573, related issue 1557).
+#
+# The staging point is the door's exit landing, 0.4 yards from the Molten Core
+# attunement NPC. No coordinate is typed here: the arrival check measures the
+# head against that NPC's own spawn row in the world database, and the start is
+# the spawn of the creature the stone stands beside. The distance bound is 9.5
+# yards from the NPC so that the staging point itself is within 10 yards.
+#
+# The control arm runs the image before the fix and must show a magma death or
+# an arrival failure; the treatment arm runs the fixed image and must show none.
+# Unverified until the first end-to-end proof: that the start spawn is on the
+# walkable side of the mountain. If it is not, the arrival precondition fails
+# and the run is INVALID, never a pass.
+decree: v1
+id: raid-head-walks-to-staging-point-no-magma
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1573, criterion: "the raid head walks from a Blackrock Mountain approach to within 10 yards of the staging point with zero liquid magma deaths"}
+  - {repo: quadseven/mod-overseer, issue: 1557, criterion: "the raid head reaches the Molten Core staging point instead of ending the walk short of it"}
+fix: {repo: quadseven/mod-overseer, commit: TODO}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 1h
+cast:
+  - who: family:grug
+    set: {alive: true, at: {creature: "Franclorn Forgewright"}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "raid:moltencore"}
+observe:
+  - name: seats-were-written
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_raid_seat WHERE family IN ('Grug', 'Zug')
+    expect: {scalar: ">= 5"}
+  - name: head-starts-far-from-the-staging-point
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters c
+      JOIN acore_world.creature k ON k.map = c.map
+      JOIN acore_world.creature_template t ON t.entry = k.id
+      WHERE c.name = 'Grug' AND t.name = 'Lothos Riftwaker'
+        AND SQRT(POW(c.position_x - k.position_x, 2) + POW(c.position_y - k.position_y, 2)) > 100
+    expect: {scalar: "= 1"}
+  - name: head-reached-the-staging-point
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM characters c
+      JOIN acore_world.creature k ON k.map = c.map
+      JOIN acore_world.creature_template t ON t.entry = k.id
+      WHERE c.name = 'Grug' AND c.health > 0 AND t.name = 'Lothos Riftwaker'
+        AND SQRT(POW(c.position_x - k.position_x, 2) + POW(c.position_y - k.position_y, 2) + POW(c.position_z - k.position_z, 2)) <= 9.5
+    expect: {scalar: "= 1"}
+  - name: no-magma-death
+    role: check
+    when: continuous
+    sql: |
+      SELECT character_name, created_at FROM overseer_death
+      WHERE created_at >= @t0 AND liquid_type = 'magma'
+    expect: {rows: 0}
