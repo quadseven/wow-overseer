@@ -152,7 +152,7 @@ class Config(unittest.TestCase):
         for workdir in (
             "/w",
             "/var/lib/forge/work-1",
-            "/tmp/forge_work.d",
+            "/var/lib/forge/work.d",
             "C:/work/forge",
         ):
             build.Config(
