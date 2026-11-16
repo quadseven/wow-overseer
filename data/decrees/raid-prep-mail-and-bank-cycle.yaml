@@ -1,0 +1,54 @@
+# A family set to job 'raid prep' runs a full gather, craft, mail and guild-bank cycle (wow-overseer
+# issue 1307). The cycle's evidence is the command log: mail rows and bank deposit rows while the mode is
+# active. No merged fix pull references this issue, so the fix commit is TODO.
+# Scope: the command rows are scoped to the tested family (the target of each row is a Grug seat), so a row
+# written for any other family cannot pass. The `_drive_raid_prep` execution lines are bridge log text and a
+# log assertion is an exact count that cannot demand presence, so they are not asserted; the jobs.py
+# IMPLEMENTED line and the describe() wording are source reads a throwaway world cannot show. The mode must
+# still be set at the end of the window, so a family that fell out of it cannot pass.
+decree: v1
+id: raid-prep-mail-and-bank-cycle
+proves:
+  - {repo: quadseven/wow-overseer, issue: 1307, criterion: "kind mail rows and bank deposit-item rows are written for the family while it is on job raid prep (the _drive_raid_prep log lines are not asserted here)"}
+fix: {repo: quadseven/wow-overseer, commit: "TODO"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 2h
+cast:
+  - who: family:grug
+    set: {alive: true, at: {creature: "Stephen Ryback"}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "raid prep"}
+observe:
+  - name: family-is-on-raid-prep
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_roster WHERE family = 'Grug' AND job = 'raid prep'
+    expect: {scalar: "= 5"}
+  - name: family-still-on-raid-prep-at-the-end
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_roster WHERE family = 'Grug' AND job = 'raid prep'
+    expect: {scalar: "= 5"}
+  - name: mail-rows-written-for-the-family-during-the-mode
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command c
+      JOIN characters ch ON ch.name = c.target_name
+      WHERE ch.guid IN (@cast) AND c.kind = 'mail' AND c.created_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: bank-deposits-written-for-the-family-during-the-mode
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command c
+      JOIN characters ch ON ch.name = c.target_name
+      WHERE ch.guid IN (@cast) AND c.kind = 'bank' AND c.command LIKE 'deposit-item%' AND c.created_at >= @t0
+    expect: {scalar: ">= 1"}

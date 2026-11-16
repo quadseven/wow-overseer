@@ -29,6 +29,7 @@ with stub_modules(pymysql=PYMYSQL):
     import guildcorps
     import guildfund
     import guildjobs
+    import guildranks
     import guildrun
     import memberloop
     import pvpgear
@@ -114,6 +115,7 @@ WRITERS = {
         "bank withdraw %d" % 5000
     ],
     ("bridge.py", "_guild_bank_once", "action.command"): _setup,
+    ("bridge.py", "_queue_remote_setup", "action.command"): _setup,
     ("bridge.py", "_guild_bank_once", "command"): lambda: ["bank deposit 5000"],
     ("bridge.py", "_guild_bank_passing_once", "command"): lambda: ["bank deposit 5000"],
     ("bridge.py", "_queue_guild_items", "command"): lambda: [
@@ -128,6 +130,10 @@ WRITERS = {
     ],
     # teamsync's "rename" and "reset" go through other kinds, not here.
     ("bridge.py", "_team_sync_once", "action.kind"): lambda: ["invite", "remove"],
+    ("bridge.py", "_guild_ranks_once", "action.command"): lambda: [
+        guildranks.promote_command(guildranks.RANK_MEMBER),
+        guildranks.motd_command("Cave goal: raid mc"),
+    ],
     ("bridge.py", "_stray_follow_loop", "r.command"): lambda: [strayfollow.VERB],
     ("bridge.py", "_member_ride_once", "r.command"): lambda: [memberloop.VERB],
     # The writer itself: its callers are the rows above.

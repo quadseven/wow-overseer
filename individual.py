@@ -175,3 +175,26 @@ def farm_retargets(
         if want and want != job:
             out[name] = want
     return out
+
+
+def gather_targets(
+    job_by_name: dict, skills_by_name: dict, family, loop_job, environ=None, exempt=()
+) -> dict:
+    """{member: job} the profession loop's GATHER phase writes (#2498).
+
+    The loop owns the phase order and names one gather job for the family.
+    Family-wide that job goes to everybody. In an individual, unlinked family,
+    a farm SKILL order (`farm:mining`, `farm:herbalism`) is replaced, member by
+    member, by the order that member's own skills advance
+    (`farmjob.target_for`); a member with no node trade keeps the loop's job,
+    and an ITEM order (`farm:<entry>`) or `quest` is the family's and goes to
+    all. Members in `exempt` are left out.
+    """
+    skip = set(exempt or ())
+    names = sorted(n for n in (job_by_name or {}) if n not in skip)
+    job = str(loop_job or "").strip().lower()
+    if not (active(job_by_name, family, environ) and farmjob.order_of(job)[1]):
+        return {n: loop_job for n in names}
+    return {
+        n: farmjob.target_for((skills_by_name or {}).get(n)) or loop_job for n in names
+    }

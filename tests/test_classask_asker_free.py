@@ -16,10 +16,15 @@ import unittest
 
 import classask
 import guildjobs
+import legacy_ladder
 from test_classquest import book, class_plan, qrow, who
 
 GROUP_JOB = 2000
 MAIL = {"Bigzug": ("take-money mail:42",)}
+
+
+def setUpModule():
+    legacy_ladder.switch_off()
 
 
 def group_book():

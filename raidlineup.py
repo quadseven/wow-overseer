@@ -266,7 +266,7 @@ def _label(member: dict) -> str:
     if not target:
         return duty
     if member.get("respec"):
-        return "%s, %s (now %s)" % (duty, target, spec)
+        return "%s, %s (now %s)" % (duty, target, spec or "unread")
     return "%s, %s" % (duty, target)
 
 
@@ -398,11 +398,12 @@ def build_lineup(
     if team:
         return _approved_lineup(members, team, guaranteed)
     questers = raidteams.quester_names()
+    bankers = raidteams.banker_names()
     pool = sorted(
         (
             raidroles.with_spec(m)
             for m in members
-            if m.get("name") and m["name"] not in questers
+            if m.get("name") and m["name"] not in questers and m["name"] not in bankers
         ),
         key=lambda m: _sort_key(m, guaranteed),
     )
@@ -534,7 +535,9 @@ def plan_molten_core(members: list) -> dict:
 
 def _approved_seat(member: dict, seat, number: int) -> dict:
     """A member in the seat the approved lineup gives it, playing the tree
-    that seat names. Nobody respecs: the approved tree is the one it plays."""
+    that seat names. Nobody respecs, except the three paladins the owner sent
+    to Holy (raidteams.RESPEC_HEALERS): one of them still in its old tree is
+    marked `respec`, and a first-kill raid does not count it as a healer yet."""
     if seat.seat == raidroles.SEAT_TANK:
         duty = MAIN_TANK if number == 1 else OFF_TANK
     elif seat.seat == raidroles.SEAT_HEALER:
@@ -548,7 +551,7 @@ def _approved_seat(member: dict, seat, number: int) -> dict:
         duty=duty,
         target_spec=seat.tree,
         target_tab=raidroles.tree_tab(seat.class_id, seat.tree),
-        respec=False,
+        respec=raidteams.respec_to_heal(seat.name) and member.get("spec") != seat.tree,
         buff=BUFF_OF.get(seat.class_id, ""),
         approved_name=seat.name,
         fire_resistance=seat.fire_resistance,
@@ -624,6 +627,10 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
     found = (find(q.name) for q in raidteams.QUESTERS.get(team, ()))
     questers = [dict(m, role="quester") for m in found if m is not None]
     used.update(m["name"] for m in questers)
+    # Nor are the bankers: they hold the vault city, not a raid seat.
+    kept = (find(b.name) for b in raidteams.BANKERS.get(team, ()))
+    bankers = [dict(m, role="banker") for m in kept if m is not None]
+    used.update(m["name"] for m in bankers)
     leaving = set(raidteams.LEAVING[team])
     surplus = sorted(
         (m for n, m in by_name.items() if n not in used),
@@ -647,6 +654,7 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
         "maintenance": upkeep,
         "summoners": summoners,
         "questers": questers,
+        "bankers": bankers,
         "surplus": surplus,
         "wanted": wanted,
         "shortfall": {
@@ -667,9 +675,10 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
             "maintenance": len(upkeep),
             "summoners": len(summoners),
             "questers": len(questers),
+            "bankers": len(bankers),
             "surplus": len(surplus),
             "considered": len(members),
-            "respec": 0,
+            "respec": len([m for m in placed if m.get("respec")]),
         },
         "composition": _composition(placed),
         "roles_line": roles_line(groups, wanted),

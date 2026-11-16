@@ -1,0 +1,56 @@
+# A family at the bag floor stands beside the Ironforge banker. The week's lava deaths lie in the Great
+# Forge pool far below the city floor. The banker errand must not be refused for crossing that pool.
+# Before the fix a void fall 140 yards away merged into the pool's disc, grew it to 157 yards over the
+# city, and every banker ask was refused ("the walk to the nearest banker crosses ground the family died
+# on: 3 fall/lava deaths ...", wow-overseer issues 2457 and 1261). A lava disc now condemns walks whose
+# ends are near the liquid's surface, not walks on a floor 130 yards above it.
+# Limit: the seed step cannot write overseer_death rows, so the lava deaths must already be in the
+# template; the first precondition makes a template without them INVALID, never a pass. The path between
+# the two ends is not sampled by the guard, and this decree does not claim it is.
+decree: v1
+id: town-errand-over-lava-from-a-city-floor
+proves:
+  - {repo: quadseven/wow-overseer, issue: 2457, criterion: "a death disc of lava condemns the liquid only: a walk whose ends stand well above the pool is not refused"}
+  - {repo: quadseven/wow-overseer, issue: 1261, criterion: "a family at the bag floor beside a city banker is given its town errand and not refused for lava far below the floor"}
+fix: {repo: quadseven/wow-overseer, commit: "TODO"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 45m
+cast:
+  - who: family:zug
+    set: {alive: true, at: {creature: "Soleil Stonemantle"}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:zug, leader: Zug}
+act:
+  - at: 0s
+    roster: {who: family:zug, job: "quest"}
+observe:
+  - name: template-carries-two-sampled-lava-deaths-below-the-banker
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(DISTINCT d.id) FROM overseer_death d
+      JOIN acore_world.creature g ON g.map = d.map
+      JOIN acore_world.creature_template t ON t.entry = g.id
+      WHERE d.liquid_type = 'magma' AND d.pos_z IS NOT NULL
+        AND d.created_at > NOW() - INTERVAL 7 DAY
+        AND t.name = 'Soleil Stonemantle'
+        AND SQRT(POW(d.pos_x - g.position_x, 2) + POW(d.pos_y - g.position_y, 2)) <= 150
+        AND d.pos_z < g.position_z - 50
+    expect: {scalar: ">= 2"}
+  - name: head-has-no-free-bag-slot
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_inventory i JOIN characters c ON c.guid = i.guid WHERE c.name = 'Zug' AND i.bag = 0 AND i.slot BETWEEN 23 AND 38
+    expect: {scalar: ">= 16"}
+  - name: no-town-walk-is-refused-for-lava-ground
+    role: check
+    log: {pattern: "refused: the walk to .* crosses ground the family died on: [0-9]+ [a-z/]*lava", expect: {count: 0}}
+  - name: the-town-errand-reaches-a-counter
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE source = 'towntrip' AND created_at >= @t0
+    expect: {scalar: ">= 1"}

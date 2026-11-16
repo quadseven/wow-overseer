@@ -23,9 +23,10 @@ ever a measured zero.
 
 THE TANK AUDIT: `tank_audit` is tankaudit's seated-tank spellbook check for
 this guild: each filled tank seat's due trainer spells it has not learned,
-from the training read's trainer rows and the members' known spells. Either
-spell read failing, or a filled tank's class having no trainer rows, leaves
-`tank_audit` null: an audit that could not see every tank is not an audit.
+from the training read's trainer rows, the members' known spells and their
+skills (a proficiency spell is held as a skill). Any of those reads failing,
+or a filled tank's class having no trainer rows, leaves `tank_audit` null:
+an audit that could not see every tank is not an audit.
 
 Read-only, one connection, the reads bound to the seat names.
 """
@@ -80,6 +81,11 @@ KNOWN_SQL = (
     "JOIN character_spell cs ON cs.guid = c.guid "
     "WHERE c.name IN ({holes})"
 )
+SKILLS_SQL = (
+    "SELECT c.name, cs.skill FROM characters c "
+    "JOIN character_skills cs ON cs.guid = c.guid "
+    "WHERE c.name IN ({holes})"
+)
 CONSUMABLES_SQL = (
     "SELECT c.name, ii.itemEntry AS entry, SUM(ii.count) AS count "
     "FROM characters c JOIN character_inventory ci ON ci.guid = c.guid "
@@ -121,7 +127,7 @@ def seat_names(guild: str) -> list:
 
 
 def fetch(rd, guild: str) -> dict:
-    """The four reads for `guild`, each None when the realm cannot answer."""
+    """The reads for `guild`, each None when the realm cannot answer."""
     names = seat_names(guild)
     members = _read(rd, MEMBERS_SQL.format(holes=_holes(len(names))), tuple(names))  # noqa: S608
     found = sorted({r["name"] for r in in_guild(members or [])})
@@ -131,6 +137,7 @@ def fetch(rd, guild: str) -> dict:
         "worn": [],
         "consumables": [],
         "known": [],
+        "skills": [],
         "trainer": {},
     }
     if not found:
@@ -155,6 +162,7 @@ def fetch(rd, guild: str) -> dict:
         (*found, *CONSUMABLES),
     )
     out["known"] = _read(rd, KNOWN_SQL.format(holes=holes), tuple(found))  # noqa: S608
+    out["skills"] = _read(rd, SKILLS_SQL.format(holes=holes), tuple(found))  # noqa: S608
     out["trainer"] = _trainer_by_class(rd, guild)
     return out
 
@@ -264,8 +272,9 @@ def _tank_audit(seats: list, fetched: dict) -> dict | None:
     """The seated tanks' spellbook audit, or None when a spell read failed
     or a filled tank's class has no trainer rows to judge it against."""
     known_rows = fetched.get("known")
+    skills_rows = fetched.get("skills")
     trainer = fetched.get("trainer")
-    if known_rows is None or trainer is None:
+    if known_rows is None or skills_rows is None or trainer is None:
         return None
     trainer = {int(k): v for k, v in trainer.items()}
     flat = [s for group in seats for s in group]
@@ -283,7 +292,16 @@ def _tank_audit(seats: list, fetched: dict) -> dict | None:
         except (KeyError, TypeError, ValueError):
             return None  # a spellbook that cannot be read is not judged
         known_by_name.setdefault(row.get("name"), set()).add(spell)
-    return tankaudit.audit_tanks(flat, trainer, known_by_name)
+    skills_by_name: dict = {}
+    for row in skills_rows:
+        try:
+            skill = int(row["skill"])
+        except (KeyError, TypeError, ValueError):
+            return None  # a skill book that cannot be read is not judged
+        skills_by_name.setdefault(row.get("name"), set()).add(skill)
+    return tankaudit.audit_tanks(
+        flat, trainer, known_by_name, skills_by_name=skills_by_name
+    )
 
 
 def build(guild: str, fetched: dict) -> dict:

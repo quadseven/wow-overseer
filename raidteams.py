@@ -8,7 +8,8 @@ built for Ragnaros instead: per guild, 8 tanks (Garr's 8 adds), 11 healers and
 21 damage, a fire resistance source (a paladin aura or a shaman totem, both
 party-only in 3.3.5) in every group, group 1 the family, groups 2 to 8 named
 from B to H. Missing roles are recruited at level 1 and the surplus leaves;
-nobody respecs. The 21 warlock summoners stay summoners.
+nobody respecs, with one exception (RESPEC_HEALERS below). The 21 warlock
+summoners stay summoners.
 
 NAMES. Every seat names the character as the operator named it and, until the
 rename lands, the name it has now (`was`), so the lineup holds before and
@@ -48,6 +49,13 @@ class Quester(NamedTuple):
     zone: str  # the race's starting zone, where it starts and stays
 
 
+class Banker(NamedTuple):
+    name: str
+    class_id: int
+    race: str
+    zone: str  # the race's starting zone, where it starts before its walk
+
+
 GROUPS = {
     "Cave": (
         (  # group 1
@@ -59,37 +67,37 @@ GROUPS = {
         ),
         (  # group 2
             Seat("Brug", "Aalall", 6, "Blood", "tank", "Draenei", False),
-            Seat("Bonk", "Goraraa", 2, "Retribution", "dps", "Draenei", True),
+            Seat("Bonk", "Goraraa", 2, "Holy", "healer", "Draenei", True),
             Seat("Bunga", "Barem", 5, "Holy", "healer", "Draenei", False),
             Seat("Brakk", "Auren", 7, "Enhancement", "dps", "Draenei", False),
             Seat("Bluk", "Aurehun", 7, "Enhancement", "dps", "Draenei", False),
         ),
         (  # group 3
             Seat("Crag", "Annian", 1, "Protection", "tank", "Night Elf", False),
-            Seat("Clobba", "Asvil", 2, "Retribution", "dps", "Draenei", True),
+            Seat("Clobba", "Asvil", 2, "Holy", "healer", "Draenei", True),
             Seat("Clunk", "Asparano", 5, "Holy", "healer", "Human", False),
             Seat("Cronk", "Ganras", 7, "Enhancement", "dps", "Draenei", False),
             Seat("Chukk", "Achevar", 3, "Survival", "dps", "Draenei", False),
         ),
         (  # group 4
             Seat("Durg", "Krebraco", 1, "Protection", "tank", "Gnome", False),
-            Seat("Drogg", "Aurevil", 2, "Retribution", "dps", "Draenei", True),
+            Seat("Diggo", "Balressian", 3, "Marksmanship", "dps", "Night Elf", False),
             Seat("Dunga", "Bramitho", 5, "Holy", "healer", "Dwarf", False),
-            Seat("Dakk", "Beerix", 7, "Enhancement", "dps", "Draenei", False),
+            Seat("Dakk", "Beerix", 7, "Enhancement", "dps", "Draenei", True),
             Seat("Dug", "Ariaad", 3, "Survival", "dps", "Draenei", False),
         ),
         (  # group 5
             Seat("Erg", "Eveline", 1, "Protection", "tank", "Human", False),
-            Seat("Embo", "Ahgeathou", 2, "Retribution", "dps", "Dwarf", True),
+            Seat("Embo", "Ahgeathou", 2, "Holy", "healer", "Dwarf", True),
             Seat("Ekka", "Actehuurn", 5, "Holy", "healer", "Draenei", False),
             Seat("Ezzo", "", 7, "Restoration", "healer", "Draenei", False),
-            Seat("Eggrok", "Derred", 8, "Frost", "dps", "Draenei", False),
+            Seat("Rubba", "Baldam", 8, "Fire", "dps", "Human", False),
         ),
         (  # group 6
             Seat("Flintt", "Selie", 1, "Protection", "tank", "Human", False),
             Seat("Frakk", "Anneve", 2, "Retribution", "dps", "Human", True),
             Seat("Fumma", "Aurerim", 5, "Holy", "healer", "Draenei", False),
-            Seat("Fizzog", "", 7, "Restoration", "healer", "Draenei", False),
+            Seat("Tugga", "Auremir", 7, "Restoration", "healer", "Draenei", False),
             Seat("Fuggo", "", 9, "Affliction", "dps", "Gnome", False),
         ),
         (  # group 7
@@ -167,6 +175,34 @@ GROUPS = {
     ),
 }
 
+# THE ONE RESPEC (owner decision on the Molten Core plan, 2026-11-16). Cave had
+# two healers at level 50 or more against a first-kill quorum of eight, and all
+# six of its level 60 paladins were seated Retribution. These three off-roster
+# paladins take Holy healer seats and change trees by the natural path only: a
+# walk to a class trainer, the reset paid from their own purse (healerrespec.py;
+# the module's `walk-to-trainer talents:` row does the errand). They were picked
+# from the five off-roster level 60 paladins on the continent with a trainer:
+# the weakest worn gear and Strength, so the least Retribution damage is lost.
+# Every other seat keeps the rule above. The owner can overrule on the plan issue.
+RESPEC_HEALERS = {"Cave": ("Bonk", "Clobba", "Embo")}
+
+
+def respec_to_heal(name: str) -> bool:
+    """Is this approved name one of the three paladins changing to Holy."""
+    return any(name in names for names in RESPEC_HEALERS.values())
+
+
+# SEATS PROMOTED FROM THE GUILD'S UPKEEP (first-kill lineup, 2026-11): they keep
+# the name the operator already gave them, so the letter-per-group naming rule
+# does not apply to them. Rubba (a level 60 mage) and Diggo (a level 59 hunter)
+# take the seats of two looping damage characters; Tugga (a level 37 resto
+# shaman, the healer nearest to 50 outside the lineup) takes the healer's.
+# The three displaced characters take the three maintenance places this freed.
+# Crag keeps the tank seat: no unseated level 60 tank-capable character exists
+# (every level 60 warrior and paladin is seated, and Corvane, the only other
+# death knight, is the questers' only one), so nobody is nearer to 60 for it.
+PROMOTED = {"Cave": ("Diggo", "Rubba", "Tugga")}
+
 # (name now, approved name) for the 21 warlock summoners.
 SUMMONERS = {
     "Cave": (
@@ -221,15 +257,15 @@ SUMMONERS = {
 MAINTENANCE = {
     "Cave": (
         ("Baall", "Chopp"),
-        ("Balressian", "Diggo"),
+        ("Derred", "Eggrok"),
         ("Arran", "Pokka"),
-        ("Baldam", "Rubba"),
+        ("Aurevil", "Drogg"),
         ("Aehuurn", "Skinna"),
         ("Behodiir", "Stakk"),
         ("Bakurn", "Totta"),
         ("Atherene", "Whakk"),
         ("Alemid", "Snipp"),
-        ("Auremir", "Tugga"),
+        ("Fizzog", "Fizzog"),
     ),
     "Bonkers": (
         ("Argam", "Grunty"),
@@ -276,6 +312,32 @@ QUESTERS = {
     ),
 }
 
+# The guild bankers, two per guild: logistics for what the vault cannot hold.
+# They join like any recruit, start over at level 1 with nothing, walk to their
+# faction's vault city and stand there. They never raid, level, quest, gather
+# or join a group, so, like the questers, they are in none of GROUPS,
+# SUMMONERS or MAINTENANCE and the lineup lists them apart.
+#
+# EACH PAIR SHARES ONE START, the shortest safe walk to a vault: Coldridge
+# Valley to Ironforge for the Alliance, Camp Narache to Thunder Bluff for the
+# Horde (a vault stands in each; the blood elf capital has none, and an orc
+# walks Durotar's road to Orgrimmar). The classes are the ones a rotating bot
+# of that race exists in on the realm, never a hunter (a pet walks too).
+# Names follow each guild's own style: short and grunted for Cave, a joke
+# about the race for Bonkers.
+# To add more: append a Banker to the guild's tuple, raise
+# teamsync.GUILD_SIZE and the realm's Overseer.Recruit.TargetSize together.
+BANKERS = {
+    "Cave": (
+        Banker("Hoarg", 5, "Dwarf", "Coldridge Valley"),
+        Banker("Stowk", 8, "Gnome", "Coldridge Valley"),
+    ),
+    "Bonkers": (
+        Banker("Hoardhoof", 11, "Tauren", "Camp Narache"),
+        Banker("Stashmoo", 7, "Tauren", "Camp Narache"),
+    ),
+}
+
 # Members who leave the guild to make room for the recruits.
 LEAVING = {
     "Cave": (
@@ -318,6 +380,7 @@ def names_of(guild: str) -> set:
             out.update((old, new))
     out.update(LEAVING.get(guild, ()))
     out.update(quester_names(guild))
+    out.update(banker_names(guild))
     return out
 
 
@@ -325,6 +388,12 @@ def quester_names(guild: str = "") -> set:
     """The questers' names in `guild`, or in every guild when none is named."""
     guilds = (guild,) if guild else tuple(QUESTERS)
     return {q.name for g in guilds for q in QUESTERS.get(g, ())}
+
+
+def banker_names(guild: str = "") -> set:
+    """The bankers' names in `guild`, or in every guild when none is named."""
+    guilds = (guild,) if guild else tuple(BANKERS)
+    return {b.name for g in guilds for b in BANKERS.get(g, ())}
 
 
 def renames(guild: str) -> list:

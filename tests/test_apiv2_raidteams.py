@@ -44,7 +44,7 @@ def _rows(team, *, renamed=False, recruits=False, other_guild=()):
 
 
 def reader(members, attuned=(), worn=(), carried=(), fail=()):
-    """The endpoint's four reads, answered by name; `fail` names the reads
+    """The endpoint's reads, answered by name; `fail` names the reads
     this realm has no table for."""
     answers = {
         v2.MEMBERS_SQL: members,
@@ -52,6 +52,7 @@ def reader(members, attuned=(), worn=(), carried=(), fail=()):
         v2.WORN_SQL: list(worn),
         v2.CONSUMABLES_SQL: list(carried),
         v2.KNOWN_SQL: [],
+        v2.SKILLS_SQL: [],
         v2training.TRAINER_SQL: [],
     }
     for sql in fail:
@@ -245,6 +246,7 @@ class TheTankAudit(unittest.TestCase):
             "worn": [],
             "consumables": [],
             "known": [],
+            "skills": [],
             "trainer": trainer,
         }
         fetched.update(reads)
@@ -289,7 +291,33 @@ class TheTankAudit(unittest.TestCase):
 
     def test_an_unreadable_spell_read_leaves_the_audit_null(self):
         self.assertIsNone(self._payload(known=None)["tank_audit"])
+        self.assertIsNone(self._payload(skills=None)["tank_audit"])
         self.assertIsNone(self._payload(trainer=None)["tank_audit"])
+
+    def test_a_proficiency_spell_held_as_a_skill_is_not_missing(self):
+        # 750 is Plate Mail: a tank holding the Plate Mail skill (293)
+        # counts as knowing it, as the training read already judges.
+        trainer = {}
+        for s in raidteams.seats("Cave"):
+            if s.seat == "tank":
+                trainer[s.class_id] = [
+                    {
+                        "spell": 750,
+                        "level": 10,
+                        "cost": 100,
+                        "req1": 0,
+                        "req2": 0,
+                        "req3": 0,
+                    }
+                ]
+        audit = self._payload(trainer=trainer, skills=[{"name": "Grug", "skill": 293}])[
+            "tank_audit"
+        ]
+        grug = [t for t in audit["tanks"] if t["name"] == "Grug"][0]
+        self.assertTrue(grug["complete"])
+        self.assertEqual(grug["missing"], [])
+        others = [t for t in audit["tanks"] if t["name"] != "Grug"]
+        self.assertTrue(all(not t["complete"] for t in others))
 
     def test_a_tank_class_without_trainer_rows_leaves_the_audit_null(self):
         trainer = {6: list(self.TRAINER)}

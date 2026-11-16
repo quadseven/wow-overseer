@@ -182,6 +182,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Answers: where the family levels, and next.
 - Example: `overseer get /api/levelroute family=grug`
 
+## `GET /api/live`
+
+- Query: none
+- Answers: every active dungeon run, raid and battleground.
+- Example: `overseer get /api/live`
+
 ## `GET /api/loot`
 
 - Query: none
@@ -241,6 +247,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Query: none
 - Answers: each family's recent dungeon runs, step by step.
 - Example: `overseer get /api/runtimeline`
+
+## `GET /api/spectate`
+
+- Query: none
+- Answers: where the observer camera is, for the Watch buttons.
+- Example: `overseer get /api/spectate`
 
 ## `GET /api/thoughts`
 
@@ -386,6 +398,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Answers: the approved Molten Core seats.
 - Example: `overseer get /api/v2/raidteams guild=cave`
 
+## `GET /api/v2/realm-status`
+
+- Query: none
+- Answers: is the worldserver up, and if not, why and until when.
+- Example: `overseer get /api/v2/realm-status`
+
 ## `GET /api/v2/roll`
 
 - Query: none
@@ -445,6 +463,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Query: none
 - Answers: how far behind each pinned dependency is.
 - Example: `overseer get /api/v2/upstream`
+
+## `GET /api/v2/whats-live`
+
+- Query: none
+- Answers: follower bridge commit, worldserver roll, and recent PRs.
+- Example: `overseer get /api/v2/whats-live`
 
 ## `GET /api/v2/zone-danger`
 
@@ -517,6 +541,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Query: none
 - Answers: the character shape table the map draws from
 - Example: `overseer get /shapes.json`
+
+## `GET /sw.js`
+
+- Query: none
+- Answers: see the handler
+- Example: `overseer get /sw.js`
 
 ## `POST /api/clips/claim`
 

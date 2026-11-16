@@ -27,6 +27,24 @@ import itemplan_vendor as vendor  # noqa: E402
 
 ON = {"ITEMPLAN_SELL_VENDOR": "on"}
 
+# These tests pin the vendor route's MECHANICS (holds, releases, fallbacks), and
+# they use an uncommon stack as the item the route sells. The guild loot policy
+# caps what the plan may send to a vendor at common quality
+# (itemplan.VENDOR_MAX_QUALITY), so the cap is lifted for this module and the
+# policy's own cap is pinned by PolicyCapTest below.
+_POLICY_CAP = itemplan.VENDOR_MAX_QUALITY
+_POLICY_BANK = itemplan.GEAR_BANK_MIN_QUALITY
+
+
+def setUpModule():
+    itemplan.VENDOR_MAX_QUALITY = 3
+    itemplan.GEAR_BANK_MIN_QUALITY = 3
+
+
+def tearDownModule():
+    itemplan.VENDOR_MAX_QUALITY = _POLICY_CAP
+    itemplan.GEAR_BANK_MIN_QUALITY = _POLICY_BANK
+
 
 def row(holder, guid, entry, name, quality=1, count=1, sell=50, item_class=15, **kw):
     base = {
@@ -100,6 +118,25 @@ class SwitchTest(unittest.TestCase):
         self.assertFalse(vendor.enabled({}))
         self.assertFalse(vendor.enabled({"ITEMPLAN_SELL_VENDOR": "off"}))
         self.assertTrue(vendor.enabled(ON))
+
+
+class PolicyCapTest(unittest.TestCase):
+    """With the guild loot policy's cap, the route never sells an uncommon."""
+
+    def setUp(self):
+        itemplan.VENDOR_MAX_QUALITY = _POLICY_CAP
+        itemplan.GEAR_BANK_MIN_QUALITY = _POLICY_BANK
+        self.addCleanup(setattr, itemplan, "VENDOR_MAX_QUALITY", 3)
+        self.addCleanup(setattr, itemplan, "GEAR_BANK_MIN_QUALITY", 3)
+
+    def test_the_cap_is_common_quality(self):
+        self.assertEqual(_POLICY_CAP, 1)
+
+    def test_a_green_is_never_a_route_sale(self):
+        rows, gear, worn, free = green_cloak()
+        plan_, prs = plan_and_pairs(rows, gear, worn, free)
+        self.assertNotEqual(plan_.decisions[0].route, itemplan.SELL_VENDOR)
+        self.assertEqual(vendor.sales_for(plan_, prs), ())
 
 
 class SalesForTest(unittest.TestCase):
@@ -514,6 +551,86 @@ class PressureReleaseTest(unittest.TestCase):
     def test_no_release_line_without_a_release(self):
         plan_, prs = held_fixture(dict(entry=1, value=1000, options=FIRST))
         self.assertEqual(vendor.release_lines(vendor.sales_for(plan_, prs)), ())
+
+    def test_reason_line_when_all_held_stacks_exceed_ceiling(self):
+        over = vendor.RELEASE_CEILING_COPPER + 1
+        plan_, prs = held_fixture(
+            dict(entry=1, value=over, confirm=True, options=FIRST),
+            dict(entry=2, value=over),
+        )
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 5})
+        lines = vendor.release_reason_lines(["Ana"], {"Ana": 4}, {}, plan_, prs, sales)
+        self.assertEqual(
+            lines,
+            (
+                "itemplan vendor: Ana at 4 free slot(s) releases 0 held sale(s): "
+                "2 held stack(s) above 5g ceiling",
+            ),
+        )
+
+    def test_reason_line_when_held_stacks_are_epic_quality(self):
+        plan_, prs = held_fixture(
+            dict(entry=1, value=100, quality=4, confirm=True, options=FIRST),
+        )
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 5})
+        lines = vendor.release_reason_lines(["Ana"], {"Ana": 3}, {}, plan_, prs, sales)
+        self.assertEqual(
+            lines,
+            (
+                "itemplan vendor: Ana at 3 free slot(s) releases 0 held sale(s): "
+                "1 held stack(s) at epic+ quality",
+            ),
+        )
+
+    def test_reason_line_when_ordinary_sales_already_cover_pressure(self):
+        plan_, prs = held_fixture(
+            dict(entry=1, value=500, options=FIRST),
+            dict(entry=2, value=1000),
+        )
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 1})
+        lines = vendor.release_reason_lines(
+            ["Ana"], {"Ana": 8}, {"Ana": 3}, plan_, prs, sales
+        )
+        self.assertEqual(
+            lines,
+            (
+                "itemplan vendor: Ana at 8 free slot(s) releases 0 held sale(s): "
+                "4 ordinary sale(s) already reach 12 free slots",
+            ),
+        )
+
+    def test_reason_line_when_no_releasable_held_stacks_exist(self):
+        plan_, prs = held_fixture(
+            dict(
+                entry=1,
+                value=100,
+                item_class=itemplan.C_CONTAINER,
+                options=FIRST,
+            ),
+        )
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 5})
+        lines = vendor.release_reason_lines(["Ana"], {"Ana": 5}, {}, plan_, prs, sales)
+        self.assertEqual(
+            lines,
+            (
+                "itemplan vendor: Ana at 5 free slot(s) releases 0 held sale(s): "
+                "no releasable held stacks",
+            ),
+        )
+
+    def test_no_reason_line_at_trigger_or_after_a_release(self):
+        plan_, prs = held_fixture(dict(entry=1, value=1000))
+        sales = vendor.sales_for(plan_, prs, pressure={"Ana": 1})
+        self.assertEqual(
+            vendor.release_reason_lines(["Ana"], {"Ana": 4}, {}, plan_, prs, sales),
+            (),
+        )
+        self.assertEqual(
+            vendor.release_reason_lines(
+                ["Ana"], {"Ana": itemplan.TRIGGER_FREE}, {}, plan_, prs, ()
+            ),
+            (),
+        )
 
 
 def vendor_money(copper):
@@ -966,10 +1083,16 @@ class RouteSalesAtTheBridgeTest(unittest.TestCase):
 
     def test_release_on_leaves_a_valuable_stack_held(self):
         env = {**ON, "ITEMPLAN_SELL_RELEASE": "on"}
-        out, _ = self.seam(
+        out, fake_log = self.seam(
             {"Ana": 0}, env, counts={}, value=vendor.RELEASE_CEILING_COPPER + 1
         )
         self.assertEqual(out, ())
+        lines = [c.args[1] for c in fake_log.info.call_args_list]
+        self.assertIn(
+            "itemplan vendor: Ana at 0 free slot(s) releases 0 held sale(s): "
+            "1 held stack(s) above 5g ceiling",
+            lines,
+        )
 
     def test_the_ordinary_sellable_count_lowers_the_pressure(self):
         env = {**ON, "ITEMPLAN_SELL_RELEASE": "on"}

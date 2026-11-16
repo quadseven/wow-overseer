@@ -91,6 +91,34 @@ class TheRecall(unittest.TestCase):
                 )
                 self.assertIsNotNone(guildjobs.stranded_recall_step(knight(), failed))
 
+    def test_a_recall_refused_for_the_missing_stone_is_held_for_hours(self):
+        # The module calls it retryable, but only an innkeeper gives a new
+        # stone: asking again every pass was 99 refusals in a day.
+        words = (
+            "a recall casts the hearthstone without the stone, which no player "
+            "can do; it gets a new stone from an innkeeper"
+        )
+        failed = STALLS + rows((("hearth", "Brug"), "recall", 90, words, "error"))
+        self.assertIsNone(guildjobs.stranded_recall_step(knight(), failed))
+        old = STALLS + rows(
+            (
+                ("hearth", "Brug"),
+                "recall",
+                guildjobs.NO_STONE_BACKOFF_MINUTES,
+                words,
+                "error",
+            )
+        )
+        self.assertIsNotNone(guildjobs.stranded_recall_step(knight(), old))
+
+    def test_a_recall_refused_for_another_reason_is_not_held_for_hours(self):
+        for status in ("error", "unchanged"):
+            with self.subTest(status):
+                failed = STALLS + rows(
+                    (("hearth", "Brug"), "recall", 90, "character is in combat", status)
+                )
+                self.assertIsNotNone(guildjobs.stranded_recall_step(knight(), failed))
+
     def test_the_plan_lets_a_recall_through_a_fight_and_nothing_else(self):
         # The step was chosen in a fight (#689) and then dropped by the plan's
         # own combat refusal: the live log said 'Brug is in combat' (2026-10-08).

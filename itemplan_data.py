@@ -49,6 +49,7 @@ ITEM_TEMPLATE_SQL = (
     "it.RequiredSkill AS required_skill, "
     "it.RequiredSkillRank AS required_skill_rank, "
     "it.AllowableClass AS allowable_class, "
+    "it.spellid_2 AS spell_id, "
     "it.ContainerSlots AS container_slots, "
     "it.DisenchantID AS disenchant_id, "
     "it.RequiredDisenchantSkill AS disenchant_skill, "
@@ -57,6 +58,10 @@ ITEM_TEMPLATE_SQL = (
     "it.holy_res AS holy_res, it.fire_res AS fire_res, "
     "it.nature_res AS nature_res, it.frost_res AS frost_res, "
     "it.shadow_res AS shadow_res, it.arcane_res AS arcane_res, "
+    "it.RandomProperty AS RandomProperty, it.RandomSuffix AS RandomSuffix, "
+    "("
+    + " OR ".join("it.spellid_%d > 0" % n for n in range(1, 6))
+    + ") AS has_effect, "
     + ", ".join(
         "it.stat_type%d AS stat_type%d, it.stat_value%d AS stat_value%d" % (n, n, n, n)
         for n in range(1, 11)
@@ -82,6 +87,7 @@ _TEMPLATE_FIELDS = (
 _OPTIONAL_TEMPLATE_FIELDS = (
     "required_skill",
     "allowable_class",
+    "spell_id",
 )
 
 ITEM_INSTANCE_SQL = (
@@ -121,6 +127,50 @@ def _int(value, default=None):
         return default
 
 
+def _row_resistance_only(row: dict, stats: dict | None = None) -> bool:
+    return bool(
+        row.get("resistance_only")
+        or gearscore.is_resistance_only(
+            row,
+            stats,
+            unread_spell=bool(_int(row.get("has_effect"), 0))
+            or any(_int(row.get(f"spellid_{n}"), 0) > 0 for n in range(1, 6)),
+            unresolved_random=bool(
+                _int(row.get("random_property_id"), 0)
+                or _int(row.get("RandomProperty"), 0)
+                or _int(row.get("RandomSuffix"), 0)
+            ),
+        )
+    )
+
+
+def _parse_item_template(row) -> tuple[int, dict] | None:
+    """Parse one `ITEM_TEMPLATE_SQL` row into `(entry, template_dict)`."""
+    try:
+        entry = _int(row["entry"])
+        item = {k: _int(row[k]) for k in _TEMPLATE_FIELDS}
+    except (KeyError, TypeError, AttributeError):
+        return None
+    if entry is None or entry <= 0 or any(v is None for v in item.values()):
+        return None
+    for k in _OPTIONAL_TEMPLATE_FIELDS:
+        if k in row:
+            v = _int(row[k])
+            if v is None:
+                return None
+            item[k] = v
+    item["stats"] = gearscore.stats_from_row(row)
+    if _row_resistance_only(row, item["stats"]):
+        item["resistance_only"] = True
+    # The core's own breakdown facts (#1978). Optional: a row without them
+    # is still read, and the plan falls back to its convention.
+    for field in _DISENCHANT_FIELDS:
+        value = _int(row.get(field)) if hasattr(row, "get") else None
+        if value is not None:
+            item[field] = value
+    return entry, item
+
+
 def item_templates(rows) -> dict:
     """{entry: {field: int}} from `ITEM_TEMPLATE_SQL` rows.
 
@@ -131,30 +181,10 @@ def item_templates(rows) -> dict:
     """
     out: dict = {}
     for row in rows or ():
-        try:
-            entry = _int(row["entry"])
-            item = {k: _int(row[k]) for k in _TEMPLATE_FIELDS}
-        except (KeyError, TypeError, AttributeError):
-            continue
-        if entry is None or entry <= 0 or any(v is None for v in item.values()):
-            continue
-        for k in _OPTIONAL_TEMPLATE_FIELDS:
-            if k in row:
-                v = _int(row[k])
-                if v is None:
-                    item = None
-                    break
-                item[k] = v
-        if item is None:
-            continue
-        item["stats"] = gearscore.stats_from_row(row)
-        # The core's own breakdown facts (#1978). Optional: a row without them
-        # is still read, and the plan falls back to its convention.
-        for field in _DISENCHANT_FIELDS:
-            value = _int(row.get(field)) if hasattr(row, "get") else None
-            if value is not None:
-                item[field] = value
-        out[entry] = item
+        parsed = _parse_item_template(row)
+        if parsed is not None:
+            entry, item = parsed
+            out[entry] = item
     return out
 
 
@@ -178,6 +208,7 @@ def verdict_rows(stacks, templates, characters) -> list:
                 "item_level": t["item_level"],
                 "req_level": t["req_level"],
                 "level": characters[s.holder][1],
+                "resistance_only": bool(t.get("resistance_only")),
             }
         )
     return out
@@ -276,6 +307,10 @@ EQUIPPED_SQL = (  # noqa: S608 - the bound is an int from armory, names stay pla
     "it.holy_res AS holy_res, it.nature_res AS nature_res, "
     "it.frost_res AS frost_res, it.shadow_res AS shadow_res, "
     "it.arcane_res AS arcane_res, "
+    "it.RandomProperty AS RandomProperty, it.RandomSuffix AS RandomSuffix, "
+    "("
+    + " OR ".join("it.spellid_%d > 0" % n for n in range(1, 6))
+    + ") AS has_effect, "
     + ", ".join(
         "it.stat_type%d AS stat_type%d, it.stat_value%d AS stat_value%d" % (n, n, n, n)
         for n in range(1, 11)
@@ -320,6 +355,8 @@ def equipped(rows) -> dict:
             item["fire_res"] = _int(row.get("fire_res"), 0)
             item["instance_flags"] = _int(row.get("instance_flags"), 0)
             item["stats"] = gearscore.stats_from_row(row)
+            if _row_resistance_only(row, item["stats"]):
+                item["resistance_only"] = True
         except (KeyError, TypeError, AttributeError):
             continue
         out.setdefault(member, {}).setdefault(armory.EQUIPPED_SLOTS[slot], item)
@@ -360,6 +397,24 @@ _SLOTS_FOR = {
 }
 
 
+def _worn_slot_ilvl(mine: dict, slot: str) -> int:
+    """Effective item level of one worn slot, treating resistance-only gear as 0."""
+    equipped = mine.get(slot, {})
+    return 0 if equipped.get("resistance_only") else equipped.get("item_level", 0)
+
+
+def _is_ilvl_upgrade(
+    mine: dict | None, entry: int, itype: int, ilvl: int, req: int, level: int
+) -> bool:
+    """Fallback upgrade check when `drive` does not cover the holder."""
+    slots = _SLOTS_FOR.get(itype)
+    if not slots or req > level or mine is None:
+        return False
+    if any(slot in mine and mine[slot]["entry"] == entry for slot in slots):
+        return False
+    return all(ilvl > _worn_slot_ilvl(mine, slot) for slot in slots)
+
+
 def upgrade_verdicts(worn: dict, bag_rows, drive=None) -> dict:
     """`itemplan.Context.gear_verdict`: {(member, entry): "wear"}.
 
@@ -393,15 +448,9 @@ def upgrade_verdicts(worn: dict, bag_rows, drive=None) -> dict:
             if drive[member].get(entry) == "wear":
                 out[(member, entry)] = "wear"
             continue
-        slots = _SLOTS_FOR.get(itype)
-        if not slots or req > level:
+        if _row_resistance_only(row):
             continue
-        mine = worn.get(member)
-        if mine is None:
-            continue  # worn gear was not read for this member: no verdict
-        if any(slot in mine and mine[slot]["entry"] == entry for slot in slots):
-            continue
-        if all(ilvl > mine.get(slot, {}).get("item_level", 0) for slot in slots):
+        if _is_ilvl_upgrade(worn.get(member), entry, itype, ilvl, req, level):
             out[(member, entry)] = "wear"
     return out
 
@@ -479,6 +528,7 @@ __all__ = [
     "EQUIPPED_SQL",
     "ITEM_INSTANCE_SQL",
     "ITEM_TEMPLATE_SQL",
+    "KNOWN_SPELLS_SQL",
     "LISTINGS_SQL",
     "NO_PRICE_SOURCE",
     "QUEST_LOG_SQL",
@@ -487,9 +537,72 @@ __all__ = [
     "auction_prices",
     "equipped",
     "item_templates",
+    "known_spells_by_member",
     "open_quest_items",
     "quest_needs",
     "upgrade_verdicts",
     "verdict_rows",
     "worn_entries",
 ]
+
+
+KNOWN_SPELLS_SQL = (
+    "SELECT DISTINCT c.name AS member, cs.spell AS spell "
+    "FROM characters c "
+    "JOIN character_spell cs ON cs.guid = c.guid "
+    "LEFT JOIN guild_member gm ON gm.guid = c.guid "
+    "WHERE cs.spell IN (%s) "
+    "AND (c.name IN (%s) OR gm.guildid IN ("
+    "SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN (%s)))"
+)
+
+
+def known_spells_by_member(rows) -> dict:
+    """{member: frozenset[spell_id]} from `KNOWN_SPELLS_SQL` rows."""
+    out: dict = {}
+    for row in rows or ():
+        try:
+            member = str(row["member"])
+            spell = _int(row["spell"])
+        except (KeyError, TypeError, AttributeError):
+            continue
+        if not member or spell is None or spell <= 0:
+            continue
+        out.setdefault(member, set()).add(spell)
+    return {member: frozenset(spells) for member, spells in out.items()}
+
+
+# Listings of one item instance that were written and applied (#2605): an item
+# still carried after two of them has been listed, expired and come back twice,
+# and may go to a vendor. The `list guid:<n> ...` command names the instance;
+# the core mails an expired listing's item back as the same instance.
+LISTING_HISTORY_SQL = (
+    "SELECT SUBSTRING_INDEX(SUBSTRING_INDEX(command, 'guid:', -1), ' ', 1) "
+    "AS item_guid, COUNT(*) AS listings FROM overseer_command "
+    "WHERE kind = 'auction' AND command LIKE 'list guid:%%' "
+    "AND status IN ('applied', 'delivered') GROUP BY item_guid"
+)
+
+
+def failed_listings(history_rows, carried_rows) -> dict:
+    """(holder, entry) -> how many listings of that carried stack were applied.
+
+    Only instances still carried count: a stack that sold is gone, and one that
+    is still here after a listing was returned by the house unsold."""
+    carried = {}
+    for r in carried_rows:
+        try:
+            carried[int(r.get("item_guid"))] = (str(r["holder"]), int(r["entry"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+    out: dict = {}
+    for h in history_rows:
+        try:
+            key = carried.get(int(h.get("item_guid")))
+            n = int(h.get("listings"))
+        except (TypeError, ValueError):
+            continue
+        if key is not None and n > 0:
+            out[key] = max(out.get(key, 0), n)
+    return out

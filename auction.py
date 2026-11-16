@@ -304,6 +304,12 @@ AUCTIONEER_ROLE = next(role for role in travel.ROLES if role == "auctioneer")
 # asserts this rendering is what it accepts.
 
 AUCTION_KIND = "auction"
+# mod-overseer's DoAuction error when the bot is outside 3D INTERACTION_DISTANCE
+# (5.5 yards in SharedDefines.h / Object.h).
+OUT_OF_REACH = "auctioneer not in range"
+# Strictly inside 5.5-yard 3D interact reach so height or floating-point jitter
+# never fails GetNPCIfCanInteractWith right after a walk or town stop.
+COUNTER_REACH_YARDS = 5.0
 
 
 def buy_command(auction_id: int) -> str:

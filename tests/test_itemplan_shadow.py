@@ -236,9 +236,8 @@ class RunTest(unittest.TestCase):
             for x in cap.lines
             if x.startswith("itemplan: disagree ") and "Plain Green Cloak" in x
         ]
-        self.assertEqual(len(hits), 1, cap.lines)
-        self.assertIn("sale pass keeps (uncommon or better)", hits[0])
-        self.assertIn("plan SELL_VENDOR", hits[0])
+        # The plan no longer sells an uncommon: it agrees with the sale pass.
+        self.assertEqual(hits, [], cap.lines)
         self.assertEqual(
             len(report.disagreements),
             len([x for x in cap.lines if x.startswith("itemplan: disagree ")]),
@@ -308,7 +307,9 @@ class AuctionExecutorTest(unittest.IsolatedAsyncioTestCase):
         )
         queued = []
         executor = SimpleNamespace(
-            _auction_holder_houses=mock.AsyncMock(return_value={"Ana": 2})
+            _auction_holder_houses=mock.AsyncMock(return_value={"Ana": 2}),
+            _keep_at_auctioneer=mock.AsyncMock(),
+            _itemplan_auction_walk=mock.AsyncMock(),
         )
         bridge = import_bridge()
 
@@ -340,6 +341,185 @@ class AuctionExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queued[0][0], "Ana")
         self.assertIn("guid:101", queued[0][1])
         self.assertNotIn("guid:102", queued[0][1])
+
+    def test_shadow_passes_family_skills_so_holder_keeps_own_trade_recipe(self):
+        rows = [
+            row(
+                "Oz",
+                201,
+                16245,
+                "Formula: Enchant Boots - Greater Agility",
+                item_class=9,
+                quality=2,
+                sell=500,
+            )
+        ]
+        worn = [{"name": "Oz", "class_id": 8, "level": 60}]
+        ench = shadow.itemplan.guildshare.SKILL_LINES["enchanting"]
+        extras = shadow.Extras(
+            open_quest_items={"Oz": frozenset()},
+            family_skills={"Oz": ((ench, 15, 75),)},
+            known_spells={},
+            templates={
+                16245: {
+                    "item_class": 9,
+                    "subclass": 8,
+                    "bonding": 0,
+                    "inventory_type": 0,
+                    "item_level": 59,
+                    "req_level": 0,
+                    "required_skill": 333,
+                    "required_skill_rank": 295,
+                    "allowable_class": -1,
+                    "spell_id": 20023,
+                    "container_slots": 0,
+                    "fire_res": 0,
+                    "stats": {},
+                }
+            },
+            instance_soulbound={201: False},
+            fire_gear=frozenset(),
+        )
+        report = shadow.shadow(
+            ["Oz"], "Oz", rows, {"Oz": 10}, gear_rows=[], worn_rows=worn, extras=extras
+        )
+        self.assertEqual(report.plan.decisions[0].route, shadow.itemplan.BANK_PERSONAL)
+        self.assertEqual(report.plan.decisions[0].goal, shadow.itemplan.TRADE_NEXT)
+
+
+class GiveExecutorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_give_executor_delivers_gifts_for_outside_guildmates(self):
+        rows = [
+            {
+                "holder": "Grug",
+                "item_guid": 21,
+                "entry": 17682,
+                "name": "Book: Gift of the Wild",
+                "quality": 2,
+                "count": 1,
+                "sell_price": 2500,
+                "item_class": 9,
+            }
+        ]
+        written = []
+        executor = SimpleNamespace(
+            _write_guild_gifts=mock.AsyncMock(
+                side_effect=lambda gifts: written.extend(gifts)
+            ),
+        )
+        plan = SimpleNamespace(
+            decisions=[
+                SimpleNamespace(
+                    key=("Grug", 1, 17682, 0),
+                    route=shadow.itemplan.GIVE,
+                    target="Glob",
+                    holder="Grug",
+                    entry=17682,
+                    name="Book: Gift of the Wild",
+                    count=1,
+                    reason="class book for guildmate Glob",
+                )
+            ]
+        )
+        extras = shadow.Extras(
+            open_quest_items={},
+            market={},
+            templates={
+                17682: {
+                    "item_class": 9,
+                    "subclass": 0,
+                    "bonding": 0,
+                    "inventory_type": 0,
+                    "item_level": 50,
+                    "req_level": 50,
+                    "required_skill": 0,
+                    "required_skill_rank": 0,
+                    "allowable_class": 1024,
+                    "spell_id": 21849,
+                    "container_slots": 0,
+                    "fire_res": 0,
+                    "stats": {},
+                }
+            },
+            instance_soulbound={21: False},
+            fire_gear=frozenset(),
+            guild_free={},
+            guild_crafters=(),
+        )
+        bridge = import_bridge()
+        with (
+            mock.patch.object(
+                bridge.itemplan_shadow, "give_enabled", return_value=True
+            ),
+            mock.patch.object(bridge, "_itemplan_reads", return_value=extras),
+            mock.patch.object(
+                bridge.itemplan_shadow,
+                "shadow",
+                return_value=SimpleNamespace(plan=plan),
+            ),
+            mock.patch.object(bridge, "_recently_given_guids", return_value=set()),
+        ):
+            await bridge.Bridge._itemplan_give(
+                executor, ["Grug", "Bork"], "Cave", rows, {"Grug": 10, "Bork": 10}
+            )
+        self.assertEqual(len(written), 1)
+        self.assertEqual(written[0].taker, "Glob")
+        self.assertEqual(written[0].guid, 21)
+
+    def test_shadow_preserves_none_guild_roster_and_banks_class_book(self):
+        rows = [
+            {
+                "holder": "Bork",
+                "item_guid": 21,
+                "entry": 17682,
+                "name": "Book: Gift of the Wild",
+                "quality": 2,
+                "count": 1,
+                "sell_price": 2500,
+                "item_class": 9,
+                "stackable": 1,
+                "required_level": 50,
+                "required_skill": 0,
+                "required_skill_rank": 0,
+            }
+        ]
+        extras = shadow.Extras(
+            open_quest_items={"Bork": frozenset()},
+            market={17682: (40_000, 1)},
+            templates={
+                17682: {
+                    "item_class": 9,
+                    "subclass": 0,
+                    "bonding": 0,
+                    "inventory_type": 0,
+                    "item_level": 50,
+                    "req_level": 50,
+                    "required_skill": 0,
+                    "required_skill_rank": 0,
+                    "allowable_class": 1024,
+                    "spell_id": 21849,
+                    "container_slots": 0,
+                    "fire_res": 0,
+                    "stats": {},
+                }
+            },
+            instance_soulbound={21: False},
+            fire_gear=frozenset(),
+            guild_free={},
+            guild_class_members=None,
+            known_spells={"Bork": frozenset({21849})},
+        )
+        report = shadow.shadow(
+            ["Bork"],
+            "Cave",
+            rows,
+            {"Bork": 16},
+            gear_rows=[],
+            worn_rows=[{"name": "Bork", "class_id": 11, "level": 60}],
+            extras=extras,
+        )
+        self.assertEqual(1, len(report.plan.decisions))
+        self.assertEqual(shadow.itemplan.BANK_PERSONAL, report.plan.decisions[0].route)
 
 
 class BridgeShapeTest(unittest.TestCase):

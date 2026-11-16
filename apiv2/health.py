@@ -50,6 +50,12 @@ THE KINDS:
               standing in the world, so neither is flagged; a member with
               no death on record has no proven start and is not flagged
               either.
+  realm-down  the worldserver is down with a maintenance notice past its
+              expected_back (OVERRUN) or with no notice (DOWN_UNEXPLAINED),
+              from /api/v2/realm-status. One finding, ranked above the rest,
+              since every other finding assumes a realm that is up. A
+              planned window inside its ETA, a normal boot and an unreadable
+              cluster raise nothing.
 
 Read-only, like everything under /api/v2. An empty list means "looked and
 found nothing"; a read that fails is a 503 from the map server, never an empty
@@ -70,7 +76,8 @@ import dungeonstall
 import guildfund
 import guildrun
 import levelroute
-from apiv2 import _scope, members, quests
+import realmmaint
+from apiv2 import _scope, members, quests, realm_status
 
 STUCK_HOURS = 2.0
 MIN_RUNS = campaignplan.POOR_CLEAR_RUNS
@@ -482,6 +489,51 @@ def unreleased_findings(roster: dict, deaths: list, now_at: int) -> list:
     return out
 
 
+REALM_IMPACT = 100_000.0
+
+
+def realm_findings(realm: dict | None, now_at: int) -> list:
+    """One finding when the worldserver is down past its window or with no
+    notice (apiv2/realm_status.py). Ranked above every other kind."""
+    if not realm or not realm.get("alert"):
+        return []
+    name = str(realm.get("state"))
+    ws = realm.get("worldserver") or {}
+    since = realmmaint.parse_time(ws.get("down_since"))
+    at = int(since.timestamp()) if since else None
+    notice = realm.get("notice") or {}
+    if name == "OVERRUN":
+        said = (
+            "%s. The maintenance notice (%s, by %s) expected the realm back at %s, %d min ago."
+            % (
+                name,
+                notice.get("reason"),
+                notice.get("who"),
+                notice.get("expected_back"),
+                int(realm.get("overrun_seconds") or 0) // 60,
+            )
+        )
+        title = "The realm's maintenance window has overrun"
+    else:
+        said = (
+            "%s. The worldserver is not running and no maintenance notice explains it."
+            % name
+        )
+        title = "The realm is down and nobody has said why"
+    return [
+        finding(
+            "realm-down",
+            title,
+            "stability",
+            1,
+            hours_since(at, now_at),
+            said,
+            at,
+            impact=REALM_IMPACT,
+        )
+    ]
+
+
 def streak(rows: list) -> list:
     """The ended runs of `rows` (one family's, oldest first) from the newest
     back to the first that cleared or ran another map, oldest first. A run
@@ -602,6 +654,7 @@ def build(
     events=(),
     roster=None,
     deaths=(),
+    realm=None,
 ):
     """Everything read, the payload out. Pure. Highest impact first."""
     found = (
@@ -611,6 +664,7 @@ def build(
         + quester_findings(questers, invites, now_at)
         + bank_findings(banks, moved, now_at)
         + unreleased_findings(roster or {}, deaths, now_at)
+        + realm_findings(realm, now_at)
     )
     found.sort(key=lambda f: (-f["impact"], f["key"]))
     return {"checked_at": iso(now_at), "findings": found}
@@ -697,6 +751,7 @@ def health(_query: dict, ctx) -> tuple[int, dict]:
         events,
         roster=roster,
         deaths=[dict(r) for r in deaths],
+        realm=realm_status.read_state(),
     )
     return 200, payload
 

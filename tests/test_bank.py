@@ -14,6 +14,7 @@ import pathlib
 import unittest
 
 import bank
+import bankpolicy
 import disposition
 
 
@@ -495,6 +496,191 @@ class TheCommandIsTheOneTheExecutorParses(unittest.TestCase):
         """A pass logs what it WROTE. Half a plan can be dropped by the retry
         window, and a log that reported the plan would be lying."""
         self.assertEqual(bank.lines([]), [])
+
+
+class FullBankOfKeptStacks(unittest.TestCase):
+    """#2608: kept_full names members whose full bank has nothing to pull out."""
+
+    def test_full_kept_bank_is_reported_and_withdraw_or_free_slot_clears_it(self):
+        rows = [
+            *[
+                row(
+                    holder="Zug",
+                    item_guid=10 + i,
+                    entry=11137,
+                    name="Soul Dust",
+                    slot=39 + i,
+                )
+                for i in range(28)
+            ],
+            *[
+                row(
+                    holder="Og",
+                    item_guid=40 + i,
+                    entry=11137,
+                    name="Soul Dust",
+                    slot=39 + i,
+                )
+                for i in range(27)
+            ],
+            *[
+                row(
+                    holder="Grug",
+                    item_guid=70 + i,
+                    entry=11137,
+                    name="Soul Dust",
+                    slot=39 + i,
+                )
+                for i in range(27)
+            ],
+            row(holder="Grug", item_guid=99, entry=2589, name="Linen Cloth", slot=66),
+        ]
+        members = bank.members_from_rows(rows, ["Zug", "Og", "Grug"])
+        storage = bank.Storage(
+            trades={
+                "Zug": frozenset({"enchanting"}),
+                "Grug": frozenset({"enchanting"}),
+            },
+            family_trades=frozenset({"enchanting", "tailoring"}),
+            named={11137: frozenset({"enchanting"}), 2589: frozenset({"tailoring"})},
+            guild_depositors=frozenset({"Grug"}),
+            guild_tab_free={0: 5},
+        )
+        result = bank.plan(members, bank.family_from_skills({}), storage=storage)
+        self.assertEqual(result.kept_full, frozenset({"Zug"}))
+
+    def test_depositor_with_relocatable_stack_is_not_kept_full_when_tab_has_room(self):
+        # 28 banked slots on a guild depositor: 27 kept stacks + 1 relocatable stack.
+        rows = [
+            *[
+                row(
+                    holder="Grug",
+                    item_guid=200 + i,
+                    entry=11137,
+                    name="Soul Dust",
+                    slot=39 + i,
+                )
+                for i in range(27)
+            ],
+            row(
+                holder="Grug",
+                item_guid=299,
+                entry=2589,
+                name="Linen Cloth",
+                slot=66,
+            ),
+        ]
+        members = bank.members_from_rows(rows, ["Grug"])
+        storage = bank.Storage(
+            trades={"Grug": frozenset({"enchanting"})},
+            family_trades=frozenset({"enchanting", "tailoring"}),
+            named={11137: frozenset({"enchanting"}), 2589: frozenset({"tailoring"})},
+            guild_depositors=frozenset({"Grug"}),
+            guild_tab_free={0: 2},
+        )
+        # No relocations budget used here: check kept_full before tab room runs out
+        # and also confirm when tab has no room it IS kept_full.
+        has_room = bank.plan(members, bank.family_from_skills({}), storage=storage)
+        self.assertNotIn("Grug", has_room.kept_full)
+        self.assertTrue(
+            any(m.verb == bank.WITHDRAW and m.guid == 299 for m in has_room.moves)
+        )
+
+        no_room_storage = bank.Storage(
+            trades={"Grug": frozenset({"enchanting"})},
+            family_trades=frozenset({"enchanting", "tailoring"}),
+            named={11137: frozenset({"enchanting"}), 2589: frozenset({"tailoring"})},
+            guild_depositors=frozenset({"Grug"}),
+            guild_tab_free={0: 0},
+        )
+        no_room = bank.plan(
+            members, bank.family_from_skills({}), storage=no_room_storage
+        )
+        self.assertIn("Grug", no_room.kept_full)
+
+
+class BankedPolicyGearRelocatesWhenGuildTabHasRoom(unittest.TestCase):
+    def test_unbound_rare_placed_for_gear_tab_is_withdrawn_from_personal_bank(self):
+        rows = [
+            row(
+                item_guid=101,
+                name="Wildheart Belt",
+                quality=3,
+                item_class=bank.ITEM_CLASS_ARMOR,
+                bonding=2,
+                slot=39,
+                required_level=54,
+            ),
+            row(
+                item_guid=102,
+                name="Bulwark Shield",
+                quality=3,
+                item_class=bank.ITEM_CLASS_ARMOR,
+                bonding=1,
+                slot=40,
+                required_level=55,
+            ),
+        ]
+        members = bank.members_from_rows(rows, ["Grug"])
+        policy = {
+            101: bankpolicy.Placement(
+                guid=101,
+                holder="Grug",
+                item="Wildheart Belt",
+                to=bankpolicy.GUILD,
+                tab=bankpolicy.GEAR_TAB,
+                kind="gear for later",
+                why="rare for Oz later",
+            ),
+            102: bankpolicy.Placement(
+                guid=102,
+                holder="Grug",
+                item="Bulwark Shield",
+                to=bankpolicy.PERSONAL,
+                tab=None,
+                kind=bankpolicy.GROWS_INTO,
+                why="Grug keeps Bulwark Shield until level 55",
+            ),
+        }
+        storage = bank.Storage(
+            guild_depositors=frozenset({"Grug"}),
+            guild_tab_free={bankpolicy.MATERIALS_TAB: 0, bankpolicy.GEAR_TAB: 3},
+            policy=policy,
+        )
+        planned = bank.plan(members, NOBODY, storage=storage)
+        self.assertEqual(
+            [101], [m.guid for m in planned.moves if m.verb == bank.WITHDRAW]
+        )
+        self.assertEqual([], [m for m in planned.moves if m.guid == 102])
+
+    def test_non_dropped_banked_gear_still_withdraws_while_dropped_second_set_stays(
+        self,
+    ):
+        rows = [
+            row(
+                item_guid=201,
+                name="Normal Banked Blade",
+                quality=3,
+                item_class=bank.ITEM_CLASS_WEAPON,
+                bonding=1,
+                slot=39,
+                required_level=55,
+            ),
+            row(
+                item_guid=202,
+                name="Dropped Second-Set Axe",
+                quality=3,
+                item_class=bank.ITEM_CLASS_WEAPON,
+                bonding=1,
+                slot=40,
+                required_level=55,
+            ),
+        ]
+        members = bank.members_from_rows(rows, ["Grug"])
+        storage = bank.Storage(dropped_second_sets=frozenset({202}))
+        planned = bank.plan(members, NOBODY, storage=storage)
+        withdrawn = [m.guid for m in planned.moves if m.verb == bank.WITHDRAW]
+        self.assertEqual([201], withdrawn)
 
 
 if __name__ == "__main__":

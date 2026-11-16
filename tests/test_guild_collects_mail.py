@@ -27,6 +27,8 @@ def _member(**kw):
         y=0.0,
         money=5000,
         eligible=True,
+        # Both trade slots are full, so no profession errand comes first.
+        skills={guildjobs.HERBALISM: (40, 75), guildjobs.MINING: (40, 75)},
     )
     base.update(kw)
     return guildjobs.Member(**base)

@@ -605,6 +605,7 @@ class AnApprovedGuildKeepsItsSeats(unittest.TestCase):
         import raidteams
 
         for team in raidteams.GROUPS:
+            moved = len(raidteams.RESPEC_HEALERS.get(team, ()))
             members = [
                 {"name": s.name, "level": 60, "class_id": s.class_id}
                 for s in raidteams.seats(team)
@@ -617,7 +618,7 @@ class AnApprovedGuildKeepsItsSeats(unittest.TestCase):
                     lineup["wanted"]["healers"],
                     lineup["wanted"]["damage"],
                 ),
-                (8, 11, 21),
+                (8, 11 + moved, 21 - moved),
                 team,
             )
             self.assertEqual(

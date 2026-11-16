@@ -78,6 +78,7 @@ class TheRoutesSomethingReadsStay(unittest.TestCase):
         routes = map_server.Handler.GET_ROUTES
         self.assertIs(routes["/api/watch"], map_server.Handler._watch_state)
         self.assertIs(routes["/api/director"], map_server.Handler._director_state)
+        self.assertIs(routes["/api/spectate"], map_server.Handler._spectate_state)
         self.assertIs(routes["/api/frame"], map_server.Handler._frame_get)
 
     def test_the_static_files_the_page_loads_stay(self):
@@ -93,6 +94,7 @@ class TheRoutesSomethingReadsStay(unittest.TestCase):
                 "/api/decree": "_decree_post",
                 "/api/watch": "_watch_post",
                 "/api/director": "_director_post",
+                "/api/spectate": "_spectate_post",
                 "/api/frame": "_frame_post",
                 "/api/clips/claim": "_clips_claim",
                 "/api/clips/file": "_clips_file",

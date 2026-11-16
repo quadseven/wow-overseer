@@ -552,6 +552,7 @@ class TheGuild(unittest.TestCase):
                 {"name": "Bonk", "id": 5, "status": 3, "title": "Five"}
             ],
             guild._CQ_STEPS_SQL: [],
+            guild._ACTIVE_GOAL_SQL: [],
             guildrun._RUN_SQL: [],
         }
         code, body = guild.guild({"guild": ["cave"]}, Ctx(answers, Server))
