@@ -109,9 +109,9 @@ class TheRunLineSaysWhatShipped(unittest.TestCase):
     shipped answer is that an order clears, and that a raider away from the
     door is not brought to it."""
 
-    def test_the_module_clears_and_does_not_gather(self):
+    def test_the_module_clears_and_gathers(self):
         self.assertTrue(raidrun.CLEARS)
-        self.assertFalse(raidrun.GATHERS)
+        self.assertTrue(raidrun.GATHERS)
 
     def test_the_run_line_says_it_clears(self):
         line = raidrun.run_line()
@@ -120,10 +120,10 @@ class TheRunLineSaysWhatShipped(unittest.TestCase):
         self.assertIn("clears it with the dungeon brain", line)
         self.assertIn("runs back after a wipe", line)
 
-    def test_the_run_line_says_who_is_not_brought(self):
+    def test_the_run_line_says_a_straggler_is_summoned_at_the_stone(self):
         line = raidrun.run_line()
-        self.assertIn("Only the head is walked to the door", line)
-        self.assertIn("not brought there", line)
+        self.assertIn("summoned at the Blackrock Mountain stone", line)
+        self.assertNotIn("not brought there", line)
 
     def test_a_module_without_the_clear_is_still_said_plainly(self):
         """The flags are switches pinned to the module, like FORMS and ENTERS.
@@ -354,6 +354,7 @@ def _load_drive_raid(
         ast.get_source_segment(BRIDGE, _function(name))
         for name in (
             "_withheld",
+            "_seat_current_rows",
             "_raid_seat_eligibility",
             "_write_raid_seats",
             "_log_raid_arrivals",
@@ -532,7 +533,7 @@ class TheBridgeWritesSeatsThenTheJob(unittest.TestCase):
             "_reset_campaign_done": lambda names: calls.append(("reset",)),
             "_insert_job": lambda *a: calls.append(("job",) + a),
             "_drive_dungeon": lambda *a, **k: calls.append(("dungeon",)) or (0, 0),
-            "_drive_raid": lambda keyword, family, names, source, withheld=None: (
+            "_drive_raid": lambda keyword, family, names, source, withheld=None, first_kill=False: (
                 calls.append(("raid", keyword, family, tuple(names))) or len(names)
             ),
         }
@@ -751,8 +752,10 @@ class TheArrivalOrderNamesHowEachRaiderComes(unittest.TestCase):
         self.assertIn("raidrun.INSERT_SEAT_SQL", writer)
         self.assertIn("raidrun.arrival_line(", BRIDGE)
 
-    def test_the_run_line_says_the_order_is_logged_not_yet_carried_out(self):
-        """GATHERS stays pinned to the module: it does not summon yet."""
+    def test_the_run_line_says_every_seat_is_walked_to_the_door(self):
+        """GATHERS is pinned to the module (every seat walked, stragglers
+        summoned at the stone), so the line never says only the head walks."""
         line = raidrun.run_line()
         self.assertIn("logs how each raider away from the door is to arrive", line)
-        self.assertIn("Only the head is walked to the door", line)
+        self.assertIn("Every seat is walked to the door", line)
+        self.assertNotIn("Only the head is walked", line)
