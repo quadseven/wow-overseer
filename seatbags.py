@@ -79,10 +79,24 @@ def is_seat(member) -> bool:
     return member.role == guildjobs.RAIDER and member.name in seat_names(member.guild)
 
 
+def is_corps_member(member) -> bool:
+    """A guild member outside the families and the approved seats: the
+    maintenance, summoner and raider corps. The families' heads (role FAMILY)
+    run the economy pass's own loop, and a seat is `is_seat`.
+
+    THE GUILD LOOT POLICY (lootpolicy.py) stops every vendor sale of an
+    uncommon or better item, so these members' bags would only fill. They take
+    the seat loop's route instead: at the item plan's trigger, on a town stop,
+    the plan's deposit at the nearest banker.
+    """
+    return member.role in (guildjobs.MAINTENANCE, guildjobs.SUMMONER, guildjobs.RAIDER)
+
+
 def needs_plan(member) -> bool:
-    """A seat in the world with fewer free slots than the plan's trigger."""
+    """A seat or corps member in the world with fewer free slots than the
+    plan's trigger."""
     return bool(
-        is_seat(member)
+        (is_seat(member) or is_corps_member(member))
         and member.online
         and member.alive
         and member.free_slots is not None
