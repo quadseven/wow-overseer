@@ -309,4 +309,11 @@ Discord token, no external keys), talks only to the pod's loopback database, and
 adds its requests to the world's, so the dispatcher counts it. With `bridge: "off"`
 the sidecar and its pull secret are removed and the Job is the one it was before.
 
+For a fix in this repo's bridge code, each arm's fix presence is read from the
+commit baked into that arm's bridge image (its `OVERSEER_COMMIT`, found through
+the image registry with the namespace's `ghcr` pull secret and checked against
+the image digest), so no pin needs typing. `--control-pin` and `--treatment-pin`
+still win when given; an image whose commit cannot be read is recorded as
+unchecked.
+
 Not built: requeueing an INVALID first pair (resubmit instead) and PR-built images.
