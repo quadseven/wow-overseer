@@ -6,7 +6,7 @@ import unittest
 from ephemeral import acts
 from ephemeral.miniyaml import loads
 
-DECREES = pathlib.Path(__file__).resolve().parent.parent / "decrees"
+DECREES = pathlib.Path(__file__).resolve().parent.parent / "data" / "decrees"
 
 
 class ActCommandsTest(unittest.TestCase):
