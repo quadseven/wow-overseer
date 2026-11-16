@@ -34859,7 +34859,7 @@ _GIVE_WRITE_LOCK = threading.Lock()
 _INSERT_GIVE_ONCE_SQL = (
     "INSERT INTO overseer_command "
     "(target_name, command, kind, target_arg, source) "
-    "SELECT %s, %s, %s, %s, %s FROM DUAL WHERE NOT EXISTS ("
+    "SELECT %s, %s, %s, %s, %s FROM (SELECT 1) AS one WHERE NOT EXISTS ("
     "SELECT 1 FROM overseer_command "
     "WHERE kind IN ('give', 'mail') AND status IN ('pending', 'claimed') "
     "AND (command = %s OR command LIKE %s OR command LIKE %s))"
