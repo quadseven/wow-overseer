@@ -1,0 +1,38 @@
+# Raise the entities.player and movement.motionmaster loggers, let a character fall from a captured
+# fall start, and quote the FALLDAMAGE and MoveFall lines (mod-overseer issue 254). The loggers are the
+# only world-config change; the baseline is restored by tearing the world down.
+# Fix: mod-overseer pull 292 (the fall guard measures the fall).
+decree: v1
+id: fall-death-logger-capture
+proves:
+  - {repo: quadseven/mod-overseer, issue: 254, criterion: "a fall death is captured with entities.player and movement.motionmaster at debug and the FALLDAMAGE and MoveFall lines are quoted"}
+fix: {repo: quadseven/mod-overseer, commit: "97e790ccfd9d23723c52b943ed97fa20e4f47aeb"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {Logger.entities.player: "2,Console Server", Logger.movement.motionmaster: "2,Console Server"}}
+runs: {control: 3, treatment: 3}
+duration: 20m
+cast:
+  - who: Og
+    set: {alive: true, at: {captured: mo254-fall-start}}
+    ceiling: "nothing granted but position"
+act:
+  - at: 0s
+    roster: {who: Og, job: "quest"}
+observe:
+  - name: og-starts-at-the-fall-start
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid = @Og AND map_id = 230
+    expect: {scalar: "= 1"}
+  - name: a-fall-was-recorded
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_death WHERE created_at >= @t0 AND character_name = 'Og' AND yards_fallen > 0
+    expect: {scalar: ">= 1"}
+  - name: fall-measured-not-guessed
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_death WHERE created_at >= @t0 AND yards_fallen > 0 AND fall_start_z IS NULL
+    expect: {scalar: "= 0"}
