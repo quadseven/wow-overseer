@@ -14,11 +14,12 @@ Three layers, none of which relies on the caller being careful:
 3. `apply_plan` accepts only a `GuardedConnection`.
 
 The marker row is written by the forge when it builds the template, so a
-database that did not come from a template (wow-dev's, a copy of it) has none.
+database that did not come from a template (the long-running realm's, or a copy of it) has none.
 Nothing here names a cluster host; the label value and the loopback address are
 the only literals, and the label key is supplied by the pod's own spec.
 """
 
+import contextlib
 import re
 import weakref
 from dataclasses import dataclass
@@ -167,13 +168,17 @@ class GuardedConnection:
         try:
             for stmt in statements:
                 cur.execute(stmt.sql)
+            cur.close()  # before the commit: a failure here must still roll back
             self._conn.commit()
         except Exception:
-            self._conn.rollback()
+            self._rollback_quietly()
             raise
-        finally:
-            cur.close()
         return len(statements)
+
+    def _rollback_quietly(self):
+        """Roll back; if that fails too, keep the original error (closing ends the transaction)."""
+        with contextlib.suppress(Exception):
+            self._conn.rollback()
 
     def close(self):
         self._conn.close()

@@ -90,6 +90,22 @@ def run(decree_path, env, dry_run=False, anchors_path=None, connect=None, out=pr
     except SeedError as exc:
         out(f"INVALID: guard refused: {exc}")
         return 3
+    except Exception as exc:  # noqa: BLE001 - any driver or socket failure is INVALID, not a traceback
+        out(f"INVALID: could not reach the world database ({type(exc).__name__})")
+        return 3
+    rc = _seed_and_report(g, decree, anchors, dry_run, out)
+    try:
+        g.close()
+    except Exception as exc:  # noqa: BLE001 - a failed close must not turn into a traceback or a success
+        out(
+            f"INVALID: closing the world database connection failed ({type(exc).__name__})"
+        )
+        return 3
+    return rc
+
+
+def _seed_and_report(g, decree, anchors, dry_run, out):
+    """Compile and apply on an open guarded connection; 0 on success, 3 when INVALID."""
     try:
         live = dbschema.Schema.from_rows(g.query(LIVE_SCHEMA_SQL))
         g.use_schema(live)  # statements are checked against THIS world's schema
@@ -103,5 +119,6 @@ def run(decree_path, env, dry_run=False, anchors_path=None, connect=None, out=pr
     except SeedError as exc:
         out(f"INVALID: {exc}")
         return 3
-    finally:
-        g.close()
+    except Exception as exc:  # noqa: BLE001 - a database error mid-seed is INVALID (apply rolled back)
+        out(f"INVALID: database error while seeding ({type(exc).__name__})")
+        return 3

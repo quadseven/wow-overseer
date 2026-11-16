@@ -536,6 +536,12 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 - Answers: the character shape table the map draws from
 - Example: `overseer get /shapes.json`
 
+## `GET /sw.js`
+
+- Query: none
+- Answers: see the handler
+- Example: `overseer get /sw.js`
+
 ## `POST /api/clips/claim`
 
 - Query: `id`
