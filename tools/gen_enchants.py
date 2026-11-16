@@ -7,7 +7,15 @@ carry, so it is frozen here from the same three files tools/gen_items.py
 reads, the way that tool freezes the item book.
 
 Inputs (3.3.5a client data, as extracted into the worldserver's data/dbc):
-  Spell.dbc, SkillLineAbility.dbc, SpellItemEnchantment.dbc
+  Spell.dbc, SkillLineAbility.dbc, SpellItemEnchantment.dbc, TotemCategory.dbc
+
+`totem_categories` carries the TotemCategory rows the recipes' tools name:
+id -> [type, mask]. The core's IsTotemCategoryCompatibleWith says a held
+category answers a required one when they are the same, or when both have the
+same type and the held mask holds every bit of the required mask. Runed Rods
+are type 3 with cumulative masks, so a better rod answers a lower rung, and the
+Outland and Northrend rods (41, 62, 63, 190) are one line above the arcanite
+rod (10) that a Truesilver-era enchanter holds.
 
 A recipe is every Spell.dbc row that SkillLineAbility.dbc files under the
 Enchanting skill line (333) and whose effect is ENCHANT_ITEM (53).
@@ -43,6 +51,9 @@ ENCHANT_MIN = slice(5, 8)
 ENCHANT_ARGS = slice(11, 14)
 ENCHANT_NAME = 14
 
+# TotemCategory.dbc: ID, Name[16]+mask, TotemCategoryType, TotemCategoryMask.
+TOTEM_TYPE, TOTEM_MASK = -2, -1
+
 
 def read_dbc(path: str):
     with open(path, "rb") as f:
@@ -57,6 +68,12 @@ def read_dbc(path: str):
 def cstr(strings: bytes, offset: int) -> str:
     end = strings.index(b"\x00", offset)
     return strings[offset:end].decode("utf-8", "replace")
+
+
+def freeze_totems(dbc_dir: str, wanted) -> dict:
+    """{category id: [type, mask]} for the categories in `wanted`."""
+    rows, _ = read_dbc(f"{dbc_dir}/TotemCategory.dbc")
+    return {str(r[0]): [r[TOTEM_TYPE], r[TOTEM_MASK]] for r in rows if r[0] in wanted}
 
 
 def freeze(dbc_dir: str) -> list:
@@ -123,7 +140,13 @@ def freeze(dbc_dir: str) -> list:
 
 if __name__ == "__main__":
     recipes = freeze(sys.argv[1])
+    tools = {t for r in recipes for t in r["tools"]}
+    totems = freeze_totems(sys.argv[1], tools)
     with open(sys.argv[2], "w", newline="\n") as f:
-        json.dump({"recipes": recipes}, f, separators=(",", ":"))
+        json.dump(
+            {"recipes": recipes, "totem_categories": totems},
+            f,
+            separators=(",", ":"),
+        )
         f.write("\n")
     print(len(recipes), "recipes")

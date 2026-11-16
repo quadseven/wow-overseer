@@ -367,6 +367,72 @@ def cloak(holder, *, fire=0, enchantments="", guid=3):
     return row
 
 
+# Every Runed Rod, by the TotemCategory the realm's TotemCategory.dbc gives it,
+# lowest first. The category ids are not consecutive: the Outland and Northrend
+# rods are 41, 62, 63 and 190, which is what the first version of has_tools
+# (6 to 10 only) threw away, along with every recipe that asked for one.
+RODS = (
+    (6, 6218),  # Runed Copper Rod
+    (7, 6339),  # Runed Silver Rod
+    (8, 11130),  # Runed Golden Rod
+    (9, 11145),  # Runed Truesilver Rod
+    (10, 16207),  # Runed Arcanite Rod
+    (41, 22461),  # Runed Fel Iron Rod
+    (62, 22462),  # Runed Adamantite Rod
+    (63, 22463),  # Runed Eternium Rod
+    (190, 44452),  # Runed Titanium Rod
+)
+
+
+class RodTierTest(unittest.TestCase):
+    """has_tools reads the realm's own TotemCategory rows, for every tier."""
+
+    def recipe_needing(self, category):
+        return next(r for r in enchantfor.catalogue() if r.tools == (category,))
+
+    def test_every_category_a_recipe_names_has_a_rod(self):
+        named = {c for r in enchantfor.catalogue() for c in r.tools}
+        self.assertEqual({c for c, _ in RODS}, named)
+
+    def test_each_rod_answers_its_own_tier(self):
+        for category, item in RODS:
+            with self.subTest(category=category):
+                self.assertTrue(
+                    enchantfor.has_tools(self.recipe_needing(category), {item: 1})
+                )
+
+    def test_a_rod_of_a_lower_tier_does_not_answer_a_higher_one(self):
+        copper_for_silver = enchantfor.has_tools(self.recipe_needing(7), {6218: 1})
+        self.assertFalse(copper_for_silver)
+        self.assertFalse(enchantfor.has_tools(self.recipe_needing(9), {6339: 1}))
+        self.assertFalse(enchantfor.has_tools(self.recipe_needing(41), {16207: 1}))
+        self.assertFalse(enchantfor.has_tools(self.recipe_needing(62), {22461: 1}))
+        self.assertFalse(enchantfor.has_tools(self.recipe_needing(190), {22463: 1}))
+
+    def test_a_higher_rod_answers_every_lower_rung_of_its_line(self):
+        self.assertTrue(enchantfor.has_tools(self.recipe_needing(6), {44452: 1}))
+        self.assertTrue(enchantfor.has_tools(self.recipe_needing(9), {16207: 1}))
+        self.assertTrue(enchantfor.has_tools(self.recipe_needing(41), {44452: 1}))
+        self.assertTrue(enchantfor.has_tools(self.recipe_needing(63), {44452: 1}))
+
+    def test_the_best_rod_leaves_no_recipe_discarded_for_its_tool(self):
+        bags = {item: 1 for _category, item in RODS}
+        stuck = [
+            r.spell for r in enchantfor.catalogue() if not enchantfor.has_tools(r, bags)
+        ]
+        self.assertEqual([], stuck)
+
+    def test_no_rod_answers_a_recipe_that_needs_one(self):
+        needing = [r for r in enchantfor.catalogue() if r.tools]
+        self.assertGreater(len(needing), 100)
+        for recipe in needing:
+            self.assertFalse(enchantfor.has_tools(recipe, {}))
+
+    def test_a_category_that_is_not_a_rod_is_never_met(self):
+        stone = enchantfor.Recipe(1, "x", 1, "x", (), (), (12,), 4, 0, 0)
+        self.assertFalse(enchantfor.has_tools(stone, {9149: 1, 44452: 1}))
+
+
 class FireResistanceCloakTest(unittest.TestCase):
     """#481: the +7 Fire Resistance cloak, for the seats Molten Core asks fire
     resistance of, end to end through the planner to the row's command."""
@@ -583,6 +649,15 @@ class BridgeSeamTest(unittest.TestCase):
     def test_the_fact_name_is_the_one_the_module_reports(self):
         self.assertEqual("enchant_for", enchantfor.CAPABILITY_FACT)
         self.assertEqual("trade", enchantfor.CAPABILITY)
+
+
+class ConfigExampleTest(unittest.TestCase):
+    def test_the_switch_is_in_the_tracked_example_with_its_default(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        lines = (root / "bridge.env.example").read_text(encoding="utf-8").splitlines()
+        self.assertIn("ENCHANT_FOR=on", lines)
+        self.assertTrue(enchantfor.enabled({"ENCHANT_FOR": "on"}))
+        self.assertTrue(enchantfor.enabled({}))
 
 
 class SwitchTest(unittest.TestCase):

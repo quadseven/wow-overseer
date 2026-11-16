@@ -69,10 +69,23 @@ TOGETHER_YARDS = 8.0
 KIND_RESIST, KIND_DAMAGE, KIND_STAT = 4, 2, 5
 ARMOR_RESIST_ARG = 0
 
-# Runed Rods by tier, lowest first: the item that answers each TotemCategory
-# (6 copper .. 9 truesilver, 10 arcanite). A higher rod answers a lower rung.
-ROD_CATEGORY_FIRST = 6
-ROD_ITEMS = (6218, 6339, 11130, 11145, 16207)
+# The Runed Rod item that carries each TotemCategory (item_template.TotemCategory
+# on the realm, read 2026-11-15). The category ids are the client's own and not
+# consecutive: 6 to 10 are the Azeroth rods, 41, 62, 63 and 190 the Outland and
+# Northrend ones. Whether a held rod answers a recipe's category is the core's
+# rule, over the rows frozen in data/enchants.json (`totem_categories`).
+ROD_ITEM_OF_CATEGORY = {
+    6: 6218,  # Runed Copper Rod
+    7: 6339,  # Runed Silver Rod
+    8: 11130,  # Runed Golden Rod
+    9: 11145,  # Runed Truesilver Rod
+    10: 16207,  # Runed Arcanite Rod
+    41: 22461,  # Runed Fel Iron Rod
+    62: 22462,  # Runed Adamantite Rod
+    63: 22463,  # Runed Eternium Rod
+    190: 44452,  # Runed Titanium Rod
+}
+ROD_ITEMS = tuple(ROD_ITEM_OF_CATEGORY.values())
 
 CATALOGUE_PATH = str(world_data.DATA_ROOT / "data" / "enchants.json")
 
@@ -196,14 +209,34 @@ def fits(recipe: Recipe, row: dict) -> bool:
     return True
 
 
+@functools.lru_cache(maxsize=None)
+def totem_categories(path: str = CATALOGUE_PATH) -> dict:
+    """{category id: (type, mask)} from the frozen file."""
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    return {int(k): (int(v[0]), int(v[1])) for k, v in data["totem_categories"].items()}
+
+
+def _answers(held: int, required: int, categories: dict) -> bool:
+    """The core's IsTotemCategoryCompatibleWith: the same category, or one of
+    the same type whose mask holds every bit of the required one."""
+    if held == required:
+        return True
+    have, need = categories.get(held), categories.get(required)
+    if have is None or need is None or have[0] != need[0]:
+        return False
+    return have[1] & need[1] == need[1]
+
+
 def has_tools(recipe: Recipe, bags: dict) -> bool:
-    """Every Runed Rod category the recipe names is answered by a rod of that
-    tier or higher in the bags. A tool category that is not a rod is never met."""
-    for category in recipe.tools:
-        tier = category - ROD_CATEGORY_FIRST
-        if not 0 <= tier < len(ROD_ITEMS):
-            return False
-        if not any(_int(bags.get(rod)) > 0 for rod in ROD_ITEMS[tier:]):
+    """Every tool category the recipe names is answered by a Runed Rod in the
+    bags. A category no rod carries (a stone, a spanner) is never met."""
+    categories = totem_categories()
+    for required in recipe.tools:
+        if not any(
+            _int(bags.get(item)) > 0 and _answers(held, required, categories)
+            for held, item in ROD_ITEM_OF_CATEGORY.items()
+        ):
             return False
     return True
 
