@@ -138,7 +138,9 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("lint", help="check decrees against schema v1 and its rules")
     p.add_argument("decrees", nargs="+")
-    p.add_argument("--anchors", help="anchors.yaml (default: decrees/anchors.yaml)")
+    p.add_argument(
+        "--anchors", help="anchors.yaml (default: data/decrees/anchors.yaml)"
+    )
     p.add_argument("--schema", help="schema snapshot JSON (default: the bundled one)")
     p.add_argument("--strict", action="store_true", help="warnings fail too")
     p.set_defaults(func=_lint)
@@ -152,7 +154,9 @@ def main(argv=None):
         help="in a world pod: guard, compile and apply a decree's cast and arrange",
     )
     q.add_argument("decree")
-    q.add_argument("--anchors", help="anchors.yaml (default: decrees/anchors.yaml)")
+    q.add_argument(
+        "--anchors", help="anchors.yaml (default: data/decrees/anchors.yaml)"
+    )
     q.add_argument(
         "--dry-run", action="store_true", help="print the SQL, apply nothing"
     )
@@ -162,7 +166,7 @@ def main(argv=None):
         help="in a world pod: run the act timeline, decide PASS/FAIL/INVALID, write the result",
     )
     j.add_argument("decree")
-    j.add_argument("--anchors", help="anchors.yaml (default: decrees/anchors.yaml)")
+    j.add_argument("--anchors", help="anchors.yaml (default: data/decrees/anchors.yaml)")
     j.add_argument("--log", help="the worldserver log file log assertions read")
     j.set_defaults(func=_judge)
     cfg_help = "runner settings JSON (default: $EPH_CONFIG; see ephemeral/eph.config.example.json)"
@@ -171,7 +175,7 @@ def main(argv=None):
     )
     s.add_argument("decree")
     s.add_argument("--config", help=cfg_help)
-    s.add_argument("--anchors", help="anchors.yaml (default: decrees/anchors.yaml)")
+    s.add_argument("--anchors", help="anchors.yaml (default: data/decrees/anchors.yaml)")
     s.add_argument("--arm", choices=("control", "treatment", "both"), default="both")
     s.add_argument(
         "--node",

@@ -39,6 +39,14 @@ class EphemeralDocsTest(unittest.TestCase):
         self.assertNotRegex(PAGE, r"a world refuses")
         self.assertNotRegex(PAGE, r"(?i)vacuous pass is impossible")
 
+    def test_no_merge_markers_and_paths_are_under_data(self):
+        self.assertNotRegex(PAGE, r"(?m)^(<<<<<<<|=======|>>>>>>>)")
+        self.assertNotRegex(PAGE, r"(?<!data/)decrees/(anchors|<name>|\*)")
+        self.assertNotIn(
+            "ephemeral/config.example.env",
+            PAGE.replace("data/ephemeral/config.example.env", ""),
+        )
+
     def test_no_em_dash(self):
         self.assertNotIn(chr(0x2014), PAGE)
         self.assertIsNone(

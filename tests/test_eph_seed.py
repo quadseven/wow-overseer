@@ -577,6 +577,16 @@ class CompileTest(unittest.TestCase):
         self.assertEqual(plan.variables["cast"], "1, 2")
         self.assertEqual(plan.variables["Ugga"], 2)
 
+    def test_a_repeated_instance_alias_is_invalid_even_if_lint_is_bypassed(self):
+        d = doc()
+        d["cast"][0]["set"] = {}
+        d["arrange"] = [
+            {"instance": {"map": "Blackrock Depths", "as": "brd"}},
+            {"instance": {"map": "Molten Core", "as": "brd"}},
+        ]
+        with self.assertRaises(SeedError):
+            compile_(d)
+
     def test_creature_dead_state_in_arrange(self):
         d = doc()
         d["cast"][0]["set"] = {}
@@ -781,7 +791,7 @@ class ExampleDecreesTest(unittest.TestCase):
     """The shipped decrees compile against a world that has what they name."""
 
     def load(self, name):
-        return loads((ROOT / "decrees" / name).read_text(encoding="utf-8"))
+        return loads((ROOT / "data" / "decrees" / name).read_text(encoding="utf-8"))
 
     def test_guzzler_compiles_and_does_not_seed_plugger_dead(self):
         plan = compile_seed(
@@ -955,6 +965,11 @@ class SeedRunTest(unittest.TestCase):
             self.assertEqual(rc, 3, host)
             self.assertEqual(calls, [], host)
             self.assertIn("guard refused", text)
+
+    def test_a_junk_port_is_invalid_not_a_crash(self):
+        rc, _, calls, text = self.run_seed({**self.ENV, "EPH_MYSQL_PORT": "not-a-port"})
+        self.assertEqual((rc, calls), (3, []))
+        self.assertIn("EPH_MYSQL_PORT", text)
 
     def test_missing_label_is_invalid(self):
         env = {k: v for k, v in self.ENV.items() if k != "EPH_WORLD_LABEL"}

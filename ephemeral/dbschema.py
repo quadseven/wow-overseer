@@ -181,6 +181,17 @@ def _collect_tables(toks, schema, problems):
     return aliases, skip
 
 
+def tables_read(sql, schema):
+    """The set of (database, table) a SELECT actually reads: its FROM and JOIN refs.
+
+    A table name inside a string, a function argument, a column or an alias is
+    not a read, so it never appears here. Unknown tables are left out.
+    """
+    body = sql.strip().rstrip(";")
+    aliases, _ = _collect_tables(_tokens(body), schema, [])
+    return set(aliases.values())
+
+
 def _select_aliases(toks):
     return {
         toks[j + 1][1].lower() for j in range(len(toks) - 1) if _is_word(toks[j], "as")

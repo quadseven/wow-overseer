@@ -2,7 +2,7 @@
 
 An ephemeral (proving) world is a throwaway copy of the realm that bots can play
 in without touching live progression. A decree is the one YAML file under
-`decrees/` that says who is in that world, where, in what state, what to do, and
+`data/decrees/` that says who is in that world, where, in what state, what to do, and
 which SQL or log assertions decide the verdict. Tracking issue: #2343.
 
 Last checked: 2026-11-15.
@@ -12,7 +12,7 @@ Last checked: 2026-11-15.
 Shipped in this repository now:
 
 - the decree schema v1 and `python3 -m ephemeral lint`;
-- `decrees/anchors.yaml`, the only place coordinates may live;
+- `data/decrees/anchors.yaml`, the only place coordinates may live;
 - `python3 -m ephemeral acts`, which prints a decree's `act` timeline as the
   command rows it becomes;
 - `python3 -m ephemeral seed`, which compiles `cast` and `arrange` to SQL behind a
@@ -22,7 +22,7 @@ Shipped in this repository now:
   ConfigMap (see Judge below);
 - `python3 -m ephemeral submit`, `dispatch` and `collect`, the PC-side runner
   (see Runner below);
-- three worked example decrees in `decrees/`.
+- three worked example decrees in `data/decrees/`.
 
 Not shipped: the world itself. The cluster side and the world image live outside
 this repository, and the whole chain from decree file to a posted verdict has not
@@ -37,7 +37,7 @@ under Runner. The part that comes first is writing the decree:
 
 1. Write the decree for the defect: a starting state, the action, and
    observations that fail on the broken image and hold on the fixed one.
-2. Run `python3 -m ephemeral lint decrees/<name>.yaml` until it has no errors.
+2. Run `python3 -m ephemeral lint data/decrees/<name>.yaml` until it has no errors.
    Fill the issue number and fix commit (a `TODO` is only a warning).
 3. Open a pull request with the decree. A fix pull request should carry its
    decree, so the red-then-green evidence exists before the fix merges.
@@ -89,8 +89,8 @@ decree can actually reach its scenario; only a run can.
 
 ## Lint a decree
 
-    python3 -m ephemeral lint decrees/<name>.yaml        # warnings pass
-    python3 -m ephemeral lint --strict decrees/<name>.yaml  # warnings fail
+    python3 -m ephemeral lint data/decrees/<name>.yaml        # warnings pass
+    python3 -m ephemeral lint --strict data/decrees/<name>.yaml  # warnings fail
 
 No cluster is needed. The reader is a strict YAML subset (`ephemeral/miniyaml.py`)
 because the unit suite has no YAML parser. Table and column names in observation
@@ -115,7 +115,7 @@ SQL are checked against a snapshot of the game databases
 
 - No literal coordinates. `at`, `corpse_at` and `homebind` name an anchor:
   `creature`, `gameobject`, `areatrigger`, `graveyard`, `with`, or `captured`
-  (a key in `decrees/anchors.yaml`). A coordinate column compared to a number
+  (a key in `data/decrees/anchors.yaml`). A coordinate column compared to a number
   in observation SQL is also an error.
 - `kind: gm` is rejected: bot sessions are SEC_PLAYER, so it silently does nothing.
 - Auction rows and the auction house bot are refused unless the decree sets
@@ -143,7 +143,7 @@ SQL are checked against a snapshot of the game databases
 
 ## Anchors
 
-`decrees/anchors.yaml` is the only file that may hold coordinates. Each entry is
+`data/decrees/anchors.yaml` is the only file that may hold coordinates. Each entry is
 a position a real character stood at, copied from a row the game wrote, with
 `provenance: {source, ref, observed}`. Never type a position by hand. An entry
 whose row has not been copied is `pending`: lint warns when a decree uses it, and
@@ -155,22 +155,24 @@ Seeding a creature dead skips its death script. Where the script is the point
 (a bar that turns hostile when its owner dies), the kill belongs in `act`, and
 the window continues `when:` an observation shows the creature dead.
 
-## A decree-only change
+## Where the decrees live
 
-`check.yml` filters on Python and JSON, so a pull request that touches only a
-`.yaml` file under `decrees/` does not start the unit tests. Run
-`python3 -m ephemeral lint decrees/*.yaml` yourself, or touch a test.
+Decrees and `anchors.yaml` are under `data/decrees/`, a path `check.yml` already
+watches (`data/**`), so a pull request that changes only a decree still runs the
+unit tests that lint every shipped decree. Keep new decrees there; a decree
+elsewhere would not start the tests.
 
 ## Seed: cast and arrange to SQL
 
-    python3 -m ephemeral seed [--dry-run] decrees/<name>.yaml
+    python3 -m ephemeral seed [--dry-run] data/decrees/<name>.yaml
 
-Meant to run inside the world pod before the worldserver starts (no pod runs it yet). It lints the decree,
-passes the guard, resolves every name and anchor in the world's own database
+Meant to run inside the world pod before the worldserver starts (no pod runs it yet).
+It lints the decree, passes the guard, resolves every name and anchor in the world's own database
 (zero or several matches is INVALID), compiles the statements and applies them
 in one transaction. Settings come from the pod environment, never the decree:
 `EPH_MYSQL_HOST`, `EPH_MYSQL_PORT`, `EPH_MYSQL_USER`, `EPH_MYSQL_PASSWORD`,
-`EPH_WORLD_LABEL`, `EPH_HARNESS_GRANTS`. Exit 3 is INVALID. Exit 0 means the
+`EPH_WORLD_LABEL`, `EPH_HARNESS_GRANTS` (placeholders in
+`data/ephemeral/config.example.env`). Exit 3 is INVALID. Exit 0 means the
 plan compiled, and also that it was applied unless `--dry-run` was given, which
 prints the SQL and applies nothing.
 
@@ -197,7 +199,7 @@ failed precondition makes that run INVALID, never a pass.
 
 ## Judge: act timeline, observations, verdict
 
-    python3 -m ephemeral judge decrees/<name>.yaml --log <worldserver log>
+    python3 -m ephemeral judge data/decrees/<name>.yaml --log <worldserver log>
 
 Meant to run as the world pod's last step, after the seed (no pod runs it yet).
 It reads the variables and resolved cast the seed left in `EPH_VARS_FILE`, runs
@@ -230,6 +232,15 @@ reasons, the rendered SQL and observed values per assertion, sample rows and
 matched log lines (cut to fit 256 KB, never the verdict). Exit 0 means a verdict
 was written, whatever it was; exit 2 means the harness could not write one.
 
+Two rules keep a PASS honest. A scalar expectation needs exactly one row and one
+column; any other shape is INVALID, so row order can never hide a failing value.
+And a decree that arranges an instance cannot PASS without a held precondition
+that reads `log_encounter`, the core's own credited-encounter record; a run's
+completion flag is never evidence, and a run with no credit is INVALID. The
+judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
+`KUBERNETES_SERVICE_PORT`; without them it prints an INVALID verdict and exits 2,
+because there is nowhere to write the result.
+
 ## Runner: submit, dispatch, collect
 
 All three read one settings file, never the repository: copy
@@ -238,7 +249,7 @@ All three read one settings file, never the repository: copy
 client-data claim and a world cap), the nodes that are never used, and the
 digest-pinned tools image. A missing or malformed file is an error.
 
-    python3 -m ephemeral submit [--arm both] [--node N] --control-worldserver REF         --control-dbimport REF --control-pin SHA decrees/<name>.yaml
+    python3 -m ephemeral submit [--arm both] [--node N] --control-worldserver REF         --control-dbimport REF --control-pin SHA data/decrees/<name>.yaml
     python3 -m ephemeral dispatch [--once]
     python3 -m ephemeral collect [--dry-run]
 

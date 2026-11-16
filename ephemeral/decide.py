@@ -194,7 +194,7 @@ def render_comment(rec, decision, res, decree_repo, decree_commit, entry):
         f"Ephemeral world result: **{decision['outcome']}** ({decision['reason']}).",
         "",
         f"Criterion: {entry.get('criterion', '')}",
-        f"Decree: https://github.com/{decree_repo}/blob/{decree_commit or 'main'}/decrees/{sid}.yaml "
+        f"Decree: https://github.com/{decree_repo}/blob/{decree_commit or 'main'}/data/decrees/{sid}.yaml "
         f"(sha256 `{rec['decree_sha256']}`)",
         "",
         "| arm | image (worldserver digest) | fix state | built from |",

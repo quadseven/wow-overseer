@@ -11,7 +11,7 @@ from eph_fakes import (
 from ephemeral import confmerge, ghx, kube, submit
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-GUZZLER = (ROOT / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml").read_text(
+GUZZLER = (ROOT / "data" / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml").read_text(
     encoding="utf-8"
 )
 CHECKED = GUZZLER.replace("issue: TODO", "issue: 12").replace(

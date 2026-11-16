@@ -69,12 +69,12 @@ class Base(unittest.TestCase):
         pr_author="agent-anthropic-claude-code[bot]",
     ):
         a = self.fg.answers
-        a[("GET", f"repos/{MAIN}/contents/decrees/demo-decree.yaml?ref=main")] = {
+        a[("GET", f"repos/{MAIN}/contents/data/decrees/demo-decree.yaml?ref=main")] = {
             "encoding": "base64", "content": base64.b64encode(text.encode()).decode()}  # fmt: skip
         a[
             (
                 "GET",
-                f"repos/{MAIN}/commits?path=decrees/demo-decree.yaml&sha=main&per_page=1",
+                f"repos/{MAIN}/commits?path=data/decrees/demo-decree.yaml&sha=main&per_page=1",
             )
         ] = [{"sha": COMMIT}]
         a[("GET", f"repos/{MAIN}/commits/{COMMIT}/pulls")] = [

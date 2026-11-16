@@ -36,7 +36,7 @@ class CollectError(Exception):
 def decree_status(gh, cfg, rec):
     """('merged-independent' | 'merged' | 'not-on-main', pr number or None, commit or '')."""
     repo, did = cfg.decree_repo, rec["decree_id"]
-    path = f"decrees/{did}.yaml"
+    path = f"data/decrees/{did}.yaml"
     doc = gh.api(f"repos/{repo}/contents/{path}?ref=main", missing_ok=True)
     if not doc or doc.get("encoding") != "base64":
         return "not-on-main", None, ""
