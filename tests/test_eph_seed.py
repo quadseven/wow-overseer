@@ -966,6 +966,61 @@ class SeedRunTest(unittest.TestCase):
             self.assertEqual(calls, [], host)
             self.assertIn("guard refused", text)
 
+    def test_a_refused_connection_is_invalid_not_a_traceback(self):
+        import tempfile
+
+        from ephemeral import seedrun
+
+        def refuse(**kw):
+            raise ConnectionRefusedError("secret-password-must-not-print")
+
+        out = []
+        with tempfile.TemporaryDirectory() as tmp:
+            decree, anchors = self.files(tmp)
+            rc = seedrun.run(
+                decree, self.ENV, anchors_path=anchors, connect=refuse, out=out.append
+            )
+        text = chr(10).join(out)
+        self.assertEqual(rc, 3)
+        self.assertIn("ConnectionRefusedError", text)
+        self.assertNotIn("secret-password", text)
+
+    def test_a_database_error_mid_seed_is_invalid_and_rolls_back(self):
+        import tempfile
+
+        from ephemeral import seedrun
+
+        class Boom(ScriptedConn):
+            def cursor(self):
+                cur = super().cursor()
+                real = cur.execute
+
+                def execute(sql, params=()):
+                    if sql.startswith("UPDATE"):
+                        raise OSError("lost connection")
+                    return real(sql, params)
+
+                cur.execute = execute
+                return cur
+
+        conn = Boom()
+        conn.rolled_back = False
+        conn.rollback = lambda: setattr(conn, "rolled_back", True)
+        out = []
+        with tempfile.TemporaryDirectory() as tmp:
+            decree, anchors = self.files(tmp)
+            rc = seedrun.run(
+                decree,
+                self.ENV,
+                anchors_path=anchors,
+                connect=lambda **kw: conn,
+                out=out.append,
+            )
+        self.assertEqual(rc, 3)
+        self.assertTrue(conn.rolled_back)
+        self.assertEqual(conn.commits, 0)
+        self.assertIn("OSError", chr(10).join(out))
+
     def test_a_junk_port_is_invalid_not_a_crash(self):
         rc, _, calls, text = self.run_seed({**self.ENV, "EPH_MYSQL_PORT": "not-a-port"})
         self.assertEqual((rc, calls), (3, []))
