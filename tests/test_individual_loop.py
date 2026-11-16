@@ -53,7 +53,8 @@ class TheGatherPhaseHandsOutMemberTargets(unittest.TestCase):
 
     def test_a_member_sitting_out_is_left_out(self):
         got = individual.gather_targets(
-            GATHER_ROWS, SKILLS, "Grug", "farm:mining", ENV, exempt=("Og",))
+            GATHER_ROWS, SKILLS, "Grug", "farm:mining", ENV, exempt=("Og",)
+        )
         self.assertNotIn("Og", got)
 
 
@@ -76,7 +77,8 @@ class TheLoopWritesTheTargets(unittest.TestCase):
 
     def test_each_member_is_written_its_own_job(self):
         targets = individual.gather_targets(
-            GATHER_ROWS, SKILLS, "Grug", "farm:mining", ENV)
+            GATHER_ROWS, SKILLS, "Grug", "farm:mining", ENV
+        )
         got = self.write(targets)
         self.assertEqual(got["Ugga"], "farm:herbalism")
         self.assertEqual(got["Grug"], "farm:mining")
@@ -89,7 +91,7 @@ class TheLoopWritesTheTargets(unittest.TestCase):
     def test_the_pass_asks_for_targets_only_in_the_gather_phase(self):
         text = (ROOT / "bridge.py").read_text(encoding="utf-8")
         a = text.index("    async def _prof_loop_for(")
-        body = text[a:text.index("    async def _prof_loop_facts(", a)]
+        body = text[a : text.index("    async def _prof_loop_facts(", a)]
         self.assertIn("profloop.GATHER", body)
         self.assertLess(body.index("gather_targets("), body.index("_prof_loop_write("))
 
@@ -139,20 +141,27 @@ class TheMemberFarmPassRunsUnderTheLoopOnlyInGather(unittest.TestCase):
 
 
 class TheRhythmStaysSilentUnderTheLoop(unittest.TestCase):
-    JOBS = {"Oz": "quest", "Uzza": "train", "Zork": "quest", "Zrog": "fish",
-            "Zug": "quest"}
+    JOBS = {
+        "Oz": "quest",
+        "Uzza": "train",
+        "Zork": "quest",
+        "Zrog": "fish",
+        "Zug": "quest",
+    }
 
     def run_rhythm(self, looped):
         from test_individual_drives import HORDE, MixedFamily, _individual_rhythm
 
         world = MixedFamily(self.JOBS, linen=30)
         me, once = _individual_rhythm(world, _Log())
-        once.__globals__.update({
-            "_prof_loop_family": lambda key=None: "Zug" if looped else "",
-            "_PROF_LOOPS": {"Zug": profloop.State(phase=profloop.CRAFT)},
-            "profloop": profloop,
-            "dataclasses": __import__("dataclasses"),
-        })
+        once.__globals__.update(
+            {
+                "_prof_loop_family": lambda key=None: "Zug" if looped else "",
+                "_PROF_LOOPS": {"Zug": profloop.State(phase=profloop.CRAFT)},
+                "profloop": profloop,
+                "dataclasses": __import__("dataclasses"),
+            }
+        )
         with mock.patch.dict(os.environ, {individual.ENV: "Zug"}):
             asyncio.run(once(me, HORDE))
         return world
@@ -162,7 +171,8 @@ class TheRhythmStaysSilentUnderTheLoop(unittest.TestCase):
 
     def test_without_the_loop_the_individual_path_still_writes(self):
         self.assertEqual(
-            [("Oz", "craft", "overseer:craft_rhythm")], self.run_rhythm(False).jobs)
+            [("Oz", "craft", "overseer:craft_rhythm")], self.run_rhythm(False).jobs
+        )
 
 
 if __name__ == "__main__":
