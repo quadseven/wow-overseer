@@ -197,6 +197,53 @@ class SubmitTest(Base):
         self.assertEqual(self.cluster.of("jobs"), [])
 
 
+class ModuleLogTest(Base):
+    """The world writes the module's and the bots' log lines to the file the judge reads."""
+
+    def worldserver_conf(self, rid_suffix="-c1"):
+        cm = next(
+            c for c in self.cluster.of("configmaps", "wow-ephemeral")
+            if c["metadata"]["name"].endswith(rid_suffix)
+        )  # fmt: skip
+        return cm["data"]["worldserver.overrides.conf"]
+
+    def setUp(self):
+        super().setUp()
+        cm = self.cluster.objs[("configmaps", "base-realm", "worldserver-overrides-h1")]
+        cm["data"]["worldserver.overrides.conf"] = (
+            "MaxPlayerLevel = 60\nAppender.Overseer = 1,6,7\n"
+            "Logger.module.overseer = 6,Overseer\n"
+        )
+
+    def test_a_file_appender_writes_the_file_the_judge_reads(self):
+        from ephemeral import podpaths
+
+        self.submit(**CONTROL)
+        conf = confmerge.parse(self.worldserver_conf())
+        kind, level, _flags, name, mode = conf["Appender.EphModule"].strip('"').split(",")
+        self.assertEqual(kind, "2")  # a file appender
+        self.assertEqual(level, "6")
+        self.assertEqual(name, podpaths.LOG_NAME)
+        self.assertEqual(mode, "w")
+
+    def test_the_module_and_the_bots_log_to_it_and_keep_their_other_appenders(self):
+        self.submit(**CONTROL)
+        conf = confmerge.parse(self.worldserver_conf())
+        self.assertEqual(conf["Logger.module.overseer"].strip('"'), "6,Overseer EphModule")
+        self.assertIn("EphModule", conf["Logger.playerbots"])
+        self.assertIn("Console", conf["Logger.playerbots"])
+
+    def test_each_key_appears_once_even_when_the_base_file_set_it(self):
+        self.submit(**CONTROL)
+        text = self.worldserver_conf()
+        for key in ("Logger.module.overseer", "Appender.EphModule", "Appender.Overseer"):
+            self.assertEqual(text.count(key + " "), 1, key)
+
+    def test_the_change_is_listed_as_a_fidelity_delta(self):
+        rec = self.submit(**CONTROL)
+        self.assertTrue(any(d.startswith("Appender.EphModule:") for d in rec["fidelity_deltas"]))
+
+
 class ConfMergeTest(unittest.TestCase):
     def test_value_rendering(self):
         self.assertEqual(confmerge.render_value(True), "1")

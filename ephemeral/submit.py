@@ -18,7 +18,7 @@ import re
 import time
 
 from . import anchors as anchors_mod
-from . import confmerge, dbschema, lint, runids
+from . import confmerge, dbschema, lint, podpaths, runids
 from .kube import KubeError
 from .miniyaml import YamlError, loads
 
@@ -34,6 +34,15 @@ BASELINE = {
     "Overseer.RequireClient": 0,
     "Overseer.Raid.RequireHeadClient": 0,
     "OllamaChat.Enable": 0,
+    # The log the judge's log assertions read (podpaths.LOG_NAME). The base realm
+    # sends the module's and the bots' lines to the console only, and the stock
+    # Server.log appender keeps errors alone, so a log check would count zero. A
+    # dedicated file appender at trace level, named by the module's own loggers;
+    # the existing appenders stay, so `kubectl logs` is unchanged.
+    "Appender.EphModule": f"2,6,7,{podpaths.LOG_NAME},w",
+    "Logger.module.overseer": "6,Overseer EphModule",
+    "Logger.playerbots": "4,Console EphModule",
+    "Logger.playerbots.dungeonclear": "4,Overseer EphModule",
 }
 
 
