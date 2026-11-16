@@ -1,0 +1,51 @@
+# A first-kill Molten Core order forms the raid from the eligible approved seats and names the rest
+# left out; below the quorum it refuses (issue 2570). The unit test pins the 14 eligible of 40, 26 left
+# out case on the pure decision; this decree proves the order path writes only the eligible seats.
+# Scope note: only the ten roster characters can be cast by name, so the world holds a short lineup
+# whose seats are mostly offline. The first-kill quorum is the bridge's own setting
+# (RAID_FIRST_KILL_QUORUM_SEATS, _TANKS, _HEALERS) and must be set small on the world's bridge, with the
+# module keys below set to match. The runner's bridge sidecar is not built, so the bridge side of that
+# is carried in the run notes, not in this file.
+# The seats come from overseer_raid_seat, written by the bridge on the order; the first precondition
+# witnesses the cast level, and a world with no seats at the end is a failed check, never a pass.
+# The runner has no operator-order act yet, so the act below is the roster step the sibling raid decrees use
+# and the world's order is the queue entry `queue grug: moltencore first kill 1`, seeded with the run.
+# Fix: wow-overseer pull request for issue 2570.
+decree: v1
+id: raid-first-kill-forms-from-eligible-seats
+proves:
+  - {repo: quadseven/wow-overseer, issue: 2570, criterion: "a first-kill order for one guild writes its seats, and the bridge log names the seats left out"}
+  - {repo: quadseven/wow-overseer, issue: 2104, criterion: "an order seats only members of the approved lineup who are online at level 50 or more"}
+fix: {repo: quadseven/wow-overseer, commit: TODO}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {Overseer.Raid.QuorumSeats: 5, Overseer.Raid.QuorumTanks: 1, Overseer.Raid.QuorumHealers: 1}}
+runs: {control: 3, treatment: 3}
+duration: 15m
+cast:
+  - who: family:grug
+    set: {level: 60, alive: true, at: {areatrigger: 2886}}
+    ceiling: "levels 50 to 60, throwaway world only; nothing is seeded on the organic realm"
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "raid:moltencore"}
+observe:
+  - name: the-cast-is-at-the-door-level
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid IN (@cast) AND level >= 50
+    expect: {scalar: ">= 5"}
+  - name: only-eligible-seats-were-written
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_raid_seat WHERE family = 'Grug' AND keyword = 'moltencore'
+    expect: {scalar: ">= 5"}
+  - name: the-roster-is-shorter-than-the-full-forty
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_raid_seat WHERE family = 'Grug' AND keyword = 'moltencore'
+    expect: {scalar: "< 40"}
+  - name: the-log-names-the-seats-left-out
+    role: check
+    log: {pattern: "first kill: [0-9]+ of [0-9]+ approved seats form the raid.*left out", expect: {count: 1}}
