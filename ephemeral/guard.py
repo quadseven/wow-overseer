@@ -19,6 +19,7 @@ Nothing here names a cluster host; the label value and the loopback address are
 the only literals, and the label key is supplied by the pod's own spec.
 """
 
+import contextlib
 import re
 import weakref
 from dataclasses import dataclass
@@ -124,10 +125,8 @@ class GuardedConnection:
 
     def _rollback_quietly(self):
         """Roll back; if that fails too, keep the original error (closing ends the transaction)."""
-        try:
+        with contextlib.suppress(Exception):
             self._conn.rollback()
-        except Exception:  # noqa: BLE001 - the caller re-raises the error that got us here
-            pass
 
     def close(self):
         self._conn.close()
