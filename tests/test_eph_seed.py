@@ -791,7 +791,7 @@ class ExampleDecreesTest(unittest.TestCase):
     """The shipped decrees compile against a world that has what they name."""
 
     def load(self, name):
-        return loads((ROOT / "decrees" / name).read_text(encoding="utf-8"))
+        return loads((ROOT / "data" / "decrees" / name).read_text(encoding="utf-8"))
 
     def test_guzzler_compiles_and_does_not_seed_plugger_dead(self):
         plan = compile_seed(

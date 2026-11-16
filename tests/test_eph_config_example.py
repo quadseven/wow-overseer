@@ -1,11 +1,11 @@
-"""Every EPH_* setting the package reads appears in config.example.env, with a fake value."""
+"""Every EPH_* setting the package reads appears in data/ephemeral/config.example.env, with a fake value."""
 
 import pathlib
 import re
 import unittest
 
 PKG = pathlib.Path(__file__).resolve().parent.parent / "ephemeral"
-EXAMPLE = PKG / "config.example.env"
+EXAMPLE = PKG.parent / "data" / "ephemeral" / "config.example.env"
 
 
 def read_in_code():

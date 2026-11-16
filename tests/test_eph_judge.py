@@ -16,7 +16,7 @@ from ephemeral.miniyaml import loads
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCHEMA = dbschema.Schema.load()
 GUZZLER = loads(
-    (ROOT / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml").read_text(
+    (ROOT / "data" / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml").read_text(
         encoding="utf-8"
     )
 )
@@ -817,7 +817,9 @@ class RunEntryTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             d = pathlib.Path(tmp)
-            path = ROOT / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml"
+            path = (
+                ROOT / "data" / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml"
+            )
             handoff = d / "handoff.json"
             if with_handoff:
                 handoff.write_text(json.dumps(HANDOFF), encoding="utf-8")
@@ -851,7 +853,7 @@ class RunEntryTest(unittest.TestCase):
                 stored.append(cm)
 
         rc = judge.run(
-            str(ROOT / "decrees" / "no-such-decree.yaml"),
+            str(ROOT / "data" / "decrees" / "no-such-decree.yaml"),
             self.ENV,
             connect=lambda **kw: ScriptedConn(),
             store=Store(),
@@ -866,7 +868,12 @@ class RunEntryTest(unittest.TestCase):
             handoff = pathlib.Path(tmp) / "h.json"
             handoff.write_text(json.dumps(HANDOFF), encoding="utf-8")
             rc = judge.run(
-                str(ROOT / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml"),
+                str(
+                    ROOT
+                    / "data"
+                    / "decrees"
+                    / "brd-guzzler-exit-zero-patron-deaths.yaml"
+                ),
                 {**self.ENV, "EPH_VARS_FILE": str(handoff)},
                 connect=lambda **kw: ScriptedConn(),
                 out=out.append,
@@ -889,7 +896,12 @@ class RunEntryTest(unittest.TestCase):
         out = []
         with tempfile.TemporaryDirectory() as tmp:
             rc = judge.run(
-                str(ROOT / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml"),
+                str(
+                    ROOT
+                    / "data"
+                    / "decrees"
+                    / "brd-guzzler-exit-zero-patron-deaths.yaml"
+                ),
                 {**self.ENV, "EPH_MYSQL_HOST": "mysql"},
                 connect=lambda **kw: ScriptedConn(),
                 store=Broken(),

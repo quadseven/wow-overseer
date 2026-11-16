@@ -1,4 +1,4 @@
-"""decrees/anchors.yaml: the ONE place literal coordinates may live.
+"""data/decrees/anchors.yaml: the ONE place literal coordinates may live.
 
 Every entry is a position a real character stood at, with its provenance. A
 guessed z has no navmesh and has already killed a character, so a decree never
@@ -13,7 +13,7 @@ import re
 from .miniyaml import loads
 
 DEFAULT_PATH = (
-    pathlib.Path(__file__).resolve().parent.parent / "decrees" / "anchors.yaml"
+    pathlib.Path(__file__).resolve().parent.parent / "data" / "decrees" / "anchors.yaml"
 )
 _KEY = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 _NUM = (int, float)
