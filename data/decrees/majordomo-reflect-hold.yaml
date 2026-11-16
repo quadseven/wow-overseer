@@ -5,7 +5,8 @@
 # Majordomo Executus is not a creature spawn row (a script summons him once the five bosses are down), so
 # the family is placed at Golemagg and the run must reach him. At the encounter, casters hold on the Magic
 # Reflection shield (issue 767) including for an area spell (issue 1659), and no raider dies to reflected
-# damage. The Majordomo precondition fails the run as INVALID if the encounter is never reached.
+# damage. The precondition reads the core's credit for Majordomo himself and fails the run as INVALID if the
+# encounter is never reached.
 # Scope: what a throwaway world cannot show is NOT claimed here. The holding line ("casters holding,
 # magic reflection on <add>") and the tank retaking adds after Teleport Target (patch 0020 logs nothing) leave no
 # database row, and a log assertion is an exact count that cannot demand presence, so neither is asserted. The
@@ -39,19 +40,16 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_raid_seat WHERE family IN ('Grug', 'Zug')
     expect: {scalar: ">= 5"}
-  - name: majordomo-encounter-reached
+  # The boss event row does not name the boss ("1 encounter credited, 2 in all"), so Majordomo is read from the
+  # core's own credited-encounter record, joined to the creature name. The judge accepts this as the credit
+  # evidence for the arranged instance: positive, one read of log_encounter, bounded to this run and map.
+  - name: majordomo-encounter-credited
     role: precondition
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_dungeon_run_event WHERE family = 'Grug' AND created_at >= @t0 AND kind = 'boss' AND detail LIKE '%Majordomo%'
-    expect: {scalar: ">= 1"}
-  # The judge needs the core's own credited-encounter record when an instance is arranged.
-  - name: encounter-credited
-    role: precondition
-    when: end
-    sql: |
-      SELECT COUNT(*) FROM log_encounter
-      WHERE map = 409 AND time >= @t0
+      SELECT COUNT(*) FROM log_encounter le
+      JOIN acore_world.creature_template t ON t.entry = le.creditEntry
+      WHERE le.map = 409 AND le.time >= @t0 AND le.creditType = 0 AND t.name = 'Majordomo Executus'
     expect: {scalar: ">= 1"}
   - name: no-raider-died-to-reflected-damage
     role: check
