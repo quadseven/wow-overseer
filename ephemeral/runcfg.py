@@ -64,30 +64,21 @@ def load(path=None, env=None):
     return from_dict(raw)
 
 
-def from_dict(raw):
-    if not isinstance(raw, dict):
-        raise ConfigError("runner config must be a JSON object")
-    known = set(Config.__dataclass_fields__)
-    extra = sorted(set(raw) - known)
-    if extra:
-        raise ConfigError(f"unknown runner config keys: {', '.join(extra)}")
-    cfg = Config(**{k: v for k, v in raw.items() if k not in ("nodes", "never_nodes")})
-    cfg.never_nodes = tuple(raw.get("never_nodes") or ())
-    nodes = raw.get("nodes")
-    if not isinstance(nodes, dict) or not nodes:
-        raise ConfigError("runner config needs a non-empty nodes mapping")
-    for name, spec in nodes.items():
-        if not isinstance(spec, dict) or not spec.get("claim"):
-            raise ConfigError(f"node {name!r} needs a client-data claim")
-        if name in cfg.never_nodes:
-            raise ConfigError(f"node {name!r} is listed as never-use")
-        mx = spec.get("max_worlds")
-        if not isinstance(mx, int) or isinstance(mx, bool) or mx < 1:
-            raise ConfigError(f"node {name!r} needs max_worlds of at least 1")
-        classes = tuple(spec.get("classes") or ("lean",))
-        if not set(classes) <= {"lean", "full"}:
-            raise ConfigError(f"node {name!r} classes must be lean and/or full")
-        cfg.nodes[name] = Node(name, spec["claim"], mx, classes)
+def _node(name, spec, never):
+    if not isinstance(spec, dict) or not spec.get("claim"):
+        raise ConfigError(f"node {name!r} needs a client-data claim")
+    if name in never:
+        raise ConfigError(f"node {name!r} is listed as never-use")
+    mx = spec.get("max_worlds")
+    if not isinstance(mx, int) or isinstance(mx, bool) or mx < 1:
+        raise ConfigError(f"node {name!r} needs max_worlds of at least 1")
+    classes = tuple(spec.get("classes") or ("lean",))
+    if not set(classes) <= {"lean", "full"}:
+        raise ConfigError(f"node {name!r} classes must be lean and/or full")
+    return Node(name, spec["claim"], mx, classes)
+
+
+def _check(cfg):
     claims = [n.claim for n in cfg.nodes.values()]
     if len(set(claims)) != len(claims):
         raise ConfigError("two nodes share one client-data claim")
@@ -99,4 +90,21 @@ def from_dict(raw):
         raise ConfigError("results_dir is required")
     if not 1 <= int(cfg.min_free_percent) <= 90:
         raise ConfigError("min_free_percent must be between 1 and 90")
+
+
+def from_dict(raw):
+    if not isinstance(raw, dict):
+        raise ConfigError("runner config must be a JSON object")
+    extra = sorted(set(raw) - set(Config.__dataclass_fields__))
+    if extra:
+        raise ConfigError(f"unknown runner config keys: {', '.join(extra)}")
+    skip = ("nodes", "never_nodes")
+    cfg = Config(**{k: v for k, v in raw.items() if k not in skip})
+    cfg.never_nodes = tuple(raw.get("never_nodes") or ())
+    nodes = raw.get("nodes")
+    if not isinstance(nodes, dict) or not nodes:
+        raise ConfigError("runner config needs a non-empty nodes mapping")
+    for name, spec in nodes.items():
+        cfg.nodes[name] = _node(name, spec, cfg.never_nodes)
+    _check(cfg)
     return cfg

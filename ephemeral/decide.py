@@ -55,49 +55,62 @@ def _verdict(rec, res, run):
     return v
 
 
+def _early(pres, treat, ctrl):
+    """Outcomes a single valid run settles: a treatment FAIL or a control PASS."""
+    if "FAIL" in treat:
+        if pres.get("treatment") != "present":
+            return (
+                "unclear",
+                "a treatment run FAILed but the fix was not verified present in its image",
+            )
+        return "disproven", "a valid treatment run FAILed"
+    if "PASS" in ctrl:
+        return (
+            "non-discriminating",
+            "a control run PASSed, so the decree cannot tell fixed from broken",
+        )
+    return None
+
+
+def _uncontrolled(wanted, treat, ctrl):
+    n_treat = wanted.get("treatment", 0)
+    if not (n_treat and len(treat) == n_treat and all(v == "PASS" for v in treat)):
+        return False
+    return not wanted.get("control") or bool(ctrl and all(v == "INVALID" for v in ctrl))
+
+
+def _settled(rec, pres, treat, ctrl, runs):
+    """The outcome once no single run settles it."""
+    if _uncontrolled(rec["runs_wanted"], treat, ctrl):
+        return "pass-uncontrolled", "treatment passed with no usable control"
+    if "INVALID" in treat + ctrl:
+        return "unclear", "a run was INVALID: the scenario was never reached"
+    if any(v is None for _, v in runs):
+        return "pending", "runs are still missing"
+    if pres.get("treatment") != "present" or pres.get("control") != "absent":
+        return "unclear", "fix presence was not verified in both images"
+    return "proven", "control FAILed and treatment PASSed on every run"
+
+
 def decide(rec, res):
     """Decision for one batch: {outcome, reason, runs, statistics}."""
     runs = [(r, _verdict(rec, res, r)) for r in rec["runs"]]
     verdicts = [(r["arm"], v) for r, v in runs if v]
-    wanted = rec["runs_wanted"]
     pres = {a: p.get("state") for a, p in rec["presence"].items()}
-
-    def out(outcome, reason):
-        return {
-            "outcome": outcome, "reason": reason,
-            "runs": [{"run_id": r["run_id"], "arm": r["arm"], "verdict": v or "not run"} for r, v in runs],
-            "statistics": statistics_line(verdicts),
-        }  # fmt: skip
-
     treat = [v for a, v in verdicts if a == "treatment"]
     ctrl = [v for a, v in verdicts if a == "control"]
-    if "FAIL" in treat:
-        if pres.get("treatment") != "present":
-            return out(
-                "unclear",
-                "a treatment run FAILed but the fix was not verified present in its image",
-            )
-        return out("disproven", "a valid treatment run FAILed")
-    if "PASS" in ctrl:
-        return out(
-            "non-discriminating",
-            "a control run PASSed, so the decree cannot tell fixed from broken",
-        )
-    n_treat = wanted.get("treatment", 0)
-    treat_done = len(treat) == n_treat and all(v == "PASS" for v in treat)
-    if (
-        treat_done
-        and n_treat
-        and (not wanted.get("control") or (ctrl and all(v == "INVALID" for v in ctrl)))
-    ):
-        return out("pass-uncontrolled", "treatment passed with no usable control")
-    if "INVALID" in treat + ctrl:
-        return out("unclear", "a run was INVALID: the scenario was never reached")
-    if any(v is None for _, v in runs):
-        return out("pending", "runs are still missing")
-    if pres.get("treatment") != "present" or pres.get("control") != "absent":
-        return out("unclear", "fix presence was not verified in both images")
-    return out("proven", "control FAILed and treatment PASSed on every run")
+    outcome, reason = _early(pres, treat, ctrl) or _settled(
+        rec, pres, treat, ctrl, runs
+    )
+    return {
+        "outcome": outcome,
+        "reason": reason,
+        "runs": [
+            {"run_id": r["run_id"], "arm": r["arm"], "verdict": v or "not run"}
+            for r, v in runs
+        ],
+        "statistics": statistics_line(verdicts),
+    }
 
 
 # -- boxes -------------------------------------------------------------------------

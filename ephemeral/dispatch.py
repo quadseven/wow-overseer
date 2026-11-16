@@ -271,28 +271,41 @@ class Dispatcher:
             verdicts[rid] = "INVALID"
             self.log(f"{rid}: INVALID, {reason}")
 
-    def _early_stop(self, jobs, verdicts):
-        """Drop waiting runs of a batch whose first pair was not control FAIL, treatment PASS."""
-        batches = {}
+    @staticmethod
+    def _batches(jobs, verdicts):
+        """{batch: {"members": [(job, run id, n)], "arms": {arm}}} from Jobs and results."""
+        out = {}
+
+        def entry(batch):
+            return out.setdefault(batch, {"members": [], "arms": set()})
+
         for j in jobs:
             rid = runids.run_of_job(j)
             parsed = runids.parse_run(rid) if rid else None
             if parsed:
-                batches.setdefault(parsed[0], []).append((j, rid, parsed))
+                e = entry(parsed[0])
+                e["members"].append((j, rid, parsed[2]))
+                e["arms"].add(parsed[1])
         for rid in verdicts:
             parsed = runids.parse_run(rid)
             if parsed:
-                batches.setdefault(parsed[0], [])
-        gone = set()
-        for batch, members in batches.items():
-            arms = {p[1] for _, _, p in members} | {
-                runids.parse_run(r)[1] for r in verdicts if r.startswith(batch + "-")
-            }
-            first = {a: verdicts.get(runids.run_id(batch, a, 1)) for a in arms}
-            want = {"control": "FAIL", "treatment": "PASS"}
-            decided = all(v is not None for v in first.values())
-            ok = decided and all(first[a] == want[a] for a in arms)
-            for j, rid, (_, arm, n) in members:
+                entry(parsed[0])["arms"].add(parsed[1])
+        return out
+
+    @staticmethod
+    def _first_pair(batch, arms, verdicts):
+        """(decided, ok): is the first run of every arm in, and was it control FAIL, treatment PASS."""
+        want = {"control": "FAIL", "treatment": "PASS"}
+        first = {a: verdicts.get(runids.run_id(batch, a, 1)) for a in arms}
+        decided = all(v is not None for v in first.values())
+        return decided, decided and all(first[a] == want[a] for a in arms)
+
+    def _early_stop(self, jobs, verdicts):
+        """Drop waiting runs of a batch whose first pair was not control FAIL, treatment PASS."""
+        gone, self._held = set(), set()
+        for batch, info in self._batches(jobs, verdicts).items():
+            decided, ok = self._first_pair(batch, info["arms"], verdicts)
+            for j, rid, n in info["members"]:
                 waiting = j["spec"].get("suspend") is True and not finished(j)
                 if n == 1 or not waiting or ok:
                     continue
@@ -300,21 +313,11 @@ class Dispatcher:
                     self.kube.delete("jobs", j["metadata"]["name"])
                     gone.add(j["metadata"]["name"])
                     self.log(
-                        f"{rid}: removed, the first pair of {batch} stopped the batch ({first})"
+                        f"{rid}: removed, the first pair of {batch} stopped the batch"
                     )
-        keep = [j for j in jobs if j["metadata"]["name"] not in gone]
-        self._held = {
-            j["metadata"]["name"]
-            for b, members in batches.items()
-            for j, rid, (_, _, n) in members
-            if n > 1 and not self._pair_ok(b, verdicts, {p[1] for _, _, p in members})
-        }
-        return keep
-
-    @staticmethod
-    def _pair_ok(batch, verdicts, arms):
-        want = {"control": "FAIL", "treatment": "PASS"}
-        return all(verdicts.get(runids.run_id(batch, a, 1)) == want[a] for a in arms)
+                else:
+                    self._held.add(j["metadata"]["name"])
+        return [j for j in jobs if j["metadata"]["name"] not in gone]
 
     def _admit(self, jobs):
         cfg = self.cfg
