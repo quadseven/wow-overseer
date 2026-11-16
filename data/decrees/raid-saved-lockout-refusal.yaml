@@ -1,6 +1,9 @@
 # A raid order for a family with a saved Molten Core lockout is refused in chat, with the lockout read
 # from the database (mod-overseer issue 963). Grug is bound to a Molten Core instance the arrange step
 # creates; the order then names the same raid.
+# Scope: the judge refuses a PASS for an arranged instance without a credited encounter, and a refused order
+# credits none, so until the judge accepts a refusal path this decree can only end INVALID, never PASS. It
+# does not pretend otherwise: the checks below are what a pass would need.
 # Fix: mod-overseer pull 1466 (raid door names seats saved to another Molten Core).
 decree: v1
 id: raid-saved-lockout-refusal

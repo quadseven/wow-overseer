@@ -1,11 +1,14 @@
 # take quest:N accepts a quest an item starts when the taker carries the item, with the item as the giver,
 # and refuses a character without it as a stop (mod-overseer issue 1508). Quest 54 'Report to Goldshire'
 # is started by item 745 (Marshal McBride's Documents). Og carries it; Ugga does not.
+# Scope: Ugga's row must end as an error row with a reason in its own words (a refusal), and Og's row must be
+# applied. The stop marker inside the result column and the holder reading item are not asserted: their
+# encoding is not in this repository, and a guessed string would fail closed for the wrong reason.
 # Fix: mod-overseer pull 1507.
 decree: v1
 id: take-quest-started-by-an-item
 proves:
-  - {repo: quadseven/mod-overseer, issue: 1508, criterion: "take quest:N for a quest no creature gives takes it with the carried item, and a character without the item is refused as a stop"}
+  - {repo: quadseven/mod-overseer, issue: 1508, criterion: "take quest:N for a quest no creature gives takes it with the carried item, and a character without the item is refused with an error row and a reason (the stop marker is not asserted here)"}
 fix: {repo: quadseven/mod-overseer, commit: "31b32a324c724e6ae87277f4b626fa01fcd3fb68"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -41,6 +44,18 @@ observe:
     sql: |
       SELECT COUNT(*) FROM character_queststatus WHERE guid = @Og AND quest = 54
     expect: {scalar: "= 1"}
+  - name: og-row-was-applied
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Og' AND kind = 'quest' AND command LIKE 'take quest:54%' AND created_at >= @t0 AND status = 'applied'
+    expect: {scalar: ">= 1"}
+  - name: ugga-was-refused-in-words
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Ugga' AND kind = 'quest' AND command LIKE 'take quest:54%' AND created_at >= @t0 AND status = 'error' AND detail <> ''
+    expect: {scalar: ">= 1"}
   - name: ugga-does-not-have-the-quest
     role: check
     when: end
