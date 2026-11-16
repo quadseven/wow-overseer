@@ -8,7 +8,7 @@ import pathlib
 import shlex
 import sys
 
-from forge import build, classes
+from forge import build, classes, scrub
 
 
 def _check_classes(args: argparse.Namespace) -> int:
@@ -25,6 +25,13 @@ def _check_classes(args: argparse.Namespace) -> int:
     for name in gone:
         print(f"class for a table that no longer exists: {name}", file=sys.stderr)
     return 1 if missing or gone else 0
+
+
+def _lean_conf(args: argparse.Namespace) -> int:
+    del args
+    for key, value in scrub.LEAN_PLAYERBOTS_CONF.items():
+        print(f"{key} = {value}")
+    return 0
 
 
 def _build(args: argparse.Namespace) -> int:
@@ -64,6 +71,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     check.add_argument("--classes", default=str(classes.DEFAULT_PATH))
     check.set_defaults(func=_check_classes)
+
+    conf = sub.add_parser(
+        "lean-conf", help="print the playerbots config a lean world must carry"
+    )
+    conf.set_defaults(func=_lean_conf)
 
     make = sub.add_parser("build", help="build one template from the newest backup")
     make.add_argument(

@@ -379,6 +379,21 @@ class Plan(unittest.TestCase):
         self.assertIn("verify-auth-dump", names)
         self.assertLess(names.index("verify-auth-dump"), names.index("start-mysql"))
 
+    def test_with_an_auth_dump_bot_accounts_are_not_renumbered(self) -> None:
+        auth = self.dir / "auth.sql.gz"
+        write_dump(self.dir, "auth.sql.gz")
+        step = next(s for s in self.plan("full", auth_dump=auth) if s.name == "auth")
+        self.assertNotIn("ROW_NUMBER", chr(10).join(step.sql))
+
+    def test_a_lean_template_records_the_config_a_world_must_carry(self) -> None:
+        lean = next(s for s in self.plan("lean") if s.name == "marker")
+        text = chr(10).join(lean.sql)
+        self.assertIn("required_conf", text)
+        for key in scrub.LEAN_PLAYERBOTS_CONF:
+            self.assertIn(key + "=0", text)
+        full = next(s for s in self.plan("full") if s.name == "marker")
+        self.assertNotIn("Playerbots.", chr(10).join(full.sql))
+
     def test_no_auth_dump_means_no_auth_verification_step(self) -> None:
         self.assertNotIn("verify-auth-dump", self.names("full"))
 
@@ -947,6 +962,16 @@ class Cli(unittest.TestCase):
                 self.assertIn("start-mysql", printed.getvalue())
                 with self.assertRaises(ValueError):
                     cli.main([*base, "--workdir", "/w; rm -rf /"])
+
+    def test_lean_conf_prints_the_playerbots_keys_a_lean_world_needs(self) -> None:
+        from forge import __main__ as cli
+
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            self.assertEqual(cli.main(["lean-conf"]), 0)
+        lines = printed.getvalue().splitlines()
+        self.assertIn("Playerbots.RandomBotAccountCount = 0", lines)
+        self.assertIn("Playerbots.AddClassAccountPoolSize = 0", lines)
 
     def test_build_refuses_to_guess_the_backup_prefix(self) -> None:
         from forge import __main__ as cli

@@ -138,14 +138,25 @@ def _marker_sql(
     for value in (cfg.template_class, backup.stamp, backup.path.name, auth_source):
         if not re.match(r"^[A-Za-z0-9._-]+$", value):
             raise ValueError(f"unsafe marker value {value!r}")
+    # The playerbots config a world built from this template must also carry. A
+    # lean template only stays lean when the worldserver is told not to create
+    # bot accounts; nothing in the database can say so, so the marker does.
+    required_conf = (
+        ";".join(f"{k}={v}" for k, v in scrub.LEAN_PLAYERBOTS_CONF.items())
+        if cfg.template_class == "lean"
+        else ""
+    )
     return (
         "CREATE TABLE IF NOT EXISTS acore_characters.ephemeral_world ("
         " id TINYINT UNSIGNED NOT NULL PRIMARY KEY, template_stamp VARCHAR(32) NOT NULL,"
         " class VARCHAR(8) NOT NULL, source_backup VARCHAR(128) NOT NULL,"
-        " auth_source VARCHAR(16) NOT NULL, built_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+        " auth_source VARCHAR(16) NOT NULL, required_conf VARCHAR(255) NOT NULL,"
+        " built_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         "DELETE FROM acore_characters.ephemeral_world",
-        "INSERT INTO acore_characters.ephemeral_world (id, template_stamp, class, source_backup, auth_source)"
-        f" VALUES (1, '{backup.stamp}', '{cfg.template_class}', '{backup.path.name}', '{auth_source}')",
+        "INSERT INTO acore_characters.ephemeral_world (id, template_stamp, class, source_backup,"
+        " auth_source, required_conf)"
+        f" VALUES (1, '{backup.stamp}', '{cfg.template_class}', '{backup.path.name}', '{auth_source}',"
+        f" '{required_conf}')",
     )
 
 
@@ -213,7 +224,7 @@ def plan(cfg: Config, classes: dict[str, TableClass]) -> list[Step]:
         )
         auth_sql = scrub.auth_scrub_statements(
             "mysql"
-        ) + scrub.auth_synthesis_statements("mysql")
+        ) + scrub.auth_synthesis_statements("mysql", include_bots=False)
         auth_source = "dump"
     else:
         auth_sql = scrub.auth_synthesis_statements(

@@ -102,7 +102,7 @@ def _check_prefix(prefix: str) -> str:
 
 
 def auth_synthesis_statements(
-    dialect: str = "mysql", bot_prefix: str = BOT_PREFIX
+    dialect: str = "mysql", bot_prefix: str = BOT_PREFIX, include_bots: bool = True
 ) -> list[str]:
     """Build accounts from the restored tables, so no credential is ever read.
 
@@ -111,20 +111,30 @@ def auth_synthesis_statements(
     `<prefix><n>` in id order, because the factory looks them up by that name and
     would otherwise create a fresh full set. Every other account that owns a
     character is named `ACCT<id>`. All get the unusable salt and verifier.
+
+    With an auth dump the accounts already carry their names, so
+    `include_bots=False` leaves the factory's accounts alone: renumbering only
+    the missing ones from 0 could collide with names the dump holds, and the
+    factory creates any it cannot find.
     """
     prefix = _check_prefix(bot_prefix)
     bot_name = _concat(
         f"'{prefix}'", "(ROW_NUMBER() OVER (ORDER BY account_id) - 1)", dialect
     )
     player_name = _concat("'ACCT'", "account", dialect)
-    return [
-        f"INSERT INTO {AUTH}.account (id, username, salt, verifier, expansion)"
-        f" SELECT account_id, {bot_name}, {_ZERO32}, {_ZERO32}, 2 FROM {BOTS}.playerbots_account_type"
-        f" WHERE account_id NOT IN (SELECT id FROM {AUTH}.account)",
+    statements = []
+    if include_bots:
+        statements.append(
+            f"INSERT INTO {AUTH}.account (id, username, salt, verifier, expansion)"
+            f" SELECT account_id, {bot_name}, {_ZERO32}, {_ZERO32}, 2 FROM {BOTS}.playerbots_account_type"
+            f" WHERE account_id NOT IN (SELECT id FROM {AUTH}.account)"
+        )
+    statements.append(
         f"INSERT INTO {AUTH}.account (id, username, salt, verifier, expansion)"
         f" SELECT DISTINCT account, {player_name}, {_ZERO32}, {_ZERO32}, 2 FROM {CHARS}.characters"
-        f" WHERE account NOT IN (SELECT id FROM {AUTH}.account)",
-    ]
+        f" WHERE account NOT IN (SELECT id FROM {AUTH}.account)"
+    )
+    return statements
 
 
 def playerbots_scrub_statements(dialect: str = "mysql") -> list[str]:

@@ -317,7 +317,7 @@ character_pet: per-character owner
 pet_aura: per-character guid > character_pet.id
 item_instance: per-character owner_guid
 item_soulbound_trade_data: per-character itemGuid > item_instance.guid
-guild: per-character leaderguid
+guild: per-character guildid > guild_member.guildid
 guild_member: per-character guid
 guild_rank: per-character guildid > guild.guildid
 overseer_roster: scrub neutral-job
@@ -674,6 +674,76 @@ class LeanBotAccounts(unittest.TestCase):
     def test_the_prefix_must_be_a_plain_word(self) -> None:
         with self.assertRaises(ValueError):
             scrub.lean_statements(MINI, "sqlite", bot_prefix="x' OR 1=1 --")
+
+
+class AuthSynthesisWithDump(unittest.TestCase):
+    """With an auth dump the accounts already carry their names."""
+
+    def setUp(self) -> None:
+        self.db = connect()
+        make_auth(self.db)
+        self.db.execute("DELETE FROM acore_auth.account")
+        self.db.execute(
+            "CREATE UNIQUE INDEX acore_auth.ux_username ON account (username)"
+        )
+        self.db.execute(
+            "INSERT INTO acore_auth.account (id, username, salt, verifier) VALUES (30, 'RNDBOT0', x'00', x'00')"
+        )
+        self.db.execute(
+            "CREATE TABLE acore_characters.characters (guid INTEGER, account INTEGER, name TEXT)"
+        )
+        self.db.executemany(
+            "INSERT INTO acore_characters.characters VALUES (?,?,?)",
+            [(1, 10, "A"), (2, 30, "B")],
+        )
+        self.db.execute(
+            "CREATE TABLE acore_playerbots.playerbots_account_type"
+            " (account_id INTEGER, account_type INTEGER, assignment_date TEXT)"
+        )
+        self.db.executemany(
+            "INSERT INTO acore_playerbots.playerbots_account_type VALUES (?,?,NULL)",
+            [(30, 1), (31, 1)],
+        )
+
+    def test_renumbering_bot_names_would_collide_with_the_dump(self) -> None:
+        with self.assertRaises(sqlite3.IntegrityError):
+            run(self.db, scrub.auth_synthesis_statements("sqlite"))
+
+    def test_dump_mode_names_only_player_accounts(self) -> None:
+        run(self.db, scrub.auth_synthesis_statements("sqlite", include_bots=False))
+        rows = dict(self.db.execute("SELECT id, username FROM acore_auth.account"))
+        self.assertEqual(rows, {30: "RNDBOT0", 10: "ACCT10"})
+
+    def test_the_dump_mode_statements_never_renumber(self) -> None:
+        for dialect in ("mysql", "sqlite"):
+            text = " ".join(
+                scrub.auth_synthesis_statements(dialect, include_bots=False)
+            )
+            self.assertNotIn("ROW_NUMBER", text)
+
+
+class LeanGuilds(unittest.TestCase):
+    def test_a_guild_with_a_kept_member_survives_when_its_leader_is_dropped(
+        self,
+    ) -> None:
+        db = connect()
+        make_bot_world(db)
+        db.execute("UPDATE acore_characters.guild SET leaderguid = 5 WHERE guildid = 1")
+        scrub.run_lean(
+            lambda sql: db.execute(sql).fetchall(),
+            scrub.lean_statements(MINI, "sqlite"),
+        )
+        guilds = [
+            r[0]
+            for r in db.execute("SELECT guildid FROM acore_characters.guild ORDER BY 1")
+        ]
+        ranks = [
+            r[0]
+            for r in db.execute(
+                "SELECT guildid FROM acore_characters.guild_rank ORDER BY 1"
+            )
+        ]
+        self.assertEqual((guilds, ranks), ([1], [1]))
 
 
 class MysqlSyntax(unittest.TestCase):

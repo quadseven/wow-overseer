@@ -118,6 +118,9 @@ class ParentChains(unittest.TestCase):
         self.assertEqual(pet_aura.parent, ("character_pet", "id"))
         self.assertEqual(self.classes["character_pet"].kind, "per-character")
 
+    def test_a_guild_follows_its_members_not_its_leader(self) -> None:
+        self.assertEqual(self.classes["guild"].parent, ("guild_member", "guildid"))
+
     def test_every_parent_is_a_per_character_table(self) -> None:
         for name, entry in self.classes.items():
             if entry.parent is not None:

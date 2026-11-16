@@ -74,7 +74,7 @@ gm_survey: truncate
 gm_ticket: truncate
 group_member: truncate
 groups: truncate
-guild: per-character leaderguid
+guild: per-character guildid > guild_member.guildid
 guild_bank_eventlog: truncate
 guild_bank_item: per-character guildid > guild.guildid
 guild_bank_right: per-character guildid > guild.guildid
