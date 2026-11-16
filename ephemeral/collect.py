@@ -229,11 +229,9 @@ class Collector:
             self._ledger(repo, n, "unclear", evidence, "")
             return f"{repo}#{n}: {outcome}, nothing posted"
         url = self._comment_once(repo, n, body, rec)
-        if outcome == "pass-uncontrolled":
-            self._ledger(
-                repo, n, "unclear", "pass-uncontrolled: " + d["statistics"], url
-            )
-            return f"{repo}#{n}: pass-uncontrolled, evidence posted, left open"
+        if outcome in ("pass-uncontrolled", "underpowered"):
+            self._ledger(repo, n, "unclear", f"{outcome}: " + d["statistics"], url)
+            return f"{repo}#{n}: {outcome}, evidence posted, left open"
         if outcome == "disproven":
             self.gh.remove_label(repo, n, LABEL_WAITING)
             if self.gh.label_exists(repo, LABEL_READY):

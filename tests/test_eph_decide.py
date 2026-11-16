@@ -161,5 +161,29 @@ class StatisticsDisplayTest(unittest.TestCase):
         self.assertIn("p = 1/137846528820", line)
 
 
+class ExactlyThreeTest(unittest.TestCase):
+    def test_one_of_one_each_way_never_proves(self):
+        rec = record(control=1, treatment=1)
+        d = decide.decide(rec, results(rec, control="FAIL", treatment="PASS"))
+        self.assertEqual(d["outcome"], "underpowered")
+        self.assertNotEqual(d["outcome"], "proven")
+
+    def test_two_of_two_and_four_of_four_do_not_prove_either(self):
+        for n in (2, 4):
+            rec = record(control=n, treatment=n)
+            d = decide.decide(rec, results(rec, control="FAIL", treatment="PASS"))
+            self.assertEqual(d["outcome"], "underpowered", n)
+
+    def test_uneven_arms_do_not_prove(self):
+        rec = record(control=3, treatment=2)
+        d = decide.decide(rec, results(rec, control="FAIL", treatment="PASS"))
+        self.assertEqual(d["outcome"], "underpowered")
+
+    def test_a_small_decree_still_disproves_on_a_treatment_fail(self):
+        rec = record(control=1, treatment=1)
+        d = decide.decide(rec, results(rec, control="FAIL", treatment="FAIL"))
+        self.assertEqual(d["outcome"], "disproven")
+
+
 if __name__ == "__main__":
     unittest.main()

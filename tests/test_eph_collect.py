@@ -441,5 +441,18 @@ class LatestReviewDecidesTest(Base):
         self.assertEqual(self.closes(), [])
 
 
+class SmallDecreeTest(Base):
+    def test_a_one_run_decree_posts_evidence_and_never_closes(self):
+        self.rec = record()
+        self.rec["runs"] = [r for r in self.rec["runs"] if r["n"] == 1]
+        self.rec["runs_wanted"] = {"control": 1, "treatment": 1}
+        self.save(self.rec)
+        self.results(["FAIL"], ["PASS"])
+        self.assertEqual(self.collect(), {"abc123": "underpowered"})
+        self.assertEqual(self.closes(), [])
+        self.assertEqual(len(self.fg.comments[f"repos/{REPO}/issues/12/comments"]), 1)
+        self.assertEqual(self.ledger()[0]["verdict"], "unclear")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,8 @@ import re
 from math import comb
 
 OUTCOMES = (
-    "proven", "disproven", "non-discriminating", "pass-uncontrolled", "unclear", "pending",
+    "proven", "disproven", "non-discriminating", "pass-uncontrolled",
+    "underpowered", "unclear", "pending",
 )  # fmt: skip
 SIGNATURE = "-- claude-code (Overseer, PC session, ephemeral worlds)"
 
@@ -55,6 +56,13 @@ def _verdict(rec, res, run):
     return v
 
 
+REQUIRED_RUNS = {"control": 3, "treatment": 3}
+
+
+def wanted_runs(rec):
+    return dict(rec["runs_wanted"])
+
+
 def _early(pres, treat, ctrl):
     """Outcomes a single valid run settles: a treatment FAIL or a control PASS."""
     if "FAIL" in treat:
@@ -89,6 +97,11 @@ def _settled(rec, pres, treat, ctrl, runs):
         return "pending", "runs are still missing"
     if pres.get("treatment") != "present" or pres.get("control") != "absent":
         return "unclear", "fix presence was not verified in both images"
+    if wanted_runs(rec) != REQUIRED_RUNS:
+        return (
+            "underpowered",
+            "a close needs exactly 3 runs per arm (3 of 3 control FAIL, 3 of 3 treatment PASS)",
+        )
     return "proven", "control FAILed and treatment PASSed on every run"
 
 

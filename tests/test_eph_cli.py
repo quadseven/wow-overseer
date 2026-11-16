@@ -42,7 +42,7 @@ class CliTest(unittest.TestCase):
         raw["never_nodes"] = ["some-other-node"]
         raw["tools_image"] = "registry.example.com/t@sha256:" + "0" * 64
         cfg = runcfg.from_dict(raw)
-        self.assertEqual(set(cfg.nodes), {"node-a", "node-b"})
+        self.assertEqual(set(cfg.nodes), {"<node-name-1>", "<node-name-2>"})
 
     def test_config_refuses_a_never_node_and_a_tag_only_tools_image(self):
         from ephemeral import runcfg

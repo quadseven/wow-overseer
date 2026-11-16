@@ -284,7 +284,8 @@ treatment PASS; any other first pair stops the batch and removes its waiting
 Jobs. A finished Job with no result gets an INVALID result recorded for it.
 
 `collect` copies result ConfigMaps to the results directory, decides each batch
-and posts. An issue closes only when the same decree FAILed on every control run
+and posts. A decree with any run count other than 3 control and 3 treatment can
+still post evidence (outcome `underpowered`) but never closes an issue. An issue closes only when the same decree FAILed on every control run
 and PASSed on every treatment run, every run valid, the fix verified present in
 the treatment image and absent from the control, the decree on the default
 branch byte for byte, that decree's pull request approved by someone other than
