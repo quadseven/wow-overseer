@@ -26,6 +26,12 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND map_id = 0
     expect: {scalar: "= 5"}
+  - name: bag-slots-were-not-all-full-at-the-start
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_inventory WHERE guid IN (@cast) AND bag = 0 AND slot BETWEEN 19 AND 22
+    expect: {scalar: "< 20"}
   - name: ten-turn-ins
     role: check
     when: end

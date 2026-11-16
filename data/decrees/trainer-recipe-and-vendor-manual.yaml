@@ -3,12 +3,17 @@
 # can afford is bought and learned, while an unaffordable one is refused (issue 1098). Grug lacks Runed
 # Copper Belt (spell 2666, cited by the craft issue) and stands at a blacksmithing trainer. Ugga stands at the
 # alchemy trainer with the Fire Protection Potion manual (item 6055) in reach and gold for it; Uzza has none.
+# Scope: the worldserver lines naming the recipe or the refusal (issues 1094 and 1098) are log text a decree
+# can only forbid, so they are not asserted. The manual is proven by what the game wrote: Ugga did not know
+# the recipe it teaches (Fire Protection Potion, spell 7257) at the start and does at the end. Uzza, who cannot
+# afford the manual, is sent for it too and must end with an error row that carries a reason, no recipe and no
+# money lost.
 # Fixes: mod-overseer pulls 1120 (trainer recipe) and 1184 (vendor manual); the commit is 1184.
 decree: v1
 id: trainer-recipe-and-vendor-manual
 proves:
-  - {repo: quadseven/mod-overseer, issue: 1094, criterion: "a character that arrives at its trade trainer with a named recipe it lacks and can afford ends the errand holding it, with a worldserver line naming it"}
-  - {repo: quadseven/mod-overseer, issue: 1098, criterion: "a roster character buys an affordable vendor manual and learns it; an unaffordable one is refused"}
+  - {repo: quadseven/mod-overseer, issue: 1094, criterion: "a character that arrives at its trade trainer with a named recipe it lacks and can afford ends the errand holding it (the worldserver line is not asserted here)"}
+  - {repo: quadseven/mod-overseer, issue: 1098, criterion: "a roster character buys an affordable vendor manual and learns its recipe; an unaffordable one is refused with a reason and no recipe (the log lines are not asserted here)"}
 fix: {repo: quadseven/mod-overseer, commit: "c27b21858af194c8f145a10e9e783f5623e5a014"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -20,11 +25,16 @@ cast:
   - who: Ugga
     set: {alive: true, skills: {Alchemy: {value: 140, max: 150}}, money: 5000, at: {creature: "Alchemist Mallory"}}
     ceiling: "a rank for the manual and gold to buy it; no level or gear"
+  - who: Uzza
+    set: {alive: true, skills: {Alchemy: {value: 140, max: 150}}, money: 0, at: {creature: "Alchemist Mallory"}}
+    ceiling: "a rank for the manual and no gold, so the manual is unaffordable; no level or gear"
 act:
   - at: 0s
     command: {who: Grug, kind: buy, text: "recipe 2666"}
   - at: 0s
     command: {who: Ugga, kind: buy, text: "recipe 6055"}
+  - at: 0s
+    command: {who: Uzza, kind: buy, text: "recipe 6055"}
 observe:
   - name: grug-lacks-the-recipe
     role: precondition
@@ -32,6 +42,18 @@ observe:
     sql: |
       SELECT COUNT(*) FROM character_spell WHERE guid = @cast0 AND spell = 2666
     expect: {scalar: "= 0"}
+  - name: ugga-lacks-the-manual-recipe
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_spell WHERE guid = @Ugga AND spell = 7257
+    expect: {scalar: "= 0"}
+  - name: uzza-cannot-afford-it
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid = @Uzza AND money = 0
+    expect: {scalar: "= 1"}
   - name: grug-holds-the-recipe
     role: check
     when: end
@@ -50,9 +72,27 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Ugga' AND kind = 'buy' AND created_at >= @t0 AND status IN ('delivered', 'applied')
     expect: {scalar: ">= 1"}
+  - name: ugga-learned-the-manual-recipe
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM character_spell WHERE guid = @Ugga AND spell = 7257
+    expect: {scalar: "= 1"}
   - name: ugga-paid-for-it
     role: check
     when: end
     sql: |
       SELECT COUNT(*) FROM characters WHERE guid = @Ugga AND money < 5000
     expect: {scalar: "= 1"}
+  - name: uzza-was-refused-with-a-reason
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Uzza' AND kind = 'buy' AND created_at >= @t0 AND status = 'error' AND detail <> ''
+    expect: {scalar: ">= 1"}
+  - name: uzza-did-not-learn-the-manual-recipe
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM character_spell WHERE guid = @Uzza AND spell = 7257
+    expect: {scalar: "= 0"}
