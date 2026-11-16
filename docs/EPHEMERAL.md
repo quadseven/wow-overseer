@@ -15,13 +15,15 @@ Shipped in this repository now:
 - `decrees/anchors.yaml`, the only place coordinates may live;
 - `python3 -m ephemeral acts`, which prints a decree's `act` timeline as the
   command rows it becomes;
+- `python3 -m ephemeral seed`, which compiles `cast` and `arrange` to SQL behind a
+  loopback-only guard (see Seed below);
 - three worked example decrees in `decrees/`.
 
 Not shipped: the world itself. There is no runner, no judge that samples a
 world and gives a verdict, no template build and no cluster objects in this
 repository yet. Nothing here starts a world or produces a PASS, FAIL or INVALID.
-The seed compiler (turning `cast` and `arrange` into SQL) is a separate change
-and is not described as available until it merges.
+The seed step has only been run against a fake connection in unit tests, never
+against a real database.
 
 ## Requesting a proving run
 
@@ -141,9 +143,8 @@ SQL are checked against a snapshot of the game databases
 `decrees/anchors.yaml` is the only file that may hold coordinates. Each entry is
 a position a real character stood at, copied from a row the game wrote, with
 `provenance: {source, ref, observed}`. Never type a position by hand. An entry
-whose row has not been copied is `pending`: lint warns when a decree uses it.
-Refusing a pending anchor at seed time belongs to the seed compiler, which is
-not part of this change.
+whose row has not been copied is `pending`: lint warns when a decree uses it, and
+the seed compiler refuses it.
 
 ## Killing a creature whose death has a script
 
@@ -161,12 +162,14 @@ the window continues `when:` an observation shows the creature dead.
 
     python3 -m ephemeral seed [--dry-run] decrees/<name>.yaml
 
-Runs inside the world pod, before the worldserver starts. It lints the decree,
+Meant to run inside the world pod before the worldserver starts (no pod runs it yet). It lints the decree,
 passes the guard, resolves every name and anchor in the world's own database
 (zero or several matches is INVALID), compiles the statements and applies them
 in one transaction. Settings come from the pod environment, never the decree:
 `EPH_MYSQL_HOST`, `EPH_MYSQL_PORT`, `EPH_MYSQL_USER`, `EPH_MYSQL_PASSWORD`,
-`EPH_WORLD_LABEL`, `EPH_HARNESS_GRANTS`. Exit 0 is applied, 3 is INVALID.
+`EPH_WORLD_LABEL`, `EPH_HARNESS_GRANTS`. Exit 3 is INVALID. Exit 0 means the
+plan compiled, and also that it was applied unless `--dry-run` was given, which
+prints the SQL and applies nothing.
 
 The guard (`ephemeral/guard.py`) makes the SQL unable to reach anything else:
 
