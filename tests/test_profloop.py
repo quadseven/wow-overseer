@@ -12,6 +12,7 @@ import unittest
 from unittest import mock
 
 import craft_rhythm
+import individual
 import jobs
 import profloop
 import reagentplan
@@ -539,6 +540,7 @@ class ProfLoopBridgeWiring(unittest.TestCase):
             "asyncio": asyncio,
             "dataclasses": dataclasses,
             "jobs": jobs,
+            "individual": individual,
             "log": logging.getLogger("test_profloop_bridge"),
             "profloop": profloop,
             "time": time,
@@ -555,6 +557,7 @@ class ProfLoopBridgeWiring(unittest.TestCase):
             "_RHYTHM_SPELLS": {"Og": 12053},
             "_TOWN_ERRANDS": {},
             "_standin_running": lambda names: list(names),
+            "_standin_out": frozenset,
             "_jobs_of": lambda names: {n: "quest" for n in names},
             "_fetch_trade_skills": lambda names: {"Grug": {"mining": 150}},
             "_fetch_standing_crafts": lambda names: {"Og": (12053, 1)},
@@ -619,6 +622,28 @@ class ProfLoopBridgeWiring(unittest.TestCase):
                 ("Og", "craft", profloop.SOURCE),
             ],
         )
+
+    def _gather_writes(self, family_setting, key="grug"):
+        import os
+
+        writes = []
+        bridge_obj, ns = self._make_bridge(set(), writes)
+        ns["_plan_craft_reagents"] = lambda names, spells, skills: {}
+        ns["_fetch_trade_skills"] = lambda names: {
+            "Grug": {"mining": 150},
+            "Og": {"herbalism": 200},
+        }
+        with mock.patch.dict(os.environ, {individual.ENV: family_setting}):
+            asyncio.run(bridge_obj._prof_loop_for(key, ["Grug", "Og"]))
+        return dict((n, m) for n, m, _ in writes)
+
+    def test_an_individual_family_gathers_per_member_under_the_loop(self):
+        got = self._gather_writes("grug")
+        self.assertEqual(got, {"Grug": "farm:mining", "Og": "farm:herbalism"})
+
+    def test_a_family_not_individual_stays_family_wide_under_the_loop(self):
+        got = self._gather_writes("")
+        self.assertEqual(got, {"Grug": "farm:mining", "Og": "farm:mining"})
 
 
 if __name__ == "__main__":
