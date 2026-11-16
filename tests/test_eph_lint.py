@@ -379,7 +379,9 @@ class CliTest(unittest.TestCase):
     def test_exit_codes(self):
         from ephemeral.__main__ import main
 
-        good = str(DECREES[0])
+        good = str(
+            ROOT / "data" / "decrees" / "brd-guzzler-exit-zero-patron-deaths.yaml"
+        )
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(["lint", good]), 0)
             self.assertEqual(
