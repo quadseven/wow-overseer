@@ -214,11 +214,13 @@ class Renames(unittest.TestCase):
         )
 
 
-OPEN_CAVE = ("Ezzo", "Fizzog", "Fuggo", "Gorrk", "Haggo", "Hrunt")
+# Fizzog was an open seat in this snapshot; it now holds a maintenance place
+# (the first-kill lineup change), so five seats are open here.
+OPEN_CAVE = ("Ezzo", "Fuggo", "Gorrk", "Haggo", "Hrunt")
 
 
 def _cave_live():
-    """Cave as it stood on 2026-10-08: 71 members, the 6 recruits invited on
+    """Cave as it stood on 2026-10-08: 71 members, the 5 recruits invited on
     2026-10-05 still at level 1 under their own names, empty LEAVING."""
     out = []
     for s in raidteams.seats("Cave"):
@@ -235,7 +237,6 @@ def _cave_live():
         out.append({"name": old, "class_id": 9, "race": 5, "level": 20})
     recruits = [
         ("Ahesun", 7, 11),
-        ("Anduum", 7, 11),
         ("Anklitlu", 9, 7),
         ("Awudis", 9, 7),
         ("Aramas", 9, 1),
@@ -249,12 +250,12 @@ class StalledOnRenames(unittest.TestCase):
     def test_the_live_cave_numbers(self):
         members = _cave_live()
         self.assertEqual(len(members), 71)
-        # The 6 raid seats, the 10 questers' (5 since #927, 5 more since
-        # every class got one) and the 2 bankers'.
+        # The 5 raid seats, the 9 questers' (Corvane was promoted to a raid
+        # seat) and the 2 bankers'.
         self.assertEqual(
-            len(teamsync.open_seats("Cave", [m["name"] for m in members])), 18
+            len(teamsync.open_seats("Cave", [m["name"] for m in members])), 16
         )
-        self.assertEqual(len(teamsync.recruits_in_guild("Cave", members)), 6)
+        self.assertEqual(len(teamsync.recruits_in_guild("Cave", members)), 5)
 
     def test_an_empty_plan_with_open_seats_says_why(self):
         members = _cave_live()
@@ -262,11 +263,11 @@ class StalledOnRenames(unittest.TestCase):
         acts = teamsync.plan("Cave", members, [], pending, False)
         self.assertEqual(acts, [])
         why = teamsync.stall_reason(
-            "Cave", members, [], pending, True, {"target not online": 6}
+            "Cave", members, [], pending, True, {"target not online": 5}
         )
-        self.assertIn("6 seats are filled by recruits already in the guild", why)
+        self.assertIn("5 seats are filled by recruits already in the guild", why)
         self.assertIn("Ahesun as Ezzo", why)
-        self.assertIn("target not online x6", why)
+        self.assertIn("target not online x5", why)
 
     def test_a_full_guild_with_a_candidate_and_no_leaver_says_so(self):
         members = [m for m in _cave_live() if m["level"] != 1]
@@ -288,13 +289,13 @@ class StalledOnRenames(unittest.TestCase):
             "the guild is full (83) and the approved teams name no leaver", why
         )
         self.assertIn(
-            "no candidate on a rotating random-bot account fits Fizzog (level 1 "
-            "or under), Fuggo (level 1 or under), Gorrk (level 1 or under), "
+            "no candidate on a rotating random-bot account fits Fuggo (level 1 "
+            "or under), Gorrk (level 1 or under), "
             "Haggo (level 1 or under), Hrunt (level 1 or under), Tharn (level 60 "
             "or under), Mirra (level 60 or under), Velo (level 60 or under), "
             "Durga (level 60 or under), Fizzik (level 60 or under), Kellan (level "
             "60 or under), Bromli (level 60 or under), Sylvi (level 60 or under), "
-            "Pindle (level 60 or under), Corvane (level 60 or under), "
+            "Pindle (level 60 or under), "
             "Hoarg (level 60 or under), Stowk (level 60 or under)",
             why,
         )
@@ -374,10 +375,11 @@ class Questers(unittest.TestCase):
         # (operator, 2026-10-15): every race and every class of the faction.
         self.assertEqual(sorted(raidteams.QUESTERS), ["Bonkers", "Cave"])
         everyone = [q for g in raidteams.QUESTERS.values() for q in g]
-        self.assertEqual(len({q.name for q in everyone}), 20)
+        self.assertEqual(len({q.name for q in everyone}), 19)
         alliance = raidteams.QUESTERS["Cave"]
         horde = raidteams.QUESTERS["Bonkers"]
-        self.assertEqual(len(alliance), 10)
+        # Cave's death knight quester was promoted to a raid seat.
+        self.assertEqual(len(alliance), 9)
         self.assertEqual(len(horde), 10)
         self.assertEqual(
             {q.race for q in alliance},
@@ -387,13 +389,11 @@ class Questers(unittest.TestCase):
             {q.race for q in horde},
             {"Orc", "Undead", "Tauren", "Troll", "Blood Elf"},
         )
-        self.assertEqual(
-            {q.class_id for q in alliance}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 11}
-        )
+        self.assertEqual({q.class_id for q in alliance}, {1, 2, 3, 4, 5, 7, 8, 9, 11})
         self.assertEqual({q.class_id for q in horde}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 11})
         self.assertEqual(
             [(q.name, q.zone) for q in everyone if q.class_id == teamsync.DEATH_KNIGHT],
-            [("Corvane", "Acherus"), ("Saevor", "Acherus")],
+            [("Saevor", "Acherus")],
         )
 
     def test_a_death_knight_quester_is_reset_to_55(self):

@@ -241,14 +241,13 @@ class HardBlockers(unittest.TestCase):
         self.assertIn("Nothing clears Molten Core yet", hard[0])
         self.assertIn("holds at the entrance", hard[0])
 
-    def test_the_shipped_answer_is_that_it_clears_but_does_not_gather(self):
+    def test_the_shipped_answer_is_that_it_clears_and_gathers(self):
         """Unpatched, the card states today's truth: the run clears
-        (mod-overseer#640, in the deployed module since 2026-09-24), and only
-        the head is walked to the door. This fails the moment raidrun claims
-        a gather it has not got, or drops the clear the module has."""
+        (mod-overseer#640) and walks every seat to the door (mod-overseer#1132),
+        so no hard blocker says only the head is walked."""
         self.assertIn(raidready.RAID_PORTAL, raidready.jobs.RAID_KEYWORDS)
         self.assertTrue(raidready.raidrun.CLEARS)
-        self.assertFalse(raidready.raidrun.GATHERS)
+        self.assertTrue(raidready.raidrun.GATHERS)
 
     def test_a_run_that_does_not_gather_is_a_hard_blocker_said_plainly(self):
         """The raid run clears, but ASSEMBLE walks only the head: a seated

@@ -34,6 +34,50 @@ def _family(team):
     return {s.name for s in raidteams.GROUPS[team][0]}
 
 
+class TheFirstKillLineupChange(unittest.TestCase):
+    """Cave's lineup after the first-kill decisions: two level 60 characters
+    seated, four looping seats replaced by the closest to 60 in the same role."""
+
+    SEATED = {"Corvane": "tank", "Rubba": "dps", "Diggo": "dps", "Tugga": "healer"}
+    LOOPING = ("Crag", "Drogg", "Eggrok", "Fizzog")
+
+    def test_the_four_looping_seats_are_gone_and_the_replacements_hold_their_role(self):
+        by_name = {s.name: s for s in raidteams.seats("Cave")}
+        for name in self.LOOPING:
+            self.assertNotIn(name, by_name)
+        for name, role in self.SEATED.items():
+            self.assertEqual(role, by_name[name].seat, name)
+        self.assertEqual(40, len(by_name))
+
+    def test_nobody_is_in_two_places(self):
+        seated = {s.name for s in raidteams.seats("Cave")}
+        questers = raidteams.quester_names("Cave")
+        upkeep = {
+            n
+            for pairs in (raidteams.SUMMONERS["Cave"], raidteams.MAINTENANCE["Cave"])
+            for _o, n in pairs
+        }
+        self.assertEqual(set(), seated & questers)
+        self.assertEqual(set(), seated & upkeep)
+        self.assertEqual(set(), questers & upkeep)
+
+    def test_the_three_displaced_with_a_place_keep_maintenance_and_crag_is_surplus(
+        self,
+    ):
+        upkeep = {n for _o, n in raidteams.MAINTENANCE["Cave"]}
+        self.assertTrue({"Drogg", "Eggrok", "Fizzog"} <= upkeep)
+        self.assertIn("Crag", raidteams.BENCHED["Cave"])
+        self.assertNotIn("Crag", {n for _o, n in raidteams.MAINTENANCE["Cave"]})
+
+    def test_a_group_that_lost_its_paladin_aura_has_a_shaman_totem(self):
+        group4 = raidteams.GROUPS["Cave"][3]
+        self.assertTrue(any(s.fire_resistance for s in group4))
+
+    def test_promoted_seats_are_exempt_from_the_letter_rule_and_only_they(self):
+        for name in raidteams.PROMOTED["Cave"]:
+            self.assertIn(name, {s.name for s in raidteams.seats("Cave")})
+
+
 class TheTeams(unittest.TestCase):
     def test_each_raid_is_8_tanks_11_healers_21_damage(self):
         for team in raidteams.GROUPS:
@@ -55,6 +99,8 @@ class TheTeams(unittest.TestCase):
             for number, group in enumerate(groups[1:], start=2):
                 letter = "ABCDEFGH"[number - 1]
                 for s in group:
+                    if s.name in raidteams.PROMOTED.get(team, ()):
+                        continue
                     self.assertTrue(s.name.startswith(letter), (team, number, s.name))
 
     def test_coom_is_an_orc_enhancement_shaman_in_bonkers(self):
@@ -160,7 +206,9 @@ class TheQuestersHoldNoRaidSeat(unittest.TestCase):
             )
             self.assertEqual({m["name"] for m in lineup["questers"]}, questers)
             self.assertEqual({m["role"] for m in lineup["questers"]}, {"quester"})
-            self.assertEqual(lineup["counts"]["questers"], 10)
+            self.assertEqual(
+                lineup["counts"]["questers"], len(raidteams.QUESTERS[team])
+            )
 
     def test_a_quester_is_not_on_the_kick_list(self):
         lineup = raidlineup.build_lineup(_guild("Cave") + _questers("Cave"))
