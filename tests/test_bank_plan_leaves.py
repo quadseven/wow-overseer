@@ -352,7 +352,7 @@ class OnlyARouteSomethingCarriesOutCounts(unittest.TestCase):
         routes = {itemplan.SELL_VENDOR, itemplan.GIVE, itemplan.AUCTION}
         self.assertEqual({}, shadow.leaving(plan_, pairs, routes))
 
-    def test_the_real_plan_sells_surplus_cloth_and_a_spare_green(self):
+    def test_the_real_plan_sells_surplus_cloth_and_banks_a_spare_green(self):
         rows_, gear, worn, free = fixture()
         ex = extras()
         report = shadow.shadow(
@@ -365,7 +365,8 @@ class OnlyARouteSomethingCarriesOutCounts(unittest.TestCase):
             {itemplan.SELL_VENDOR},
             ["Ana"],
         )
-        self.assertEqual([1, 4], sorted(got))
+        # The spare green (stack 4) is banked by the guild loot policy, not sold.
+        self.assertEqual([1], sorted(got))
 
 
 def import_bridge():
@@ -414,7 +415,8 @@ class TheBridgeReadsThePlanForTheBank(unittest.TestCase):
         ):
             leaves, unread = b._bank_plan_leaves(["Ana"])
         self.assertFalse(unread)
-        self.assertEqual([1, 4], sorted(leaves))
+        # The spare green (stack 4) is banked by the guild loot policy, not sold.
+        self.assertEqual([1], sorted(leaves))
 
     def test_the_bank_plan_hands_the_answer_to_the_storage(self):
         src = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(

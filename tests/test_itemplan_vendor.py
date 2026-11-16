@@ -27,6 +27,24 @@ import itemplan_vendor as vendor  # noqa: E402
 
 ON = {"ITEMPLAN_SELL_VENDOR": "on"}
 
+# These tests pin the vendor route's MECHANICS (holds, releases, fallbacks), and
+# they use an uncommon stack as the item the route sells. The guild loot policy
+# caps what the plan may send to a vendor at common quality
+# (itemplan.VENDOR_MAX_QUALITY), so the cap is lifted for this module and the
+# policy's own cap is pinned by PolicyCapTest below.
+_POLICY_CAP = itemplan.VENDOR_MAX_QUALITY
+_POLICY_BANK = itemplan.GEAR_BANK_MIN_QUALITY
+
+
+def setUpModule():
+    itemplan.VENDOR_MAX_QUALITY = 3
+    itemplan.GEAR_BANK_MIN_QUALITY = 3
+
+
+def tearDownModule():
+    itemplan.VENDOR_MAX_QUALITY = _POLICY_CAP
+    itemplan.GEAR_BANK_MIN_QUALITY = _POLICY_BANK
+
 
 def row(holder, guid, entry, name, quality=1, count=1, sell=50, item_class=15, **kw):
     base = {
@@ -100,6 +118,25 @@ class SwitchTest(unittest.TestCase):
         self.assertFalse(vendor.enabled({}))
         self.assertFalse(vendor.enabled({"ITEMPLAN_SELL_VENDOR": "off"}))
         self.assertTrue(vendor.enabled(ON))
+
+
+class PolicyCapTest(unittest.TestCase):
+    """With the guild loot policy's cap, the route never sells an uncommon."""
+
+    def setUp(self):
+        itemplan.VENDOR_MAX_QUALITY = _POLICY_CAP
+        itemplan.GEAR_BANK_MIN_QUALITY = _POLICY_BANK
+        self.addCleanup(setattr, itemplan, "VENDOR_MAX_QUALITY", 3)
+        self.addCleanup(setattr, itemplan, "GEAR_BANK_MIN_QUALITY", 3)
+
+    def test_the_cap_is_common_quality(self):
+        self.assertEqual(_POLICY_CAP, 1)
+
+    def test_a_green_is_never_a_route_sale(self):
+        rows, gear, worn, free = green_cloak()
+        plan_, prs = plan_and_pairs(rows, gear, worn, free)
+        self.assertNotEqual(plan_.decisions[0].route, itemplan.SELL_VENDOR)
+        self.assertEqual(vendor.sales_for(plan_, prs), ())
 
 
 class SalesForTest(unittest.TestCase):

@@ -102,14 +102,17 @@ class ThePage(unittest.TestCase):
         ):
             self.assertIn(tag, PAGE)
 
-    def test_no_service_worker_keeps_a_stale_copy(self):
-        # A cached app would show an old realm as if it were now. Nothing
-        # registers a worker; adding one means network first for every read.
-        for path in [HERE / "index.html", *sorted((HERE / "app").rglob("*.js"))]:
-            self.assertNotIn(
-                "serviceWorker", path.read_text(encoding="utf-8"), path.name
-            )
-        self.assertNotIn("/sw.js", map_server.Handler.GET_ROUTES)
+    def test_service_worker_never_caches_api_reads(self):
+        # Reads always go to the network untouched; /sw.js carries no-cache and
+        # the mount's scope so updates and isolated prefixes stay safe.
+        self.assertIn("/sw.js", map_server.Handler.GET_ROUTES)
+        r = get("/sw.js")
+        self.assertEqual(r.status(), 200)
+        self.assertEqual(r.header("Cache-Control"), "no-cache")
+        self.assertEqual(r.header("Service-Worker-Allowed"), "/")
+        sw_text = r.body().decode("utf-8")
+        self.assertNotIn('"/api/', sw_text)
+        self.assertIn('/app/" + BUILD + "/"', sw_text)
 
 
 if __name__ == "__main__":
