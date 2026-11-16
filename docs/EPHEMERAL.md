@@ -22,7 +22,7 @@ Shipped in this repository now:
   ConfigMap (see Judge below);
 - `python3 -m ephemeral submit`, `dispatch` and `collect`, the PC-side runner
   (see Runner below);
-- three worked example decrees in `data/decrees/`.
+- four worked example decrees in `data/decrees/`.
 
 Not shipped: the world itself. The cluster side and the world image live outside
 this repository, and the whole chain from decree file to a posted verdict has not

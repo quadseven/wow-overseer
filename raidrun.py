@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from dataclasses import dataclass
 
 import jobs
@@ -425,8 +426,10 @@ def strip_first_kill(words: list) -> tuple:
     text = " ".join(words)
     said = False
     for phrase in FIRST_KILL_WORDS:
-        if phrase in text:
-            text = " ".join(text.replace(phrase, " ").split())
+        # Whole words only: "firstkiller" or "first killing" are not the phrase.
+        pattern = r"(?<![\w-])" + re.escape(phrase) + r"(?![\w-])"
+        if re.search(pattern, text):
+            text = " ".join(re.sub(pattern, " ", text).split())
             said = True
     return text.split(), said
 

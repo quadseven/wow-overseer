@@ -163,6 +163,20 @@ class TheFlagRidesTheOrder(unittest.TestCase):
                 text,
             )
 
+    def test_ordinary_words_come_back_unchanged(self):
+        for words in (
+            ["moltencore"],
+            ["first", "aid", "kit"],
+            ["firstkiller", "moltencore"],
+            ["unfirst", "kill"],
+            ["first", "killing", "moltencore"],
+        ):
+            self.assertEqual((words, False), raidrun.strip_first_kill(words), words)
+        self.assertEqual(
+            (["moltencore"], True),
+            raidrun.strip_first_kill(["moltencore", "first", "kill"]),
+        )
+
     def test_a_plain_order_does_not_carry_it(self):
         entries, _ = campaignqueue.parse_entries("moltencore 1")
         self.assertFalse(entries[0].first_kill)
