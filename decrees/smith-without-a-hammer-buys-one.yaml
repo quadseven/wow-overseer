@@ -25,7 +25,7 @@ observe:
     role: precondition
     when: start
     sql: |
-      SELECT COUNT(*) FROM item_instance WHERE owner_guid = @Grug AND itemEntry = 5956
+      SELECT COUNT(*) FROM item_instance WHERE owner_guid = @cast0 AND itemEntry = 5956
     expect: {scalar: "= 0"}
   - name: exactly-one-hammer-buy-row
     role: check
@@ -37,7 +37,7 @@ observe:
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM item_instance WHERE owner_guid = @Grug AND itemEntry = 5956
+      SELECT COUNT(*) FROM item_instance WHERE owner_guid = @cast0 AND itemEntry = 5956
     expect: {scalar: "= 1"}
   - name: a-craft-event-followed
     role: check

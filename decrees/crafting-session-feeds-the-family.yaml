@@ -37,7 +37,7 @@ observe:
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM item_instance WHERE creatorGuid IN (@Grug, @Grog)
+      SELECT COUNT(*) FROM item_instance WHERE creatorGuid IN (@cast0, @cast1)
     expect: {scalar: ">= 1"}
   - name: a-trade-was-settled
     role: check
