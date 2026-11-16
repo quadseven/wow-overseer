@@ -172,6 +172,9 @@ class _Self:
         self._guild_social_names = set()
         self._job_steps = {}
 
+    def _begin_death_parties(self, starts, loops=None, free=None):
+        """The death-party seat hook: these passes do not drive it."""
+
 
 class TheBridgePass(unittest.TestCase):
     def run_once(self, this, **patches):
