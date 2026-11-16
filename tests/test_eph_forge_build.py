@@ -6,12 +6,15 @@ the tests drive it with a recording runner.
 
 from __future__ import annotations
 
+import contextlib
 import gzip
+import io
 import pathlib
 import tempfile
 import unittest
 from unittest import mock
 
+import sandbox_caps
 from forge import build, classes, restore, scrub
 
 OLD = "wow-dev-characters-20261113T051002Z.sql.gz"
@@ -635,6 +638,7 @@ class ServerIdentity(unittest.TestCase):
         self.assertEqual(self.spawned, [], "mysqld was never started")
         self.assertEqual(self.calls, [])
 
+    @unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
     def test_a_real_listening_socket_is_seen_as_in_use(self) -> None:
         import socket
 
@@ -754,9 +758,11 @@ class Cli(unittest.TestCase):
             with mock.patch.dict(
                 "os.environ", {"FORGE_REGISTRY": "registry.example.invalid/eph"}
             ):
-                self.assertEqual(
-                    cli.main([*base, "--workdir", "/var/lib/forge/work"]), 0
-                )
+                printed = io.StringIO()
+                with contextlib.redirect_stdout(printed):
+                    code = cli.main([*base, "--workdir", "/var/lib/forge/work"])
+                self.assertEqual(code, 0)
+                self.assertIn("start-mysql", printed.getvalue())
                 with self.assertRaises(ValueError):
                     cli.main([*base, "--workdir", "/w; rm -rf /"])
 
