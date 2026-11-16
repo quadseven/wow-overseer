@@ -6,6 +6,9 @@
 # asserted. What is proven by rows: the hearth took the key holder out (an applied row for Og), a credited BRD
 # encounter happened, no run closed split_failed, and no run was left open or closed for any split reason.
 # Fix: mod-overseer pull 1489.
+# Og is cast on his own (a different position or state), and a decree can seat only a WHOLE cast entry in an
+# arranged group, so he is not in the seeded group. He is given the same dungeon job by his own order, so the
+# run's job reaches him; a decree cannot seat him in the party itself (wow-overseer#2767 for the log side).
 decree: v1
 id: brd-finder-entry-key-holder-out
 proves:
@@ -27,6 +30,8 @@ arrange:
 act:
   - at: 0s
     roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+  - at: 0s
+    roster: {who: Og, job: "dungeon:blackrock-depths"}
   - at: 2m
     command: {who: Og, kind: hearth, text: "hearth"}
 observe:
