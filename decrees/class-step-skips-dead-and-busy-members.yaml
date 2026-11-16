@@ -1,0 +1,45 @@
+# The family class step does not take a class quest for a dead member or one on cooldown (wow-overseer
+# issue 2325), and is held, not walked, for a member on a bag-room town errand or whose giver sits on
+# dangerous ground (issue 2338). Grog, the paladin, is dead beside the paladin trainer; Bork is mid town
+# run. No take row may be written for either.
+# Fixes: wow-overseer pulls 2327 and 2339; the commit is 2339.
+decree: v1
+id: class-step-skips-dead-and-busy-members
+proves:
+  - {repo: quadseven/wow-overseer, issue: 2325, criterion: "no take is written for a dead or cooling member while the class giver is in reach"}
+  - {repo: quadseven/wow-overseer, issue: 2338, criterion: "the class step is held, not walked, for a member on a bag-room errand or whose giver sits on dangerous ground"}
+fix: {repo: quadseven/wow-overseer, commit: "b1c33154bc9e044c055e05e0da8d7103f28a626a"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 45m
+cast:
+  - who: family:grug
+    set: {alive: true, at: {creature: "Lord Grayson Shadowbreaker"}}
+    ceiling: "nothing granted but position"
+  - who: Grog
+    set: {alive: false, corpse_at: {creature: "Lord Grayson Shadowbreaker"}, at: {graveyard: 1}}
+    ceiling: "nothing granted; the death is the scenario"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "town run"}
+observe:
+  - name: grog-started-dead
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM corpse WHERE guid = @Grog
+    expect: {scalar: "= 1"}
+  - name: no-take-for-the-dead-member
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Grog' AND kind = 'quest' AND command LIKE 'take%' AND created_at >= @t0 AND created_at < DATE_ADD(@t0, INTERVAL 2 MINUTE)
+    expect: {scalar: "= 0"}
+  - name: no-class-walk-for-a-member-on-an-errand
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Bork' AND source LIKE '%class%' AND created_at >= @t0
+    expect: {scalar: "= 0"}
