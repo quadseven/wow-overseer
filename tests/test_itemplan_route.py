@@ -365,5 +365,33 @@ class TheRoutesReachTheCommandWritingSeam(unittest.TestCase):
         self.assertIn("_insert_guild", body)
 
 
+class TheAuditTrailAndTheDryRun(unittest.TestCase):
+    def routed(self):
+        stacks = [green(1), green(2)]
+        return route.routes_for(plan_of(stacks), pairs_of(stacks), bank_it)
+
+    def test_an_executed_route_logs_who_deposited_what_where(self):
+        out = self.routed()
+        lines = bank.lines(out.moves)
+        self.assertEqual(2, len(lines))
+        for line, name in zip(lines, ("Plate Thing 1", "Plate Thing 2"), strict=True):
+            self.assertIn("Ana", line)
+            self.assertIn(name, line)
+
+    def test_the_dry_run_lists_every_move_one_for_one_and_moves_nothing(self):
+        out = self.routed()
+        before = out.moves
+        rows = route.dry_run(out)
+        self.assertEqual(len(out.moves), len(rows))
+        for move, row in zip(out.moves, rows, strict=True):
+            self.assertEqual(
+                (move.character, move.item, move.guid, bank.command(move)),
+                (row[0], row[1], row[2], row[4]),
+            )
+        self.assertIn("guild bank tab 1", rows[0][3])
+        self.assertIs(before, out.moves)
+        self.assertEqual((), route.dry_run(route.Routed()))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -53,36 +53,21 @@ observe:
     sql: |
       SELECT COUNT(*) FROM character_inventory WHERE guid = @Uzza AND bag = 0 AND slot BETWEEN 23 AND 38
     expect: {scalar: "<= 8"}
-  - name: target-greens-left-the-bags
+  - name: the-same-greens-were-deposited-and-banked
     role: check
     when: end
+    # One query over one set of item guids: the instance is a target green, a deposit command names its
+    # guid, it is no longer in the pack slots, and it sits in the personal bank slots or the guild bank.
     sql: |
-      SELECT COUNT(*) FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item
+      SELECT COUNT(DISTINCT ii.guid) FROM item_instance ii
       JOIN acore_world.item_template t ON t.entry = ii.itemEntry
-      WHERE ci.guid = @Uzza AND ci.bag = 0 AND ci.slot BETWEEN 23 AND 38
-        AND t.name IN ("Heavy Mithril Shoulder", "Heavy Mithril Gauntlet", "Heavy Mithril Pants", "Ornate Mithril Pants", "Ornate Mithril Gloves", "Ornate Mithril Shoulder", "Heavy Mithril Breastplate", "Heavy Mithril Boots")
-    expect: {scalar: "<= 4"}
-  - name: target-greens-reached-a-bank
-    role: check
-    when: end
-    sql: |
-      SELECT (SELECT COUNT(*) FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item
-        JOIN acore_world.item_template t ON t.entry = ii.itemEntry
-        WHERE ci.guid = @Uzza AND ci.bag = 0 AND ci.slot BETWEEN 39 AND 66
-          AND t.name IN ("Heavy Mithril Shoulder", "Heavy Mithril Gauntlet", "Heavy Mithril Pants", "Ornate Mithril Pants", "Ornate Mithril Gloves", "Ornate Mithril Shoulder", "Heavy Mithril Breastplate", "Heavy Mithril Boots"))
-      + (SELECT COUNT(*) FROM guild_bank_item gbi JOIN item_instance ii ON ii.guid = gbi.item_guid
-        JOIN acore_world.item_template t ON t.entry = ii.itemEntry
-        WHERE t.name IN ("Heavy Mithril Shoulder", "Heavy Mithril Gauntlet", "Heavy Mithril Pants", "Ornate Mithril Pants", "Ornate Mithril Gloves", "Ornate Mithril Shoulder", "Heavy Mithril Breastplate", "Heavy Mithril Boots"))
-    expect: {scalar: ">= 4"}
-  - name: deposit-rows-name-the-target-greens
-    role: check
-    when: end
-    sql: |
-      SELECT COUNT(DISTINCT ii.guid) FROM overseer_command c
-      JOIN item_instance ii ON c.command LIKE CONCAT('%guid:', ii.guid, '%')
-      JOIN acore_world.item_template t ON t.entry = ii.itemEntry
-      WHERE c.target_name = 'Uzza' AND c.created_at >= @t0 AND c.command LIKE '%deposit%'
-        AND t.name IN ("Heavy Mithril Shoulder", "Heavy Mithril Gauntlet", "Heavy Mithril Pants", "Ornate Mithril Pants", "Ornate Mithril Gloves", "Ornate Mithril Shoulder", "Heavy Mithril Breastplate", "Heavy Mithril Boots")
+      JOIN overseer_command c ON c.command LIKE CONCAT('%guid:', ii.guid, '%')
+      LEFT JOIN character_inventory ci ON ci.item = ii.guid AND ci.guid = @Uzza
+      LEFT JOIN guild_bank_item gbi ON gbi.item_guid = ii.guid
+      WHERE t.name IN ("Heavy Mithril Shoulder", "Heavy Mithril Gauntlet", "Heavy Mithril Pants", "Ornate Mithril Pants", "Ornate Mithril Gloves", "Ornate Mithril Shoulder", "Heavy Mithril Breastplate", "Heavy Mithril Boots")
+        AND c.target_name = 'Uzza' AND c.created_at >= @t0 AND c.command LIKE '%deposit%'
+        AND (ci.slot BETWEEN 39 AND 66 OR gbi.item_guid IS NOT NULL)
+        AND NOT (ci.bag = 0 AND ci.slot BETWEEN 23 AND 38)
     expect: {scalar: ">= 4"}
   - name: no-target-green-was-sold
     role: check

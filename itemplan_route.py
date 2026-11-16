@@ -159,3 +159,22 @@ def merge(plan_, routed: Routed, limit: int = bank.VISIT_LIMIT):
         guild=tuple(plan_.guild) + tuple(vault),
         notes=tuple(dict.fromkeys(notes)),
     )
+
+
+def dry_run(routed: Routed) -> tuple:
+    """What `routed` would move, one row per move and nothing moved.
+
+    Each row is (holder, item, guid, destination, command): the same fields,
+    in the same order, as the moves, so a reader can set the dry run beside the
+    rows the bank pass writes. Pure: it writes nothing.
+    """
+    return tuple(
+        (
+            m.character,
+            m.item,
+            m.guid,
+            "guild bank tab %d" % m.tab if m.to == bank.GUILD else "personal bank",
+            bank.command(m),
+        )
+        for m in routed.moves
+    )
