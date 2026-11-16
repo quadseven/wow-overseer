@@ -31,7 +31,7 @@ observe:
     role: precondition
     when: start
     sql: |
-      SELECT COUNT(*) FROM characters WHERE guid IN (@cast) AND level >= 52
+      SELECT COUNT(*) FROM characters WHERE guid = @cast0 AND level >= 52
     expect: {scalar: ">= 1"}
   - name: nobody-in-the-guild-knows-the-recipe-at-the-start
     role: precondition

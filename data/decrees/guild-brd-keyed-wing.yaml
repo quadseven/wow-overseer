@@ -11,12 +11,13 @@
 # The taker must hold neither an ACTIVE nor a rewarded 3801 or 3802 at the start, be level 48 or more, and be a
 # ghost (a corpse row), so an ineligible fixture is INVALID and not a treatment failure; the take row must be
 # applied, so a rejected command cannot pass on a pre-existing row. The naming line: wow-overseer#2767.
+# Issue 811 (the bridge itself chooses and emits the take) is dropped from proves: this decree orders the take by
+# hand, which shows an applied take, not the bridge's own selection. The take rows stay as supporting evidence only.
 # Fixes: wow-overseer pulls 1966 and 1625; the commit is 1966.
 decree: v1
 id: guild-brd-keyed-wing
 proves:
   - {repo: quadseven/wow-overseer, issue: 783, criterion: "a BRD guild run whose five seats all have the attunement quest done goes through Gerstahn and on, with bosses_done above 1 (the seat count of the row is not asserted here)"}
-  - {repo: quadseven/wow-overseer, issue: 811, criterion: "a ghost guild member with neither quest takes 3801 from Franclorn and a cast member ends holding the Shadowforge Key that no cast member held at the start (the line naming the member is not asserted here)"}
 fix: {repo: quadseven/wow-overseer, commit: "9885acc6e64a3776a41950eeebf945aa08c546e9"}
 world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}

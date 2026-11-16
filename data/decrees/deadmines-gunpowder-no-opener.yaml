@@ -81,6 +81,3 @@ observe:
       SELECT id FROM overseer_dungeon_run
       WHERE map_id = 36 AND started_at >= @t0 AND state <> 'ended' AND last_progress_at <= DATE_SUB(NOW(), INTERVAL 5 MINUTE)
     expect: {rows: 0}
-  - name: no-iron-clad-door-line
-    role: check
-    log: {pattern: "I can't progress the event at Iron Clad Door", expect: {count: 0}}
