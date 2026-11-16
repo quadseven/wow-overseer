@@ -14,6 +14,7 @@ import "./searchv2.js";
 import * as tooltip from "./tooltip.js";
 import * as gestures from "./gestures.js";
 import * as update from "./update.js";
+import { installWorker } from "./worker.js";
 import { legacy, parse, resolve } from "./router.js";
 import { captureAnchor, resolveAnchor, scrollShift, restoreTarget } from "./scrollanchor.js";
 import { makeHold, makeGate, endOnce } from "./redraw.js";
@@ -298,6 +299,7 @@ gestures.install(main, {
 
 tooltip.install();
 update.install();
+installWorker();
 
 document.addEventListener("visibilitychange", () => { if (document.hidden) stampVisit(); });
 window.addEventListener("pagehide", stampVisit);

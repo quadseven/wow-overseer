@@ -336,7 +336,7 @@ class Gear(unittest.TestCase):
         d = one([plate], [bo, pal], plate)
         self.assertEqual((d.route, d.target), (GIVE, "Pal"))
 
-    def test_outgrown_green_is_sold_and_marked_refusable(self):
+    def test_outgrown_green_is_banked_never_vendored(self):
         ring = stack(
             entry=80,
             item_class=4,
@@ -348,8 +348,9 @@ class Gear(unittest.TestCase):
             item_level=25,
         )
         d = one([ring], [member()], ring)
-        self.assertEqual(d.route, SELL_VENDOR)
-        self.assertTrue(d.irreversible and d.refusable)
+        # The guild loot policy: a green is banked or listed, never vendored.
+        self.assertNotEqual(d.route, SELL_VENDOR)
+        self.assertIn(d.route, (GUILD_BANK, BANK_PERSONAL, AUCTION))
 
     def test_epic_is_never_sold(self):
         epic = stack(
@@ -365,7 +366,7 @@ class Gear(unittest.TestCase):
         d = one([epic], [member()], epic)
         self.assertNotIn(d.route, itemplan.IRREVERSIBLE)
 
-    def test_blue_sale_waits_for_a_release(self):
+    def test_a_blue_is_never_vendored(self):
         blue = stack(
             entry=82,
             item_class=4,
@@ -377,8 +378,8 @@ class Gear(unittest.TestCase):
             item_level=25,
         )
         d = one([blue], [member()], blue)
-        self.assertEqual(d.route, SELL_VENDOR)
-        self.assertTrue(d.confirm)
+        self.assertNotEqual(d.route, SELL_VENDOR)
+        self.assertEqual(d.route, BANK_PERSONAL)
 
 
 class Destroy(unittest.TestCase):
@@ -581,20 +582,18 @@ class ZorkBlues(unittest.TestCase):
     def test_nothing_is_destroyed(self):
         self.assertFalse([d for d in self.plan.decisions if d.route == DESTROY])
 
-    def test_every_blue_sale_waits_for_a_release(self):
-        sales = [d for d in self.plan.decisions if d.route == SELL_VENDOR]
-        self.assertTrue(sales)
-        self.assertTrue(all(d.confirm and d.refusable for d in sales))
+    def test_no_blue_is_vendored(self):
+        self.assertFalse([d for d in self.plan.decisions if d.route == SELL_VENDOR])
 
     def test_the_levelled_leather_set_is_banked_not_sold(self):
         for name in ("Embrace of the Lycan", "Soothsayer's Headdress"):
             for d in self.by_name[name]:
                 self.assertEqual(d.route, BANK_PERSONAL, name)
 
-    def test_the_outgrown_staff_and_cloth_go_to_the_vendor(self):
+    def test_the_outgrown_staff_and_cloth_are_kept_not_vendored(self):
         # Level 42 staff and cloth the druid cannot wear at its level.
-        self.assertEqual(self.by_name["Zum'rah's Vexing Cane"][0].route, SELL_VENDOR)
-        self.assertEqual(self.by_name["Chloromesh Girdle"][0].route, SELL_VENDOR)
+        for name in ("Zum'rah's Vexing Cane", "Chloromesh Girdle"):
+            self.assertNotEqual(self.by_name[name][0].route, SELL_VENDOR)
 
     def test_the_spare_set_is_capped(self):
         banked = [

@@ -1,0 +1,81 @@
+# Blackrock Depths, Grim Guzzler: the family kills Plugger Spazzring, the bar
+# turns hostile through his death script, and the family walks out.
+#
+# Plugger is NOT seeded dead. The patrons turn hostile only through the kill
+# script, so loading with him already dead would not exercise the hostile bar.
+# The family kills him in `act`, and the window continues on `plugger-was-dead`.
+#
+# Unverified until the first end-to-end proof: that the clear job engages
+# Plugger from the placement below. If it does not, the run is INVALID (the
+# plugger-was-dead precondition fails), never a pass.
+decree: v1
+id: brd-guzzler-exit-zero-patron-deaths
+proves:
+  - {repo: quadseven/mod-dungeon-clear, issue: TODO, criterion: "the family leaves the bar without a patron dying"}
+fix: {repo: quadseven/mod-dungeon-clear, commit: TODO}
+world: {class: lean, image: follow-dev, bridge: off, random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 20m
+cast:
+  - who: family:grug
+    set: {level: 58, alive: true, health_pct: 100, at: {creature: "Plugger Spazzring"}}
+    ceiling: "levels 56 to 60, own gear from the template, nothing granted but position"
+arrange:
+  - instance: {map: "Blackrock Depths", as: brd, bind: family:grug}   # instance row and binds, id exposed as @brd
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:blackrockdepths"}       # the family fights what is in front of it
+  - when: plugger-was-dead
+    roster: {who: family:grug, job: "quest"}                         # leaving the dungeon job starts the exit walk
+observe:
+  - name: family-loaded-inside
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run
+      WHERE map_id = 230 AND started_at >= @t0
+    expect: {scalar: ">= 1"}
+  # The verdict needs the core's own credited-encounter record, never the run's
+  # completion flag: the core writes log_encounter when an encounter is credited.
+  # A run that clears nothing credited never reached the scenario, so it is INVALID.
+  # The judge requires the expectation to reject zero and the query to be bounded to
+  # this run: time >= @t0 and the arranged instance's map (230).
+  - name: encounter-credited
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM log_encounter
+      WHERE map = 230 AND time >= @t0
+    expect: {scalar: ">= 1"}
+  - name: plugger-was-dead
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM creature_respawn r
+      JOIN acore_world.creature c ON c.guid = r.guid
+      JOIN acore_world.creature_template t ON t.entry = c.id
+      WHERE r.instanceId = @brd AND t.name = 'Plugger Spazzring'
+    expect: {scalar: "= 1"}
+  - name: family-left-the-instance
+    role: precondition
+    when: end
+    sql: |
+      SELECT name FROM characters WHERE guid IN (@cast) AND map = 230
+    expect: {rows: 0}
+  - name: zero-patron-deaths
+    role: check
+    when: end
+    sql: |
+      SELECT t.name, r.guid, r.respawnTime FROM creature_respawn r
+      JOIN acore_world.creature c ON c.guid = r.guid
+      JOIN acore_world.creature_template t ON t.entry = c.id
+      WHERE r.instanceId = @brd
+        AND t.name IN ('Grim Patron', 'Guzzling Patron', 'Hammered Patron')
+    expect: {rows: 0}
+  - name: zero-family-deaths
+    role: check
+    when: end
+    sql: |
+      SELECT character_name, created_at FROM overseer_death WHERE created_at >= @t0
+    expect: {rows: 0}
