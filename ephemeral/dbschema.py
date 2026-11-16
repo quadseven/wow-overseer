@@ -158,7 +158,7 @@ def _is_word(tok, *words):
     return tok[0] == "id" and not tok[2] and tok[1].lower() in words
 
 
-def _collect_tables(toks, schema, problems):
+def _collect_tables(toks, schema, problems, refs=None):
     """Every table the query names: ({alias or table: (db, table)}, token indexes of the refs)."""
     aliases = {}
     skip = set()
@@ -171,7 +171,7 @@ def _collect_tables(toks, schema, problems):
         )
         if starts_ref:
             in_from = True
-            end = _table_ref(toks, i + 1, schema, aliases, problems)
+            end = _table_ref(toks, i + 1, schema, aliases, problems, refs)
             skip.update(range(i + 1, end))
             i = end
             continue
@@ -179,6 +179,27 @@ def _collect_tables(toks, schema, problems):
             in_from = False
         i += 1
     return aliases, skip
+
+
+def tables_read(sql, schema):
+    """The set of (database, table) a SELECT actually reads: its FROM and JOIN refs.
+
+    A table name inside a string, a function argument, a column or an alias is
+    not a read, so it never appears here. Unknown tables are left out.
+    """
+    body = sql.strip().rstrip(";")
+    aliases, _ = _collect_tables(_tokens(body), schema, [])
+    return set(aliases.values())
+
+
+def table_refs(sql, schema):
+    """Every FROM or JOIN reference of a SELECT, in order: [(alias, db, table)].
+
+    Unlike `tables_read` this keeps repeats, so a self-join shows as two entries.
+    """
+    refs = []
+    _collect_tables(_tokens(sql.strip().rstrip(";")), schema, [], refs)
+    return refs
 
 
 def _select_aliases(toks):
@@ -267,7 +288,7 @@ def _qualified_problem(qualifier, col, schema, aliases):
     return f"unknown table or alias {qualifier!r}"
 
 
-def _table_ref(toks, i, schema, aliases, problems):
+def _table_ref(toks, i, schema, aliases, problems, refs=None):
     """Parse `[db.]table [[AS] alias]` at toks[i]. Returns (next index, opaque)."""
     if i >= len(toks):
         problems.append("dangling FROM or JOIN")
@@ -302,4 +323,6 @@ def _table_ref(toks, i, schema, aliases, problems):
         i += 1
     aliases[alias] = (db, table)
     aliases.setdefault(table, (db, table))
+    if refs is not None:
+        refs.append((alias, db, table))
     return i

@@ -101,6 +101,22 @@ STACK_QUEST_NEEDED_SQL = (
 )
 QUEST_NEEDED_SQL = "(it.class = 12 AND " + STACK_QUEST_NEEDED_SQL + ")"
 
+# A QUEST IN THE HOLDER'S OWN LOG NAMES THE ITEM, OF ANY CLASS. The loot policy
+# asks this of every carried stack it is about to sell, destroy or disenchant:
+# a quest the holder is on (a character_queststatus row whose status is not 0)
+# that requires the item, drops it, or hands it out at the start. It is the
+# log half of STACK_QUEST_NEEDED_SQL without its class gate, because a common
+# trade good (a bomb, a bar, a cloth) is quest-named too. Expects the aliases
+# `it` (item_template) and `ii` (item_instance); the holder is ii.owner_guid.
+LOG_QUEST_NEEDED_SQL = (
+    "EXISTS (SELECT 1 FROM character_queststatus qs "
+    "JOIN acore_world.quest_template qt ON qt.ID = qs.quest "
+    "WHERE qs.guid = ii.owner_guid AND qs.status <> 0 AND ii.itemEntry IN ("
+    "qt.RequiredItemId1, qt.RequiredItemId2, qt.RequiredItemId3, "
+    "qt.RequiredItemId4, qt.RequiredItemId5, qt.RequiredItemId6, "
+    "qt.ItemDrop1, qt.ItemDrop2, qt.ItemDrop3, qt.ItemDrop4, qt.StartItem))"
+)
+
 
 # THE DARKMOON DECK CARDS (#2607). A card is "<Ace to Eight> of <Beasts,
 # Elementals, Portals or Warlords>", a deck is "<suit> Deck", and a finished

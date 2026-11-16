@@ -16,6 +16,12 @@ THE POLICY, in priority order (the first rule that claims an item decides):
      house, a listing the bot posts itself.                    BANK_OR_AUCTION
      A piece nobody can use that is soulbound cannot go to either, so it is
      disenchanted.                                                DISENCHANT
+     TRULY TRASH is disenchanted too: an unbound uncommon-to-epic piece that
+     upgrades nobody, whose expected auction value is under `TRASH_CEILING`
+     copper, and that a guild enchanter's Enchanting skill can break down
+     (`decide`'s `auction_value` and `enchanters` judges). A worthwhile piece
+     keeps BANK_OR_AUCTION, and so does a piece no enchanter can break down:
+     it is never vendored.
   3. Vendor only gray (quality 0) and junk.                           VENDOR
 
 `decide` is the whole policy: pure, rows in, a `Verdict` out. No MySQL, no
@@ -63,6 +69,12 @@ _RECIPE_CLASS = 9
 # item_template.bonding: 1 is bind on pickup, 4 is quest-bound.
 _BOUND_ON_PICKUP = frozenset({1, 4})
 _SOULBOUND = 0x1  # item_instance.flags bit 1
+# "Truly trash" ceiling: an unbound piece whose expected auction value is under
+# this many copper (one gold) is disenchanted for enchanting materials rather
+# than shelved. It is twice itemplan.AUCTION_MIN_GAIN, the least a listing must
+# clear over the vendor for the item plan to list at all, so a piece the plan
+# would not bother to list is not worth shelving either.
+TRASH_CEILING = 10_000
 
 
 @dataclass(frozen=True)
@@ -135,16 +147,33 @@ def _can_disenchant(row: dict) -> bool:
     )
 
 
-def decide(row: dict, guild_classes, upgrade=None) -> Verdict:
+def decide(
+    row: dict, guild_classes, upgrade=None, auction_value=None, enchanters=None
+) -> Verdict:
     """The policy's verdict for one carried item.
 
     `row` carries `quality`, `item_class`, `subclass`, `inventory_type`,
     `required_level`, `allowable_class`, `bonding`, `instance_flags`,
-    `holder_class` and `disenchant_id`. `guild_classes` is every class among
+    `holder_class`, `quest_needed` and `disenchant_id`. `guild_classes` is every class among
     the guilds' members. `upgrade(row)` names the members whose own equip
     judge would put the piece on over what they wear now, or None when it
     could not be read; it is asked only for a piece some class could wear.
+    `auction_value(row)` is the item's expected auction copper, None when it
+    could not be read; `enchanters()` is {name: Enchanting skill} for the guild
+    enchanters, None or empty when there are none. Both are asked only for an
+    unbound, disenchantable piece, and without them it is shelved, never broken
+    down: a missing judge never turns a piece into trash.
     """
+    if "quest_needed" in row:
+        # A quest in the holder's log names the item (the item is the quest's
+        # source, drop or required item): it stays, whatever its class or
+        # quality, because the quest cannot be finished without it. Unread is
+        # held too.
+        needed = row.get("quest_needed")
+        if needed is None:
+            return Verdict(HOLD, "its quest log could not be read")
+        if needed:
+            return Verdict(HOLD, "a quest in the holder's log names it")
     quality = _int(row.get("quality"))
     if quality is None:
         return Verdict(HOLD, "its quality could not be read")
@@ -171,15 +200,17 @@ def decide(row: dict, guild_classes, upgrade=None) -> Verdict:
         # a soulbound piece has no known holder class). Unknown is not "nobody".
         return Verdict(HOLD, "the guild's classes could not be read")
     if equipment and _wearable(row, guild_classes):
-        return _wearable_verdict(row, quality, upgrade)
+        return _wearable_verdict(row, quality, upgrade, auction_value, enchanters)
     if quality == COMMON and equipment:
         return Verdict(VENDOR, "a common piece no guild class can wear")
     if _int(row.get("item_class")) in _GUILD_USED_CLASSES:
         return _shelve(row, "the guild's trades use it", usable=True)
-    return _shelve(row, "no guild member can use it")
+    return _shelve(row, "no guild member can use it", False, auction_value, enchanters)
 
 
-def _wearable_verdict(row: dict, quality: int, upgrade) -> Verdict:
+def _wearable_verdict(
+    row: dict, quality: int, upgrade, auction_value=None, enchanters=None
+) -> Verdict:
     """A piece some guild class could wear: an upgrade for somebody, or kept."""
     wanted = upgrade(row) if upgrade is not None else None
     if wanted is None:
@@ -193,14 +224,55 @@ def _wearable_verdict(row: dict, quality: int, upgrade) -> Verdict:
         return Verdict(UPGRADE, "an upgrade for %s" % ", ".join(wanted), tuple(wanted))
     if quality == COMMON:
         return Verdict(VENDOR, "a common piece nobody would wear over their own")
-    return _shelve(row, "a guild member could use it later", usable=True)
+    return _shelve(
+        row, "a guild member could use it later", True, auction_value, enchanters
+    )
 
 
-def _shelve(row: dict, why: str, usable: bool = False) -> Verdict:
+def _breakable_by(row: dict, enchanters):
+    """The guild enchanter (highest skill, then name) whose Enchanting reaches
+    the core's RequiredDisenchantSkill for this piece, or None."""
+    need = _int(row.get("disenchant_skill"))
+    if need is None or need < 0 or not enchanters:
+        return None
+    able = sorted(
+        (name for name, skill in enchanters.items() if (_int(skill) or 0) >= need),
+        key=lambda name: (-(_int(enchanters[name]) or 0), name),
+    )
+    return able[0] if able else None
+
+
+def _truly_trash(row: dict, auction_value, enchanters):
+    """The enchanter who should break this unbound piece down, or None when it
+    is worth shelving or nobody can break it down. Unread means shelved."""
+    if not (_is_equipment(row) and _can_disenchant(row)) or auction_value is None:
+        return None
+    value = auction_value(row)
+    if value is None or value >= TRASH_CEILING:
+        return None
+    # The judge answers a read failure itself (an empty answer); a bug in it
+    # is not caught here.
+    skills = enchanters() if enchanters is not None else None
+    return _breakable_by(row, skills)
+
+
+def _shelve(
+    row: dict, why: str, usable: bool = False, auction_value=None, enchanters=None
+) -> Verdict:
     """Bank or auction an item that can leave the bags. A bound piece nobody
     can use is disenchanted; a bound piece somebody could use stays with its
-    holder; what is bound and cannot be broken down is held."""
+    holder; what is bound and cannot be broken down is held. An unbound piece
+    that is truly trash (worth little, upgrades nobody, an enchanter can break
+    it down) is disenchanted too."""
     if not is_bound(row):
+        breaker = _truly_trash(row, auction_value, enchanters)
+        if breaker:
+            return Verdict(
+                DISENCHANT,
+                why
+                + "; worth under %d copper, so %s disenchants it"
+                % (TRASH_CEILING, breaker),
+            )
         return Verdict(BANK_OR_AUCTION, why + "; the guild bank or the auction house")
     if usable:
         return Verdict(HOLD, why + "; it is bound and stays with its holder")

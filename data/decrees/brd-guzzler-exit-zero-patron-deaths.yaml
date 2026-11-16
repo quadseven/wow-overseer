@@ -36,6 +36,18 @@ observe:
       SELECT COUNT(*) FROM overseer_dungeon_run
       WHERE map_id = 230 AND started_at >= @t0
     expect: {scalar: ">= 1"}
+  # The verdict needs the core's own credited-encounter record, never the run's
+  # completion flag: the core writes log_encounter when an encounter is credited.
+  # A run that clears nothing credited never reached the scenario, so it is INVALID.
+  # The judge requires the expectation to reject zero and the query to be bounded to
+  # this run: time >= @t0 and the arranged instance's map (230).
+  - name: encounter-credited
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM log_encounter
+      WHERE map = 230 AND time >= @t0
+    expect: {scalar: ">= 1"}
   - name: plugger-was-dead
     role: precondition
     when: end
