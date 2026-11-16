@@ -154,7 +154,7 @@ def decide(
 
     `row` carries `quality`, `item_class`, `subclass`, `inventory_type`,
     `required_level`, `allowable_class`, `bonding`, `instance_flags`,
-    `holder_class` and `disenchant_id`. `guild_classes` is every class among
+    `holder_class`, `quest_needed` and `disenchant_id`. `guild_classes` is every class among
     the guilds' members. `upgrade(row)` names the members whose own equip
     judge would put the piece on over what they wear now, or None when it
     could not be read; it is asked only for a piece some class could wear.
@@ -164,6 +164,16 @@ def decide(
     unbound, disenchantable piece, and without them it is shelved, never broken
     down: a missing judge never turns a piece into trash.
     """
+    if "quest_needed" in row:
+        # A quest in the holder's log names the item (the item is the quest's
+        # source, drop or required item): it stays, whatever its class or
+        # quality, because the quest cannot be finished without it. Unread is
+        # held too.
+        needed = row.get("quest_needed")
+        if needed is None:
+            return Verdict(HOLD, "its quest log could not be read")
+        if needed:
+            return Verdict(HOLD, "a quest in the holder's log names it")
     quality = _int(row.get("quality"))
     if quality is None:
         return Verdict(HOLD, "its quality could not be read")

@@ -34003,7 +34003,10 @@ _EPIC_FACTS_SQL = (
     "it.DisenchantID AS disenchant_id, "
     "it.RequiredDisenchantSkill AS disenchant_skill, "
     "it.SellPrice AS sell_price, "
-    "it.bonding AS bonding, c.class AS holder_class "
+    "it.bonding AS bonding, c.class AS holder_class, "
+    # A quest in the holder's log names the item: never sold, destroyed or
+    # disenchanted, whatever its class (lootpolicy.decide).
+    + bag_pressure.LOG_QUEST_NEEDED_SQL + " AS quest_needed "
     "FROM item_instance ii "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
     "LEFT JOIN characters c ON c.guid = ii.owner_guid "
