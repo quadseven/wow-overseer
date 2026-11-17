@@ -21,6 +21,7 @@ import raidrun
 import raidteams
 
 PALADIN = 2
+SHAMAN = 7
 GOLD = 10000
 
 
@@ -35,6 +36,7 @@ def _spells(class_id, tree, points):
 
 RET = _spells(PALADIN, "Retribution", 8)
 HOLY = _spells(PALADIN, "Holy", 8)
+ENH = _spells(SHAMAN, "Enhancement", 8)
 
 
 def row(name="Embo", **kw):
@@ -60,23 +62,35 @@ class TheSeats(unittest.TestCase):
         self.assertEqual("Retribution", raidroles.tree_of(PALADIN, RET))
         self.assertEqual("Holy", raidroles.tree_of(PALADIN, HOLY))
 
-    def test_three_cave_paladins_hold_holy_healer_seats(self):
+    def test_four_cave_paladins_and_two_shamans_hold_healer_seats(self):
         names = healerrespec.names("Cave")
-        self.assertEqual(3, len(names))
+        self.assertEqual(
+            {"Bonk", "Clobba", "Embo", "Gakk", "Bluk", "Cronk"}, set(names)
+        )
         by_name = {s.name: s for s in raidteams.seats("Cave")}
         for name in names:
             seat = by_name[name]
-            self.assertEqual(
-                (PALADIN, "Holy", "healer"), (seat.class_id, seat.tree, seat.seat)
+            want = (
+                (PALADIN, "Holy")
+                if seat.class_id == PALADIN
+                else (SHAMAN, "Restoration")
             )
-            self.assertTrue(seat.fire_resistance, name)
+            self.assertEqual(
+                (*want, "healer"), (seat.class_id, seat.tree, seat.seat), name
+            )
+            if seat.class_id == PALADIN:
+                self.assertTrue(seat.fire_resistance, name)
+
+    def test_cave_reaches_eight_healers_at_fifty_with_the_six(self):
+        # Ugga (priest) and Glob (druid) already heal at 50 or more.
+        self.assertEqual(8, 2 + len(healerrespec.names("Cave")))
 
     def test_the_other_guild_and_the_other_seats_are_untouched(self):
         self.assertEqual((), healerrespec.names("Bonkers"))
         retribution = [
             s.name for s in raidteams.seats("Cave") if s.tree == "Retribution"
         ]
-        self.assertEqual(4, len(retribution))
+        self.assertEqual(3, len(retribution))
         self.assertFalse(set(retribution) & set(healerrespec.names("Cave")))
 
     def test_no_picked_paladin_is_on_the_roster_family(self):
@@ -143,6 +157,24 @@ class TheCandidates(unittest.TestCase):
         found, _ = healerrespec.candidates("Cave", [row("Frakk")], roster=set())
         self.assertEqual([], found)
 
+    def test_an_enhancement_shaman_on_a_restoration_seat_is_a_candidate(self):
+        found, _ = healerrespec.candidates(
+            "Cave",
+            [row("Cronk", class_id=SHAMAN, level=50, talent_spells=ENH)],
+            roster=set(),
+        )
+        self.assertEqual(["Cronk"], [c.name for c in found])
+        self.assertEqual(
+            ("Enhancement", "Restoration"), (found[0].played, found[0].target)
+        )
+        self.assertEqual(raidroles.tree_tab(SHAMAN, "Restoration"), found[0].tab)
+
+    def test_a_retribution_paladin_gakk_is_a_candidate_and_grog_is_not(self):
+        found, _ = healerrespec.candidates(
+            "Cave", [row("Gakk"), row("Grog")], roster=set()
+        )
+        self.assertEqual(["Gakk"], [c.name for c in found])
+
 
 class ThePlan(unittest.TestCase):
     def _cand(self, name="Embo"):
@@ -190,11 +222,11 @@ class ThePlan(unittest.TestCase):
 
 
 class TheLineup(unittest.TestCase):
-    def test_cave_wants_fourteen_healers_and_eighteen_damage(self):
+    def test_cave_wants_seventeen_healers_and_fifteen_damage(self):
         seats = [s.seat for s in raidteams.seats("Cave")]
         self.assertEqual(8, seats.count(raidroles.SEAT_TANK))
-        self.assertEqual(14, seats.count(raidroles.SEAT_HEALER))
-        self.assertEqual(18, seats.count(raidroles.SEAT_DAMAGE))
+        self.assertEqual(17, seats.count(raidroles.SEAT_HEALER))
+        self.assertEqual(15, seats.count(raidroles.SEAT_DAMAGE))
 
     def test_a_seat_still_in_its_old_tree_is_marked_as_a_respec(self):
         seat = next(s for s in raidteams.seats("Cave") if s.name == "Embo")
