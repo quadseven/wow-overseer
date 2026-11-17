@@ -1629,11 +1629,15 @@ def _ender_spots(quest, facts, gone=frozenset(), object_gone=frozenset()) -> tup
     )
 
 
-def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list:
+def failures(
+    cat: Catalogue, member, clock, now, tried=(), last_quest=0, crossings=()
+) -> list:
     """Broken rows for the quests the quester holds that cannot be finished:
     a stall of STALL_SECONDS of play, a turn-in NPC or an objective the world
     does not hold, or a take or a hand-in the world keeps refusing. The clock
-    is told every quest in the log, so it must be asked once a pass."""
+    is told every quest in the log, so it must be asked once a pass.
+    `crossings` names a refused route when its map holds the remaining
+    objective fields."""
     gone = gone_spawns(member.name, tried)
     object_gone = gone_spawns(member.name, tried, OBJECT_KIND)
     refused = refusals(member.name, tried)
@@ -1663,6 +1667,12 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
         reason = _broken_reason(
             quest, facts, status, played, gone, refused, final, object_gone, prog
         )
+        if reason.startswith(STALLED):
+            fields = _held_objective_fields(member, qid, quest)
+            destination = classquest.far_map(member, fields)
+            wall = guildjobs.class_walls(member.name, crossings).get(destination)
+            if wall:
+                reason += "; objective route is blocked: %s" % wall
         if reason:
             out.append(Broken(member.name, qid, quest.title, reason, held=True))
     clock.forget(member.name, member.quest_log)
@@ -2582,7 +2592,7 @@ def plan(
     A move that walks waits while the quester's newest row was refused for a
     far walk wall (`walk_wall`)."""
     member = settled(member, tried)
-    found = failures(cat, member, clock, now, tried, last_quest)
+    found = failures(cat, member, clock, now, tried, last_quest, crossings)
     if not member.online:
         return Plan(
             member.name, None, tuple(found), "%s is not in the world" % member.name
