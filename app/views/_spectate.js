@@ -109,14 +109,19 @@ export function stage(spRead, runs, opRead, idle) {
   }
   const on = sp.run ? label(runs, sp.run) : sp.character || sp.spec;
   const who = sp.target && sp.target !== sp.character ? html` Following ${sp.target}.` : "";
-  const why = !sp.target && sp.note ? html`<p class="muted sp-note">Waiting: ${sp.note}</p>` : "";
-  const stop = operatorOn(opRead) ? html`<button type="button" class="btn btn-secondary sp-btn sp-stop" data-spectate-stop><i class="ph ph-stop" aria-hidden="true"></i>Stop</button>` : "";
+  const way = sp.character && sp.target ? html`<p class="muted sp-note">The Watcher is on its way to ${sp.target}. Until it arrives the picture shows wherever it is now.</p>` : "";
+  // The director's latest word, which is the reason when the Watcher is not
+  // moving (no target yet, or its moves are held).
+  const why = !sp.note ? "" : !sp.target ? html`<p class="muted sp-note">Waiting: ${sp.note}</p>` : html`<p class="muted sp-note">Latest from the camera: ${sp.note}</p>`;
+  const stop = operatorOn(opRead) ? html`<button type="button" class="btn btn-secondary sp-btn sp-stop" data-spectate-stop><i class="ph ph-stop" aria-hidden="true"></i>Stop watching</button>` : "";
+  // Not the wall's `data-stream`: Now's wall moves a family picture into every
+  // slot carrying that, and one in here covered the whole page.
   const picture = sp.stream
-    ? html`<div class="sp-slot" data-spectate-slot data-stream="${sp.stream}"></div>`
+    ? html`<div class="sp-slot" data-spectate-slot data-spectate-stream="${sp.stream}"><p class="muted sp-note" data-spectate-wait>Starting the Watcher's stream. If it stays dark, the Watcher's client may be off.</p></div>`
     : html`<p class="muted sp-note">The camera has no stream address yet.</p>`;
   return html`<div class="sp-region">${status}<div class="card sp-stage" aria-live="polite">
 <span class="g-name"><i class="ph-fill ph-video-camera" aria-hidden="true"></i> Now watching ${on}.${who}</span>
-${why}${picture}${stop}
+${way}${why}${picture}${stop}
 <span class="muted sp-note">This is the camera's view, an invisible observer that follows the target. The interface on screen belongs to the camera, not to any of them.${wait(sp)}</span>
 </div></div>`;
 }
@@ -156,7 +161,7 @@ export function bind(main) {
   // A view with no Watcher slot (or a renderer that answers every selector
   // with something that is not an element) has no picture to place.
   if (!slot || typeof slot.getAttribute !== "function") { stopPicture(); return; }
-  const url = slot.getAttribute("data-stream");
+  const url = slot.getAttribute("data-spectate-stream");
   if (!kept.video) {
     kept.video = document.createElement("video");
     kept.video.className = "sp-video";
@@ -165,9 +170,18 @@ export function bind(main) {
     kept.video.controls = true;
     kept.status = document.createElement("p");
     kept.status.className = "muted sp-note";
-    kept.player = makePlayer(kept.video, (text) => { kept.status.textContent = text; });
+    kept.player = makePlayer(kept.video, (text) => {
+      kept.status.textContent = text;
+      // The player has its own word now, so the "starting" line goes.
+      document.querySelectorAll("[data-spectate-wait]").forEach((n) => { n.hidden = true; });
+    });
   }
   slot.append(kept.video, kept.status);
+  // A redraw draws the "starting" line again; once the player has spoken it stays hidden.
+  if (kept.status.textContent && typeof slot.querySelector === "function") {
+    const wait = slot.querySelector("[data-spectate-wait]");
+    if (wait) wait.hidden = true;
+  }
   if (kept.url !== url) {
     kept.url = url;
     kept.player.start("the camera", url);

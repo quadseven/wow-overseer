@@ -165,6 +165,9 @@ export function retryDue() {
 // Move every living picture into its slot under `root`.
 export function mount(root) {
   root.querySelectorAll("[data-stream]").forEach((slot) => {
+    // The Watcher's card (_spectate.js) plays its own picture: a wall tile put
+    // in its slot would stretch over the whole page.
+    if (typeof slot.hasAttribute === "function" && slot.hasAttribute("data-spectate-slot")) return;
     const t = tile(slot.getAttribute("data-stream"));
     if (t.isFull) return;
     if (t.pic.parentElement !== slot) slot.appendChild(t.pic);
