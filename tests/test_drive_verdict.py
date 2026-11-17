@@ -184,16 +184,18 @@ class GrugsSeal(unittest.TestCase):
         # (mod-overseer#221, abe76676), so a piece that clears that is worn.
         lone = dict(NAGLERING, equipment_slot=10)
         both = [lone, dict(NAGLERING, equipment_slot=11, entry=1, item_flags=0)]
-        big = ring("Big Band", 99001, 1, level=60, req=55, stats=((STA, 100),),
-                   item_flags=0)
+        big = ring(
+            "Big Band", 99001, 1, level=60, req=55, stats=((STA, 100),), item_flags=0
+        )
         verdict, why = equipscore.drive_verdict(big, grug(), both, BOOK)
         self.assertEqual(verdict, equipscore.DRIVE_WEAR, why)
 
     def test_a_piece_under_the_credited_floor_stays_undecided(self):
         lone = dict(NAGLERING, equipment_slot=10)
         both = [lone, dict(NAGLERING, equipment_slot=11, entry=1, item_flags=0)]
-        small = ring("Small Band", 99002, 2, level=60, req=55, stats=((STA, 40),),
-                     item_flags=0)
+        small = ring(
+            "Small Band", 99002, 2, level=60, req=55, stats=((STA, 40),), item_flags=0
+        )
         verdict, why = equipscore.drive_verdict(small, grug(), both, BOOK)
         self.assertEqual(verdict, equipscore.DRIVE_UNDECIDED, why)
 
