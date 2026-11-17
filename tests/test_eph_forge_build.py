@@ -284,6 +284,8 @@ class Plan(unittest.TestCase):
                 "verify-backup",
                 "start-mysql",
                 "restore",
+                "create-databases",
+                "dbimport-conf",
                 "db-import",
                 "auth",
                 "playerbots-scrub",
@@ -291,6 +293,7 @@ class Plan(unittest.TestCase):
                 "marker",
                 "credential-audit",
                 "shutdown",
+                "server-exit",
                 "package",
                 "push",
                 "prune",
@@ -318,6 +321,45 @@ class Plan(unittest.TestCase):
         ):
             self.assertIn(flag, joined)
         self.assertIn("--bind-address=127.0.0.1", joined)
+
+    def test_mysqld_paths_all_sit_inside_the_workdir(self) -> None:
+        step = next(s for s in self.plan("full") if s.name == "start-mysql")
+        script = step.argv[2]
+        workdir = (self.dir / "work").as_posix()
+        for flag in ("--socket=", "--pid-file="):
+            value = next(
+                part.strip("'")[len(flag) :]
+                for part in script.split()
+                if part.strip("'").startswith(flag)
+            )
+            self.assertTrue(value.startswith(workdir + "/"), value)
+        self.assertIn("--mysqlx=OFF", script)
+        self.assertIn("--secure-file-priv=NULL", script)
+        self.assertEqual(script.count("--socket="), 2)
+
+    def test_both_schemas_are_created_before_the_db_import(self) -> None:
+        plan = self.plan("full")
+        names = [s.name for s in plan]
+        self.assertLess(names.index("restore"), names.index("create-databases"))
+        self.assertLess(names.index("create-databases"), names.index("db-import"))
+        text = " ".join(next(s for s in plan if s.name == "create-databases").sql)
+        self.assertIn("acore_auth", text)
+        self.assertIn("acore_world", text)
+
+    def test_db_import_reads_a_config_the_forge_wrote_in_the_workdir(self) -> None:
+        plan = self.plan("full")
+        names = [s.name for s in plan]
+        self.assertLess(names.index("dbimport-conf"), names.index("db-import"))
+        argv = next(s for s in plan if s.name == "db-import").argv
+        conf = (self.dir / "work" / "dbimport.conf").as_posix()
+        self.assertEqual(argv[-2:], ("-c", conf))
+
+    def test_the_server_must_exit_before_the_datadir_is_packaged(self) -> None:
+        names = self.names("full")
+        self.assertLess(names.index("shutdown"), names.index("server-exit"))
+        self.assertLess(names.index("server-exit"), names.index("package"))
+        step = next(s for s in self.plan("full") if s.name == "server-exit")
+        self.assertTrue(step.await_exit)
 
     def test_shutdown_is_a_clean_slow_shutdown(self) -> None:
         step = next(s for s in self.plan("full") if s.name == "shutdown")
@@ -430,10 +472,19 @@ class Prune(unittest.TestCase):
 
 
 class Execution(unittest.TestCase):
+    def setUp(self) -> None:
+        patch = mock.patch.object(build, "write_dbimport_conf")
+        patch.start()
+        self.addCleanup(patch.stop)
+
     class Recorder:
         def __init__(self, audit_counts: list[int] | None = None) -> None:
             self.calls: list[str] = []
             self.audit_counts = audit_counts if audit_counts is not None else [0]
+
+        def wait_for_exit(self) -> bool:
+            self.calls.append("server-exit")
+            return True
 
         def argv(self, step: build.Step) -> int:
             self.calls.append(step.name)
@@ -542,6 +593,21 @@ class Execution(unittest.TestCase):
         with self.assertRaises(build.StepFailed):
             build.execute(self.steps(), rec)
         self.assertEqual(rec.closed, 1)
+
+    def test_the_build_stops_when_the_server_does_not_exit(self) -> None:
+        class Stuck(self.Recorder):
+            def wait_for_exit(self) -> bool:
+                return False
+
+        rec = Stuck()
+        with self.assertRaises(build.StepFailed):
+            build.execute(self.steps(), rec)
+        self.assertNotIn("package", rec.calls)
+
+    def test_package_runs_only_after_the_server_exit_wait(self) -> None:
+        rec = self.Recorder()
+        build.execute(self.steps(), rec)
+        self.assertLess(rec.calls.index("server-exit"), rec.calls.index("package"))
 
     def test_close_terminates_a_running_server(self) -> None:
         class Server:
@@ -652,6 +718,71 @@ class RunnerCommands(unittest.TestCase):
                 "r.example.invalid/x/wow-eph-template:lean-20261112T051000Z",
             ],
         )
+
+
+class WaitForExit(unittest.TestCase):
+    def runner(self, server) -> build.SubprocessRunner:
+        cfg = build.Config(
+            template_class="full",
+            backup_dir=pathlib.Path("/b"),
+            workdir=pathlib.Path("/w"),
+        )
+        runner = build.SubprocessRunner(cfg, run=lambda *a, **k: Done())
+        runner._server = server
+        return runner
+
+    def test_waits_on_the_spawned_process(self) -> None:
+        waited: list[float] = []
+
+        class Server:
+            def wait(self, timeout=None) -> int:
+                waited.append(timeout)
+                return 0
+
+        self.assertTrue(self.runner(Server()).wait_for_exit())
+        self.assertEqual(len(waited), 1)
+
+    def test_a_server_that_outlives_the_timeout_is_reported(self) -> None:
+        class Server:
+            def wait(self, timeout=None) -> int:
+                raise build.subprocess.TimeoutExpired("mysqld", timeout)
+
+        self.assertFalse(self.runner(Server()).wait_for_exit())
+
+    def test_a_plain_command_step_gets_no_stdin(self) -> None:
+        seen: list[dict] = []
+        cfg = build.Config(
+            template_class="full",
+            backup_dir=pathlib.Path("/b"),
+            workdir=pathlib.Path("/w"),
+        )
+        runner = build.SubprocessRunner(
+            cfg, run=lambda argv, **kw: seen.append(kw) or Done()
+        )
+        runner.argv(build.Step("package", argv=("true",)))
+        self.assertIs(seen[0]["stdin"], build.subprocess.DEVNULL)
+
+
+class WriteDbimportConf(unittest.TestCase):
+    def test_copies_the_dist_file_beside_the_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "bin").mkdir()
+            (root / "etc").mkdir()
+            exe = root / "bin" / "dbimport"
+            exe.write_text("")
+            (root / "etc" / "dbimport.conf.dist").write_text("LoginDatabaseInfo=x\n")
+            target = root / "work" / "dbimport.conf"
+            build.write_dbimport_conf((str(exe),), target)
+            self.assertEqual(target.read_text(), "LoginDatabaseInfo=x\n")
+
+    def test_no_dist_file_is_a_failed_step(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            exe = root / "dbimport"
+            exe.write_text("")
+            with self.assertRaises(build.StepFailed):
+                build.write_dbimport_conf((str(exe),), root / "w" / "dbimport.conf")
 
 
 class FakeProcess:

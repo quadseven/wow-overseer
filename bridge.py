@@ -37032,7 +37032,8 @@ _CORPS_VENDORS_SQL = (
 )
 _CORPS_RECENT_SQL = (
     "SELECT target_name, target_arg, source, "
-    "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
+    "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age, "
+    "IF(source LIKE '%%:collect:%%', result, '') AS result FROM overseer_command "
     "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY"
 )
 # How long one corps row is followed: a trainer walk's own ceiling and margin.
@@ -37455,6 +37456,9 @@ _JOB_ROSTER_SQL = "SELECT name FROM overseer_roster WHERE enabled = 1"
 # The hub quests' chains, kinds and spawned givers (guildlevel.QUEST_FACTS_SQL),
 # for a member's open quests. Read once per process: the world does not change.
 _JOB_QUEST_FACTS: list = []
+# When a timed-out read may be asked again (time.monotonic), and the wait.
+_QUEST_FACTS_RETRY_AT = [0.0]
+_QUEST_FACTS_RETRY_SECONDS = 600
 
 
 # THE CLASS QUEST BOOK (classquest.py): every class quest of the classic range,
@@ -37625,9 +37629,27 @@ def _read_job_spawns_once(cur) -> None:
         _JOB_INNS.extend(_job_read(
             cur, "innkeepers", _JOB_INNS_SQL,
             (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP, INNKEEPER_NPC_FLAG)))
-    if not _JOB_QUEST_FACTS:
+    _read_quest_facts_once(cur)
+
+
+def _read_quest_facts_once(cur) -> None:
+    """The hub quest givers, once per process. A timeout on this read must not
+    fail the guild jobs pass, which carries the death-loop escape, the raid
+    seats and the town stops: the pass plans without the quest book (the level
+    step takes none, `guildlevel.quest_book`) and the read is asked again after
+    `_QUEST_FACTS_RETRY_SECONDS`, not on every pass."""
+    if _JOB_QUEST_FACTS or time.monotonic() < _QUEST_FACTS_RETRY_AT[0]:
+        return
+    try:
         _JOB_QUEST_FACTS.extend(_job_read(cur, "hub quest givers",
                                           guildlevel.QUEST_FACTS_SQL))
+    except pymysql.err.MySQLError as exc:
+        if not readtimeout.is_read_timeout(exc):
+            raise
+        _QUEST_FACTS_RETRY_AT[0] = time.monotonic() + _QUEST_FACTS_RETRY_SECONDS
+        log.warning("guild jobs: the 'hub quest givers' read timed out after %.1fs; "
+                    "the pass plans without the quest book and asks again in %d s",
+                    getattr(exc, "read_seconds", 0.0), _QUEST_FACTS_RETRY_SECONDS)
 
 
 # The class quest asks lately, how many said yes to each and why a party that
