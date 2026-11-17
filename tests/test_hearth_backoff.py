@@ -95,5 +95,94 @@ class TheBridgePassAsksOnlyThoseNotBackedOff(unittest.TestCase):
         self.assertIn("_insert_hearth(name, guildrun.SOURCE)", self.body)
 
 
+TOWN_ERRAND = "overseer:town-errand"
+NEXT_DEF = chr(10) + "def "
+
+
+class TheTownErrandDoesNotRetryAStoneOnCooldownEveryPass(unittest.TestCase):
+    """wow-dev 2026-11-17: 48 of the errand's hearth rows in eight hours were
+    refused for the stone's cooldown, one a minute per member, because only
+    the guild run asked the back-off before writing (#2183)."""
+
+    def helper(self, rows):
+        import ast
+        import logging
+        import types
+
+        body = BRIDGE[BRIDGE.index("def _hearth_backed_off_names") :]
+        body = body[: body.index(NEXT_DEF)]
+        calls = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql, params=()):
+                calls.append((sql, params))
+
+            def fetchall(self):
+                return rows
+
+        class Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def cursor(self):
+                return Cursor()
+
+        ns = {
+            "guildrun": guildrun,
+            "_connect": Conn,
+            "_GUILD_HEARTH_NEWEST": "SELECT %s WHERE n IN (%s)",
+            "pymysql": types.SimpleNamespace(
+                err=types.SimpleNamespace(MySQLError=Exception)
+            ),
+            "log": logging.getLogger("t"),
+        }
+        exec(compile(ast.parse(body), "bridge", "exec"), ns)  # noqa: S102
+        return ns["_hearth_backed_off_names"], calls
+
+    def test_a_member_refused_for_the_cooldown_is_held(self):
+        ask, calls = self.helper([newest("Zork", age=60), newest("Oz", age=5000)])
+        self.assertEqual(ask(["Zork", "Oz", "Uzza"], TOWN_ERRAND), {"Zork"})
+        self.assertEqual(calls[0][1], (TOWN_ERRAND, "Zork", "Oz", "Uzza"))
+
+    def test_a_refusal_for_moving_is_still_asked_again(self):
+        ask, _ = self.helper([newest("Zork", detail="character is moving", age=5)])
+        self.assertEqual(ask(["Zork"], TOWN_ERRAND), set())
+
+    def test_nobody_asked_for_reads_nothing(self):
+        ask, calls = self.helper([])
+        self.assertEqual(ask([], TOWN_ERRAND), set())
+        self.assertEqual(calls, [])
+
+    def test_an_unreadable_table_holds_nobody(self):
+        ask, _ = self.helper([])
+
+        ask.__globals__["_connect"] = lambda: (_ for _ in ()).throw(
+            ask.__globals__["pymysql"].err.MySQLError(2003)
+        )
+        self.assertEqual(ask(["Zork"], TOWN_ERRAND), set())
+
+    def test_both_errand_hearth_writers_ask_first(self):
+        for name in ("async def _town_errand_start", "async def _town_errand_regroup"):
+            self.assertIn(name, BRIDGE, name)
+        start = BRIDGE[
+            BRIDGE.index("await asyncio.to_thread(_town_errand_jobs, names)") :
+        ]
+        start = start[: start.index("began = townerrand.start")]
+        self.assertIn("_hearth_backed_off_names", start)
+        regroup = BRIDGE[BRIDGE.index("async def _town_errand_regroup") :]
+        regroup = regroup[: regroup.index("async def _town_errand_aim")]
+        self.assertIn("_hearth_backed_off_names", regroup)
+        self.assertIn("TOWN_ERRAND_SOURCE", regroup)
+
+
 if __name__ == "__main__":
     unittest.main()

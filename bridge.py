@@ -23113,6 +23113,13 @@ class Bridge(discord.Client):
                      "leave the family behind; not going", why, label, leader)
             return townerrand.State(ended=now)
         await asyncio.to_thread(_town_errand_jobs, names)
+        # A STONE THAT WAS REFUSED FOR ITS COOLDOWN IS NOT ASKED AGAIN AT ONCE:
+        # it casts nothing, so it is no hearth in flight either. Looked up: the
+        # adapter tests load this door in isolation.
+        backed = globals().get("_hearth_backed_off_names")
+        held = (await asyncio.to_thread(backed, far, TOWN_ERRAND_SOURCE)
+                if backed and far else ())
+        far = [n for n in far if n not in held]
         for name in far:
             await asyncio.to_thread(_insert_hearth, name, TOWN_ERRAND_SOURCE)
         log.info("town errand: starts%s - %s; the family goes to the mailbox "
@@ -23132,6 +23139,10 @@ class Bridge(discord.Client):
         reads = await asyncio.to_thread(_movement_reads, list(names))
         far = townerrand.to_hearth(state.hub, positions, names, reads["hearthed"],
                                    reads["binds"])
+        backed = globals().get("_hearth_backed_off_names")
+        held = (await asyncio.to_thread(backed, far, TOWN_ERRAND_SOURCE)
+                if backed and far else ())
+        far = [n for n in far if n not in held]
         if not far:
             return state
         for name in far:
@@ -32203,6 +32214,28 @@ _GUILD_CLASS_WALKS = (
     "AND created_at > NOW() - INTERVAL "
     + str(guildrun.CLASS_WALK_WINDOW_SECONDS) + " SECOND "
     "AND target_name IN (%s) GROUP BY target_name")
+
+
+def _hearth_backed_off_names(names, source: str) -> set:
+    """The members of `names` whose newest hearth row for `source` was refused
+    for the stone's cooldown (or left unchanged) inside the back-off window, so
+    the pass that wrote it must not write another yet (#2183). The guild run
+    has asked this since #2183; the town errand wrote a fresh row for the same
+    member every minute until the stone was ready (48 refusals in eight hours
+    on wow-dev 2026-11-17). Any other answer, "moving" included, is asked again
+    at once. ADVISORY: an unreadable table holds nobody back."""
+    names = list(names or ())
+    if not names:
+        return set()
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_GUILD_HEARTH_NEWEST % ("%s", ",".join(["%s"] * len(names))),
+                        (source, *names))
+            return guildrun.hearth_backed_off(list(cur.fetchall()))
+    except pymysql.err.MySQLError as exc:
+        log.warning("hearth back-off: the newest hearth rows could not be read "
+                    "(%s); nobody is held back", exc.args[:1])
+        return set()
 
 
 def _hearth_stranded_guild_members() -> int:
@@ -45739,16 +45772,24 @@ _KEYWORD_SPAWN_SQL = (
     "cr.position_z AS z FROM overseer_snapshot s "
     "JOIN acore_world.creature cr ON cr.map = s.map_id "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
     "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
     "AND (ct.npcflag & %s) = %s AND " + towntrip.REAL_SPAWN_SQL + " "
+    # A HOLDER THAT ATTACKS THE WALKER'S SIDE IS NOT ITS COUNTER: the walk is
+    # judged to the nearest one the walker may use, as the module walks it, not
+    # to the other side's capital (a Horde family in the Badlands was judged
+    # against the Ironforge bankers). An unknown faction template still counts,
+    # as before; a walker whose side is unread (0) is filtered on players only.
+    "AND (ft.EnemyGroup IS NULL OR ((ft.EnemyGroup & %s) = 0 "
+    "AND (ft.EnemyGroup & %s) = 0)) "
     "ORDER BY POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2) "
     "LIMIT 1"
 )
 
 
 def _nearest_keyword_spawn(name: str, aim: str):
-    """{map_id, x, y} of the nearest holder of the role keyword `aim` names on
-    `name`'s own map, or None. ADVISORY, like the discs it is judged against:
+    """{map_id, x, y, z} of the nearest holder of the role keyword `aim` names on
+    `name`'s own map that does not attack `name`'s side, or None. ADVISORY, like the discs it is judged against:
     an unreadable table, an unplaced character or an aim that is not a role
     keyword all answer None, and None refuses nothing (#2457)."""
     mask = deathcells.keyword_mask(aim)
@@ -45756,7 +45797,11 @@ def _nearest_keyword_spawn(name: str, aim: str):
         return None
     try:
         with _connect() as conn, conn.cursor() as cur:
-            cur.execute(_KEYWORD_SPAWN_SQL, (name, mask, mask))
+            cur.execute(_DETOUR_RACE_SQL, (name,))
+            race_row = cur.fetchone()
+            side = situation.side_mask([race_row.get("race")] if race_row else [])
+            cur.execute(_KEYWORD_SPAWN_SQL, (
+                name, mask, mask, situation.PLAYER_MASK, side))
             row = cur.fetchone()
     except pymysql.err.MySQLError as exc:
         log.warning("death discs: the %r holder could not be read (%s); the "

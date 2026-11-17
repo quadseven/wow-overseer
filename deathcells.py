@@ -278,6 +278,34 @@ def _over_the_liquid(disc, start, goal) -> bool:
     )
 
 
+def _goal_over_the_liquid(disc, start, goal) -> bool:
+    """Whether the walk ENDS at a counter standing well over a lava or slime
+    pool, from a start that is not at the pool's own level.
+
+    The Ironforge bank stands at z 504 over a pool whose deaths sit at z 373,
+    so a walker on lower ground (Stormwind at z 101, the Badlands at z 256)
+    failed `_over_the_liquid`, which asks that BOTH ends be high, and the bank
+    was refused for ever. Here the goal must lie inside the disc (the only
+    stretch of the line the disc can touch is then the last approach to a
+    counter 10 yards or more over the surface), and the walker must not stand
+    within LIQUID_CLEARANCE_YARDS of the surface either way: a walker at the
+    liquid's own level is the one the disc is for. A line that crosses a disc
+    and ends past it, a goal or start with no height, a pool with no surface
+    and a fall disc are all judged as before."""
+    if disc.surface_z is None:
+        return False
+    z0, z1 = _num(start, "z"), _num(goal, "z")
+    if z0 is None or z1 is None:
+        return False
+    g = _point(goal)
+    if g is None or math.hypot(disc.x - g[1], disc.y - g[2]) > disc.radius:
+        return False
+    return (
+        z1 >= disc.surface_z + LIQUID_CLEARANCE_YARDS
+        and abs(z0 - disc.surface_z) >= LIQUID_CLEARANCE_YARDS
+    )
+
+
 def _to_segment(disc, a, b) -> float:
     dx, dy = b[1] - a[1], b[2] - a[2]
     span = dx * dx + dy * dy
@@ -309,6 +337,7 @@ def crossings(all_discs, start, goal) -> list:
         if (
             _on_the_floor(disc, start)
             or _over_the_liquid(disc, start, goal)
+            or _goal_over_the_liquid(disc, start, goal)
             or _above_the_void(disc, start, goal)
         ):
             continue
