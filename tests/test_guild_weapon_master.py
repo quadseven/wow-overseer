@@ -270,9 +270,13 @@ class TheFarMaster(unittest.TestCase):
             {}, weaponskill.choose_far_master([FAR_MASTER], {201}, "alliance", 1)
         )
 
-    def test_off_the_classic_continents_nothing_is_far(self):
+    def test_outland_can_choose_a_compatible_classic_master(self):
+        got = weaponskill.choose_far_master([FAR_MASTER], {201}, "horde", 530)
+        self.assertEqual(8765, got["spawn"])
+
+    def test_northrend_has_no_far_master_candidate(self):
         self.assertEqual(
-            {}, weaponskill.choose_far_master([FAR_MASTER], {201}, "horde", 530)
+            {}, weaponskill.choose_far_master([FAR_MASTER], {201}, "horde", 571)
         )
         far_off = dict(FAR_MASTER, map_id=530)
         self.assertEqual(
@@ -290,7 +294,8 @@ class TheFarMaster(unittest.TestCase):
     def test_the_far_maps_are_the_other_continent(self):
         self.assertEqual([1], weaponskill.far_maps(0))
         self.assertEqual([0], weaponskill.far_maps(1))
-        self.assertEqual([], weaponskill.far_maps(530))
+        self.assertEqual([0, 1], weaponskill.far_maps(530))
+        self.assertEqual([], weaponskill.far_maps(571))
         self.assertEqual([], weaponskill.far_maps(None))
 
 
@@ -313,6 +318,14 @@ class TheCrossing(unittest.TestCase):
         )
         self.assertIn("Far Master", step.said)
         self.assertIn("Eastern Kingdoms", step.said)
+
+    def test_an_outland_member_crosses_to_a_classic_weapon_master(self):
+        chosen = weaponskill.choose_far_master([FAR_MASTER], {201}, "horde", 530)
+        result = guildjobs.plan(
+            [member(map_id=530)], weapons={"Eggo": offer(master=chosen)}
+        )
+        (step,) = weapon_steps(result)
+        self.assertEqual("cross-to-map map:0", step.rows[0].command)
 
     def test_the_weapon_crossing_shares_the_crossing_clock(self):
         self.assertIn(guildjobs.WEAPON_CROSS_ACTION, guildjobs.CROSS_ACTIONS)

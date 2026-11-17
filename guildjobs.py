@@ -3439,12 +3439,12 @@ def weapon_cross_back(m, to_map, recent) -> str:
 
 
 def weapon_cross_step(m, offer, recent):
-    """(step or None, a note) for a weapon master on the other classic continent
-    (weaponskill.choose_far_master, #793): one `cross-to-map map:<id>` row, no
-    walk, as the level step crosses (level_cross_step). Once the member stands
-    on that map, the next pass finds the master there and walks to it. Held
-    with no row while its last crossing is young (crossing_cooling); a crossing
-    the module refused for good (class_walls) is named and not asked."""
+    """(step or None, a note) for a far weapon master (#793): one
+    `cross-to-map map:<id>` row, no walk, as the level step crosses
+    (level_cross_step). Once the member stands on that map, the next pass finds
+    the master there and walks to it. Held with no row while its last crossing
+    is young (crossing_cooling); a crossing the module refused for good
+    (class_walls) is named and not asked."""
     need, to_map = offer.need, int(offer.map_id)
     where = classquest.CONTINENTS.get(to_map, "map %d" % to_map)
     wall = class_walls(m.name, recent).get(to_map)
