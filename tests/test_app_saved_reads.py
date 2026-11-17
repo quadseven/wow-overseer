@@ -109,6 +109,30 @@ def kept(path, data, at=1000, mount="/dev", build=BUILD):
 
 @unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
 class ASavedCopy(unittest.TestCase):
+    def test_a_reload_paints_the_saved_copy_at_once_and_says_so(self):
+        got = run(
+            "const p = M.peek('/api/realm');"
+            "console.log(JSON.stringify({data: p.data, saved: p.saved, loading: p.loading, "
+            "at: p.at, state: M.health(['/api/realm']).state}));",
+            store=kept("/api/realm", {"realm": "dev"}),
+        )
+        self.assertEqual(got["data"], {"realm": "dev"})
+        self.assertTrue(got["saved"])
+        self.assertFalse(got["loading"])
+        self.assertEqual(got["at"], 1000)
+        self.assertEqual(got["state"], "saved")
+
+    def test_a_world_that_does_not_answer_is_stale_not_saved(self):
+        got = run(
+            "await M.load('/api/realm');"
+            "const p = M.peek('/api/realm');"
+            "console.log(JSON.stringify({data: p.data, state: M.health(['/api/realm']).state}));",
+            store=kept("/api/realm", {"realm": "dev"}),
+            answers={"/dev/api/realm": "throw"},
+        )
+        self.assertEqual(got["data"], {"realm": "dev"})
+        self.assertEqual(got["state"], "stale")
+
     def test_a_new_page_load_restores_data_from_persistent_storage(self):
         got = run(
             "const text = JSON.stringify({realm: 'dev'});"
