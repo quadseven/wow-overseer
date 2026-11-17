@@ -19889,12 +19889,15 @@ class Bridge(discord.Client):
             _log_capped("healer respec", notes)
             return
         now = time.monotonic()
-        recent = healerrespec.recent_walkers(await asyncio.to_thread(_respec_walk_rows))
+        respec_rows = await asyncio.to_thread(_respec_walk_rows)
+        recent = healerrespec.recent_walkers(respec_rows)
+        stranded = healerrespec.stranded(respec_rows)
         busy = self._guild_walkers_busy(now)
         row_walks = now >= self._mail_walk_unsupported_until
         walkers = await asyncio.to_thread(
             _route_walkers, [c.name for c in cands], names, row_walks)
-        walks, plan_notes = healerrespec.plan(cands, walkers, recent, busy)
+        walks, plan_notes = healerrespec.plan(
+            cands, walkers, recent, busy, stranded=stranded)
         _log_capped("healer respec", notes + plan_notes)
         started = 0
         for walk in walks:
@@ -36855,14 +36858,18 @@ def _fetch_respec_rows(guild: str) -> list:
 
 
 def _respec_walk_rows() -> list:
-    """The talent reset walks of the last day, for healerrespec."""
+    """The talent reset walks of the last day, for healerrespec, and the older
+    refusals for having no trainer on the map (who is stranded, #2864)."""
     with _connect() as conn, conn.cursor() as cur:
         return _corps_read(
             cur, "healer respec walks",
-            "SELECT target_name, source, "
+            "SELECT target_name, source, status, detail, result, "
             "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
-            "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY",
-            (healerrespec.SOURCE + ":%",))
+            "WHERE source LIKE %s AND (created_at > NOW() - INTERVAL 1 DAY "
+            "OR (status = 'error' AND created_at > NOW() - INTERVAL %s DAY "
+            "AND result LIKE %s))",
+            (healerrespec.SOURCE + ":%", classtrain.STRANDED_READ_DAYS,
+             "%" + classtrain.NO_TRAINER_REASON + "%"))
 
 
 def _guild_train_rows() -> list:
