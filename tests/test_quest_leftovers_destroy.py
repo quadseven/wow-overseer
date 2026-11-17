@@ -137,6 +137,15 @@ class DarkmoonCardsFollowTheDeckThreshold(unittest.TestCase):
         d = one([target, *others], [member(), member("Bo")], target, LOG_READ)
         self.assertIn(d.route, (BANK_PERSONAL, KEEP_CARRY))
 
+    def test_each_non_ace_card_without_a_family_set_is_listed_not_destroyed(self):
+        for suit in ("Beasts", "Elementals", "Portals", "Warlords"):
+            for rank in ("Two", "Three", "Four", "Five", "Six", "Seven", "Eight"):
+                with self.subTest(card=f"{rank} of {suit}"):
+                    card = self.card(f"{rank} of {suit}", 850)
+                    d = one([card], [member()], card, LOG_READ)
+                    self.assertEqual(d.route, AUCTION)
+                    self.assertNotEqual(d.route, DESTROY)
+
     def test_cards_from_a_different_deck_do_not_count(self):
         target = self.card("Two of Beasts", 809)
         others = [

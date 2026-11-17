@@ -1,6 +1,6 @@
 # Item plan: what each member keeps, banks, gives, sells or breaks down
 
-Status: design, an unwired prototype (`itemplan.py`) and a measured simulation. Nothing here changes the bridge, the realm or any pass. Last checked 2026-11-08. Data-read coverage: #1973.
+Status: design, an unwired prototype (`itemplan.py`) and a measured simulation. Nothing here changes the bridge, the realm or any pass. Last checked 2026-11-17. Data-read coverage: #1973.
 
 ## The question
 
