@@ -938,7 +938,11 @@ def _weapon_can(j: Judgment, route: str) -> bool:
 
 def _disposition_can(j: Judgment) -> bool:
     """`keep` can withhold an equip or a hand-off; `equip` can stand in for
-    keeping it or handing it off. Nothing else has an act path."""
+    keeping it or handing it off. Nothing else has an act path. An answer that
+    agrees with the heuristic needs none: the heuristic's own route stands, and
+    Policy.acted records the agreement (#2134)."""
+    if j.jev == j.heuristic:
+        return True
     if j.jev == KEEP:
         return j.heuristic == EQUIP or _gives(j.heuristic)
     if j.jev == EQUIP:

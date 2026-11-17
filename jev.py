@@ -244,11 +244,15 @@ class Policy:
 
     def acted(self, heuristic: str, answer: str, confidence, can_act=True) -> str:
         """JEV, BOTH or HEURISTIC for one comparison. `can_act` is False when
-        no act path exists for Jev's answer, so the heuristic stands."""
+        no act path exists for Jev's answer, so the heuristic stands, an
+        agreement with it included (#2134): an answer the caller fenced off does
+        not count as acted on by agreeing."""
         if self.mode != ACT or not answer or confidence is None:
             return HEURISTIC
         confident = float(confidence) >= self.threshold
         if answer == heuristic:
+            if not can_act:
+                return HEURISTIC
             return BOTH if (confident or self.on_agreement) else HEURISTIC
         return JEV if (confident and can_act) else HEURISTIC
 
