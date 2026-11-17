@@ -18,7 +18,7 @@ import re
 import time
 
 from . import anchors as anchors_mod
-from . import confmerge, dbschema, lint, podpaths, runids
+from . import confmerge, dbschema, imagecommit, lint, podpaths, runids
 from .kube import KubeError
 from .miniyaml import YamlError, loads
 
@@ -269,7 +269,24 @@ def _load_decree(decree_path, args):
     return raw, decree
 
 
-def submit(cfg, kube, gh, decree_path, args=None, clock=time.time, out=print):
+def default_image_env(cfg, kube):
+    """image_env(ref, name): one variable of an image's baked Env, or None when it cannot be read."""
+
+    def image_env(ref, name):
+        try:
+            host = imagecommit.parse_ref(ref)[0]
+            secret = kube.get("secrets", BRIDGE_PULL_NAME, missing_ok=True)
+            env = imagecommit.image_env(ref, imagecommit.credentials(secret, host))
+        except (imagecommit.RegistryError, KubeError, KeyError, TypeError, ValueError):
+            return None
+        return env.get(name)
+
+    return image_env
+
+
+def submit(
+    cfg, kube, gh, decree_path, args=None, clock=time.time, out=print, image_env=None,
+):  # fmt: skip
     """Create the suspended Jobs. Returns the submission record (also saved)."""
     args = dict(args or {})
     arm_arg = args.get("arm", "both")
@@ -295,7 +312,12 @@ def submit(cfg, kube, gh, decree_path, args=None, clock=time.time, out=print):
     live_bridge = read_bridge_image(cfg, kube) if bridge_on else None
     files, deltas = _config_for(world, base_files, bridge_on)
     arms = ["control", "treatment"] if arm_arg == "both" else [arm_arg]
-    presence = _presence(cfg, gh, decree, arms, args, pins)
+    arm_bridge = {
+        arm: _images_for(arm, live_images, args, live_bridge).get("bridge")
+        for arm in arms
+    }
+    image_env = image_env or default_image_env(cfg, kube)
+    presence = _presence(cfg, gh, decree, arms, args, pins, arm_bridge, image_env)
 
     batch = hashlib.sha256(f"{sha}:{clock()}".encode()).hexdigest()[:6]
     duration = parse_duration(decree["duration"])
@@ -377,14 +399,24 @@ def _config_for(world, base_files, bridge_on=False):
     return files, deltas
 
 
-def _presence(cfg, gh, decree, arms, args, pins):
-    pin_var = cfg.fix_pin_env.get(decree["fix"]["repo"], "")
+def _presence(cfg, gh, decree, arms, args, pins, arm_bridge=None, image_env=None):
+    repo = decree["fix"]["repo"]
+    pin_var = cfg.fix_pin_env.get(repo, "")
+    from_image = repo.endswith("/wow-overseer")  # the bridge repo: the arm's image says
     presence = {}
     for arm in arms:
+        image = (arm_bridge or {}).get(arm)
+        read = None
+        if from_image and image and image_env and pin_var:
+            read = imagecommit.valid_sha(image_env(image, pin_var))
         if arm == "control":
-            pin = args.get("control_pin")
+            pin = args.get("control_pin") or read
         else:
-            pin = args.get("treatment_pin") or pins.get(pin_var)
+            pin = (
+                args.get("treatment_pin")
+                or read
+                or (None if from_image else pins.get(pin_var))
+            )
         state = fix_presence(gh, decree["fix"], pin)
         presence[arm] = {"pin": pin or "", "state": state}
         want = "present" if arm == "treatment" else "absent"

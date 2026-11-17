@@ -143,6 +143,7 @@ from dataclasses import fields as dataclass_fields
 
 import classhunt
 import classic
+import bag_pressure
 import classquest
 import guildcorps
 import guildjobs
@@ -150,6 +151,7 @@ import guildroute
 import levelroute
 import questlog
 import vendorsale
+import weaponskill
 
 # The step's action word, in the command log's source (guildjobs.source_for).
 ACTION = "quester"
@@ -159,6 +161,14 @@ WALK_ACTION = ACTION + "-walk"
 # and not one `attempts` reads as a quest's take, hand-in or walk.
 SELL_ACTION = ACTION + "-sell"
 SELL_WALK_ACTION = SELL_ACTION + "-walk"
+# The destroy of a quester with full bags (`destroy_step`, #1813): quest
+# leftovers have no price, so no sale reaches them. Under SELL_ACTION's prefix
+# so the pass's recent read holds its rows.
+QUEST_CLASS = 12
+DESTROY_ACTION = SELL_ACTION + "-destroy"
+DESTROY_WHY = (
+    "no quest it is on or could still take names it, no vendor price, common quality"
+)
 # Free general bag slots at or under which a quester sells: one for the item a
 # quest hands over and one for the loot of the next kill.
 SELL_FLOOR = 1
@@ -778,11 +788,34 @@ def hostile_givers(giver_rows) -> dict:
     return {side: frozenset(guids) for side, guids in out.items()}
 
 
+# THE OTHER SIDE'S HOME GROUND (#1912). Teldrassil, with Darnassus on it, is
+# the Alliance's island (weaponskill.ISLANDS): its guards killed a Horde
+# quester 1045 times in six days, because a quest it held names a creature that
+# also spawns there and the hunt took the nearest spawn. A Horde quester is
+# never given a spawn on the island, as a giver or as an objective. The
+# Alliance has no island of the Horde's in the world data, so nothing is
+# skipped for it yet.
+OTHER_SIDES_ISLANDS = {levelroute.HORDE: frozenset({"Teldrassil"})}
+
+
+def on_other_sides_ground(member, spot) -> bool:
+    """Whether `spot` lies on ground whose guards are hostile to the quester's
+    side (OTHER_SIDES_ISLANDS)."""
+    islands = OTHER_SIDES_ISLANDS.get(side_of(member.race), frozenset())
+    return bool(islands) and (
+        weaponskill.ground_of(spot.map_id, spot.x, spot.y) in islands
+    )
+
+
 def friendly_starters(cat: Catalogue, member, quest) -> tuple:
     """The creature spawns that give the quest which the quester's side can
-    take it from (`hostile_givers`)."""
+    take it from (`hostile_givers`), and not on the other side's home ground."""
     hostile = cat.hostile.get(side_of(member.race), frozenset())
-    return tuple(s for s in quest.starters if s.guid not in hostile)
+    return tuple(
+        s
+        for s in quest.starters
+        if s.guid not in hostile and not on_other_sides_ground(member, s)
+    )
 
 
 def _rep(row, end):
@@ -1470,6 +1503,7 @@ def _nearest_chest(member, qid, quest, object_left=frozenset()):
         if spot.guid not in object_left
         and member.placed
         and int(spot.map_id) == int(member.map_id)
+        and not on_other_sides_ground(member, spot)
     ]
     if not here:
         return None
@@ -2093,7 +2127,11 @@ def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
     }
     return classquest.within_level(
         member,
-        tuple(s for s in classquest.solo_fields(quest) if s.entry in targets),
+        tuple(
+            s
+            for s in classquest.solo_fields(quest)
+            if s.entry in targets and not on_other_sides_ground(member, s)
+        ),
     )
 
 
@@ -2258,6 +2296,108 @@ def sell_step(member, carried, worn, kept, cat: Catalogue, recent, cap, tried=()
             guildjobs.source_for(SELL_WALK_ACTION, member.name),
         ),
         sales=guildjobs.sale_notes(stacks),
+    )
+
+
+def _destroying_lately(name, recent) -> bool:
+    """A destroy row of this quester's younger than SELL_COOLDOWN_MINUTES."""
+    return any(
+        r.name == name
+        and r.action == DESTROY_ACTION
+        and int(r.age_minutes) < SELL_COOLDOWN_MINUTES
+        for r in recent or ()
+    )
+
+
+def _undone_quest_entries(cat: Catalogue, member, tried) -> frozenset:
+    """Every item entry a catalogue quest the member has not handed in names:
+    the quests in its log (the quest-log hold, read through `settled` so a take
+    just made counts) and the ones it could still take."""
+    seen = settled(member, tried)
+    out = set()
+    for q in cat.book.quests.values():
+        if int(q.id) in seen.quests_done:
+            continue
+        out.update(i for i, _n in q.items)
+        out.update(q.provided)
+        out.update(q.sources)
+    return frozenset(out)
+
+
+def leftover_stacks(member, carried, kept, cat: Catalogue, tried=()) -> list:
+    """The stacks a quester with full bags destroys: a quest-class stack the
+    quest test read as needed by no quest it is on or could take, with no
+    vendor price and common quality (guildjobs, #2607's rule). Never an epic,
+    a Darkmoon card, a stack reserved in overseer_keep, or an item a catalogue
+    quest it has not handed in names."""
+    # Tools and soul shards are never let go; a quest it has not handed in
+    # holds every item it names.
+    guard = (
+        _undone_quest_entries(cat, member, tried)
+        | guildjobs._protected_entries(None)
+        | frozenset(cat.book.watch_items())
+    )
+    out = [
+        c
+        for c in carried or ()
+        if c.item_class == QUEST_CLASS
+        and c.quest_needed is False
+        and int(c.sell_price) <= 0
+        and int(c.quality) <= 1
+        and int(c.entry) not in guard
+        and not bag_pressure.is_darkmoon(c.name)
+        and not guildjobs._kept(member.name, c, kept)
+    ]
+    return sorted(out, key=lambda c: int(c.guid))[: guildjobs.MAX_SALES]
+
+
+def destroy_step(member, carried, kept, cat: Catalogue, recent, tried=(), guard=None):
+    """The guildcorps.Step that destroys a full-bag quester's quest leftovers,
+    or None: its bags have room or are unread, it is offline, dead or unplaced,
+    its last destroy is younger than SELL_COOLDOWN_MINUTES, the reservations
+    are unread, or it carries no leftover. No walk and no vendor: the world's
+    destroy verb re-checks the quest log before it destroys anything.
+
+    `guard(stack)` is the shared loot-policy guard (the bridge's
+    `_loot_policy_blocks` through `lootpolicy.allowed`, kind `destroy`): a stack
+    it refuses is never in the step, so a destroy cannot bypass the quest-log
+    hold, the epic rule or the keep list. Unset, nothing extra is refused here;
+    the row writer asks the same guard again."""
+    if not needs_sale(member, tried) or kept is None:
+        return None
+    if not member.online or not member.alive or not member.placed:
+        return None
+    if _destroying_lately(member.name, recent):
+        return None
+    stacks = [
+        s
+        for s in leftover_stacks(member, carried, kept, cat, tried)
+        if guard is None or guard(s)
+    ]
+    if not stacks:
+        return None
+    source = guildjobs.source_for(DESTROY_ACTION, member.name)
+    return guildcorps.Step(
+        member.name,
+        DESTROY_ACTION,
+        len(stacks),
+        "%s has %d free bag slot(s) and destroys %d quest leftover(s) (%s): %s"
+        % (
+            member.name,
+            int(member.free_slots or 0),
+            len(stacks),
+            DESTROY_WHY,
+            ", ".join("%s x%d" % (c.name or c.entry, int(c.count)) for c in stacks),
+        ),
+        rows=tuple(
+            guildcorps.Row(
+                "sell",
+                "destroy guid:%d count:%d" % (int(c.guid), int(c.count)),
+                "",
+                source,
+            )
+            for c in stacks
+        ),
     )
 
 

@@ -182,27 +182,81 @@ class GrugsSeal(unittest.TestCase):
     def test_a_trinket_is_worn_once(self):
         # mod-overseer: the drive refuses a second copy of a worn trinket
         # (wow-overseer#2358); a pair of the same ring stays legitimate.
-        heart = ring("Heart of Noxxion", 17744, 3, slot=12, level=51, req=45,
-                     stats=((STA, 10),), item_flags=0, inventory_type=12)
+        heart = ring(
+            "Heart of Noxxion",
+            17744,
+            3,
+            slot=12,
+            level=51,
+            req=45,
+            stats=((STA, 10),),
+            item_flags=0,
+            inventory_type=12,
+        )
         copy = dict(heart, equipment_slot=None, item_guid=4)
         verdict, why = equipscore.drive_verdict(copy, grug(), [heart], BOOK)
         self.assertEqual(verdict, equipscore.DRIVE_REFUSED, why)
         self.assertIn("trinket", why)
 
     def test_a_different_trinket_is_still_worn(self):
-        heart = ring("Heart of Noxxion", 17744, 3, slot=12, level=51, req=45,
-                     stats=((STA, 10),), item_flags=0, inventory_type=12)
-        other = ring("Other Charm", 17745, 5, level=51, req=45,
-                     stats=((STA, 10),), item_flags=0, inventory_type=12)
+        heart = ring(
+            "Heart of Noxxion",
+            17744,
+            3,
+            slot=12,
+            level=51,
+            req=45,
+            stats=((STA, 10),),
+            item_flags=0,
+            inventory_type=12,
+        )
+        other = ring(
+            "Other Charm",
+            17745,
+            5,
+            level=51,
+            req=45,
+            stats=((STA, 10),),
+            item_flags=0,
+            inventory_type=12,
+        )
         verdict, why = equipscore.drive_verdict(other, grug(), [heart], BOOK)
         self.assertEqual(verdict, equipscore.DRIVE_WEAR, why)
 
     def test_a_pair_of_the_same_ring_is_still_allowed(self):
-        band = ring("Plain Band", 17746, 6, slot=10, level=51, req=45,
-                    stats=((STA, 10),), item_flags=0)
+        band = ring(
+            "Plain Band",
+            17746,
+            6,
+            slot=10,
+            level=51,
+            req=45,
+            stats=((STA, 10),),
+            item_flags=0,
+        )
         copy = dict(band, equipment_slot=None, item_guid=7)
         verdict, why = equipscore.drive_verdict(copy, grug(), [band], BOOK)
         self.assertEqual(verdict, equipscore.DRIVE_WEAR, why)
+
+    def test_a_clearly_better_piece_beats_a_worn_floor(self):
+        # The module credits a worn floor with half again for what is unread
+        # (mod-overseer#221, abe76676), so a piece that clears that is worn.
+        lone = dict(NAGLERING, equipment_slot=10)
+        both = [lone, dict(NAGLERING, equipment_slot=11, entry=1, item_flags=0)]
+        big = ring(
+            "Big Band", 99001, 1, level=60, req=55, stats=((STA, 100),), item_flags=0
+        )
+        verdict, why = equipscore.drive_verdict(big, grug(), both, BOOK)
+        self.assertEqual(verdict, equipscore.DRIVE_WEAR, why)
+
+    def test_a_piece_under_the_credited_floor_stays_undecided(self):
+        lone = dict(NAGLERING, equipment_slot=10)
+        both = [lone, dict(NAGLERING, equipment_slot=11, entry=1, item_flags=0)]
+        small = ring(
+            "Small Band", 99002, 2, level=60, req=55, stats=((STA, 40),), item_flags=0
+        )
+        verdict, why = equipscore.drive_verdict(small, grug(), both, BOOK)
+        self.assertEqual(verdict, equipscore.DRIVE_UNDECIDED, why)
 
     def test_drive_verdicts_reads_the_pass_rows(self):
         rows = [ARCHAEDIC, NAGLERING, SEAL, SECOND_NAGLERING]

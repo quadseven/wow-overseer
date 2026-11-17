@@ -93,6 +93,14 @@ DROP_SQL = (
     "JOIN acore_world.creature_template c ON c.lootid = l.Entry "
     "WHERE l.Reference <> 0 AND r.Item IN ({ids})"
 )
+# Chests and other lootable gameobjects that hold an item: a required item with one
+# of these is not "without a source" (#2735, #2736).
+OBJECT_LOOT_SQL = (
+    "SELECT DISTINCT l.Item AS item, g.entry AS entry "
+    "FROM acore_world.gameobject_loot_template l "
+    "JOIN acore_world.gameobject_template g ON g.type = 3 AND g.Data1 = l.Entry "
+    "WHERE l.Item IN ({ids})"
+)
 REWARD_SQL = (
     "SELECT ID AS quest, RewardItem1 AS item FROM acore_world.quest_template "
     "WHERE RewardItem1 IN ({ids}) UNION ALL "
@@ -104,13 +112,16 @@ REWARD_SQL = (
 VENDOR_SQL = (
     "SELECT DISTINCT item, entry FROM acore_world.npc_vendor WHERE item IN ({ids})"
 )
+# Counted by map, never by zoneId: creature.zoneId is unset on almost every
+# row of the dev realm, so a zone filter reads 0 for creatures that stand on
+# the right map and files a false "broken quest" ticket.
 SPAWN_COUNTS_SQL = (
-    "SELECT id AS entry, zoneId AS zone, COUNT(*) AS n FROM acore_world.creature "
-    "WHERE id IN ({ids}) GROUP BY id, zoneId"
+    "SELECT id AS entry, map, COUNT(*) AS n FROM acore_world.creature "
+    "WHERE id IN ({ids}) GROUP BY id, map"
 )
 OBJECT_COUNTS_SQL = (
-    "SELECT id AS entry, zoneId AS zone, COUNT(*) AS n FROM acore_world.gameobject "
-    "WHERE id IN ({ids}) GROUP BY id, zoneId"
+    "SELECT id AS entry, map, COUNT(*) AS n FROM acore_world.gameobject "
+    "WHERE id IN ({ids}) GROUP BY id, map"
 )
 
 # Every map a quest's starters and enders stand on. creature.id, not id1, as
@@ -145,6 +156,7 @@ class Quest:
     follows: int  # PrevQuestID; 0 is none
     items: tuple = ()
     objectives: tuple = ()
+    maps: frozenset = frozenset()  # maps its starters and enders stand on
 
     def view(self) -> dict:
         return {
@@ -257,6 +269,10 @@ def build(quest_rows, giver_rows) -> tuple:
                 races=_int(row.get("races")),
                 classes=_int(row.get("classes")),
                 follows=_int(row.get("follows")),
+                maps=frozenset(
+                    by_quest.get(quest_id, {}).get("start", set())
+                    | by_quest.get(quest_id, {}).get("end", set())
+                ),
             )
         )
     return tuple(sorted(out, key=lambda q: q.id))
@@ -331,6 +347,7 @@ def load(read) -> tuple:
         drops = rows_for(DROP_SQL, item_ids)
         rewards = rows_for(REWARD_SQL, item_ids)
         vendors = rows_for(VENDOR_SQL, item_ids)
+        object_loot = rows_for(OBJECT_LOOT_SQL, item_ids)
         spawns = rows_for(SPAWN_COUNTS_SQL, objective_ids)
         object_spawns = rows_for(OBJECT_COUNTS_SQL, objective_ids)
         by_id = {int(r["quest"]): r for r in quest_rows}
@@ -348,6 +365,7 @@ def load(read) -> tuple:
         for row in rewards:
             reward_by_item.setdefault(int(row["item"]), set()).add(int(row["quest"]))
         vendor_by_item = evidence(vendors, "item")
+        object_by_item = evidence(object_loot, "item")
         spawn_by_entry = {}
         for kind, rows in (("creature", spawns), ("object", object_spawns)):
             for row in rows:
@@ -368,6 +386,7 @@ def load(read) -> tuple:
                             "droppers": sorted(drop_by_item.get(item, ())),
                             "rewards": sorted(reward_by_item.get(item, ())),
                             "vendors": sorted(vendor_by_item.get(item, ())),
+                            "objects": sorted(object_by_item.get(item, ())),
                         }
                     )
             for i in range(1, 5):
@@ -384,10 +403,10 @@ def load(read) -> tuple:
                             "name": object_names.get(entry, "")
                             if kind == "object"
                             else creature_names.get(entry, ""),
-                            "zone_count": sum(
+                            "map_count": sum(
                                 int(r["n"])
                                 for r in counts
-                                if int(r["zone"]) == quest.zone
+                                if int(r["map"]) in quest.maps
                             ),
                             "total_count": sum(int(r["n"]) for r in counts),
                         }

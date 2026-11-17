@@ -288,8 +288,35 @@ def fits_door(family_levels, guest_level: int, door) -> bool:
     return sum(party) / len(party) >= int(door.floor) + guildrun.LEVEL_MARGIN
 
 
+# The maps a character walks about on. A guest on one of these, and the family
+# head on another, is an ocean apart (#1143).
+CONTINENT_MAPS = (0, 1, 530, 571)
+
+
+def head_map(members, *names) -> int:
+    """The map the first of `names` stands on among `members` (guildrun.Member),
+    -1 when none is read."""
+    for name in names:
+        for m in members or ():
+            if m.name == name:
+                return int(m.map_id)
+    return -1
+
+
+def across_the_water(guest_map, home_map) -> bool:
+    """Whether the guest stands on one continent and the family on another."""
+    guest, home = int(guest_map), int(home_map)
+    return guest != home and guest in CONTINENT_MAPS and home in CONTINENT_MAPS
+
+
 def unfit(
-    member: guildrun.Member, seat: str, family_levels, door, faction: str, guild: str
+    member: guildrun.Member,
+    seat: str,
+    family_levels,
+    door,
+    faction: str,
+    guild: str,
+    home_map: int = -1,
 ) -> str:
     """Why this member cannot take the seat for this family, or "".
 
@@ -300,6 +327,12 @@ def unfit(
         return "not in %s" % guild
     if faction and guildrun.faction_of([member]) != faction:
         return "the other side"
+    # A GUEST AN OCEAN AWAY CANNOT JOIN A FAMILY (#1143). Two stand-ins read
+    # on Kalimdor for a family on the Eastern Kingdoms were split from their
+    # leader for 79 to 207 minutes: the walk to the berth was 13,000 yards of
+    # hostile ground and both died on it.
+    if across_the_water(member.map_id, home_map):
+        return "on another continent than the family"
     if not guildsocial.can_take(member, seat):
         return "does not play the %s seat" % seat
     if door is None:
@@ -321,6 +354,7 @@ def guests(
     faction: str,
     guild: str,
     free,
+    home_map: int = -1,
 ) -> list:
     """The members who may stand in, best fit first.
 
@@ -331,7 +365,8 @@ def guests(
     fit = [
         m
         for m in candidates
-        if not free(m) and not unfit(m, seat, family_levels, door, faction, guild)
+        if not free(m)
+        and not unfit(m, seat, family_levels, door, faction, guild, home_map)
     ]
     fit.sort(
         key=lambda m: (m.fit(seat) != "spec", abs(m.level - int(out_level)), m.name)
@@ -451,6 +486,9 @@ class Facts:
     # for a family with a locked door and no craft order or stranded member).
     family_members: tuple = ()
     lock_pass: bool = False
+    # The map the family head stands on, -1 when unread: a guest on another
+    # continent is not seated (`across_the_water`, #1143).
+    leader_map: int = -1
 
 
 def _minutes(seconds: float) -> str:
@@ -670,6 +708,7 @@ def _found(facts: Facts, seat: str, free) -> list:
         facts.faction,
         facts.guild,
         free,
+        facts.leader_map,
     )
     lock = lock_of(facts.door)
     if lock is not None and lock_unmet(facts, facts.ordered):
@@ -816,6 +855,7 @@ def _keep_or_clear(facts: Facts, current: Seat, seat: str) -> Step:
             facts.door,
             facts.faction,
             facts.guild,
+            facts.leader_map,
         )
         if why:
             return _guest_lost(
@@ -1113,6 +1153,7 @@ def _pickers(facts: Facts, seat: str, out_level: int, levels, lock: Lock) -> lis
         facts.faction,
         facts.guild,
         _free_for(facts),
+        facts.leader_map,
     )
     return [m for m in found if opens(m, lock)]
 

@@ -928,15 +928,19 @@ def plan(
 #            of the two worn, a two-hander against both hands, an off-hand
 #            piece not while a two-hander is held.
 #   compare  GearCompare: better only when the candidate clears the worn score
-#            by 1% plus half a point. A worn floor proves nothing can beat it
-#            (undecided); a candidate floor that clears is better, one that
-#            does not is undecided.
+#            by 1% plus half a point. A worn floor is credited with half
+#            again for what is unread, and a candidate that clears that and
+#            the margin is better, else undecided; a candidate floor that
+#            clears is better, one that does not is undecided.
 #
 # Here Archaedic Stone scores 93 exactly, Naglering 123.5 as a floor, and the
 # Seal 70.5, so the drive keeps the Stone, and so does this.
 DRIVE_LEVEL_TIEBREAK = 0.5
 DRIVE_MARGIN_FRACTION = 0.01
 DRIVE_MARGIN_FLOOR = 0.5
+# What the module credits a worn piece whose score is only a floor, for the
+# part of it left unread (FLOOR_INCUMBENT_HEADROOM, mod-overseer#221).
+DRIVE_FLOOR_HEADROOM = 0.5
 DRIVE_WEAR, DRIVE_KEEP, DRIVE_UNDECIDED, DRIVE_REFUSED = (
     "wear",
     "keep",
@@ -1070,9 +1074,13 @@ def _drive_refusal(row: dict, wearer: Wearer, off_hand: bool) -> str:
 
 
 def _drive_compare(new: tuple, old: tuple) -> str:
-    clears = new[0] > old[0] * (1.0 + DRIVE_MARGIN_FRACTION) + DRIVE_MARGIN_FLOOR
     if old[1]:
-        return DRIVE_UNDECIDED
+        # A worn floor is credited with half again for what is unread; a
+        # candidate that clears that plus the margin is worn, else undecided.
+        credited = old[0] * (1.0 + DRIVE_FLOOR_HEADROOM)
+        beats = new[0] > credited * (1.0 + DRIVE_MARGIN_FRACTION) + DRIVE_MARGIN_FLOOR
+        return DRIVE_WEAR if beats else DRIVE_UNDECIDED
+    clears = new[0] > old[0] * (1.0 + DRIVE_MARGIN_FRACTION) + DRIVE_MARGIN_FLOOR
     if not new[1]:
         return DRIVE_WEAR if clears else DRIVE_KEEP
     return DRIVE_WEAR if clears else DRIVE_UNDECIDED

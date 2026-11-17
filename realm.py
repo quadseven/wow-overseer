@@ -121,6 +121,12 @@ def _iso(when) -> str | None:
 def _seconds(when, now: datetime) -> int | None:
     if not isinstance(when, datetime):
         return None
+    # MySQL hands back naive UTC; a caller may pass an aware clock. Subtracting
+    # one from the other raises TypeError, so read a naive value as UTC.
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     return max(0, int((now - when).total_seconds()))
 
 
