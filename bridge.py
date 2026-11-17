@@ -34016,7 +34016,10 @@ def _itemplan_reads(names, family, rows, gear_rows, worn_rows):
         bank_rows=_fetch_bank_items, guild_setup=_fetch_guild_bank_setup,
         roster=_fetch_guild_roster)
     # The plan asks the guild loot policy, so it and the writers cannot differ.
-    extras = dataclasses.replace(extras, loot_route=_loot_route)
+    # THE SLOTS A CRAFTER'S OWN FETCH NEEDS (#2502): the plan clears them first.
+    extras = dataclasses.replace(
+        extras, loot_route=_loot_route,
+        inbound=reagentplan.inbound_slots(_craft_plans_of(names)))
     try:
         roster = set(_fetch_enabled_roster_names())
         drive = _drive_verdicts([n for n in names if n in roster])
@@ -40408,15 +40411,19 @@ def _plan_bank(names: list) -> "bank.Plan":
     # least the room the hold is waiting for.
     room_floor = (bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS
                   if _campaign_waiting(names) else 0)
+    # THE ITEM PLAN'S DEPOSITS ARE PLANNED FIRST (#2502): a crafter's fetch of
+    # its own reagent counts the room they make, and merge sends them ahead.
+    routed = _itemplan_bank_routes(names)
     plan = bank.plan(
         bank.members_from_rows(rows, names), bank.family_from_skills(held),
         storage=storage, room_floor=room_floor,
         # A bag placed on this visit is sent before the deposits (#2263).
         room_gain=bankbags.room_gain(_fetch_bank_bag_facts(names)),
+        planned_deposits=itemplan_route.personal_room(routed.moves),
     )
     # WHAT THE ITEM PLAN BANKS IS BANKED (#2136): its GUILD_BANK and
     # BANK_PERSONAL routes had no executor, so full bags stayed full.
-    return itemplan_route.merge(plan, _itemplan_bank_routes(names))
+    return itemplan_route.merge(plan, routed)
 
 
 # THE GUILD'S BANK FORECAST, READ ONCE PER GUILD BANK CYCLE PER FAMILY

@@ -169,6 +169,8 @@ class Extras:
     # which offers no banker route.
     banker_free: Mapping[str, int] | None = None
     guild_crafters: tuple | None = None
+    # holder -> slots to clear for reagents its craft fetches (#2502).
+    inbound: Mapping[str, int] | None = None
     guild_roster: tuple | None = None
     family_skills: Mapping[str, tuple] | None = None
     guild_class_members: tuple | None = None
@@ -350,6 +352,7 @@ def _context(extras: Extras, verdicts) -> itemplan.Context:
         loot_route=extras.loot_route,
         worn_bags=extras.worn_bags,
         fishers=extras.fishers,
+        inbound=extras.inbound or {},
     )
 
 

@@ -144,6 +144,18 @@ def _refusal(stack, row, d, judge, to_guild) -> str:
     return "the loot policy says %s: %s" % (verdict.route, verdict.why)
 
 
+def personal_room(moves) -> dict:
+    """holder -> personal bank deposits among `moves`: the bag slots they free.
+
+    A guild vault deposit is written on a different trip and is not counted.
+    """
+    out: dict = {}
+    for m in moves:
+        if m.verb == bank.DEPOSIT and m.to == bank.PERSONAL:
+            out[m.character] = out.get(m.character, 0) + 1
+    return out
+
+
 def merge(plan_, routed: Routed, limit: int = bank.VISIT_LIMIT):
     """`bank.Plan` plus the routed moves, deduplicated by item guid.
 
@@ -171,9 +183,16 @@ def merge(plan_, routed: Routed, limit: int = bank.VISIT_LIMIT):
         notes.append(
             "%s %s keeps %s in the bags: %s" % (PREFIX, h.holder, h.name, h.why)
         )
+    # DEPOSITS GO OUT AHEAD OF WITHDRAWALS (#2502): a crafter's reagent comes
+    # out of the bank only into a slot a deposit has already freed. The sort is
+    # stable, so each holder keeps its own order.
+    moves = tuple(plan_.moves) + tuple(banker)
+    moves = tuple(m for m in moves if m.verb != bank.WITHDRAW) + tuple(
+        m for m in moves if m.verb == bank.WITHDRAW
+    )
     return replace(
         plan_,
-        moves=tuple(plan_.moves) + tuple(banker),
+        moves=moves,
         guild=tuple(plan_.guild) + tuple(vault),
         notes=tuple(dict.fromkeys(notes)),
     )

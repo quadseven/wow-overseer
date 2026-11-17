@@ -297,6 +297,27 @@ def line(p: Plan) -> str:
     return "%s cannot cast spell %d yet - %s" % (p.name, p.spell, "; ".join(parts))
 
 
+# The most slots one crafter's fetch asks the item plan to clear ahead of it.
+INBOUND_CAP = 6
+
+
+def inbound_slots(plans) -> dict:
+    """name -> bag slots to clear for the reagents its craft is to fetch (#2502).
+
+    One slot per short reagent whose source is the crafter's own bank, its
+    mailbox or the guild bank, the three places that hand a stack to the bags.
+    A reagent a vendor, a gatherer or the house supplies is not here: nothing
+    lands until it is bought or found, and the errand makes room as it goes.
+    Capped at `INBOUND_CAP`, so one crafter cannot empty its own bags.
+    """
+    out: dict = {}
+    for p in plans or ():
+        n = sum(1 for s in p.shorts if s.source in (BANK, MAIL, GUILD_BANK))
+        if n:
+            out[p.name] = min(n, INBOUND_CAP)
+    return out
+
+
 def bank_wants(plans) -> dict:
     """name -> the entries its own bank is to hand back for its craft."""
     out: dict = {}
