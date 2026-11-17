@@ -112,6 +112,7 @@ def _submit(args):
     opts = {
         "arm": args.arm, "node": args.node, "anchors": args.anchors,
         "control_worldserver": args.control_worldserver, "control_dbimport": args.control_dbimport,
+        "control_playerbots_prefix": args.control_playerbots_prefix,
         "control_pin": args.control_pin, "treatment_pin": args.treatment_pin,
         "control_bridge": args.control_bridge, "treatment_bridge": args.treatment_bridge,
         "decree_pr": args.decree_pr, "dry_run": args.dry_run,
@@ -196,6 +197,11 @@ def main(argv=None):
     s.add_argument(
         "--control-dbimport",
         help="refused: both arms run the live db-import (see docs/EPHEMERAL.md)",
+    )
+    s.add_argument(
+        "--control-playerbots-prefix",
+        help="key prefix of the control image's playerbots.conf.dist when it predates the "
+        "rename to Playerbots.* (for example AiPlayerbot); the control arm's keys are written with it",
     )
     s.add_argument(
         "--control-bridge",

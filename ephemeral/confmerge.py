@@ -36,6 +36,26 @@ def group_of(key):
     return "worldserver"
 
 
+def rename_prefix(text, old, new):
+    """Rewrite the leading `old` of every live key in an override file to `new`.
+
+    Comments and values are untouched. Used for a control image built before the
+    module renamed a key prefix (its dist only knows the old names).
+    """
+    out = []
+    for line in (text or "").split("\n"):
+        m = _LINE.match(line)
+        if (
+            m
+            and not line.lstrip().startswith(("#", "//"))
+            and m.group(1).startswith(old)
+        ):
+            start = line.index(m.group(1))
+            line = line[:start] + new + line[start + len(old) :]
+        out.append(line)
+    return "\n".join(out)
+
+
 def render_value(value):
     if isinstance(value, bool):
         return "1" if value else "0"
