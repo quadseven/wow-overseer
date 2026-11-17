@@ -70,6 +70,15 @@ STEP_ORDER = (FUND, MAIL, EQUIP, VENDOR, BANK, HANDDOWN, TIDY)
 # family was held 2.4 hours. Selling, banking and the tidy go first; the mail,
 # which only adds to the bags, goes last.
 ROOM_STEP_ORDER = (VENDOR, BANK, TIDY, EQUIP, HANDDOWN, FUND, MAIL)
+# A BAG-ROOM ERRAND WHOSE ROOM COMES FROM THE BANK BANKS FIRST. When no stack a
+# vendor would buy is left and the item plan routes stacks to the bank, the
+# vendor step has nothing to sell and its 480 seconds are spent before the bank
+# step is reached. Same steps, bank ahead of the vendor.
+BANK_ROOM_STEP_ORDER = (BANK, VENDOR, TIDY, EQUIP, HANDDOWN, FUND, MAIL)
+# The routes a bag-room errand can take to make room, besides the default one
+# (a vendor): the personal bank, or the guild vault when no banker will do.
+ROUTE_BANKER = "banker"
+ROUTE_VAULT = "vault"
 
 # How long each step may take before the errand moves on without it. The mail
 # step is the longest: eight takes per visit, a few seconds apart, and a
@@ -109,10 +118,12 @@ BAG_PRESSURE_WHY = "campaign held at the dungeon door for bag room"
 LOOP_WHY = "profession loop: "
 
 
-def steps_for(why: str) -> tuple:
+def steps_for(why: str, route: str = "") -> tuple:
     """The step order for an errand started for `why`: bag room first for the
     bag-pressure errand and for the profession loop's, which go to town to
-    empty the bags."""
+    empty the bags. A bag-room errand on a bank or vault route banks first."""
+    if route in (ROUTE_BANKER, ROUTE_VAULT) and why == BAG_PRESSURE_WHY:
+        return BANK_ROOM_STEP_ORDER
     if why == BAG_PRESSURE_WHY or str(why or "").startswith(LOOP_WHY):
         return ROOM_STEP_ORDER
     return STEP_ORDER
@@ -180,6 +191,9 @@ class State:
     # GO_PROGRESS_YARDS (#2151): a walk that restarts is not a walk.
     go_aimed: bool = False
     go_restarts: int = 0
+    # How a bag-room errand makes room: '' is the vendor, else ROUTE_BANKER or
+    # ROUTE_VAULT (`bank_route`). The hub is then that counter, not a mailbox.
+    route: str = ""
 
     @property
     def active(self) -> bool:
@@ -187,7 +201,7 @@ class State:
 
     @property
     def steps(self) -> tuple:
-        return steps_for(self.why)
+        return steps_for(self.why, self.route)
 
     @property
     def current_step(self) -> str:
@@ -573,10 +587,11 @@ def _was_released(spot: dict, released, now: float) -> bool:
     )
 
 
-def vendor_stops(rows, side: int = 0) -> list:
+def vendor_stops(rows, side: int = 0, kind: str = "vendor") -> list:
     """Vendor spots from creature rows ({map_id, x, y, name, enemy_group}),
     nearest first as given, one per VENDOR_STOP_YARDS, none of the side that
-    attacks the family (`side` is situation.side_mask; 0 when unread)."""
+    attacks the family (`side` is situation.side_mask; 0 when unread). The
+    same read serves bankers: pass kind="banker" for the label."""
     out = []
     for row in rows or ():
         group = row.get("enemy_group")
@@ -597,7 +612,7 @@ def vendor_stops(rows, side: int = 0) -> list:
             continue
         if any(_planar(spot, kept) <= VENDOR_STOP_YARDS for kept in out):
             continue
-        spot["place"] = "the vendor %s" % (row.get("name") or "nearby")
+        spot["place"] = "the %s %s" % (kind, row.get("name") or "nearby")
         out.append(spot)
     return out
 
@@ -652,6 +667,90 @@ def lethal_stops(stops, here: dict, deaths) -> list:
         if count >= DEATHS_MAKE_A_STOP_LETHAL:
             out.append((stop, count))
     return out
+
+
+def bank_first(why: str, sellable, bank_routed: int) -> bool:
+    """Whether a bag-room errand should make its room at the bank, not a vendor.
+
+    True for the bag-room errand when every member's sellable count is read and
+    their sum is zero (a vendor would buy nothing) while the item plan routes
+    at least one stack to the bank. An unread member keeps the vendor, as an
+    unread count always has. `sellable` is {member: count or None}.
+    """
+    if why != BAG_PRESSURE_WHY or int(bank_routed or 0) <= 0:
+        return False
+    counts = list((sellable or {}).values())
+    if not counts or any(c is None for c in counts):
+        return False
+    return sum(int(c) for c in counts) == 0
+
+
+def bank_route(
+    why: str,
+    sellable,
+    bank_routed: int,
+    hub: dict,
+    bankers,
+    vault,
+    leader_at,
+    released=(),
+    now: float = 0.0,
+    deaths=(),
+    hearth_reaches: bool = False,
+    walled=None,
+) -> tuple:
+    """(route, spot, line): where a bag-room errand aims to make room at the bank.
+
+    route is ROUTE_BANKER, ROUTE_VAULT, or '' for the existing vendor
+    behaviour (then spot is {}). `bankers` are `vendor_stops(..., kind="banker")`
+    spots, `vault` the nearest guild vault spawn row or None. The same guards
+    that keep the vendor aim off ground the family died on apply to both: a
+    stop is passed over when it was released unlanded lately, lies along ground
+    the family died on (`lethal_stop`), or the town slot would refuse the walk
+    (`walled`). With the head's stone reaching a bind hub the family casts
+    there in one go, and that town's banker serves (#2329).
+    """
+    if not bank_first(why, sellable, bank_routed):
+        return "", {}, ""
+    if not leader_at:
+        return "", {}, "the leader's position is unread, so the vendor stands"
+    here = {
+        "map_id": leader_at.get("map_id"),
+        "x": leader_at.get("pos_x"),
+        "y": leader_at.get("pos_y"),
+    }
+    walled = walled or (lambda _spot: False)
+    if hub and hub.get("bind") and hearth_reaches and not walled(hub):
+        return ROUTE_BANKER, dict(hub), "the head's stone reaches its bind town"
+
+    def usable(spot) -> bool:
+        return (
+            _same_map(spot, leader_at)
+            and not _was_released(spot, released, now)
+            and not lethal_stop(spot, here, deaths)
+            and not walled(spot)
+        )
+
+    near = [
+        (_planar(s, here), i, s)
+        for i, s in enumerate(bankers or ())
+        if usable(s)
+    ]
+    if near:
+        _d, _i, spot = min(near, key=lambda t: (t[0], t[1]))
+        return ROUTE_BANKER, dict(spot), "the nearest reachable banker"
+    refused = "no banker is reachable (passed over, released or on other ground)"
+    if vault:
+        spot = {
+            "map_id": vault.get("map_id"),
+            "x": vault.get("x"),
+            "y": vault.get("y"),
+            "z": float(vault.get("z") or 0.0),
+            "place": "the guild vault",
+        }
+        if usable(spot):
+            return ROUTE_VAULT, spot, refused + "; the guild vault serves"
+    return "", {}, refused + " and no guild vault serves; the vendor stands"
 
 
 def choose_aim(

@@ -22792,6 +22792,7 @@ class Bridge(discord.Client):
         reads = await asyncio.to_thread(_movement_reads, list(names))
         casts = townerrand.to_hearth(hub, positions, names, reads["hearthed"],
                                      reads["binds"])
+        route = ""
         if why == townerrand.BAG_PRESSURE_WHY and standing and stops_of:
             stops = townerrand.vendor_stops(
                 await asyncio.to_thread(stops_of, leader, standing),
@@ -22826,7 +22827,39 @@ class Bridge(discord.Client):
                     "map_id": spot.get("map_id"), "x": spot.get("x"),
                     "y": spot.get("y")}))
 
-            chosen = townerrand.choose_aim(
+            # A FAMILY WHOSE ROOM IS IN THE BANK AIMS AT A BANKER, NOT A VENDOR
+            # (#1261): no stack a vendor would buy is left (the policy-filtered
+            # count), the item plan routes stacks to the bank, and a vendor
+            # aim drained nothing. Same death and town slot guards as the
+            # vendor choice; a refused banker falls back to the guild vault,
+            # then to the vendor below. Looked up: the adapter tests load this
+            # method in isolation.
+            route, route_line = "", ""
+            bankers_of = globals().get("_fetch_errand_banker_stops")
+            bank_reads = globals().get("_bank_first_reads")
+            if bankers_of and bank_reads and why == townerrand.BAG_PRESSURE_WHY:
+                sellable, bank_routed = await asyncio.to_thread(
+                    bank_reads, list(names))
+                if townerrand.bank_first(why, sellable, bank_routed):
+                    banker_stops = townerrand.vendor_stops(
+                        await asyncio.to_thread(bankers_of, leader, standing),
+                        situation.ALLIANCE_MASK if teams.get(leader) == "alliance"
+                        else situation.HORDE_MASK
+                        if teams.get(leader) == "horde" else 0,
+                        kind="banker")
+                    vault = await asyncio.to_thread(_nearest_vault, leader)
+                    route, spot, route_line = townerrand.bank_route(
+                        why, sellable, bank_routed, hub, banker_stops, vault,
+                        standing, released, now, deaths=deaths,
+                        hearth_reaches=leader in casts, walled=walled)
+                    log.info("town errand: %s%s has no stack a vendor would buy "
+                             "and %d routed to the bank; %s (%s)", why, label,
+                             bank_routed,
+                             "aims at %s" % spot.get("place", "the bank")
+                             if route else "the vendor aim stands", route_line)
+                    if route:
+                        hub = spot
+            chosen = hub if route else townerrand.choose_aim(
                 hub, stops, standing, why, released, now, deaths=deaths,
                 hearth_reaches=leader in casts, walled=walled)
             if chosen != hub:
@@ -22866,7 +22899,8 @@ class Bridge(discord.Client):
                  "; %s hearth(s) there first" % ", ".join(far) if far else "")
         _TOWN_ERRAND_FUNDED.pop(tuple(sorted(names)), None)
         _TOWN_ERRAND_BOUGHT.pop(tuple(sorted(names)), None)
-        return townerrand.start(now, hub, why, hearthed=bool(far))
+        began = townerrand.start(now, hub, why, hearthed=bool(far))
+        return dataclasses.replace(began, route=route) if route else began
 
     async def _town_errand_regroup(self, state, names, positions, now, label):
         """Hearth home any member still further than a walk from a home hub,
@@ -22925,10 +22959,19 @@ class Bridge(discord.Client):
             return await self._town_errand_vendor(
                 state, names, leader, positions, cohort, now, marks)
         if step == townerrand.BANK:
-            await self._town_errand_aim(leader, "banker", cohort)
-            at = await asyncio.to_thread(_fetch_town, leader)
-            if leader not in positions or not at.banker:
-                return False
+            at_vault = state.route == townerrand.ROUTE_VAULT
+            # THE VAULT ROUTE'S COUNTER IS THE VAULT, the hub the errand chose
+            # from the spawn table; every other route's is a banker.
+            await self._town_errand_aim(
+                leader, _hub_aim(state.hub) if at_vault else "banker", cohort)
+            if at_vault:
+                if not townerrand.in_range(state.hub, positions.get(leader),
+                                           TOWN_COUNTER_YARDS):
+                    return False
+            else:
+                at = await asyncio.to_thread(_fetch_town, leader)
+                if leader not in positions or not at.banker:
+                    return False
             if step not in marks:
                 # BOTH BANKS, while the family stands at the counter. The
                 # errand owns the traveller, so the ten-minute bank and guild
@@ -40612,6 +40655,35 @@ def _fetch_errand_vendor_stops(leader: str, standing) -> list:
             if exc.args and exc.args[0] in (1054, 1146):
                 return []
             raise
+
+
+def _fetch_errand_banker_stops(leader: str, standing) -> list:
+    """Banker creature rows nearest `standing` on its map, nearest first, or []:
+    the vendor stop read with the banker flag, so one spawn lookup serves both."""
+    try:
+        at = (float(standing["pos_x"]), float(standing["pos_y"]),
+              int(standing["map_id"]))
+    except (KeyError, TypeError, ValueError):
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_ERRAND_VENDORS_SQL, (*at, towntrip.NPC_FLAG_BANKER))
+            return [dict(r) for r in cur.fetchall()]
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+
+
+def _bank_first_reads(names: list) -> tuple:
+    """({member: stacks a vendor would buy or None}, stacks the item plan routes
+    to the bank), for the errand's choice of counter. Blocking.
+
+    The sale counts are the vendor pass's own, after the loot policy's filter,
+    and a member it has not read stays None. The route count is the bank
+    pass's: the plan's GUILD_BANK and BANK_PERSONAL moves."""
+    sellable = {name: _VENDOR_SELLABLE.get(name) for name in names}
+    return sellable, len(_itemplan_bank_routes(list(names)).moves)
 
 
 # THE HOME TOWN: the mailbox spawn nearest the head's hearthstone point, on its
