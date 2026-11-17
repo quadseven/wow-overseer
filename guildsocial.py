@@ -106,6 +106,20 @@ ASKS_READ_MINUTES = max(ASK_COOLDOWN_MINUTES, ASK_REPEAT_COOLDOWN_MINUTES)
 # the channel reading as a noticeboard.
 MAX_OPEN_ASKS_PER_GUILD = 3
 NEW_ASKS_PER_PASS = 2
+
+# LEVELLING SEATS ASK FIRST. A guild holds MAX_OPEN_ASKS_PER_GUILD asks and a
+# freed slot goes to whoever asks next. Ranked by gear need alone, a member at
+# level 50 or more (a pre-raid pick above all) took a slot it could seldom fill:
+# the order's seats at 50 and over have few partners in a door for 50 to 60, and
+# nobody under 50 can answer. Measured over 24 hours on the dev realm: the
+# guilds' open asks averaged 3.0 and 3.3 (every slot always taken); 337 of 883
+# asks came from members at 50 or more and formed 7 runs (2.1 percent), 297 came
+# from raid seats under 50 and formed 75 (25.3 percent). A seat that has levels
+# to gain is asked for first, any other member under the gate next, and the gear
+# need ranks within a tier as before. SEATS_LEVEL_FIRST=off restores the old order.
+SEATS_LEVEL_FIRST_ENV = "SEATS_LEVEL_FIRST"
+# The Molten Core order's gate: every seat at 50 or more.
+ORDER_LEVEL_GATE = 50
 ANSWERS_PER_PASS = 4
 
 # --- who may answer -----------------------------------------------------------
@@ -674,6 +688,11 @@ def stance_of(mate: Mate, door, asker_level: int, faction: str, needs: list) -> 
     """(stance, value, need) for this member and this door, or ("", 0, None)."""
     level = int(mate.member.level)
     if level > door.ceiling:
+        # LEVEL-MATCHED (guildrun.gray_cutoff): a member over the door's band who
+        # would make its mobs gray costs the group its experience, so it neither
+        # helps nor carries there.
+        if guildrun.kills_gray(level, door):
+            return "", 0.0, None
         if level <= door.ceiling + HELPER_LEVELS:
             return HELPS, HELP, None
         if guildrun.fitting_doors([asker_level], [door], faction):
@@ -1745,7 +1764,21 @@ def _best_askers(board: _Board, guild: str, barred: set, asked: set) -> list:
         choice = _asker_choice(board, name, mate, guild, asked)
         if choice:
             choices.append(choice)
-    return sorted(choices, key=lambda c: (c[0], c[1]))
+    return sorted(choices, key=lambda c: (_asker_tier(c[2].member), c[0], c[1]))
+
+
+def _asker_tier(member: guildrun.Member, environ=None) -> int:
+    """0 for an approved raid seat under ORDER_LEVEL_GATE, 1 for any other
+    member under it, 2 for the rest; always 0 with SEATS_LEVEL_FIRST off, so
+    the need alone ranks. An approved seat carries its plan tree
+    (guildrun.levelling_seats reads it the same way)."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get(SEATS_LEVEL_FIRST_ENV, "") or "").strip().lower()
+    if raw in ("off", "0", "false", "no"):
+        return 0
+    if int(member.level) >= ORDER_LEVEL_GATE:
+        return 2
+    return 0 if member.target_tree else 1
 
 
 def _turn_order(guilds, asks: list) -> list:

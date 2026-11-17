@@ -303,7 +303,8 @@ class _DetourCursor:
         if "FROM characters" in sql:
             self.rows = list(self.race_rows)
         elif self.fail_spawn:
-            raise _MySQLError(1146, "table does not exist")
+            code = 1146 if self.fail_spawn is True else self.fail_spawn
+            raise _MySQLError(code, "the read failed")
         else:
             self.rows = list(self.spawn_rows)
 
@@ -451,6 +452,15 @@ class TheDetourHelperReadsSafeSurveyedGround(unittest.TestCase):
     def test_a_spawn_table_the_world_image_lacks_still_degrades(self):
         waypoint, crossed = self.go(
             spawn_rows=[dict(SIDE, enemy_group=0)], fail_spawn=True
+        )
+        self.assertEqual(waypoint, "")
+        self.assertEqual(len(crossed), 1)
+
+    def test_any_mysql_error_on_the_ring_read_still_degrades(self):
+        # 1213 is a deadlock, not a missing table: the lookup is advisory, so
+        # the refusal stands whatever the failure was.
+        waypoint, crossed = self.go(
+            spawn_rows=[dict(SIDE, enemy_group=0)], fail_spawn=1213
         )
         self.assertEqual(waypoint, "")
         self.assertEqual(len(crossed), 1)

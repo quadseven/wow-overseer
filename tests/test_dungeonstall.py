@@ -141,6 +141,57 @@ class TheTimelineSaysWhereARunStopped(unittest.TestCase):
         self.assertIsNotNone(got)
 
 
+CLEARED = (
+    "dungeon clear stopped: All bosses cleared!; it refused 'dc skip' 1 inside "
+    "map 229 with nothing left it could reach"
+)
+
+
+class AFinishedClearIsNotAStall(unittest.TestCase):
+    """The Lower Spire shares map 229 with the Upper Spire, so a run there never
+    reads 'complete': the module clears every boss it can reach, says "All
+    bosses cleared!" and the ledger closes the row 'stalled'. Two such runs
+    barred the one door that drops the fire protection recipe (the Firebrand
+    Invokers), for two days, after the family had cleared it twice."""
+
+    LBRS = dict(map_id=229, portal="lower-blackrock-spire")
+
+    def test_a_clear_the_module_finished_did_not_stall(self):
+        events = [boss(7, 0, 491), stalled(7, CLEARED)]
+        self.assertIsNone(stall.stall_of(ledger_row(7, **self.LBRS), events))
+
+    def test_two_finished_clears_do_not_bar_the_door(self):
+        runs = [ledger_row(1, **self.LBRS), ledger_row(2, **self.LBRS)]
+        events = [boss(1, 0, 491), stalled(1, CLEARED)]
+        events += [boss(2, 0, 491), stalled(2, CLEARED)]
+        self.assertEqual({}, stuck(runs, events))
+
+    def test_a_finished_clear_with_no_encounter_is_still_a_stall(self):
+        got = stall.stall_of(ledger_row(7, **self.LBRS), [stalled(7, CLEARED)])
+        self.assertIsNotNone(got)
+
+    def test_a_ledger_row_closed_stalled_by_a_clear_counts_as_a_completed_run(self):
+        rows = [
+            {
+                "leader_name": "Zug",
+                "map_id": 229,
+                "portal_keyword": "lower-blackrock-spire",
+                "outcome": "stalled",
+                "ended_reason": CLEARED,
+            },
+            {
+                "leader_name": "Zug",
+                "map_id": 229,
+                "portal_keyword": "lower-blackrock-spire",
+                "outcome": "stalled",
+                "ended_reason": "the run stopped progressing",
+            },
+        ]
+        done, failed = campaignplan.ledger(rows, ["Zug"])
+        self.assertEqual({"lower-blackrock-spire": 1}, done)
+        self.assertEqual({"lower-blackrock-spire": 1}, failed)
+
+
 def stuck(runs, events):
     return stall.stuck_doors(runs, events)
 

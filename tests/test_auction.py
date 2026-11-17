@@ -1090,5 +1090,171 @@ class MasterTailorShopsAtTheCounterTest(unittest.TestCase):
         self.assertNotIn("if spell_id in auction.GATHERED", body)
 
 
+class AuctionRangeReachTest(unittest.TestCase):
+    def test_out_of_reach_literal_matches_cpp(self):
+        decisions_h = modsource.read(
+            modsource.DECISIONS_H, encoding="utf-8", errors="ignore"
+        )
+        self.assertIn(f'"{auction.OUT_OF_REACH}"', decisions_h)
+        self.assertEqual("auctioneer not in range", auction.OUT_OF_REACH)
+
+    def test_counter_reach_is_strictly_inside_interact_distance(self):
+        self.assertGreater(auction.COUNTER_REACH_YARDS, 0.0)
+        self.assertLess(auction.COUNTER_REACH_YARDS, 5.5)
+
+    def test_fetch_auctioneer_passes_3d_counter_reach_and_returns_row(self):
+        import contextlib
+        from test_guildsocial_bridge import bridge
+
+        seen = []
+        expected = {
+            "spawn": 8719,
+            "entry": 8719,
+            "faction": 12,
+            "map_id": 1,
+            "pos_x": 9949.0,
+            "pos_y": 2368.0,
+            "pos_z": 1330.0,
+            "yards": 2.4,
+        }
+
+        class FakeCursor:
+            def __init__(self, row):
+                self._row = row
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def execute(self, sql, params=()):
+                seen.append((sql, params))
+
+            def fetchone(self):
+                return self._row
+
+        @contextlib.contextmanager
+        def fake_connect(row):
+            class Conn:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def cursor(self):
+                    return FakeCursor(row)
+
+            yield Conn()
+
+        with mock.patch.object(bridge, "_connect", lambda: fake_connect(expected)):
+            got = bridge._fetch_auctioneer("Bork")
+        self.assertEqual(expected, got)
+        self.assertEqual(1, len(seen))
+        sql, params = seen[0]
+        self.assertIn("cr.position_z - s.pos_z", sql)
+        self.assertIn("HAVING yards <= %s", sql)
+        reach = auction.COUNTER_REACH_YARDS
+        self.assertEqual(
+            (reach, reach, reach, "Bork", bridge.NPC_FLAG_AUCTIONEER, reach), params
+        )
+        with mock.patch.object(bridge, "_connect", lambda: fake_connect(None)):
+            self.assertIsNone(bridge._fetch_auctioneer("Bork"))
+
+    def test_recent_auction_and_recipe_keys_exclude_out_of_reach_errors_at_runtime(
+        self,
+    ):
+        import contextlib
+        import sqlite3
+        import recipebook
+        from test_guildsocial_bridge import bridge
+
+        mem = sqlite3.connect(":memory:")
+        mem.row_factory = sqlite3.Row
+        mem.execute(
+            "CREATE TABLE overseer_command ("
+            "target_name TEXT, command TEXT, kind TEXT, source TEXT, "
+            "status TEXT, detail TEXT, age_min INT)"
+        )
+        mem.executemany(
+            "INSERT INTO overseer_command VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    "Bork",
+                    "buy:1",
+                    "auction",
+                    "auction",
+                    "error",
+                    auction.OUT_OF_REACH,
+                    5,
+                ),
+                ("Bork", "buy:2", "auction", "auction", "error", "no money", 5),
+                ("Grug", "list:3:10:20:12", "auction", "auction", "applied", "", 5),
+                (
+                    "Bork",
+                    "buy:4",
+                    "auction",
+                    recipebook.LEARN_SOURCE,
+                    "error",
+                    auction.OUT_OF_REACH,
+                    5,
+                ),
+                (
+                    "Og",
+                    "use:1234",
+                    recipebook.LEARN_KIND,
+                    recipebook.LEARN_SOURCE,
+                    "verifying",
+                    "",
+                    5,
+                ),
+            ],
+        )
+
+        class SqliteBridgeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def execute(self, sql, params=()):
+                adapted = sql.replace(
+                    "AND created_at > NOW() - INTERVAL %s MINUTE", "AND age_min < ?"
+                ).replace("%s", "?")
+                self._rows = [dict(r) for r in mem.execute(adapted, params).fetchall()]
+
+            def fetchall(self):
+                return self._rows
+
+        @contextlib.contextmanager
+        def fake_connect():
+            class Conn:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def cursor(self):
+                    return SqliteBridgeCursor()
+
+            yield Conn()
+
+        try:
+            with mock.patch.object(bridge, "_connect", fake_connect):
+                self.assertEqual(
+                    {("Bork", "buy:2"), ("Grug", "list:3:10:20:12")},
+                    bridge._recent_auction_keys(60),
+                )
+                self.assertEqual(
+                    {("Og", "use:1234")},
+                    bridge._recent_recipe_keys(60),
+                )
+        finally:
+            mem.close()
+
+
 if __name__ == "__main__":
     unittest.main()

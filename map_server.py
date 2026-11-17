@@ -42,6 +42,7 @@ import basepath
 import campaignplan
 import campaignqueue
 import chat
+import classreagents
 import clipcutter
 import clipledger
 import clipserve
@@ -93,6 +94,7 @@ import recap
 import runreport
 import realm
 import realmread
+import restsupply
 import runtimeline
 import stream
 import tradespec
@@ -223,8 +225,9 @@ MAX_BODY = 4096
 # a post from anywhere on the network used to be obeyed regardless. Off (the
 # default, and what the deployment sets today), each answers 403 and does
 # nothing; on, the network-only trust model stands. /api/director keeps its
-# own token, and /api/frame is the capture agent's.
-OPERATOR_ROUTES = frozenset({"/api/chat", "/api/decree", "/api/watch"})
+# own token, /api/spectate is the dashboard's Watch order (a run id only), and
+# /api/frame is the capture agent's.
+OPERATOR_ROUTES = frozenset({"/api/chat", "/api/decree", "/api/watch", "/api/spectate"})
 
 # AT MOST THIS MANY /api/chat MODEL CALLS AT ONCE (#1842). Each one holds a
 # request thread on the gateway for up to LLM_TIMEOUT, and ThreadingHTTPServer
@@ -2791,36 +2794,159 @@ _RAID_SUPPLY_KNOWN = (
 _RAID_SUPPLY_MONEY = (
     "SELECT guildid, BankMoney AS bank FROM guild WHERE guildid IN ({guilds})"
 )
+_RAID_SUPPLY_SPELL_DBC = (
+    "SELECT ID AS spell_id, Reagent_1, Reagent_2, Reagent_3, Reagent_4, "
+    "Reagent_5, Reagent_6, Reagent_7, Reagent_8, "
+    "ReagentCount_1, ReagentCount_2, ReagentCount_3, ReagentCount_4, "
+    "ReagentCount_5, ReagentCount_6, ReagentCount_7, ReagentCount_8 "
+    "FROM acore_world.spell_dbc "
+    "WHERE ID IN ({spells})"
+)
+_RAID_SUPPLY_SEAT_REAGENTS = (
+    "SELECT gm.guildid, c.name, ii.itemEntry AS entry, SUM(ii.count) AS count "
+    "FROM guild_member gm "
+    "JOIN characters c ON c.guid = gm.guid "
+    "JOIN character_inventory ci ON ci.guid = gm.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE gm.guildid IN ({guilds}) AND ii.itemEntry IN ({entries}) "
+    "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "GROUP BY gm.guildid, c.name, ii.itemEntry"
+)
+_RAID_SUPPLY_SEAT_DRINK = (
+    "SELECT gm.guildid, c.name, SUM(ii.count) AS units "
+    "FROM guild_member gm "
+    "JOIN characters c ON c.guid = gm.guid "
+    "JOIN character_inventory ci ON ci.guid = gm.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE gm.guildid IN ({guilds}) "
+    "AND it.class = 0 AND it.subclass = 5 AND it.spellcategory_1 = %s "
+    "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "GROUP BY gm.guildid, c.name"
+)
+_RAID_SUPPLY_GBANK_DRINK = (
+    "SELECT gb.guildid, SUM(ii.count) AS units "
+    "FROM guild_bank_item gb "
+    "JOIN item_instance ii ON ii.guid = gb.item_guid "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE gb.guildid IN ({guilds}) "
+    "AND it.class = 0 AND it.subclass = 5 AND it.spellcategory_1 = %s "
+    "GROUP BY gb.guildid"
+)
+_RAID_SPELL_REAGENTS: dict | None = None
+
+
+def _raid_spell_reagents(rd) -> dict:
+    """Spell.dbc + spell_dbc reagent table for raid buffers, cached per process."""
+    global _RAID_SPELL_REAGENTS
+    if _RAID_SPELL_REAGENTS is None:
+        buf_spells = sorted(raidsupply.ALL_BUFFER_SPELL_IDS)
+        sql_rows = (
+            rd.rows(
+                _RAID_SUPPLY_SPELL_DBC.format(  # noqa: S608
+                    spells=", ".join(["%s"] * len(buf_spells))),
+                tuple(buf_spells), what="spell_dbc reagents")
+            if buf_spells else []
+        )
+        _RAID_SPELL_REAGENTS = classreagents.load_spell_reagents(sql_rows=sql_rows)
+    return _RAID_SPELL_REAGENTS
 
 
 def _fetch_raid_supply(rd, guild_ids: list) -> dict:
-    """guild id -> {have, knowers, bank} for the supply section; guarded."""
-    out = {g: {"have": {}, "knowers": {}, "bank": None} for g in guild_ids}
+    """guild id -> {have, knowers, bank, seat_reagents, seat_drink, ...}; guarded."""
+    spell_reagents = _raid_spell_reagents(rd)
+    reagent_entries = raidsupply.buffer_reagent_entries(spell_reagents)
+    empty = lambda: {  # noqa: E731
+        "have": {},
+        "knowers": {},
+        "bank": None,
+        "seat_reagents": {},
+        "seat_drink": {},
+        "known_spells": {},
+        "bank_reagents": {},
+        "bank_drink": 0,
+        "spell_reagents": spell_reagents,
+    }
+    out = {g: empty() for g in guild_ids}
     if not guild_ids:
         return out
     guilds = ", ".join(["%s"] * len(guild_ids))
     entries = sorted(raidsupply.SUPPLY_ENTRIES)
-    spells = sorted(raidsupply.SUPPLY_SPELLS)
+    gb_entries = sorted(raidsupply.SUPPLY_ENTRIES | reagent_entries)
+    spells = sorted(set(raidsupply.SUPPLY_SPELLS) | set(raidsupply.ALL_BUFFER_SPELL_IDS))
     eholes = ", ".join(["%s"] * len(entries))
+    gbholes = ", ".join(["%s"] * len(gb_entries))
     sholes = ", ".join(["%s"] * len(spells))
+    rlist = sorted(reagent_entries)
+    rholes = ", ".join(["%s"] * len(rlist))
     held = rd.rows(_RAID_SUPPLY_HAVE.format(guilds=guilds, entries=eholes),  # noqa: S608
                    (*guild_ids, *entries), what="character_inventory supply")
-    banked = rd.rows(_RAID_SUPPLY_GBANK.format(guilds=guilds, entries=eholes),  # noqa: S608
-                     (*guild_ids, *entries), what="guild_bank_item")
+    banked = rd.rows(_RAID_SUPPLY_GBANK.format(guilds=guilds, entries=gbholes),  # noqa: S608
+                     (*guild_ids, *gb_entries), what="guild_bank_item")
     known = rd.rows(_RAID_SUPPLY_KNOWN.format(guilds=guilds, spells=sholes),  # noqa: S608
                     (*guild_ids, *spells), what="character_spell supply")
     money = rd.rows(_RAID_SUPPLY_MONEY.format(guilds=guilds),  # noqa: S608
                     tuple(guild_ids), what="guild")
+    seat_reagent_rows = (
+        rd.rows(_RAID_SUPPLY_SEAT_REAGENTS.format(guilds=guilds, entries=rholes),  # noqa: S608
+                (*guild_ids, *rlist), what="character_inventory buffer reagents")
+        if rlist else []
+    )
+    seat_drink_rows = rd.rows(
+        _RAID_SUPPLY_SEAT_DRINK.format(guilds=guilds),  # noqa: S608
+        (*guild_ids, restsupply.DRINK_CATEGORY),
+        what="character_inventory drink",
+    )
+    gbank_drink_rows = rd.rows(
+        _RAID_SUPPLY_GBANK_DRINK.format(guilds=guilds),  # noqa: S608
+        (*guild_ids, restsupply.DRINK_CATEGORY),
+        what="guild_bank_item drink",
+    )
     for row in list(held) + list(banked):
-        have = out.setdefault(row.get("guildid"), {"have": {}, "knowers": {}, "bank": None})["have"]
+        spot = out.setdefault(row.get("guildid"), empty())
         entry = int(row.get("entry") or 0)
-        have[entry] = have.get(entry, 0) + int(row.get("count") or 0)
+        count = int(row.get("count") or 0)
+        if entry in raidsupply.SUPPLY_ENTRIES:
+            spot["have"][entry] = spot["have"].get(entry, 0) + count
+    for row in banked:
+        spot = out.setdefault(row.get("guildid"), empty())
+        entry = int(row.get("entry") or 0)
+        if entry in reagent_entries:
+            spot["bank_reagents"][entry] = (
+                spot["bank_reagents"].get(entry, 0) + int(row.get("count") or 0)
+            )
     for row in known:
-        spot = out.setdefault(row.get("guildid"), {"have": {}, "knowers": {}, "bank": None})
-        spot["knowers"].setdefault(int(row.get("spell") or 0), []).append(str(row.get("name") or ""))
+        spot = out.setdefault(row.get("guildid"), empty())
+        spell = int(row.get("spell") or 0)
+        name = str(row.get("name") or "")
+        if spell in raidsupply.SUPPLY_SPELLS:
+            spot["knowers"].setdefault(spell, []).append(name)
+        if spell in raidsupply.ALL_BUFFER_SPELL_IDS and name:
+            spot["known_spells"].setdefault(name, set()).add(spell)
     for row in money:
-        spot = out.setdefault(row.get("guildid"), {"have": {}, "knowers": {}, "bank": None})
+        spot = out.setdefault(row.get("guildid"), empty())
         spot["bank"] = int(row.get("bank") or 0)
+    for row in seat_reagent_rows:
+        spot = out.setdefault(row.get("guildid"), empty())
+        name = str(row.get("name") or "")
+        entry = int(row.get("entry") or 0)
+        if name and entry > 0:
+            by_entry = spot["seat_reagents"].setdefault(name, {})
+            by_entry[entry] = by_entry.get(entry, 0) + int(row.get("count") or 0)
+    for row in seat_drink_rows:
+        spot = out.setdefault(row.get("guildid"), empty())
+        name = str(row.get("name") or "")
+        if name:
+            spot["seat_drink"][name] = (
+                spot["seat_drink"].get(name, 0) + int(row.get("units") or 0)
+            )
+    for row in gbank_drink_rows:
+        spot = out.setdefault(row.get("guildid"), empty())
+        spot["bank_drink"] += int(row.get("units") or 0)
     return out
 # preraid's catalog of every piece the level 60 dungeons drop or reward. The
 # world's loot tables do not change under a running server, so it is read
@@ -5734,6 +5860,25 @@ class Handler(BaseHTTPRequestHandler):
     # apple-touch-icon). Same bytes on every realm, like the files above: the
     # manifest's URLs are relative, so each realm's copy resolves against the
     # path it was fetched under and opens that realm, not the root.
+    def _sw_file(self, _query: dict) -> None:
+        """Serve the mount-scoped service worker and its precache list."""
+
+        # Served at the mount with the mount's scope so every precached URL and
+        # the worker's own registration stay inside this realm's prefix (#2314).
+        def _render(body: bytes) -> bytes:
+            with open(os.path.join(HERE, "index.html"), "rb") as f:
+                index_html = f.read()
+            return appbuild.stamp_worker(
+                basepath.apply(body, BASE_PATH), appbuild.fingerprint(HERE), index_html
+            )
+
+        self._send_file(
+            "app/sw.js",
+            "text/javascript; charset=utf-8",
+            transform=_render,
+            extra_headers=(("Service-Worker-Allowed", (BASE_PATH or "") + "/"),),
+        )
+
     def _manifest_file(self, _query: dict) -> None:
         self._send_file("manifest.webmanifest", "application/manifest+json")
 
@@ -7116,6 +7261,106 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("director order failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    @_get_route("spectate state query failed")
+    def _spectate_state(_query: dict, _ctx) -> tuple[int, dict]:
+        """GET /api/spectate - where the observer camera is, for the Watch buttons.
+
+        Open like every GET here. `run` is the guild run the camera was told to
+        follow (None for any other order), `switch_in` the seconds before a
+        different group may take it, and `stream` the observer's broadcast
+        address, which is empty until the observer character is in the world.
+        """
+        row = _read_watch_order()
+        state = director.spectate_state(row)
+        state["watcher"] = director.WATCHER_NAME
+        state["stream"] = family.broadcast_url(director.WATCHER_NAME) or ""
+        return 200, state
+
+    def _spectate_post(self) -> None:
+        """POST /api/spectate - point the camera, or stop it.
+
+        The body carries exactly one of {"run": <id>}, {"character": "<name>"}
+        or {"stop": true}. Behind the operator switch (OPERATOR_ROUTES), not a
+        token: no secret reaches a browser. Each is turned into an order by
+        director (an integer, a name read through parse_watch's grammar, or
+        `off`), so no free text from the request reaches SQL except as that
+        bound, checked value. A different target, or a stop, inside the dwell
+        is a 409 with the wait. Read-then-write, not a transaction: two clicks
+        in the same instant both pass, and the later write wins, which is the
+        same outcome the dwell gives a click one second later.
+        """
+        request = self._read_json_body()
+        if request is None:
+            return
+        given = [k for k in ("run", "character", "stop") if k in request]
+        if len(given) != 1:
+            self._send(400, "application/json", json.dumps(
+                {"error": "send exactly one of run, character or stop"}).encode())
+            return
+        if given[0] == "run":
+            spec = director.spectate_spec(request.get("run"))
+        elif given[0] == "character":
+            spec = director.spectate_character(request.get("character"))
+        elif request.get("stop") is True:
+            spec = director.spectate_stop()
+        else:
+            spec = director.SpecError("stop must be true")
+        if isinstance(spec, director.SpecError):
+            self._send(400, "application/json", json.dumps({"error": spec.why}).encode())
+            return
+        try:
+            current = _read_watch_order()
+            verdict = director.spectate_verdict(current, spec.text())
+            if not verdict.allowed:
+                self._send(409, "application/json", json.dumps(
+                    {"error": verdict.reason, "switch_in": verdict.switch_in}).encode())
+                return
+            if spec.kind == "off":
+                if director.mandate_active(current):
+                    with _connect() as conn, conn.cursor() as cur:
+                        cur.execute(director.CLEAR_SQL)
+                self._send(200, "application/json", json.dumps(
+                    {"ok": True, "stopped": True, "spec": "off"}).encode())
+                return
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute(director.SET_SQL,
+                            (spec.text(), "web:spectate", director.MANDATE_TTL))
+            answer = {
+                "ok": True, "spec": spec.text(),
+                "expires_in": director.MANDATE_TTL,
+                "stream": family.broadcast_url(director.WATCHER_NAME) or "",
+            }
+            if spec.kind == "run":
+                answer["run"] = int(spec.arg)
+            else:
+                answer["character"] = spec.arg
+            self._send(200, "application/json", json.dumps(answer).encode())
+        except Exception:
+            log.exception("spectate order failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
+    @_get_route("live groups query failed", default=str)
+    def _live_now(_query: dict, ctx) -> tuple[int, director.LiveNow]:
+        """GET /api/live - every active dungeon run, raid and battleground.
+
+        Read-only. Dungeons are the guild coordinator's runs that are inside;
+        raids and battlegrounds are groups of two or more in the fresh
+        overseer_snapshot on those maps (the same 60 second freshness the
+        bridge uses). Each group carries the order that jumps the Watcher in,
+        which the page posts to /api/spectate. A world without the tables
+        answers empty lists.
+        """
+        rd = ctx.read
+        spots = [director.spot_from_row(r) for r in rd.rows(
+            "SELECT name, map_id, instance_id, pos_x, pos_y, pos_z, in_combat, "
+            "group_leader FROM overseer_snapshot "
+            "WHERE updated_at > NOW() - INTERVAL 60 SECOND",
+            what="live snapshot")]
+        runs = guildrun.page(guildrun.recent(rd, n=GUILD_RUNS_LIMIT))["active"]
+        seats = [(r["name"], r["role"]) for r in rd.rows(
+            "SELECT name, role FROM overseer_raid_seat", what="live raid seats")]
+        return 200, director.live_now(spots, runs, seats, places.map_name)
+
     def _read_json_body(self) -> dict | None:
         """The POST body as a dict, or None after sending the error itself."""
         try:
@@ -7150,7 +7395,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send_file(self, name: str, ctype: str, transform=None, path: str = "",
                    cache_control: str = "no-store", *,
-                   revalidate: bool = True) -> None:
+                   revalidate: bool = True,
+                   extra_headers: tuple[tuple[str, str], ...] = ()) -> None:
         # A file missing from the image must be a readable 500, not a bare
         # connection reset - the page keys its error banner off r.ok.
         #
@@ -7171,14 +7417,16 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("static file %s cannot be served", name)
             self._send(500, "text/plain", b"static file missing from image")
             return
+        kw = {"extra_headers": extra_headers} if extra_headers else {}
         if revalidate:
-            self._send(200, ctype, body, cache_control)
+            self._send(200, ctype, body, cache_control, **kw)
         else:
-            self._send(200, ctype, body, cache_control, revalidate=False)
+            self._send(200, ctype, body, cache_control, revalidate=False, **kw)
 
     def _send(self, code: int, ctype: str, body: bytes,
               cache_control: str = "no-store", *,
-              revalidate: bool = True) -> None:
+              revalidate: bool = True,
+              extra_headers: tuple[tuple[str, str], ...] = ()) -> None:
         # A successful GET is revalidated rather than refetched: it carries
         # an ETag of its bytes and `no-cache`, so the app's poll of an
         # unchanged answer costs a 304 and no body. The model-viewer files
@@ -7205,6 +7453,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("ETag", tag)
                 self.send_header("Cache-Control", cache_control)
                 self.send_header("Vary", "Accept-Encoding")
+                for hkey, hval in extra_headers:
+                    self.send_header(hkey, hval)
                 self.end_headers()
                 return
         self.send_response(code)
@@ -7218,6 +7468,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", cache_control)
         if tag:
             self.send_header("ETag", tag)
+        for hkey, hval in extra_headers:
+            self.send_header(hkey, hval)
         self.end_headers()
         self.wfile.write(body)
 
@@ -7373,11 +7625,14 @@ class Handler(BaseHTTPRequestHandler):
         "/api/chat/party": _chat_party,
         "/api/watch": _watch_state,
         "/api/director": _director_state,
+        "/api/spectate": _spectate_state,
+        "/api/live": _live_now,
         "/": _index,
         "/index.html": _index,
         "/shapes.json": _shapes_file,
         "/jquery.min.js": _jquery_file,
         "/manifest.webmanifest": _manifest_file,
+        "/sw.js": _sw_file,
         "/apple-touch-icon.png": _touch_icon,
         "/icon-192.png": _icon_192,
         "/icon-512.png": _icon_512,
@@ -7389,6 +7644,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/decree": _decree_post,
         "/api/watch": _watch_post,
         "/api/director": _director_post,
+        "/api/spectate": _spectate_post,
         "/api/frame": _frame_post,
         # The cutter routes trust what /api/frame trusts: the capture agent's
         # network path, with no token and no new credential.

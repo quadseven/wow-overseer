@@ -152,7 +152,9 @@ class ACraftGuild(unittest.TestCase):
 
     def test_a_raider_keeps_the_cloth_its_casts_eat(self):
         m = member("Rok", carried=(stack(1, LINEN, 25),))
-        self.assertEqual(guildjobs.postable(m, None), [m.carried[0]])
+        # A raid seat casts at its town stops (slice 3), so it keeps the batch
+        # whether or not its guild is on craft focus.
+        self.assertEqual(guildjobs.postable(m, None), [])
         self.assertEqual(guildjobs.postable(m, None, crafting=True), [])
 
     def test_a_member_in_a_guild_run_is_left_alone(self):

@@ -1566,48 +1566,6 @@ def _others_line() -> str:
     )
 
 
-def _herb_shortfall(goals: list, items: dict) -> dict:
-    """Aggregate per-night herb/reagent need, held count, and shortfall across goals."""
-    by_name: dict[str, dict] = {}
-    for g in goals:
-        if g.get("kind") != "supply" or not g.get("recipes"):
-            continue
-        rc = g["recipes"][0]
-        for r in rc.get("reagents") or ():
-            name = r["name"]
-            if name == CRYSTAL_VIAL:
-                continue
-            row = by_name.setdefault(
-                name,
-                {
-                    "name": name,
-                    "entry": r.get("entry") or items.get(name, {}).get("entry", 0),
-                    "need": 0,
-                    "held": int(r.get("held") or 0),
-                    "short": 0,
-                },
-            )
-            row["need"] += int(r.get("need") or 0)
-    herbs = []
-    for name in sorted(by_name):
-        row = by_name[name]
-        row["short"] = max(row["need"] - row["held"], 0)
-        row["line"] = "%s: %d needed, %d held, %d short" % (
-            row["name"],
-            row["need"],
-            row["held"],
-            row["short"],
-        )
-        herbs.append(row)
-    return {
-        "herbs": herbs,
-        "lotus_note": (
-            "Black Lotus is a rare world spawn at Herbalism 300; if it cannot "
-            "be met, flasks are cut first rather than counting the night short."
-        ),
-    }
-
-
 def _order(goals: list) -> None:
     """Worst first, then by name so the list does not move on its own.
 
@@ -1808,7 +1766,6 @@ def build_raidgoals(
             "and by name inside each so the list does not move on its own."
         ),
         "goals": goals,
-        "herb_shortfall": _herb_shortfall(goals, items),
         "others": _others(),
         "others_line": _others_line(),
         "basis": _basis(),

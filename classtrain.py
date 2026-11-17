@@ -37,9 +37,13 @@ from dataclasses import dataclass
 
 import classcasts
 import classic
+import classquest
 import dungeonplan
+import guildjobs
+import guildlevel
 import guildroute
 import racespells
+import situation
 import taughtspells
 
 LOG_PREFIX = "guild training:"
@@ -196,6 +200,22 @@ class Trainee:
     money: int
     due: Due
     online: bool = False
+    class_id: int = 0
+    race_id: int = 0
+
+
+@dataclass(frozen=True)
+class Cross:
+    """One stranded member planned onto a boat toward a friendly class trainer."""
+
+    name: str
+    guild: str
+    target_map: int
+    transport: str
+    command: str
+    source: str
+    kind: str = "job"
+    said: str = ""
 
 
 @dataclass(frozen=True)
@@ -209,6 +229,7 @@ class Walk:
     cost: int
     money: int
     cap: float = guildroute.FAR_WALK_YARDS
+    kind: str = KIND
 
     @property
     def command(self) -> str:
@@ -235,6 +256,25 @@ class Walk:
         )
 
 
+def trainee_rows(rows, roster, seated_tanks) -> list:
+    """The guild rows this pass may walk, out of the rows the bridge read.
+
+    A roster (family) member's row is left out: the families' own passes
+    fund and train them. The one exception is a roster member holding a
+    raid tank seat (#2361): no family pass walks a roster member to a
+    class trainer, so a seated tank joins this pass's rows like any
+    other member. `seated_tanks` carries every name a tank seat may be
+    found under, approved or current.
+    """
+    roster = {str(n) for n in roster or ()}
+    seated = {str(n) for n in seated_tanks or ()}
+    return [
+        r
+        for r in rows or ()
+        if str(r.get("name") or "") not in roster or str(r.get("name") or "") in seated
+    ]
+
+
 def trainees_from_rows(rows, dues) -> list:
     """Trainee rows out of the bridge's guild rows and classtrain.due's map."""
     return [
@@ -245,6 +285,8 @@ def trainees_from_rows(rows, dues) -> list:
             _int(r.get("money")),
             (dues or {}).get(str(r["name"]), Due()),
             bool(_int(r.get("online"))),
+            class_id=_int(r.get("class_id")),
+            race_id=_int(r.get("race")),
         )
         for r in rows or ()
         if r.get("name")
@@ -298,19 +340,213 @@ def walk_refusal(walker, name) -> str:
     return ""
 
 
+def _is_no_trainer_refusal(result: dict) -> bool:
+    """True when the module refused the walk for having no class trainer on map."""
+    reason = str(result.get("reason") or "")
+    return (
+        result.get("outcome") == "refused"
+        and result.get("retryable") is False
+        and reason.startswith(NO_TRAINER_REASON)
+    )
+
+
 def recent_walkers(rows, minutes=COOLDOWN_MINUTES) -> set:
     """Members walked inside the cooldown, from the command log's rows.
 
-    `rows` carry target_name, source and age (minutes).
+    `rows` carry target_name, source and age (minutes). Refusals for lacking a
+    trainer on the member's map are omitted so a stranded member can cross and
+    walk immediately after arriving on a trainer map.
     """
     out = set()
     for row in rows or ():
         source = str(row.get("source") or "")
         if not source.startswith(SOURCE + ":"):
             continue
+        if _is_no_trainer_refusal(_result_of(row)):
+            continue
         if _int(row.get("age"), minutes + 1) <= minutes:
             out.add(str(row.get("target_name") or source.split(":", 1)[1]))
     return out
+
+
+# The module's own refusal when no trainer of the member's class stands on the
+# map it stands on (mod-overseer's walk_refusals fixture): not retryable, and
+# true for as long as the member stays on that map (ticket 2624).
+NO_TRAINER_REASON = "no trainer of this character's class on this map"
+# How far back the log is read for such a refusal: a member left on a map with
+# no trainer is not asked again for as long as it stays.
+STRANDED_READ_DAYS = 30
+
+
+def _result_of(row) -> dict:
+    """The module's JSON answer in a log row, {} when it is not one."""
+    result = row.get("result")
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            return {}
+    return result if isinstance(result, dict) else {}
+
+
+def stranded(rows) -> dict:
+    """name -> the map each member's newest class trainer walk was refused on,
+    for those whose newest walk was refused for no trainer of their class on
+    that map. A later walk of any other kind frees the member. `rows` carry
+    target_name, source, age (minutes) and result."""
+    newest: dict = {}
+    for row in rows or ():
+        source = str(row.get("source") or "")
+        if not source.startswith(SOURCE + ":"):
+            continue
+        name = str(row.get("target_name") or source.split(":", 1)[1])
+        age = _int(row.get("age"), 10**9)
+        if name not in newest or age < newest[name][0]:
+            newest[name] = (age, _result_of(row))
+    out = {}
+    for name, (_age, result) in newest.items():
+        if _is_no_trainer_refusal(result) and result.get("map") is not None:
+            out[name] = _int(result.get("map"))
+    return out
+
+
+def trainer_maps(class_id: int, race_id: int, trainer_spawns) -> frozenset[int]:
+    """Map IDs holding at least one class trainer for (class_id, race_id)."""
+    cid = _int(class_id)
+    side = situation.side_mask([_int(race_id)]) if race_id else 0
+    if cid <= 0:
+        return frozenset()
+    maps = set()
+    for row in trainer_spawns or ():
+        if _int(row.get("class_id")) != cid:
+            continue
+        map_id = row.get("map")
+        if map_id is None:
+            continue
+        if side and situation.hostile(row.get("enemy_group"), side) is True:
+            continue
+        maps.add(_int(map_id))
+    return frozenset(maps)
+
+
+def _portal_exit(team: str, valid_maps, wall_set) -> tuple[int, str] | None:
+    """One-hop Outland exit when its destination holds a trainer and is unwalled."""
+    boat_map = guildlevel.BOAT_EXITS.get(team)
+    if boat_map is None:
+        return None
+    dest = int(boat_map)
+    if dest in valid_maps and dest not in wall_set:
+        return dest, guildlevel.EXITS[team]
+    return None
+
+
+def crossing_for(
+    team: str, map_id: int, zone_id: int, valid_maps, walls=()
+) -> tuple[int, str] | None:
+    """Next (target_map, transport_name) toward a valid trainer map, or None."""
+    here = -1 if map_id is None else _int(map_id, -1)
+    if not team or here < 0 or here in valid_maps:
+        return None
+    wall_set = frozenset(walls or ())
+    ground = guildlevel.ground_of(team, here, zone_id)
+    rides = [
+        (transport, int(far_map), far_ground)
+        for transport, far_map, far_ground in guildlevel.rides_from(
+            team, here, ground, zone_id
+        )
+        if int(far_map) in valid_maps and int(far_map) not in wall_set
+    ]
+    main = [r for r in rides if r[2] == guildlevel.MAIN_GROUND]
+    pick = next(iter(main or rides), None)
+    if pick is not None:
+        return pick[1], pick[0].name
+    if here == 530:
+        return _portal_exit(team, valid_maps, wall_set)
+    return None
+
+
+def _active_crossings_by_guild(
+    cross_recent, guild_of: dict[str, str]
+) -> dict[str, int]:
+    """Count active in-flight crossings per guild across all CROSS_ACTIONS."""
+    counts: dict[str, int] = {}
+    for row in cross_recent or ():
+        if row.action not in guildjobs.CROSS_ACTIONS:
+            continue
+        if row.status not in ("pending", "claimed", "verifying"):
+            continue
+        if int(row.age_minutes) >= classquest.CROSS_COOLDOWN_MINUTES:
+            continue
+        guild = guild_of.get(row.name, "")
+        if guild:
+            counts[guild] = counts.get(guild, 0) + 1
+    return counts
+
+
+def _plan_stranded_crossing(
+    trainee: Trainee,
+    walker,
+    trainer_spawns,
+    cross_recent,
+    started_cross: dict[str, int],
+    cross_limit: int,
+) -> tuple[Cross | None, str]:
+    """Plan one crossing step for a stranded trainee, or explain why it waits."""
+    here = _int(getattr(walker, "map_id", -1), -1)
+    if trainer_spawns is None:
+        return (
+            None,
+            "%s waits on a map change: no class trainer stands on map %d for it"
+            % (trainee.name, here),
+        )
+    why = walk_refusal(walker, trainee.name)
+    if why:
+        return None, "%s waits: %s" % (trainee.name, why)
+    team = guildlevel.side_of(trainee.race_id)
+    if not team:
+        return (
+            None,
+            "%s waits on a map change: unknown side for class trainer crossing"
+            % trainee.name,
+        )
+    valid_maps = trainer_maps(trainee.class_id, trainee.race_id, trainer_spawns)
+    walls = guildjobs.class_walls(trainee.name, cross_recent)
+    trip = crossing_for(
+        team, here, _int(getattr(walker, "zone_id", 0)), valid_maps, walls
+    )
+    if trip is None:
+        return (
+            None,
+            "%s waits on a map change: no boat reaches a map with its class trainer from map %d"
+            % (trainee.name, here),
+        )
+    if guildjobs.crossing_cooling(trainee.name, cross_recent):
+        return (
+            None,
+            "%s waits to cross for its class trainer: crossing cooldown is active"
+            % trainee.name,
+        )
+    if started_cross.get(trainee.guild, 0) >= cross_limit:
+        return (
+            None,
+            "%s waits to cross for its class trainer: guild crossing allowance (%d) is full"
+            % (trainee.name, cross_limit),
+        )
+    target_map, transport = trip
+    started_cross[trainee.guild] = started_cross.get(trainee.guild, 0) + 1
+    return (
+        Cross(
+            name=trainee.name,
+            guild=trainee.guild,
+            target_map=target_map,
+            transport=transport,
+            command=classquest.cross_command(target_map),
+            source=guildjobs.source_for(guildjobs.TRAIN_CROSS_ACTION, trainee.name),
+            said="%s crosses (%s) toward map %d for its class trainer"
+            % (trainee.name, transport, target_map),
+        ),
+        "",
+    )
 
 
 def unsupported(rows) -> bool:
@@ -322,6 +558,67 @@ def unsupported(rows) -> bool:
     )
 
 
+def _plan_walk_step(
+    trainee: Trainee,
+    walker,
+    started: dict[str, int],
+    per_guild: int,
+    cap: float,
+) -> tuple[Walk | None, str]:
+    """Plan one trainer walk for a ready trainee, or explain why it waits."""
+    why = walk_refusal(walker, trainee.name)
+    if why:
+        return None, "%s waits: %s" % (trainee.name, why)
+    if started.get(trainee.guild, 0) >= per_guild:
+        return (
+            None,
+            "%s waits: %d trainer walks per guild per pass" % (trainee.name, per_guild),
+        )
+    started[trainee.guild] = started.get(trainee.guild, 0) + 1
+    return (
+        Walk(
+            trainee.name,
+            trainee.guild,
+            trainee.level,
+            trainee.due.count,
+            trainee.due.copper,
+            trainee.money,
+            cap,
+        ),
+        "",
+    )
+
+
+def _step_for_trainee(t: Trainee, state: dict) -> tuple[Walk | Cross | None, str]:
+    """Return (step or None, waiting_note) for one ordered trainee."""
+    if not t.due.count:
+        return None, ""
+    if not t.due.affords(t.money):
+        return (
+            None,
+            "%s saves for its trainer: %d spell(s) wait, the cheapest %dc, "
+            "it carries %dc" % (t.name, t.due.count, t.due.cheapest, t.money),
+        )
+    if not t.online or t.name in state["recent"]:
+        return None, ""
+    if t.name in state["busy"]:
+        return None, "%s is already on a guild walk" % t.name
+    walker = state["walkers"].get(t.name)
+    here = getattr(walker, "map_id", None)
+    if here is not None and state["stranded"].get(t.name) == _int(here, -1):
+        return _plan_stranded_crossing(
+            t,
+            walker,
+            state["trainer_spawns"],
+            state["cross_recent"],
+            state["started_cross"],
+            state["cross_limit"],
+        )
+    return _plan_walk_step(
+        t, walker, state["started"], state["per_guild"], state["cap"]
+    )
+
+
 def plan(
     trainees,
     walkers,
@@ -329,50 +626,54 @@ def plan(
     busy,
     per_guild=WALKS_PER_GUILD,
     cap=guildroute.FAR_WALK_YARDS,
+    stranded=None,
+    trainer_spawns=None,
+    cross_recent=(),
+    cross_per_guild=None,
+    guild_of=None,
 ) -> tuple:
-    """(walks, notes): which members walk to their class trainer this pass.
+    """(walks, notes): which members walk or cross to their class trainer.
 
     A member walks when it is online, can pay for at least one waiting spell
     from its own purse, was not walked inside COOLDOWN_MINUTES, is not on
     another guild walk, and the walk row can move it. Inside a guild the
-    member with the most spells it can pay for goes first.
+    member with the most spells it can pay for goes first. A member in
+    `stranded` (name -> map, see `stranded`) on that refused map plans a
+    boat crossing toward a friendly trainer map up to `cross_per_guild` active
+    crossings, or is named once in the notes and written no row.
     """
-    recent = {str(n) for n in recent or ()}
-    busy = {str(n) for n in busy or ()}
-    walks, notes, started = [], [], {}
+    known_guilds = dict(guild_of or {})
+    for t in trainees or ():
+        known_guilds.setdefault(t.name, t.guild)
+    cross_limit = (
+        guildjobs.CROSS_STEPS_PER_GUILD
+        if cross_per_guild is None
+        else int(cross_per_guild)
+    )
+    state = {
+        "walkers": walkers or {},
+        "recent": {str(n) for n in recent or ()},
+        "busy": {str(n) for n in busy or ()},
+        "stranded": stranded or {},
+        "trainer_spawns": trainer_spawns,
+        "cross_recent": cross_recent,
+        "started": {},
+        "started_cross": _active_crossings_by_guild(cross_recent, known_guilds),
+        "per_guild": per_guild,
+        "cross_limit": cross_limit,
+        "cap": cap,
+    }
+    walks, notes = [], []
 
     def key(t):
         return (-min(t.due.count, _affordable(t)), -t.level, t.name)
 
     for t in sorted(trainees or (), key=key):
-        if not t.due.count:
-            continue
-        if not t.due.affords(t.money):
-            notes.append(
-                "%s saves for its trainer: %d spell(s) wait, the cheapest %dc, "
-                "it carries %dc" % (t.name, t.due.count, t.due.cheapest, t.money)
-            )
-            continue
-        if not t.online:
-            continue
-        if t.name in recent:
-            continue
-        if t.name in busy:
-            notes.append("%s is already on a guild walk" % t.name)
-            continue
-        why = walk_refusal((walkers or {}).get(t.name), t.name)
-        if why:
-            notes.append("%s waits: %s" % (t.name, why))
-            continue
-        if started.get(t.guild, 0) >= per_guild:
-            notes.append(
-                "%s waits: %d trainer walks per guild per pass" % (t.name, per_guild)
-            )
-            continue
-        started[t.guild] = started.get(t.guild, 0) + 1
-        walks.append(
-            Walk(t.name, t.guild, t.level, t.due.count, t.due.copper, t.money, cap)
-        )
+        step, note = _step_for_trainee(t, state)
+        if step is not None:
+            walks.append(step)
+        elif note:
+            notes.append(note)
     return walks, notes
 
 
@@ -395,6 +696,8 @@ def summary(rows) -> str:
     for row in rows or ():
         if not str(row.get("source") or "").startswith(SOURCE + ":"):
             continue
+        if _int(row.get("age"), 0) > 24 * 60:
+            continue  # read for a strand (stranded), not a walk of the day
         walks += 1
         result = row.get("result")
         if isinstance(result, str):

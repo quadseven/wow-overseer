@@ -59,6 +59,8 @@ def ugga(value, cap=150):
 # Mithril Spurs, Imperial Plate Bracers and Imperial Plate Boots have no
 # trainer_spell row; a plan item teaches each.
 PLAN_TAUGHT = frozenset({9964, 16649, 16657})
+# Non-auto-learned Cooking rungs in craft.RECIPES come from vendor/quest items.
+VENDOR_OR_QUEST_COOKING = frozenset({8607, 2545, 3397, 15855, 18243, 24801})
 
 
 class AFamilyCrafterIsDueATrainerRecipe(unittest.TestCase):
@@ -164,10 +166,10 @@ class AFamilyCrafterIsDueATrainerRecipe(unittest.TestCase):
 
     def test_every_ladder_rung_has_its_trainer_row(self):
         for skill, recipes in craft.RECIPES.items():
-            if skill == goals.SKILL_IDS["cooking"]:
-                continue  # quest/vendor cooking recipes are learned elsewhere
             for recipe in recipes:
-                if recipe.spell_id in craft.AUTO_LEARNED | PLAN_TAUGHT:
+                if recipe.spell_id in (
+                    craft.AUTO_LEARNED | PLAN_TAUGHT | VENDOR_OR_QUEST_COOKING
+                ):
                     continue
                 with self.subTest(skill=skill, recipe=recipe.name):
                     self.assertIn(recipe.spell_id, craft.TRAINER_RECIPES)

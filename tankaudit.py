@@ -7,13 +7,22 @@ learned is missing, in one of the two states the shared spell-state rule
 already names: trainable now, or needs another spell first. Above-level
 spells are not missing: the tank cannot learn them yet.
 
-The rule is classtrain.spell_state, the same rule the training surface
-and the guild training pass use, so this audit cannot disagree with
-them about a spell. Spells are given by id: the world's tables carry no
-spell names, so the one spell the audit names explicitly carries its
-name in a small id-to-name table below, sourced from the repo's own
-trainer facts. Nothing here grants a spell; a missing spell routes
-through the normal trainer machinery.
+The states are classtrain.spell_state's, the same rule the training
+surface and the guild training pass use, applied the way the pass
+applies it, so this audit cannot disagree with them about a spell. A
+due spell counts as missing only when a trainer visit could teach it:
+every spell it requires is known, or is itself taught earlier in the
+same visit (the chain rule classtrain.due counts by). A due spell whose
+requirement chain bottoms out at a spell no trainer row teaches (a
+talent, a class-book spell) can never be taught at a trainer, so it is
+not missing: the audit names the backlog a trainer route can clear, and
+only that. The member's skills ride along too, so a proficiency spell
+held as a skill counts as learned, as it does on the training read.
+Spells are given by id: the world's tables carry no spell names, so the
+one spell the audit names explicitly carries its name in a small
+id-to-name table below, sourced from the repo's own trainer facts.
+Nothing here grants a spell; a missing spell routes through the normal
+trainer machinery.
 
 PURE MODULE: rows in, an audit out. No MySQL and no clock.
 """
@@ -35,17 +44,47 @@ MISSING_STATES = ("trainable", "needs")
 SPELL_NAMES = {18499: "Berserker Rage"}
 
 
+def _teachable(rows: list, known: set, level: int, cap: int, skills) -> set:
+    """The spells one trainer visit could teach, in dependency order.
+
+    Starts from what the member knows and keeps adding a due spell the
+    visit has covered the requirements of, judged by the shared rule
+    against the growing set, the way classtrain.due counts a chain. A
+    spell whose chain never gets there (a requirement no row in the
+    list teaches) is never added.
+    """
+    reach = set(known or ())
+    grew = True
+    while grew:
+        grew = False
+        for row in rows:
+            spell = int(row["spell"])
+            if spell in reach:
+                continue
+            state = classtrain.spell_state(row, reach, level, cap, skills)
+            if state in ("learned", "trainable"):
+                reach.add(spell)
+                grew = True
+    return reach
+
+
 def audit_tank(
-    seat: dict, trainer: list, known: set, cap: int = campaignplan.LEVEL_CAP
+    seat: dict,
+    trainer: list,
+    known: set,
+    cap: int = campaignplan.LEVEL_CAP,
+    skills=None,
 ) -> dict:
     """One seated tank: the due trainer spells it has not learned."""
     level = int(seat.get("level") or 0)
-    missing = []
-    for row in sorted(
+    rows = sorted(
         trainer or (), key=lambda r: (int(r.get("level") or 0), int(r["spell"]))
-    ):
-        state = classtrain.spell_state(row, known, level, cap)
-        if state in MISSING_STATES:
+    )
+    teachable = _teachable(rows, known, level, cap, skills)
+    missing = []
+    for row in rows:
+        state = classtrain.spell_state(row, known, level, cap, skills)
+        if state in MISSING_STATES and int(row["spell"]) in teachable:
             entry = {
                 "spell": int(row["spell"]),
                 "level": int(row.get("level") or 0),
@@ -69,6 +108,7 @@ def audit_tanks(
     trainer_by_class: dict,
     known_by_name: dict,
     cap: int = campaignplan.LEVEL_CAP,
+    skills_by_name: dict | None = None,
 ) -> dict:
     """Every filled tank seat, in seat order, with the audit totals."""
     tanks = []
@@ -77,7 +117,8 @@ def audit_tanks(
             continue
         trainer = (trainer_by_class or {}).get(int(seat.get("class_id") or 0), [])
         known = (known_by_name or {}).get(seat["name"], set())
-        tanks.append(audit_tank(seat, trainer, known, cap))
+        skills = (skills_by_name or {}).get(seat["name"])
+        tanks.append(audit_tank(seat, trainer, known, cap, skills))
     return {
         "tanks": tanks,
         "audited": len(tanks),

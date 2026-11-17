@@ -203,10 +203,14 @@ class TheBridgeFarmsEachMemberItself(unittest.TestCase):
         run_individual(world)
         self.assertEqual(world.inserted, [("Ugga", "farm:herbalism")])
 
-    def test_an_operator_hold_writes_and_walks_nobody(self):
+    def test_an_operator_hold_does_not_stop_the_members_farming(self):
+        # A hold stops quest drives and lending, not gathering.
         world = FakeBridge(self.ROWS, held={"Grug"})
         self.assertTrue(run_individual(world))
-        self.assertEqual((world.inserted, world.passes), ([], []))
+        self.assertEqual(world.inserted, [("Ugga", "farm:herbalism")])
+        self.assertEqual(
+            sorted(s.leader for s in world.passes), ["Bork", "Grog", "Grug", "Og"]
+        )
 
     def test_a_campaign_queue_or_a_run_writes_and_walks_nobody(self):
         for kw in ({"queue": True}, {"mid_run": True}):

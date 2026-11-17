@@ -43,6 +43,24 @@ MIN_RADIUS = 100.0
 MAX_RADIUS = 400.0
 # A descent at least this long ending in a self death is a fall.
 MIN_FALL_YARDS = 20.0
+# A disc with this many deaths is a killing ground, not a stray accident.
+HEAVY_DEATHS = 50
+# A quest choice also passes over a quest whose straight line runs within this
+# many yards of a heavy disc's centre: the worldserver picks the road, and the
+# road around the world's walls bends through such ground.
+CORRIDOR_YARDS = 1500.0
+# A walker this close to its goal is at the counter already: the walk is a few
+# steps, not a crossing of anything (the Undercity mailbox hold, #1261).
+INTERACT_YARDS = 12.0
+# A fall disc condemns only walkers standing near the height the fall began.
+# The death row's z is where the character LANDED; z + yards_fallen is the
+# ledge it dropped from. A walker whose own z is this far (or more) below
+# that ledge is on the floor under it, and the floor does not kill.
+FALL_CLEARANCE_YARDS = MIN_FALL_YARDS
+# A lava or slime disc condemns the liquid, not the air over it. A walk whose
+# two ends both stand at least this far above the liquid's surface (the highest
+# death z in the disc) is on a bridge, a ledge or a city floor over it.
+LIQUID_CLEARANCE_YARDS = 10.0
 # How far back the rows are read, in days.
 DEATH_DAYS = 7
 # A detour may run at most this many times the direct walk: past it the
@@ -98,6 +116,13 @@ class Disc:
     radius: float
     kind: str
     deaths: int
+    # The lowest ledge the disc's falls began from, set only when EVERY death
+    # in it is a fall with a known landing z; None for lava, slime or a fall
+    # with no z (those condemn the ground whatever height the walker is at).
+    top_z: float | None = None
+    # The highest z a liquid death in a lava or slime disc was recorded at,
+    # i.e. the surface at least; None for a fall disc or a row with no z.
+    surface_z: float | None = None
 
     def said(self) -> str:
         return "%d %s death%s within %d yards of (%d, %d) on map %d" % (
@@ -142,7 +167,11 @@ def discs(rows) -> list:
     for r in rows or ():
         kind = kind_of(r)
         if kind:
-            spots.append((int(_num(r, "map_id")), _num(r, "x"), _num(r, "y"), kind))
+            z, fell = _num(r, "z"), _num(r, "yards_fallen")
+            top = z + fell if kind == "fall" and z is not None and fell else None
+            spots.append(
+                (int(_num(r, "map_id")), _num(r, "x"), _num(r, "y"), kind, top, z)
+            )
     parent = list(range(len(spots)))
 
     def find(i):
@@ -154,7 +183,14 @@ def discs(rows) -> list:
     for i, a in enumerate(spots):
         for j in range(i + 1, len(spots)):
             b = spots[j]
-            if a[0] == b[0] and math.hypot(a[1] - b[1], a[2] - b[2]) <= CLUSTER_YARDS:
+            # A KIND CLUSTERS WITH ITS OWN KIND ONLY: a void fall 140 yards from
+            # a lava pool is not part of the pool, and merging them grew a
+            # 3-death disc to 157 yards over a whole city (Ironforge).
+            if (
+                a[0] == b[0]
+                and a[3] == b[3]
+                and math.hypot(a[1] - b[1], a[2] - b[2]) <= CLUSTER_YARDS
+            ):
                 parent[find(i)] = find(j)
     groups: dict = {}
     for i, s in enumerate(spots):
@@ -167,6 +203,12 @@ def discs(rows) -> list:
         cy = sum(m[2] for m in members) / len(members)
         reach = max(math.hypot(m[1] - cx, m[2] - cy) for m in members)
         kinds = sorted({m[3] for m in members})
+        tops = [m[4] for m in members]
+        top_z = min(tops) if all(t is not None for t in tops) else None
+        zs = [m[5] for m in members]
+        surface_z = (
+            max(zs) if kinds != ["fall"] and all(v is not None for v in zs) else None
+        )
         out.append(
             Disc(
                 map_id=members[0][0],
@@ -175,6 +217,8 @@ def discs(rows) -> list:
                 radius=min(MAX_RADIUS, max(MIN_RADIUS, reach + MARGIN_YARDS)),
                 kind="/".join(kinds),
                 deaths=len(members),
+                top_z=top_z,
+                surface_z=surface_z,
             )
         )
     return sorted(out, key=lambda d: (d.map_id, d.x, d.y))
@@ -187,6 +231,33 @@ def _point(p):
     if m is None or x is None or y is None:
         return None
     return int(m), x, y
+
+
+def _on_the_floor(disc, start) -> bool:
+    """Whether the walker at `start` ({.., z}) stands well below the ledge a
+    fall disc's deaths began from, so that its ground is the floor under the
+    drop and not the drop. Needs the walker's z and the disc's ledge: with
+    either missing the disc stands and refuses, as it always did."""
+    z = _num(start, "z")
+    return (
+        disc.top_z is not None
+        and z is not None
+        and z <= disc.top_z - FALL_CLEARANCE_YARDS
+    )
+
+
+def _over_the_liquid(disc, start, goal) -> bool:
+    """Whether a lava or slime disc's liquid lies well below BOTH ends of the
+    walk, so that the walk is on dry ground over it. Needs both z and the
+    disc's surface; with any missing the disc stands. The path between the
+    ends is not sampled: a route that dives to the liquid between two high
+    ends is the one case this does not see."""
+    if disc.surface_z is None:
+        return False
+    zs = (_num(start, "z"), _num(goal, "z"))
+    return all(
+        z is not None and z >= disc.surface_z + LIQUID_CLEARANCE_YARDS for z in zs
+    )
 
 
 def _to_segment(disc, a, b) -> float:
@@ -210,9 +281,14 @@ def crossings(all_discs, start, goal) -> list:
     a, b = _point(start), _point(goal)
     if a is None or b is None or a[0] != b[0]:
         return []
+    # At the counter already: a few steps are no crossing.
+    if math.hypot(b[1] - a[1], b[2] - a[2]) <= INTERACT_YARDS:
+        return []
     out = []
     for disc in all_discs or ():
         if disc.map_id != a[0]:
+            continue
+        if _on_the_floor(disc, start) or _over_the_liquid(disc, start, goal):
             continue
         if math.hypot(disc.x - a[1], disc.y - a[2]) <= disc.radius:
             continue
@@ -280,6 +356,16 @@ def detour(all_discs, start, goal, candidates):
     return best
 
 
+def _aim_z(aim):
+    """The finite z of an `at:<map>:<x>,<y>,<z>` aim, or None (inf and nan are
+    not heights: the disc then stands)."""
+    try:
+        z = float(str(aim).split(":", 2)[2].split(",")[2])
+    except (IndexError, ValueError):
+        return None
+    return z if math.isfinite(z) else None
+
+
 def aim_refusal(all_discs, here, aim, spawn=None) -> str:
     """Why an aim must not be written, or "" when it may be.
 
@@ -291,7 +377,7 @@ def aim_refusal(all_discs, here, aim, spawn=None) -> str:
         return ""
     ground = places.parse_ground_aim(aim)
     if ground:
-        goal = {"map_id": ground[0], "x": ground[1], "y": ground[2]}
+        goal = {"map_id": ground[0], "x": ground[1], "y": ground[2], "z": _aim_z(aim)}
         what = aim
     elif spawn and keyword_mask(aim):
         goal = spawn
@@ -398,6 +484,28 @@ def standing_aim_refusal(all_discs, deaths, here, aim, spawn=None) -> str:
     )
 
 
+def _heavy_corridor(all_discs, a, goal):
+    """The first heavy disc within CORRIDOR_YARDS of the line a -> goal, or
+    None. Distance is to the disc's centre, so a disc is judged by where the
+    deaths are, not by its radius. A walker already inside a disc may leave."""
+    b = _point(goal)
+    if b is None or a[0] != b[0]:
+        return None
+    for disc in all_discs or ():
+        if disc.map_id != a[0] or disc.deaths < HEAVY_DEATHS:
+            continue
+        if math.hypot(disc.x - a[1], disc.y - a[2]) <= disc.radius:
+            continue
+        if (
+            _to_segment(
+                Disc(disc.map_id, disc.x, disc.y, 0.0, disc.kind, disc.deaths), a, b
+            )
+            <= CORRIDOR_YARDS
+        ):
+            return disc
+    return None
+
+
 def pick_quest(all_discs, here, order, ends) -> tuple:
     """(quest id or 0, one note per quest passed over).
 
@@ -418,7 +526,7 @@ def pick_quest(all_discs, here, order, ends) -> tuple:
         goal = min(
             same, key=lambda s: math.hypot(_point(s)[1] - a[1], _point(s)[2] - a[2])
         )
-        hit = crossing(all_discs, here, goal)
+        hit = crossing(all_discs, here, goal) or _heavy_corridor(all_discs, a, goal)
         if hit is None:
             return quest, notes
         notes.append(

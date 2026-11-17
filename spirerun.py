@@ -279,6 +279,45 @@ def order_slot(rows: list, last: Last | None, now: float) -> Slot | None:
     return Slot(position, tuple(int(r["id"]) for r in moved))
 
 
+def _span(seconds: float) -> str:
+    """A wait in plain words: days and hours, or minutes under an hour."""
+    seconds = max(int(seconds), 0)
+    days, rest = divmod(seconds, 86400)
+    hours = rest // 3600
+    if days:
+        return "%d days %d hours" % (days, hours)
+    if hours:
+        return "%d hours" % hours
+    return "%d minutes" % (rest // 60)
+
+
+def held_line(reason: str) -> str:
+    """Why a family under an operator hold is never read by this pass."""
+    return "held by the operator, so no Upper Spire order is written (%s)" % (
+        reason or "no reason given"
+    )
+
+
+def wait_line(last: Last, now: float) -> str:
+    """Why the order waits out the family's last entry, and for how long."""
+    if last.cancelled:
+        what, wait = "its last order was cancelled by a person", AFTER_CANCEL_SECONDS
+    elif last.cleared:
+        what, wait = "its last run cleared", AFTER_CLEAR_SECONDS
+    else:
+        what, wait = "its last run did not clear", AFTER_FAILURE_SECONDS
+    return "waits: %s, %s left" % (what, _span(wait - (now - last.finished_at)))
+
+
+def behind_line(rows: list, slot: Slot) -> str:
+    """The entries the order sits behind, or "" when it goes first."""
+    ahead = [r for r in _stands_ahead(rows) if int(r["position"]) < slot.position]
+    return ", ".join(
+        "%s (%s)" % (r.get("keyword"), r.get("status"))
+        for r in sorted(ahead, key=lambda r: int(r["position"]))
+    )
+
+
 def withdrawal(rows: list, short: str, queued_age_seconds: float) -> int | None:
     """The id of this module's unstarted entry to take back, or None.
 

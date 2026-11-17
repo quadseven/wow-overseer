@@ -92,9 +92,11 @@ class OneBatchIsKept(unittest.TestCase):
         posted = guildjobs.postable(m, None)
         self.assertEqual([3], [c.guid for c in posted])
 
-    def test_a_raider_keeps_nothing_back_for_casts(self):
+    def test_a_raider_keeps_one_batch_back_for_its_casts(self):
+        # Since slice 3 a raid seat casts at its town stops, so it keeps what
+        # its casts eat the way a maintenance member does.
         m = member(role=guildjobs.RAIDER, carried=[stack(1, LINEN, 25)])
-        self.assertEqual([1], [c.guid for c in guildjobs.postable(m, None)])
+        self.assertEqual([], guildjobs.postable(m, None))
 
 
 class TheCraftersPostComesFirst(unittest.TestCase):

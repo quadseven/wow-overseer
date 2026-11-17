@@ -15,8 +15,10 @@ import unittest
 
 import classquest
 import guildjobs
+import guildlevel
 import modsource
 from test_classquest import class_plan, class_steps, who
+from test_guildlevel import world as level_world
 
 # A point on the island (the Teldrassil box); the quest's giver stands on the
 # mainland of the same map.
@@ -142,6 +144,21 @@ class TheHold(unittest.TestCase):
                 self.assertEqual(class_steps(held), [])
         late = boat_row("Isle", classquest.CROSS_WALL_MINUTES + 1, WALL, "error")
         self.assertEqual(len(rides(class_plan([island()], recent=recent(late)))), 1)
+
+    def test_a_walled_boat_lets_an_outgrown_member_level_and_clears_class_held(self):
+        refused = boat_row("Isle", 30, WALL, "error")
+        held = class_plan([island()], recent=recent(refused))
+        self.assertEqual(guildjobs.class_held(held.lines), set())
+        leveled = class_plan(
+            [island(zone_id=1657)],
+            recent=recent(refused),
+            leveling=level_world(),
+        )
+        self.assertEqual(
+            [s.action for s in leveled.steps if s.holder == "Isle"],
+            [guildlevel.ACTION],
+        )
+        self.assertEqual(guildjobs.class_held(leveled.lines), set())
 
 
 class TheRefusalBackoff(unittest.TestCase):

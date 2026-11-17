@@ -313,7 +313,8 @@ def _level_blockers(raiders: list, min_level) -> tuple:
     hard = (
         [
             "%s below level %d, the lowest the instance's own access row lets "
-            "in: %s."
+            "in, and an order is refused until every approved seat is online "
+            "and at that level: %s."
             % (_count(len(under), "raider is", "raiders are"), gate, _names(under))
         ]
         if under
@@ -328,6 +329,101 @@ def _level_blockers(raiders: list, min_level) -> tuple:
         else []
     )
     return hard, soft
+
+
+# THE GEAR FLOOR IS A PLANNING NUMBER (#2573): raidfloor derives it from assumed
+# boss damage. The order path, the module and the instance's access row (min
+# average item level 0) never read it, so it stops nothing and is drawn SOFT.
+FLOOR_NOT_ENFORCED = (
+    " Planning number, not enforced: nothing refuses an order or holds the door on it."
+)
+
+
+def _floor_soft(sentences: list) -> list:
+    return [t + FLOOR_NOT_ENFORCED for t in sentences]
+
+
+def _eligible_counts(raiders: list, min_level) -> dict:
+    """Placed raiders at the instance's level, by role (online is not known to
+    the card; the order path also needs it)."""
+    gate = int(min_level) if min_level else raidrun.MIN_LEVEL[raidrun.MOLTEN_CORE]
+    ready = [m for m in raiders if int(m.get("level") or 0) >= gate]
+    return {
+        "gate": gate,
+        "seats": len(ready),
+        "tanks": len([m for m in ready if m.get("role") == "tank"]),
+        "healers": len([m for m in ready if m.get("role") == "healer"]),
+        "left_out": [m["name"] for m in raiders if m not in ready],
+    }
+
+
+def first_kill_card(raiders: list, min_level) -> dict:
+    """What a first-kill order (raidrun.first_kill_roster) would form from
+    these placed raiders by level alone (the card does not know who is online;
+    the order reads that), and the seats it would leave out, named."""
+    have = _eligible_counts(raiders, min_level)
+    want = raidrun.first_kill_quorum()
+    got = (have["seats"], have["tanks"], have["healers"])
+    can_form = all(h >= w for h, w in zip(got, want, strict=True))
+    left = have["left_out"]
+    shown = ", ".join(left)
+    line = (
+        "A first-kill order forms %d of %d seats at level %d or more (%d tanks, "
+        "%d healers; it needs %d seats, %d tanks and %d healers online)%s. "
+        "Left out: %s."
+        % (
+            have["seats"],
+            len(raiders),
+            have["gate"],
+            have["tanks"],
+            have["healers"],
+            want[0],
+            want[1],
+            want[2],
+            "" if can_form else ", so it would refuse today",
+            shown or "nobody",
+        )
+    )
+    return {
+        "seats": have["seats"],
+        "tanks": have["tanks"],
+        "healers": have["healers"],
+        "quorum": list(want),
+        "left_out": left,
+        "can_form": can_form,
+        "line": line,
+    }
+
+
+def _quorum_blockers(raiders: list, min_level) -> list:
+    """HARD: the module holds the raid at the door below its quorum. The
+    numbers are raidrun's copy of the module's defaults."""
+    have = _eligible_counts(raiders, min_level)
+    want = (raidrun.QUORUM_SEATS, raidrun.QUORUM_TANKS, raidrun.QUORUM_HEALERS)
+    got = (have["seats"], have["tanks"], have["healers"])
+    if all(h >= w for h, w in zip(got, want, strict=True)):
+        return []
+    return [
+        "The module holds a raid at the door unless %d seats, %d tanks and %d "
+        "healers stand there (Overseer.Raid.QuorumSeats, QuorumTanks, "
+        "QuorumHealers, at their defaults); %d seats, %d tanks and %d healers "
+        "are at level %d or more."
+        % (*want, have["seats"], have["tanks"], have["healers"], have["gate"])
+    ]
+
+
+def _below_level_card(raiders: list, min_level) -> dict:
+    """How many placed seats are below the instance's level, and in which roles."""
+    have = _eligible_counts(raiders, min_level)
+    below = [m for m in raiders if m["name"] in have["left_out"]]
+    return {
+        "gate": have["gate"],
+        "below": len(below),
+        "seats": len(raiders),
+        "tanks": len([m for m in below if m.get("role") == "tank"]),
+        "healers": len([m for m in below if m.get("role") == "healer"]),
+        "damage": len([m for m in below if m.get("role") not in ("tank", "healer")]),
+    }
 
 
 def _gear_blockers(raiders: list, gear: dict, attuned: set) -> list:
@@ -444,19 +540,22 @@ def _blockers(
     clears: bool = True,
     gathers: bool = True,
     worn_rows: list = (),
+    seat_blockers: list = (),
 ) -> list:
     """Everything between this guild and its first raid, hard ones first."""
     level_hard, level_soft = _level_blockers(raiders, min_level)
     hard = (
         _staffing_blockers(lineup, raiders, runnable, clears, gathers)
         + level_hard
-        + raidfloor.hard_blockers(raiders, worn_rows)
+        + _quorum_blockers(raiders, min_level)
     )
     soft = (
-        level_soft
+        _floor_soft(raidfloor.hard_blockers(raiders, worn_rows))
+        + level_soft
         + _thin_role_blockers(lineup)
         + _gear_blockers(raiders, gear, attuned)
         + _support_blockers(lineup, goals)
+        + list(seat_blockers or ())
     )
     return [{"tone": HARD, "text": t} for t in hard] + [
         {"tone": SOFT, "text": t} for t in soft
@@ -846,6 +945,16 @@ def build_guild(
     raiders = _placed_raiders(lineup)
     gear = {m["name"]: m.get("readiness") for m in members}
     attuned = {r["name"] for r in attuned_rows if r.get("name")}
+    faction = faction_of(m["race"] for m in members)
+    supply_card = _supply_card(
+        lineup,
+        members,
+        worn_rows,
+        group,
+        supply,
+        faction=faction,
+        holding_rows=holding_rows,
+    )
     blockers = _blockers(
         lineup,
         raiders,
@@ -857,6 +966,7 @@ def build_guild(
         raidrun.CLEARS,
         raidrun.GATHERS,
         worn_rows,
+        seat_blockers=supply_card.get("seat_blockers") or (),
     )
     names = [m["name"] for m in raiders]
     classes = {m["name"]: m.get("class_id") for m in members}
@@ -884,7 +994,6 @@ def build_guild(
         holding_rows, list(group["family_names"]), (raidrun.CORE_FRAGMENT,)
     )
     hard = len([b for b in blockers if b["tone"] == HARD])
-    faction = faction_of(m["race"] for m in members)
     name = group["guild"] or "%s's family" % group["family"]
     return {
         "guild": group["guild"],
@@ -907,6 +1016,8 @@ def build_guild(
         "encounter_line": lineup.get("encounter_line", ""),
         "gear_line": _gear_line(raiders, gear),
         "blockers": blockers,
+        "seats_below_level": _below_level_card(raiders, min_level),
+        "first_kill": first_kill_card(raiders, min_level),
         "blockers_line": (
             "Nothing stands between this guild and its first raid."
             if not blockers
@@ -922,7 +1033,7 @@ def build_guild(
         "attunement": raidrun.attunement(
             list(group["family_names"]), attuned, in_log, fragments
         ),
-        "supply": _supply_card(lineup, members, worn_rows, group, supply),
+        "supply": supply_card,
         "preraid": preraid,
         "gates": _gates(min_level),
     }
@@ -938,23 +1049,74 @@ def _gates(min_level) -> dict:
     }
 
 
-def _supply_card(lineup, members, worn_rows, group, supply) -> dict:
+def _supply_card(
+    lineup,
+    members,
+    worn_rows,
+    group,
+    supply,
+    faction: str = "",
+    holding_rows: list = (),
+) -> dict:
     """The Molten Core supply section (#275): raidsupply's card for this guild."""
     classes = {m["name"]: m.get("class_id") for m in members}
     raiders = raidsupply.raiders_from_lineup(
         lineup, classes, worn_rows, group["family_names"]
     )
     read = supply or {}
+    have = _guild_supply_have(read, holding_rows, members)
+    guild = group.get("guild") or (
+        "%s's family" % group["family"] if group.get("family") else ""
+    )
     return raidsupply.card(
         raiders,
-        read.get("have") or {},
+        have,
         read.get("knowers") or {},
         None,
         read.get("bank"),
         crafters=group["family_names"],
         snapshots=read.get("snapshots") or (),
         unobtainable=raidcraft.unobtainable_lines(),
+        guild=guild,
+        vendor_recipes=_faction_vendor_recipes(faction),
+        seat_reagents=read.get("seat_reagents"),
+        seat_drink=read.get("seat_drink"),
+        known_spells=read.get("known_spells"),
+        bank_reagents=read.get("bank_reagents"),
+        bank_drink=int(read.get("bank_drink") or 0),
+        spell_reagents=read.get("spell_reagents"),
     )
+
+
+def _guild_supply_have(read, holding_rows, members) -> dict:
+    """Combine the guild supply read, or the raid card's bag fallback."""
+    have = dict(read.get("have") or {})
+    if have or not holding_rows:
+        return have
+    entry_by_name = {
+        **{name: entry for entry, name in raidsupply.REAGENT_NAMES.items()},
+        **{s.name: s.entry for s in raidsupply.SUPPLIES},
+    }
+    by_member = carried_each(
+        holding_rows, [m["name"] for m in members], tuple(entry_by_name)
+    )
+    for counts in by_member.values():
+        for item_name, count in counts.items():
+            entry = entry_by_name[item_name]
+            have[entry] = have.get(entry, 0) + count
+    return have
+
+
+def _faction_vendor_recipes(faction: str) -> set:
+    """Recipe entries sold by vendors for this guild's faction."""
+    team = (faction or "").lower()
+    return {
+        make.recipe_item
+        for item in raidsupply.SUPPLIES
+        if (make := item.make)
+        and make.recipe_item
+        and any(vendor.team == team for vendor in make.recipe_vendors)
+    }
 
 
 def build_readiness(groups: list) -> dict:

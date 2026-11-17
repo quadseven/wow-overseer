@@ -427,7 +427,22 @@ CROSS_WALLS = frozenset(
         "the character is not a bot",
     }
 )
+HOSTILE_BERTH_WALL_PREFIX = "the berth on map "
+HOSTILE_BERTH_WALL_INFIX = " stands in hostile ground, up to level "
 CROSS_WALL_MINUTES = 6 * 60
+
+
+def is_cross_wall(refusal: str) -> bool:
+    """Whether `refusal` is a module crossing refusal that holds the map for
+    CROSS_WALL_MINUTES: one of CROSS_WALLS, or a berth standing in hostile
+    ground the character cannot survive."""
+    text = str(refusal or "")
+    if text in CROSS_WALLS:
+        return True
+    return (
+        text.startswith(HOSTILE_BERTH_WALL_PREFIX) and HOSTILE_BERTH_WALL_INFIX in text
+    )
+
 
 # THE HUNT'S CLOCK. A hunt that makes no progress (the quest's kill and item
 # counts do not move) for HUNT_STALL_MINUTES is sent to another pack of the

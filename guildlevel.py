@@ -110,8 +110,9 @@ road. Some hubs lie past the other side's ground: from the Horde's north of the
 Eastern Kingdoms, Stranglethorn Vale is reached through Duskwood, the Badlands
 through the Wetlands and Loch Modan, the Swamp of Sorrows through Redridge or
 Duskwood. A Horde player takes the zeppelin to Grom'gol and the flight paths to
-Kargath and Stonard instead. So a hub is walked to only on the member's own
-ground. The module's far walk still refuses a road far above the walker's
+Kargath and Stonard instead. The Alliance's Dustwallow Marsh is the same on
+Kalimdor: past the Barrens, left and entered by the Theramore boat. So a hub is
+walked to only on the member's own ground. The module's far walk still refuses a road far above the walker's
 level (quadseven/mod-overseer#897), and flies whenever a known flight beats it.
 
 THE ZEPPELINS AND BOATS (`TRANSPORTS`). Each side's rides between the two
@@ -272,6 +273,17 @@ POCKETS = {
             # Past Redridge or Duskwood: the Swamp of Sorrows and the Blasted
             # Lands.
             "the Swamp of Sorrows": frozenset({4, 8}),
+        },
+    },
+    levelroute.ALLIANCE: {
+        1: {
+            # Past the Barrens: Dustwallow Marsh and Theramore have no road to
+            # the rest of the Alliance's Kalimdor that stays off the Horde's
+            # ground, and its guards (Orgrimmar Grunt in the Barrens, the
+            # Splintertree Guard on the way north) killed Cave's Draenei 72
+            # times in a day on the walks out of it (2026-11-15). The way in
+            # and out is the Menethil Harbor boat (TRANSPORTS).
+            "Dustwallow Marsh": frozenset({15}),
         },
     },
 }

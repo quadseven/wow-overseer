@@ -1186,12 +1186,14 @@ class WhereMaterialsGo(unittest.TestCase):
         self.assertTrue(step is None or step.action != "post")
 
     def test_a_raider_posts_only_a_real_haul(self):
+        # An herb, which none of the raider's own trades casts (Linen Cloth is
+        # kept back for its First Aid since slice 3).
         small = member(
-            "Raider", role=guildjobs.RAIDER, carried=(stack(1, 2589, 12, subclass=5),)
+            "Raider", role=guildjobs.RAIDER, carried=(stack(1, 2449, 12, subclass=9),)
         )
         self.assertIsNone(only_step(plan([small]), "Raider"))
         big = member(
-            "Raider", role=guildjobs.RAIDER, carried=(stack(1, 2589, 20, subclass=5),)
+            "Raider", role=guildjobs.RAIDER, carried=(stack(1, 2449, 20, subclass=9),)
         )
         self.assertEqual(only_step(plan([big]), "Raider").action, "post")
 

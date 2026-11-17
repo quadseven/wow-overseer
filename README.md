@@ -97,18 +97,20 @@ DELETE FROM overseer_operator_hold WHERE family = 'Grug';
 While a family is held, these write nothing for it and log
 `held by operator: <reason>` at most every ten minutes:
 
-- the campaign queue pass: the planner, the attunement step, the Upper Spire
-  pass, the trade turn, dungeon quests, town first and the queue step itself
+- the campaign queue pass: the planner, the attunement and Hydraxian quest
+  steps, the Upper Spire pass, the trade turn, dungeon quests, town first and
+  the queue step itself
   (a queued entry is not stepped);
 - the council (no scene and no goal, including the one after a restart);
 - the activity choice;
 - the leveling route.
 
-The bag, bank, mail, vendor and craft passes keep working inside the job the
-family has. A hold undoes nothing already written, so set the job you want
-from the console. `CAMPAIGN_PLANNER=off`, `ATTUNEMENT_STEP=off` and
-`JEV_MODE_ACTIVITY_CHOICE=off` still switch their writer off for every family
-from the next start. Either a switch or a hold is enough to stop a writer.
+The farm pass (family-wide and per member), and the bag, bank, mail, vendor and
+craft passes keep working inside the job the family has. A hold undoes nothing already written, so set the job you want
+from the console. `CAMPAIGN_PLANNER=off`, `ATTUNEMENT_STEP=off`,
+`HYDRAXIAN_STEP=off` and `JEV_MODE_ACTIVITY_CHOICE=off` switch their writer off
+for every family from the next start. Either a switch or a hold is enough to
+stop a writer.
 
 ## Status
 
@@ -163,6 +165,10 @@ A worldserver roll is separate and logs every bot out. [docs/ROLLS.md](docs/ROLL
 - `apiv2/`: the versioned API.
 - `tests/`: the unit suite.
 - `tools/`, `scripts/`: maintenance and local checks. Only the scheduled metric watcher and its audit dependency ship in the image.
+- `forge/`: builds the nightly `lean` and `full` database templates for ephemeral test worlds from the backup share. It is a build tool and does not ship in the bridge image.
+  - Build one: `FORGE_REGISTRY=<your registry path> FORGE_BACKUP_PREFIX=<your dump file prefix> python -m forge build --class lean --backup-dir <read-only backup mount> --workdir <absolute scratch dir>`. `--dry-run` prints the steps and stops. Set both variables as in `data/forge/config.example.env`; `--workdir` must be an absolute path of letters, digits, `.`, `_`, `-` and `/`.
+  - Needs on the host: Python 3.12 or newer, `mysqld` and the `mysql` client (8.4), `bash`, `gzip`, `tar`, `crane` for the push, and AzerothCore's `dbimport` (override with `--db-import-cmd`). It reads the backup share only and talks to a loopback MySQL it starts itself.
+  - A world built from a template needs the existing client-data volume mounted read-only: the client-data image is only a downloader and holds empty directories. A `lean` world also needs `Playerbots.RandomBotAccountCount = 0` and `Playerbots.AddClassAccountPoolSize = 0` (`forge.scrub.LEAN_PLAYERBOTS_CONF`), or mod-playerbots creates and fills bot accounts at boot; `python -m forge lean-conf` prints them and a lean template's marker table records them in `required_conf`.
 - `mod-overseer/`: pinned submodule, read as text by tests only.
 - `patches/`, `UPSTREAM-PINS.env`: test fixtures, not build inputs.
 - `services/strands-decider/`: a separate image.

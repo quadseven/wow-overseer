@@ -151,8 +151,11 @@ def _bank_rows(fixture=UGGA, holder="Ugga"):
     ]  # fmt: skip
 
 
-def _quest_flags(rewarded=UGGA_REWARDED):
-    """name -> the set of QUEST_NEEDED_SQL answers over its carried stacks."""
+def _quest_flags(rewarded=UGGA_REWARDED, untaken=(), race=1):
+    """name -> the set of QUEST_NEEDED_SQL answers over its carried stacks.
+
+    `untaken` is ((quest id, AllowableRaces, item entry), ...): quests of the
+    world the holder is not on, which name an item as a requirement (#2607)."""
     db = sqlite3.connect(":memory:")
     db.execute("ATTACH DATABASE ':memory:' AS acore_world")
     db.execute(
@@ -166,8 +169,16 @@ def _quest_flags(rewarded=UGGA_REWARDED):
         "CREATE TABLE acore_world.quest_template (ID, StartItem, "
         "RequiredItemId1, RequiredItemId2, RequiredItemId3, RequiredItemId4, "
         "RequiredItemId5, RequiredItemId6, ItemDrop1, ItemDrop2, ItemDrop3, "
-        "ItemDrop4)"
+        "ItemDrop4, AllowableRaces DEFAULT 0)"
     )
+    db.execute("CREATE TABLE characters (guid, race)")
+    db.execute("INSERT INTO characters VALUES (?,?)", (CHAR_GUID, race))
+    for quest, races, entry in untaken:
+        db.execute(
+            "INSERT INTO acore_world.quest_template "
+            "(ID, RequiredItemId1, AllowableRaces) VALUES (?,?,?)",
+            (quest, entry, races),
+        )
     for row in UGGA:
         bag, slot, guid, entry, name, cls, startq = (
             row[0], row[1], row[2], row[3], row[6], row[7], row[12],
@@ -187,7 +198,10 @@ def _quest_flags(rewarded=UGGA_REWARDED):
             (CHAR_GUID, quest, status),
         )
         db.execute(
-            "INSERT INTO acore_world.quest_template VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO acore_world.quest_template (ID, StartItem, "
+            "RequiredItemId1, RequiredItemId2, RequiredItemId3, RequiredItemId4, "
+            "RequiredItemId5, RequiredItemId6, ItemDrop1, ItemDrop2, ItemDrop3, "
+            "ItemDrop4) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (quest, *items),
         )
     for quest in rewarded:
@@ -264,9 +278,12 @@ class TheQuestRule(unittest.TestCase):
         flags = _quest_flags()
         protected = {name for name, f in flags.items() if f == {True}}
         # Jaron's Pick is the item quest 5245 (in her log) hands out; the
-        # other three start quests she has not turned in.
+        # other three start quests she has not turned in; Un'Goro Soil is
+        # named by quest 22, which she is not on, has not turned in and may
+        # still take (#2607: go and finish it).
         self.assertEqual(
             {
+                "Un'Goro Soil",
                 "Jaron's Pick",
                 "Riding Training Pamphlet",
                 "Gold Pickup Schedule",
@@ -275,7 +292,6 @@ class TheQuestRule(unittest.TestCase):
             protected,
         )
         for name in (
-            "Un'Goro Soil",
             "Bloodpetal Sprout",
             "Yellow Power Crystal",
             "Southsea Pirate Hat",
@@ -294,8 +310,31 @@ class TheQuestRule(unittest.TestCase):
         self.assertEqual({False}, flags["Gold Pickup Schedule"])
         self.assertEqual({True}, flags["OOX-17/TN Distress Beacon"])
 
-    def test_a_quest_not_in_the_log_needs_nothing(self):
-        self.assertEqual({False}, _quest_flags()["Un'Goro Soil"])
+    def test_a_quest_turned_in_needs_nothing(self):
+        flags = _quest_flags(UGGA_REWARDED + (22,))
+        self.assertEqual({False}, flags["Un'Goro Soil"])
+
+    SOIL = next(r[3] for r in UGGA if r[NAME] == "Un'Goro Soil")
+
+    def test_a_quest_she_could_still_take_protects_what_it_names(self):
+        """#2607: go and finish it, do not sell or destroy the item."""
+        flags = _quest_flags(UGGA_REWARDED + (22,), untaken=((900001, 0, self.SOIL),))
+        self.assertEqual({True}, flags["Un'Goro Soil"])
+
+    def test_a_quest_her_race_may_take_protects_it_a_quest_it_may_not_does_not(self):
+        human = 1 << 0
+        orc = 1 << 1
+        done = UGGA_REWARDED + (22,)
+        mine = _quest_flags(done, untaken=((900002, human, self.SOIL),), race=1)
+        self.assertEqual({True}, mine["Un'Goro Soil"])
+        theirs = _quest_flags(done, untaken=((900003, orc, self.SOIL),), race=1)
+        self.assertEqual({False}, theirs["Un'Goro Soil"])
+
+    def test_a_quest_already_rewarded_protects_nothing(self):
+        flags = _quest_flags(
+            rewarded=UGGA_REWARDED + (22, 900004), untaken=((900004, 0, self.SOIL),)
+        )
+        self.assertEqual({False}, flags["Un'Goro Soil"])
 
 
 class TheBankPassUsedToStoreNothing(unittest.TestCase):

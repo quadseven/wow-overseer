@@ -9,10 +9,16 @@ the faction's public channel (mod-overseer's `lfg` chat channel:
 LookingForGroup, else its zone's General), and a random bot of the same side
 that plays the seat answers.
 
-WHEN TO LOOK. An open dungeon ask whose asker is free, at least
-LOOK_AFTER_MINUTES old, whose yeses fill every seat but a real tank and/or a
-real healer (guildsocial.seats_so_far: the same seating `seat` does). One call
-per ask (the call table's unique ask id).
+WHEN TO LOOK. An open dungeon ask whose asker is free and at least
+LOOK_AFTER_MINUTES old, with a seat still open (guildsocial.seats_so_far: the
+same seating `seat` does). The call names the open seats, a tank first, then a
+healer, then damage, and never more than MAX_PUGS of them less the pugs
+already holding a yes: the finder row takes two pugs at most (mod-overseer's
+GUILD_FINDER_MAX_PUGS) and needs a guildmate to anchor it. Levelling first
+(raid seats below 60): a band with few guildmates fills a damage seat from the
+server too, and a pug that would make the dungeon's mobs gray to it is not
+taken (guildrun.kills_gray), because the core halves everyone's experience
+then. One call per ask (the call table's unique ask id).
 
 WHO ANSWERS. A random bot (the bridge reads overseer_snapshot, is_bot = 1, in
 no guild or another guild) that is:
@@ -92,13 +98,18 @@ SOURCE = "overseer:guildpug"
 # mod-overseer's chat channel for the faction's public channel.
 CHANNEL = "lfg"
 
+# The most pugs a finder row takes (mod-overseer GUILD_FINDER_MAX_PUGS): the
+# rest of the five are the guild's, and at least one of them anchors the row.
+MAX_PUGS = 2
 LOOK_AFTER_MINUTES = 5
 ANSWER_AFTER_MINUTES = 1
-PUGS_PER_ASK_PER_PASS = 1
+PUGS_PER_ASK_PER_PASS = MAX_PUGS
 
-TANK, HEALER = guildsocial.TANK, guildsocial.HEALER
-# The seats a pug is called for, in the order they are filled.
-PUG_SEATS = (TANK, HEALER)
+TANK, HEALER, DPS = guildsocial.TANK, guildsocial.HEALER, guildsocial.DPS
+# The seats a pug is called for, in the order they are filled. A levelling
+# group (a raid seat below 60 levels in a full, level-matched five) fills a
+# damage seat from the server as it fills a tank or healer seat.
+PUG_SEATS = (TANK, HEALER, DPS)
 
 CALL_TABLE_SQL = (
     "CREATE TABLE IF NOT EXISTS overseer_guild_pug_call ("
@@ -227,18 +238,31 @@ def _minutes_since(when, now) -> float:
 
 
 def short_seats(ask, answers: list, free: dict, door=None) -> tuple:
-    """The tank and healer seats still empty at `door` when every other seat
-    is filled by the asker and its yeses, tank first; () when anything else
-    is short (a guild group fills its damage seats first) or nothing is. A
-    yes under the door's bosses' level leaves its seat empty
-    (guildrun.carries)."""
+    """The seats a pug may still be called for at `door`, tank first, then
+    healer, then damage; () when the asker is not free or the five is full.
+
+    At most MAX_PUGS less the pugs already holding a yes (a finder row takes two),
+    so a call never asks for a seat the row could not name. A yes under the
+    door's bosses' level leaves its seat empty (guildrun.carries)."""
     sofar = guildsocial.seats_so_far(ask, answers, free, door)
     if sofar is None:
         return ()
     seats, damage = sofar
-    if len(damage) < 3:
-        return ()
-    return tuple(seat for seat in PUG_SEATS if seats[seat] is None)
+    open_seats = [seat for seat in (TANK, HEALER) if seats[seat] is None]
+    open_seats += [DPS] * max(0, 3 - len(damage))
+    pugged = sum(
+        1 for a in answers if a.stance == guildsocial.PUG and a.state == guildsocial.YES
+    )
+    return tuple(open_seats[: max(0, MAX_PUGS - pugged)])
+
+
+def empty_seats(ask, answers: list, free: dict, door=None) -> int:
+    """How many of the five seats are open now (for the call's `have/5`)."""
+    sofar = guildsocial.seats_so_far(ask, answers, free, door)
+    if sofar is None:
+        return 0
+    seats, damage = sofar
+    return sum(1 for s in (TANK, HEALER) if seats[s] is None) + max(0, 3 - len(damage))
 
 
 def _live(ask) -> bool:
@@ -309,6 +333,8 @@ def why_not_pug(
         return "under the level of the dungeon's bosses"
     if not guildrun.fitting_doors([member.level], [door], faction):
         return "outside the door's band"
+    if guildrun.kills_gray(member.level, door):
+        return "would make the dungeon's mobs gray"
     if abs(int(member.level) - int(asker_level)) > guildrun.BAND_SPREAD:
         return "too far from the asker's level"
     if worth(mate, door, entrances) <= 0:
@@ -397,8 +423,13 @@ def _pick(options: tuple, *keys) -> str:
 
 
 def seats_words(seats) -> str:
-    """("tank", "healer") -> "tank and healer"."""
-    return " and ".join(seats)
+    """("tank", "healer") -> "tank and healer"; ("healer", "dps", "dps") ->
+    "healer and 2 dps"."""
+    words = []
+    for seat in dict.fromkeys(seats):
+        n = sum(1 for s in seats if s == seat)
+        words.append(seat if n == 1 else "%d %s" % (n, seat))
+    return " and ".join(words)
 
 
 _CALL = (
@@ -418,11 +449,16 @@ _ANSWER = {
         "Healer here, inv me for {place}",
         "Saw your LF, I'll heal. Inv?",
     ),
+    DPS: (
+        "I can dps {place}, inv",
+        "Dps here, inv me for {place}",
+        "Saw your LF, I'll dps. Inv?",
+    ),
 }
 
 
-def call_line(asker: str, door, seats: tuple) -> str:
-    have = 5 - len(seats)
+def call_line(asker: str, door, seats: tuple, empty: int | None = None) -> str:
+    have = 5 - (len(seats) if empty is None else empty)
     template = _pick(_CALL, asker, door.keyword, ",".join(seats))
     return guildsocial._fit(
         template.format(
@@ -525,8 +561,14 @@ def plan(
         call = calls.get(ask.id)
         if call is None:
             if _minutes_since(ask.created_at, now) >= LOOK_AFTER_MINUTES:
+                empty = empty_seats(ask, by_ask.get(ask.id, []), free, door)
                 new_calls.append(
-                    Call(ask.id, ask.asker, short, call_line(ask.asker, door, short))
+                    Call(
+                        ask.id,
+                        ask.asker,
+                        short,
+                        call_line(ask.asker, door, short, empty),
+                    )
                 )
             continue
         if _minutes_since(call.created_at, now) < ANSWER_AFTER_MINUTES:
