@@ -21,6 +21,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import bank  # noqa: E402
+import bankforecast  # noqa: E402
 import itemplan  # noqa: E402
 import itemplan_route  # noqa: E402
 import itemplan_shadow  # noqa: E402
@@ -252,6 +253,52 @@ class TheBankFetchesOnlyAfterRoomIsMade(unittest.TestCase):
         self.assertEqual({}, itemplan_route.personal_room([guild]))
         personal = bank.Move("Uzza", bank.DEPOSIT, 2, "Junk", 1, "plan")
         self.assertEqual({"Uzza": 1}, itemplan_route.personal_room([guild, personal]))
+
+
+class TheFeedProducesItsOrderAtThePublicSeam(unittest.TestCase):
+    """Each absent feed, planned end to end, names the order the crafter runs."""
+
+    def _plan(self, **places):
+        return reagentplan.plan(
+            "Uzza",
+            MINOR_HEALING_POTION,
+            {
+                PEACEBLOOM: reagentplan.Stock(bags=20),
+                SILVERLEAF: reagentplan.Stock(bags=20),
+                EMPTY_VIAL: reagentplan.Stock(**places),
+            },
+            {},
+            {},
+        )
+
+    def _vault(self):
+        return {
+            "Uzza": [bankforecast.Stack(guid=77, entry=EMPTY_VIAL, count=34, tab=0)]
+        }
+
+    def test_the_guild_bank_feed_orders_the_vial_within_the_withdrawal_allowance(self):
+        plan = self._plan(guild_bank=34)
+        self.assertEqual(reagentplan.GUILD_BANK, plan.shorts[0].source)
+        taker = bankforecast.Withdrawer("Uzza", 1, 1, {0: 1})
+        out, _notes = reagentplan.vault_withdrawals([plan], self._vault(), [taker])
+        self.assertEqual([77], [w.stack.guid for w in out])
+        self.assertEqual("Uzza", out[0].character)
+
+    def test_the_guild_bank_feed_stops_when_the_allowance_is_spent(self):
+        plan = self._plan(guild_bank=34)
+        taker = bankforecast.Withdrawer("Uzza", 1, 1, {0: 0})
+        out, notes = reagentplan.vault_withdrawals([plan], self._vault(), [taker])
+        self.assertEqual((), out)
+        self.assertTrue(any("may not take" in n for n in notes))
+
+    def test_the_mailbox_feed_names_the_crafter_and_orders_no_vault_trip(self):
+        plan = self._plan(mail=34)
+        short = plan.shorts[0]
+        self.assertEqual((reagentplan.MAIL, "Uzza"), (short.source, short.who))
+        self.assertIn("mailbox", short.why)
+        taker = bankforecast.Withdrawer("Uzza", 1, 1, {0: 1})
+        out, _notes = reagentplan.vault_withdrawals([plan], self._vault(), [taker])
+        self.assertEqual((), out)
 
 
 class TheCallersAreWired(unittest.TestCase):
