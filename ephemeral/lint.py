@@ -29,7 +29,7 @@ REQUIRED_TOP = (
 )
 SET_KEYS = {
     "level", "alive", "health_pct", "money", "skills", "spells_add", "spells_remove",
-    "items", "quests", "homebind", "at", "corpse_at",
+    "items", "quests", "homebind", "at", "corpse_at", "free_backpack_slots",
 }  # fmt: skip
 GRANT_KEYS = ("money", "skills", "spells_add", "items")  # level has its own range check
 ANCHOR_KINDS = (
@@ -394,6 +394,13 @@ def _cast_set(lint, path, entry, s):
         )
         lint.ensure(ok, f"{sp}.{key}", "schema", "must be a list of spell ids")
     _set_items(lint, sp, s.get("items"))
+    lint.ensure(
+        "free_backpack_slots" not in s
+        or (_is_int(s["free_backpack_slots"]) and 1 <= s["free_backpack_slots"] <= 16),
+        f"{sp}.free_backpack_slots",
+        "schema",
+        "must be an integer from 1 to 16",
+    )
     _set_quests(lint, sp, s.get("quests"))
     _set_places(lint, sp, s)
     _set_ceiling(lint, path, entry, s)

@@ -104,6 +104,13 @@ class FakeResolver(resolve.Resolver):
     def used_backpack_slots(self, guid):
         return self.used.get(guid, set())
 
+    def backpack_items(self, guid):
+        return [
+            (slot, 9000 + slot)
+            for slot in sorted(self.used.get(guid, set()))
+            if 23 <= slot <= 38
+        ]
+
     def max_item_guid(self):
         return 1000
 
@@ -779,6 +786,52 @@ class CompileTest(unittest.TestCase):
         r.used[1] = set(range(23, 39))
         with self.assertRaises(SeedError):
             compile_(d, r)
+
+    def test_free_backpack_slots_makes_room_from_the_top_and_then_the_grant_fits(self):
+        d = doc()
+        d["cast"][0]["set"]["free_backpack_slots"] = 2
+        d["cast"][0]["set"]["items"] = [{"name": "Copper Bar", "count": 1}]
+        d["cast"][0]["ceiling"] = "test grants"
+        r = FakeResolver()
+        r.used[1] = set(range(23, 39))  # a full backpack
+        sql = sql_of(compile_(d, r))
+        inv_del = [
+            s
+            for s in sql
+            if s.startswith("DELETE FROM `acore_characters`.`character_inventory`")
+        ]
+        inst_del = [
+            s
+            for s in sql
+            if s.startswith("DELETE FROM `acore_characters`.`item_instance`")
+        ]
+        self.assertEqual(len(inv_del), 2)
+        self.assertIn("`slot` = 38", inv_del[0])
+        self.assertIn("`slot` = 37", inv_del[1])
+        self.assertIn("9038", inst_del[0])
+        self.assertIn("9037", inst_del[1])
+        # the grant lands in one of the slots just freed, not on top of an item
+        grant = [
+            s
+            for s in sql
+            if s.startswith("INSERT INTO `acore_characters`.`character_inventory`")
+        ]
+        self.assertTrue(any(", 37, " in g or ", 38, " in g for g in grant))
+        # deletes come before the inserts
+        self.assertLess(sql.index(inv_del[0]), sql.index(grant[0]))
+
+    def test_free_backpack_slots_with_room_already_deletes_nothing(self):
+        d = doc()
+        d["cast"][0]["set"]["free_backpack_slots"] = 2
+        d["cast"][0]["ceiling"] = "test world"
+        sql = sql_of(compile_(d))
+        self.assertFalse(
+            [
+                s
+                for s in sql
+                if s.startswith("DELETE FROM `acore_characters`.`character_inventory`")
+            ]
+        )
 
     def test_unknown_item_is_invalid(self):
         d = doc()
