@@ -240,6 +240,7 @@ class TheSupplyPass(unittest.IsolatedAsyncioTestCase):
             _dark_iron_once=AsyncMock(),
             _buy_blacksmith_hammers=AsyncMock(return_value=(0, [])),
             _buy_gather_tools=AsyncMock(return_value=(0, [])),
+            _buy_fishing_poles=AsyncMock(return_value=(0, 0)),
             _walk_for_hammers=AsyncMock(),
             _walk_for_reagents=AsyncMock(),
         )

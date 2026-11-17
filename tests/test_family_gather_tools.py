@@ -325,6 +325,7 @@ class SupplyPassWiring(unittest.IsolatedAsyncioTestCase):
             _dark_iron_once=AsyncMock(),
             _buy_blacksmith_hammers=AsyncMock(return_value=(0, [])),
             _buy_gather_tools=AsyncMock(return_value=(1, needs)),
+            _buy_fishing_poles=AsyncMock(return_value=(0, 0)),
             _walk_for_hammers=AsyncMock(),
             _walk_for_reagents=AsyncMock(),
         )
@@ -334,6 +335,12 @@ class SupplyPassWiring(unittest.IsolatedAsyncioTestCase):
         owner = self.owner([])
         await run(owner, None)
         owner._buy_gather_tools.assert_awaited_once_with(["Og"], {})
+
+    async def test_a_pole_is_bought_where_the_member_stands_and_no_walk_is_made(self):
+        run = load("_craft_supply_once", self.namespace())
+        owner = self.owner([])
+        await run(owner, None)
+        owner._buy_fishing_poles.assert_awaited_once_with(["Og"], None, walk=False)
 
     async def test_the_tool_needs_reach_the_walk(self):
         need = craft_supply.Need("Og", PICK, "Mining Pick")

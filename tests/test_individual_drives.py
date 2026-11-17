@@ -310,6 +310,7 @@ class CraftSupplyBuysForTheFilteredMembersAndWalksNobody(
             _dark_iron_once=mock.AsyncMock(),
             _buy_blacksmith_hammers=mock.AsyncMock(return_value=(0, [])),
             _buy_gather_tools=mock.AsyncMock(return_value=(1, [need])),
+            _buy_fishing_poles=mock.AsyncMock(return_value=(0, 0)),
             _walk_for_hammers=mock.AsyncMock(),
             _walk_for_reagents=mock.AsyncMock(),
         )

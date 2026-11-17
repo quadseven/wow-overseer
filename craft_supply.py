@@ -504,9 +504,11 @@ def craft_reagent_errands(
 # retires it either.
 FISHING_POLE: tuple[int, str, int] = (6256, "Fishing Pole", 23)
 
-# The mode in which a pole is worth buying. Read from jobs.IMPLEMENTED rather
-# than spelled here, the same way craft_rhythm reads MODE_CRAFT/MODE_GATHER:
-# outside job='fish' nothing casts, and a pole would be an inert purchase.
+# The mode in which the family WALKS for a pole. Read from jobs.IMPLEMENTED
+# rather than spelled here, the same way craft_rhythm reads MODE_CRAFT/
+# MODE_GATHER. On any other job a member at a counter that sells one buys it
+# anyway, with no walk (the bridge's `_buy_fishing_poles(walk=False)`): the
+# family never reached job='fish', so waiting for it left nobody a pole.
 FISH_MODE = next(mode for mode in jobs.IMPLEMENTED if mode == "fish")
 
 
@@ -537,7 +539,7 @@ def pole_errand(
             name,
             "buy",
             f"entry:{entry} count:1 max:{price}",
-            f"holds no fishing pole and the family is on job={FISH_MODE}",
+            "holds no fishing pole and stands at a counter that sells one",
             price,
         ),
         None,

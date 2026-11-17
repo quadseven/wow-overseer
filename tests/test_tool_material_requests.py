@@ -365,8 +365,11 @@ class FamilyModeGuard(unittest.IsolatedAsyncioTestCase):
         )
         run = load("_craft_supply_once", ns)
         owner = SimpleNamespace(
-            _dark_iron_once=AsyncMock(), _buy_blacksmith_hammers=AsyncMock()
+            _dark_iron_once=AsyncMock(),
+            _buy_blacksmith_hammers=AsyncMock(),
+            _buy_fishing_poles=AsyncMock(),
         )
         await run(owner, None)
         reader.assert_not_called()
         owner._buy_blacksmith_hammers.assert_not_awaited()
+        owner._buy_fishing_poles.assert_not_awaited()
