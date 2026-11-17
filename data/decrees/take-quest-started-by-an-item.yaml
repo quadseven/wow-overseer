@@ -4,6 +4,8 @@
 # Scope: Ugga's row must end as an error row with a reason in its own words (a refusal), and Og's row must be
 # applied. The stop marker inside the result column and the holder reading item are not asserted: their
 # encoding is not in this repository, and a guessed string would fail closed for the wrong reason.
+# The act fires only once both takers are logged in (a row to a character that is not online is refused as 'target not
+# online', which would pass the refusal check and fail the take for the wrong reason).
 # Fix: mod-overseer pull 1507.
 decree: v1
 id: take-quest-started-by-an-item
@@ -26,6 +28,12 @@ act:
   - at: 0s
     command: {who: Ugga, kind: quest, text: "take quest:54"}
 observe:
+  - name: both-takers-are-online
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE name IN ('Og', 'Ugga')
+    expect: {scalar: "= 2"}
   - name: og-holds-the-item
     role: precondition
     when: start
@@ -54,7 +62,7 @@ observe:
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Ugga' AND kind = 'quest' AND command LIKE 'take quest:54%' AND created_at >= @t0 AND status = 'error' AND detail <> ''
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Ugga' AND kind = 'quest' AND command LIKE 'take quest:54%' AND created_at >= @t0 AND status = 'error' AND detail <> '' AND detail NOT LIKE '%not online%'
     expect: {scalar: ">= 1"}
   - name: ugga-does-not-have-the-quest
     role: check
