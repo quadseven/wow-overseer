@@ -84,14 +84,21 @@ class GuardedWorldDb:
         if problems:
             raise JudgeError("; ".join(problems))
         try:
-            return self._g.query(sql)
+            return self._read(sql)
         except Exception as exc:
             if exc.args and exc.args[0] in TIMEOUT_CODES:
                 raise QueryTimeout(str(exc)) from exc
             raise
 
+    def _read(self, sql):
+        """One read, then end its transaction: every look sees the world as it is now."""
+        try:
+            return self._g.query(sql)
+        finally:
+            self._g.end_read()
+
     def db_now(self):
-        return str(self._g.query("SELECT NOW()")[0][0])[:19]
+        return str(self._read("SELECT NOW()")[0][0])[:19]
 
     def insert_command(self, target, kind, text):
         return self._g.insert_command(target, kind, text)

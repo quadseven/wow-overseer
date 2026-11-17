@@ -58,6 +58,7 @@ import json
 from dataclasses import dataclass, field
 
 import classic
+import corpstickets
 import craft
 import craft_supply
 import guildroute
@@ -285,6 +286,16 @@ COOLDOWN_MINUTES = {
     "fetch": 180,
     "shop": 120,
 }
+
+# A COLLECT THE MODULE REFUSED FOR BAG ROOM WAITS LONGER THAN A COLLECT (#2633).
+# The half hour above is right for a letter that was not there yet. A member
+# whose bags are full stays full until something sells or is destroyed, and its
+# collect was sent to the mailbox, refused and sent again about every hour:
+# fourteen refusals in a day, every one the same take of the same letter. Four
+# hours keeps a day under six asks and still tries again once a sale has had time
+# to make room.
+FULL_BAGS_COLLECT_MINUTES = 240
+FULL_BAGS_COLLECT = "collect-full"
 
 # A BAG IS CRAFTED AT A MAILBOX AND POSTED IN THE SAME STAND (2026-09-24).
 # Measured on dev: Baldam crafted a Runecloth Bag at 08:09, its post walk ended
@@ -1342,7 +1353,12 @@ def _cooling(step, recent) -> bool:
     if step.action == "craft" and int(step.key) in BAG_SPELLS:
         minutes = BAG_CRAFT_MINUTES
     age = (recent or {}).get((step.holder, step.action, int(step.key)))
-    return age is not None and age < minutes
+    if age is not None and age < minutes:
+        return True
+    if step.action == "collect":
+        full = (recent or {}).get((step.holder, FULL_BAGS_COLLECT, int(step.key)))
+        return full is not None and full < FULL_BAGS_COLLECT_MINUTES
+    return False
 
 
 def _may_fetch(member, pattern, vendors_by_map) -> bool:
@@ -1836,6 +1852,12 @@ def recent_from_rows(rows, prefix=SOURCE) -> dict:
         action = parts[1][: -len("-walk")] if parts[1].endswith("-walk") else parts[1]
         key, age = _int(parts[2], -1), _int(row.get("age"), 0)
         note((str(row.get("target_name") or ""), action, key), age)
+        if (
+            action == "collect"
+            and parts[1] == "collect"
+            and any(r in str(row.get("result") or "") for r in corpstickets.BAG_REASONS)
+        ):
+            note((str(row.get("target_name") or ""), FULL_BAGS_COLLECT, key), age)
         if action in ("supply", "shop") and row.get("target_arg"):
             note(("to:" + str(row["target_arg"]), action, key), age)
     return out

@@ -56,6 +56,7 @@ class Compiler:
         self.positions = {}  # guid -> (map, zone, x, y, z, o)
         self.instances = {}  # alias -> (id, map)
         self._item_guid = None
+        self._freed = {}
         self._item_guid_next = 0
 
     # -- resolution -------------------------------------------------------
@@ -348,6 +349,7 @@ class Compiler:
         if s.get("alive") is False and corpse is not None:
             self._corpse(m, corpse)
         self._skills_and_spells(m, s)
+        self._free_backpack(m, s.get("free_backpack_slots"))
         self._items(m, s.get("items") or [])
         for quest, state in (s.get("quests") or {}).items():
             self._quest(m, quest, state)
@@ -436,10 +438,32 @@ class Compiler:
         for spell in s.get("spells_remove") or []:
             st.append(b.delete("character_spell", {"guid": m.guid, "spell": spell}))
 
+    def _free_backpack(self, m, want):
+        """Delete items from the highest used backpack slots until `want` slots are free.
+
+        The throwaway world's family carries full backpacks, so a grant (a reagent, a
+        key) has no slot. The removed items are the ones in the world's own copy only.
+        """
+        if not want:
+            return
+        held = sorted(self.r.backpack_items(m.guid))
+        room = len(BACKPACK_SLOTS) - len(held)
+        for slot, item in reversed(held):
+            if room >= want:
+                break
+            self.plan.statements.append(
+                self.b.delete(
+                    "character_inventory", {"guid": m.guid, "bag": 0, "slot": slot}
+                )
+            )
+            self.plan.statements.append(self.b.delete("item_instance", {"guid": item}))
+            self._freed.setdefault(m.guid, set()).add(slot)
+            room += 1
+
     def _items(self, m, items):
         if not items:
             return
-        used = set(self.r.used_backpack_slots(m.guid))
+        used = set(self.r.used_backpack_slots(m.guid)) - self._freed.get(m.guid, set())
         free = [slot for slot in BACKPACK_SLOTS if slot not in used]
         for it in items:
             rows = self.r.items(it["name"])

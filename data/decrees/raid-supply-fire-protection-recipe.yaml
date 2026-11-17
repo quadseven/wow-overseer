@@ -1,0 +1,57 @@
+# A guild alchemist at Alchemy 165 on job craft with a raid-supply want for Fire Protection Potion buys
+# the vendor recipe (item 6055) and the raid page counts potions (wow-overseer issue 892; the recipe vendor
+# is the town's alchemy trainer area). The alchemist's rank is a bounded grant: the families do not reach
+# 165 organically yet.
+# Scope: the buy row is scoped to this alchemist and the raid-supply source, the alchemist must lack the recipe
+# (spell 7257) and the potion (item 6049) at the start and know and hold them at the end. The raid page count is
+# a site read and the bridge line is log text, so neither is asserted; the potion held by the alchemist stands
+# in for 'a count above zero'.
+# Fix: wow-overseer pull 909.
+decree: v1
+id: raid-supply-fire-protection-recipe
+proves:
+  - {repo: quadseven/wow-overseer, issue: 892, criterion: "the alchemist buys Recipe: Fire Protection Potion through raid supply, learns it and holds a Fire Protection Potion that she did not hold at the start (the log line and the raid page count are not asserted here)"}
+fix: {repo: quadseven/wow-overseer, commit: "27a9a3032332668646bdd9e8670507e5b29d8116"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 2h
+cast:
+  - who: guild:Cave:alchemist
+    set: {alive: true, skills: {Alchemy: {value: 165, max: 225}}, money: 50000, at: {creature: "Alchemist Mallory"}}
+    ceiling: "the Alchemy rank the issue needs and gold for one recipe; no level or gear"
+act:
+  - at: 0s
+    command: {who: "cast[0]", kind: job, text: "craft:alchemy"}
+observe:
+  - name: alchemist-is-at-165
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_skills WHERE guid = @cast0 AND skill = @skill_alchemy AND value >= 165
+    expect: {scalar: "= 1"}
+  - name: alchemist-lacks-the-recipe-and-the-potion-at-the-start
+    role: precondition
+    when: start
+    sql: |
+      SELECT (SELECT COUNT(*) FROM character_spell WHERE guid = @cast0 AND spell = 7257) + (SELECT COUNT(*) FROM item_instance WHERE owner_guid = @cast0 AND itemEntry = 6049)
+    expect: {scalar: "= 0"}
+  - name: recipe-bought
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command c JOIN characters ch ON ch.name = c.target_name
+      WHERE ch.guid IN (@cast) AND c.kind = 'buy' AND c.target_arg = '6055' AND c.status IN ('delivered', 'applied')
+        AND c.source LIKE 'raidsupply%' AND c.created_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: alchemist-learned-the-recipe
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM character_spell WHERE guid = @cast0 AND spell = 7257
+    expect: {scalar: "= 1"}
+  - name: alchemist-holds-a-potion
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM item_instance WHERE owner_guid = @cast0 AND itemEntry = 6049
+    expect: {scalar: ">= 1"}
