@@ -4273,12 +4273,19 @@ def _fetch_agenda(names=None) -> dict:
             lambda sql, params: rd.rows(sql, params, what="creature names"),
             [r.get("travel_npc") for r in roster_rows],
         )
+        # The campaign queue's pending rows (#2796): the banner reads the
+        # campaign's state off its own family's, so a queued entry waiting to
+        # start is not said as a finished campaign. A realm whose bridge has
+        # not made the table reads [] and the leader's counter decides alone.
+        queue_rows = rd.rows(campaignqueue.SELECT_PENDING_SQL, (),
+                             what=campaignqueue.TABLE)
         db_now = rd.db_now()
     return {"roster_rows": roster_rows, "run_rows": run_rows,
             "instance_rows": instance_rows, "goal_rows": goal_rows,
             "trade_rows": trade_rows, "event_rows": event_rows,
             "quest_titles": quest_titles, "creatures": creatures,
-            "standin_rows": standin_rows, "now": db_now}
+            "standin_rows": standin_rows, "queue_rows": queue_rows,
+            "now": db_now}
 
 
 def _fetch_streams() -> list:
