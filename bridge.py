@@ -28598,6 +28598,22 @@ class Bridge(discord.Client):
             await channel.send(refusal[:1990])
             return
 
+        # AN ORDER FOR ONE MEMBER (#2407). Refused unless the family is not
+        # linked and the mode is not a dungeon or raid job, and then it writes
+        # that member's row alone. Asked before any write, so a refusal costs
+        # no row.
+        member = ""
+        if d.member:
+            job_by_name = await asyncio.to_thread(_standing_jobs)
+            refusal = individual.member_order_refusal(
+                job_by_name, d.member, d.mode)
+            if refusal:
+                log.info("job: refused mode=%r for %r - %s", d.mode, d.member,
+                         refusal)
+                await channel.send(refusal[:1990])
+                return
+            member = individual.resolve_member(job_by_name, d.member)
+
         if await self._queue_holds_job(d):
             return
 
@@ -28611,11 +28627,14 @@ class Bridge(discord.Client):
             return
 
         names = await asyncio.to_thread(_fetch_enabled_names)
+        if member:
+            names = [member]
         if not names:
             await channel.send("Nobody is on the roster to give a job to.")
             return
-        # A member sitting out to craft keeps its own job (standin.py).
-        sitting = sorted(set(names) - set(_standin_running(names)))
+        # A member sitting out to craft keeps its own job (standin.py). A
+        # member named by the order is not sitting out: the order is its own.
+        sitting = [] if member else sorted(set(names) - set(_standin_running(names)))
         if sitting:
             log.info("job: mode=%r leaves %s on its own job - sitting out the "
                      "campaign to craft (%s)", d.mode, ", ".join(sitting), standin.ENV)
@@ -28664,6 +28683,11 @@ class Bridge(discord.Client):
         # craft and guild-bank passes run. Each sub-pass is idempotent.
         if d.mode == raidprep.MODE and written:
             await self._drive_raid_prep()
+        if member:
+            await channel.send(
+                f"{jobs.describe(d.mode)} ({member} told, {written}/{len(names)} written)"
+            )
+            return
         await channel.send(
             f"{jobs.describe(d.mode)} ({written}/{len(names)} of the family told)"
         )
