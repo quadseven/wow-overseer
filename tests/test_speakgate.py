@@ -12,6 +12,8 @@ import speakgate
 def _load_bridge():
     """bridge imports discord, which CI does not install: stub the few names
     it touches at import, as the other bridge tests do."""
+    keys = ("bridge", "discord", "discord.ext", "discord.ext.commands")
+    saved = {k: sys.modules.get(k) for k in keys}
     for key in list(sys.modules):
         if key == "bridge" or key.startswith("discord"):
             sys.modules.pop(key, None)
@@ -31,8 +33,14 @@ def _load_bridge():
     sys.modules["discord"] = discord
     sys.modules["discord.ext"] = discord.ext
     sys.modules["discord.ext.commands"] = discord.ext.commands
-    import bridge
-
+    try:
+        import bridge
+    finally:
+        for key, mod in saved.items():
+            if mod is None:
+                sys.modules.pop(key, None)
+            else:
+                sys.modules[key] = mod
     return bridge
 
 
