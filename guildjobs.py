@@ -5116,6 +5116,7 @@ def _plan_counters():
             "classreagents",
             "inn",
             "pet",
+            "escape",
         )
     }
 
@@ -5392,7 +5393,9 @@ def _member_room_offer(member, inputs, state):
 
 def _commit_roster_step(member, step, inputs, state):
     """Apply walk limits, choose a safe crossing fallback, and record a step."""
-    started, allowance = _allowance(step, state.counters, inputs.per_guild)
+    started, allowance = _allowance(
+        step, state.counters, inputs.per_guild, inputs.loops
+    )
     why = _step_refusal(member, state.busy, started, allowance, step) or job_walk_held(
         member, step, inputs.recent
     )
@@ -5890,6 +5893,17 @@ def _release_slots(name, far, hunts) -> None:
 # (crossing_cooling), so a level crossing has an allowance of its own.
 CROSS_STEPS_PER_GUILD = 2
 
+# A DEATH LOOP'S ESCAPE HAS AN ALLOWANCE OF ITS OWN (#2152). A hearth counted
+# against GEAR_STEPS_PER_GUILD (6) with every gear, weapon and stood-still
+# hearth of the guild, and a level walk against guildlevel.STEPS_PER_GUILD, the
+# allowance kept for far walks. Read on the dev realm on 2026-11-17: the 14:41
+# and 14:48 passes refused four loopers (23 deaths since 13:24) with "waits: 6
+# guild job steps per guild per pass". The hearth and the level walk of a
+# member listed in a death loop count here instead, so they neither wait behind
+# other members' errands nor use up their allowances. Still a bound: the module
+# paces the walks itself, and a pass starts no more than this many per guild.
+ESCAPE_STEPS_PER_GUILD = 8
+
 
 def _level_crossing(step) -> bool:
     """A level step whose row rides a boat or zeppelin (level_cross_step)."""
@@ -5900,12 +5914,21 @@ def _level_crossing(step) -> bool:
     )
 
 
-def _allowance(step, counters, per_guild):
+def _allowance(step, counters, per_guild, looping=None):
     """(the counter, the cap) a step is started against: STEPS_PER_GUILD for
     every job, GEAR_STEPS_PER_GUILD for gear and hearth steps,
     TRAIN_STEPS_PER_GUILD for trainer walks, PVP_STEPS_PER_GUILD for PvP queues and honor buys,
     CROSS_STEPS_PER_GUILD for a level step's boat or zeppelin, and
-    guildlevel.STEPS_PER_GUILD for walks out of an outgrown zone."""
+    guildlevel.STEPS_PER_GUILD for walks out of an outgrown zone. A hearth or
+    a level walk (not a crossing) of a member in `looping` (the pass's death
+    loops, name -> deathloop.Loop) is ESCAPE_STEPS_PER_GUILD's."""
+    if (
+        looping
+        and step.holder in looping
+        and step.action in ("hearth", guildlevel.ACTION)
+        and not _level_crossing(step)
+    ):
+        return counters["escape"], ESCAPE_STEPS_PER_GUILD
     if step.action == ROOM_ACTION:
         return counters["room"], ROOM_STEPS_PER_GUILD
     if step.action == restsupply.ACTION:
