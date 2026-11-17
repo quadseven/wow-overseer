@@ -24,6 +24,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime
 from types import SimpleNamespace
 
 import urllib.request
@@ -18770,6 +18771,15 @@ class Bridge(discord.Client):
         actors = await asyncio.to_thread(_online_guild_members)
         prefer = await asyncio.to_thread(_recruit_prefer, sorted(actors)[0]) if actors else ()
         result, age = await asyncio.to_thread(_latest_guild_shortlist)
+        # THE SHORTLIST IS RANKED BY THE GUILD'S HOLES before a name is picked:
+        # a candidate whose class can fill a missing template role (the class
+        # plus the spec where known, else the class) goes ahead of one that
+        # cannot, and one at the raid level ahead of one below it. The
+        # module's own order stands within each.
+        if actors:
+            result = recruit.order_shortlist(
+                result or {}, await asyncio.to_thread(_recruit_missing_roles, sorted(actors)[0])
+            )
         members, target = recruit.roster_from_shortlist(result or {})
         plan_args = dict(
             actors=actors,
@@ -19181,7 +19191,57 @@ class Bridge(discord.Client):
                 await self._recruit_once()
             except Exception:
                 log.exception("recruit pass failed; retrying next cycle")
+            try:
+                await self._recruit_ads_once()
+            except Exception:
+                log.exception("recruit ads pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
+
+    async def _recruit_ads_once(self) -> None:
+        """One pass of the recruiting posts: at most one line per enrolled guild
+        per hour in the faction's public channel, and one log line per prune
+        candidate (nobody is removed).
+
+        The leader says it, or an online officer when the leader is offline.
+        The channel is guildpug.CHANNEL, the module's `lfg` channel: its
+        LookingForGroup, else the poster's zone General. A guild missing no
+        template role posts nothing, and every guild's outcome is logged.
+        """
+        for guild in sorted(raidteams.GROUPS):
+            members = await asyncio.to_thread(_recruit_guild_members, guild)
+            if not members:
+                continue
+            seats = _recruit_template_seats(guild)
+            names = {str(m["name"]) for m in members}
+            surplus = names - {seat.name for seat in seats}
+            for member in recruit.prune_surplus_members(
+                members, members[0].get("db_now") or datetime.now(), surplus
+            ):
+                log.info(
+                    "recruit: %s - prune candidate %s, offline more than %d days (not removed)",
+                    guild, member["name"], recruit.RETENTION_DAYS,
+                )
+            missing = recruit.missing_template_roles(seats, names)
+            if not missing:
+                log.info("recruit: %s - no template role is missing, no ad", guild)
+                continue
+            since = await asyncio.to_thread(_minutes_since_recruit_ad, guild)
+            if not recruit.may_post_ad(since):
+                log.info(
+                    "recruit: %s - last ad %.0f minutes ago, next in %.0f",
+                    guild, since, recruit.AD_INTERVAL_MINUTES - since,
+                )
+                continue
+            poster = recruit.ad_poster(members)
+            if not poster:
+                log.info("recruit: %s - no leader or officer is online to post the ad", guild)
+                continue
+            line = recruit.recruiting_ad(guild, missing)
+            await asyncio.to_thread(
+                _insert_speak,
+                relay.SpeakCommand(poster, guildpug.CHANNEL, line, "", recruit.AD_SOURCE),
+            )
+            log.info("recruit: %s - %s says in %s: %s", guild, poster, guildpug.CHANNEL, line)
 
     async def _raid_spec_once(self, cohort=None) -> None:
         """One family's guild planned as eight groups of five, and each
@@ -41698,6 +41758,94 @@ def _recruit_prefer(actor: str) -> tuple:
     if prefer:
         log.info("recruit: %s", lineup.get("gap_line", ""))
     return prefer
+
+
+def _recruit_guild_of(actor: str) -> str:
+    """The name of the guild `actor` is in, or ''."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT g.name AS name FROM guild g "
+            "JOIN guild_member gm ON gm.guildid = g.guildid "
+            "JOIN characters c ON c.guid = gm.guid WHERE c.name = %s",
+            (actor,),
+        )
+        row = cur.fetchone()
+    return str(row["name"]) if row else ""
+
+
+def _recruit_template_seats(guild: str) -> list:
+    """Every approved seat of `guild`'s raid template, or [] for a guild with none."""
+    return [seat for group in raidteams.GROUPS.get(guild, ()) for seat in group]
+
+
+def _recruit_missing_roles(actor: str) -> set:
+    """The template roles the acting character's guild has no member for.
+
+    A failed read orders nobody: the order is a preference and the module's
+    gates still judge, the same rule _recruit_prefer keeps.
+    """
+    try:
+        guild = _recruit_guild_of(actor)
+        seats = _recruit_template_seats(guild)
+        if not seats:
+            return set()
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT c.name AS name FROM guild_member gm "
+                "JOIN guild g ON g.guildid = gm.guildid "
+                "JOIN characters c ON c.guid = gm.guid WHERE g.name = %s",
+                (guild,),
+            )
+            names = {str(r["name"]) for r in cur.fetchall()}
+    except pymysql.err.MySQLError:
+        log.warning("recruit: the guild's template roles could not be read; no role is preferred")
+        return set()
+    return set(recruit.missing_template_roles(seats, names))
+
+
+def _recruit_guild_members(guild: str) -> list:
+    """Rows of `name`, `rank`, `online`, `last_seen` (a datetime or None) and
+    `db_now`: the database's clock, the one `last_seen` is read against."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.name AS name, gm.`rank` AS `rank`, "
+            "(s.name IS NOT NULL) AS online, "
+            "IF(c.logout_time > 0, FROM_UNIXTIME(c.logout_time), NULL) AS last_seen, "
+            "NOW() AS db_now "
+            "FROM guild g JOIN guild_member gm ON gm.guildid = g.guildid "
+            "JOIN characters c ON c.guid = gm.guid "
+            "LEFT JOIN overseer_snapshot s "
+            "ON s.name = c.name AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+            "WHERE g.name = %s",
+            (guild,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def _minutes_since_recruit_ad(guild: str) -> float | None:
+    """How long since this guild's recruiting line was last said, or None.
+
+    Read off the chat rows themselves, so a restart does not repost at once.
+    """
+    prefix = "%s LF " % guild
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age_s "
+                "FROM overseer_command "
+                "WHERE kind = 'chat' AND source = %s "
+                "AND LEFT(command, CHAR_LENGTH(%s)) = %s "
+                "ORDER BY id DESC LIMIT 1",
+                (recruit.AD_SOURCE, prefix, prefix),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return None
+            raise
+        row = cur.fetchone()
+    if not row:
+        return None
+    return float(row["age_s"] or 0) / 60.0
 
 
 TEAM_SYNC_SOURCE = "teams"
