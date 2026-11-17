@@ -64,11 +64,12 @@ class AStandingRequestWaitsItsInterval(unittest.TestCase):
 class TheSeamCountsAndLogsWhatItHolds(unittest.TestCase):
     def test_the_second_identical_line_writes_no_row_and_is_logged(self):
         cmd = relay.SpeakCommand("Og", "guild", "LF cloth", "", "overseer:guildsocial")
-        with mock.patch.object(bridge, "_SPEAK_GATE", gate()), mock.patch.object(
-            bridge.orders, "send", return_value=7
-        ) as send, mock.patch.object(bridge, "_orders_store"), self.assertLogs(
-            bridge.log, "INFO"
-        ) as logs:
+        with (
+            mock.patch.object(bridge, "_SPEAK_GATE", gate()),
+            mock.patch.object(bridge.orders, "send", return_value=7) as send,
+            mock.patch.object(bridge, "_orders_store"),
+            self.assertLogs(bridge.log, "INFO") as logs,
+        ):
             first = bridge._insert_speak(cmd)
             second = bridge._insert_speak(cmd)
         self.assertEqual((7, 0), (first, second))
