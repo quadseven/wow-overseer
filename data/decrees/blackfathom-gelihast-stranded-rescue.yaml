@@ -23,7 +23,7 @@ cast:
     set: {alive: true, health_pct: 100, at: {creature: "Gelihast"}}
     ceiling: "nothing granted but position"
   - who: Zork
-    set: {alive: true, at: {areatrigger: 257}}                      # left at the Blackfathom entrance, 40 yards or more behind
+    set: {alive: true, at: {areatrigger: 257}}                      # left at the Blackfathom entrance; the distance behind the tank is not asserted
     ceiling: "nothing granted but position"
   - who: Zrog
     set: {alive: true, at: {areatrigger: 257}}
@@ -82,5 +82,5 @@ observe:
     when: end
     sql: |
       SELECT id, ended_reason FROM overseer_dungeon_run
-      WHERE map_id = 48 AND started_at >= @t0 AND ended_reason LIKE '%never became ready%'
+      WHERE map_id = 48 AND started_at >= @t0 AND ended_reason LIKE '%never%ready%'
     expect: {rows: 0}
