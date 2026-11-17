@@ -143,6 +143,7 @@ import raidrun
 import raidteams
 import recipebook
 import restsupply
+import auction
 import classreagents
 import situation
 import standstill
@@ -736,6 +737,10 @@ class Member:
     plan_sales: tuple = ()  # Carried
     plan_bank: tuple = ()  # Carried
     banker: object = None  # a Spot
+    # What the item plan routes to the auction house (auction.Sale) and the
+    # auctioneer the seat walks to for it (a Spot), set by seatbags (#2611).
+    plan_auctions: tuple = ()
+    auctioneer: object = None
     # Quest-class stacks the plan destroys as certainly useless (#2607).
     plan_destroy: tuple = ()  # Carried
     # Class reagent item entries used by known spells (classreagents.py, #2622),
@@ -1916,6 +1921,9 @@ def _town_trades_step(m, trades, kept, recent, cap, crafters, master):
     step, note = _train_step(m, trades, cap, recent, held=due_trades(m))
     if step is not None:
         return step, ""
+    step = _seat_auction_step(m, cap, recent)
+    if step is not None:
+        return step, note
     step = _learn_step(m, cap, recent)
     if step is not None:
         return step, note
@@ -1923,6 +1931,88 @@ def _town_trades_step(m, trades, kept, recent, cap, crafters, master):
         return None, note
     step, why = _craft_or_room(m, kept, recent, cap, crafters, master)
     return step, _join(note, why)
+
+
+# LISTING A SEAT'S SURPLUS AT A CITY AUCTIONEER (#2611). The item plan routes
+# some of a seat's stacks to the auction house; on a town stop the seat walks to
+# the nearest auctioneer its team can shop at and lists them, a few per visit,
+# at the plan's own price. The real economy only: nothing is created, and what
+# the plan keeps, banks or sells is never listed.
+SEAT_AUCTION_ACTION = "auction"
+SEAT_AUCTION_COOLDOWN_MINUTES = 30
+SEAT_AUCTION_BATCH = 5
+AUCTION_NEAR = 4.0
+# The 12 hour deposit, estimated as 15 percent of the vendor value of the
+# stack. An estimate on the safe side: a seat that cannot cover it lists less.
+AUCTION_DEPOSIT_PERCENT = 15
+
+
+def auction_deposit(sale) -> int:
+    """The estimated 12 hour deposit of one listing, in copper."""
+    item = sale.candidate
+    return max(
+        1, int(item.sell_price) * int(item.count) * AUCTION_DEPOSIT_PERCENT // 100
+    )
+
+
+def _auction_cooling(m, recent) -> bool:
+    """Whether the seat listed, or was refused, lately. A visit that found no
+    auctioneer in reach is asked again after the transient wait."""
+    for r in recent or ():
+        if r.name != m.name or r.action != SEAT_AUCTION_ACTION or r.walk:
+            continue
+        wait = SEAT_AUCTION_COOLDOWN_MINUTES
+        said = " ".join((r.reason, r.refusal, r.result))
+        if auction.OUT_OF_REACH in said:
+            wait = LEVEL_TRANSIENT_RETRY_MINUTES
+        if int(r.age_minutes) < wait:
+            return True
+    return False
+
+
+def _seat_auction_step(m, cap, recent):
+    """The walk to the auctioneer and the list rows, or None."""
+    if not m.plan_auctions or m.auctioneer is None or m.in_combat:
+        return None
+    if _auction_cooling(m, recent):
+        return None
+    spot = m.auctioneer
+    rows, spent = [], 0
+    for sale in m.plan_auctions:
+        deposit = auction_deposit(sale)
+        if spent + deposit > int(m.money):
+            continue
+        spent += deposit
+        rows.append(
+            guildcorps.Row(
+                "auction",
+                sale.command,
+                "",
+                source_for(SEAT_AUCTION_ACTION, m.name),
+            )
+        )
+        if len(rows) >= SEAT_AUCTION_BATCH:
+            break
+    if not rows:
+        return None
+    walk = None
+    if not _near(m, spot, AUCTION_NEAR):
+        walk = guildcorps.Row(
+            "job",
+            spot.command + _cap_word(cap),
+            "",
+            source_for(SEAT_AUCTION_ACTION + "-walk", m.name),
+        )
+    return guildcorps.Step(
+        m.name,
+        SEAT_AUCTION_ACTION,
+        int(spot.spawn),
+        "%s lists %d surplus item(s) at %s"
+        % (m.name, len(rows), spot.name or "an auctioneer"),
+        rows=tuple(rows),
+        walk=walk,
+        goal=spot.name or m.name,
+    )
 
 
 def _profession_unfit(m, pvp, pending) -> bool:
