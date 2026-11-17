@@ -807,7 +807,7 @@ class TheAdapter(unittest.TestCase):
         self.ns["_mail_gear_holders"] = lambda names: {}
         self.ns["_campaign_waiting"] = lambda names: True
         self.ns["_fetch_free_slots"] = lambda names: {"Bork": 0, "Grug": 0}
-        self.ns["_bag_hold_stuck"] = lambda names, free_slots: False
+        self.ns["_bag_hold_stuck"] = lambda names, free_slots, claim_store=None: False
         state = asyncio.run(
             self.fam._town_errand_start(
                 te.State(), ["Bork", "Grug"], "Grug", False, self.now, ""

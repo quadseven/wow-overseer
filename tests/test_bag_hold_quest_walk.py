@@ -172,6 +172,7 @@ def _run_vendor_once(stuck):
 
     ns = _load(
         [
+            "_release_stale_ground_aim_for_vendor",
             "_vendor_once",
             "_vendor_pass_mode",
             "_vendor_seller_fetch_blocks_trip",
@@ -234,6 +235,9 @@ def _run_vendor_once(stuck):
         },
     )
     me = _FakeEconomySelf()
+    me._release_stale_ground_aim_for_vendor = lambda *a: ns[
+        "_release_stale_ground_aim_for_vendor"
+    ](me, *a)
     if stuck:
         key = claims.MemberClaims.key(FAMILY)
         me._claims.members._holds[key] = claims.MemberHold(
