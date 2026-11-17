@@ -9,9 +9,10 @@ only the log, so the 860 looked like leftovers and could be sold or destroyed.
 
 The rule now: an item a quest the holder could still take names stays (go and
 finish it); an unpriced common leftover that no quest names, or whose quests
-are all done or closed, is destroyed with its reason; every Darkmoon card and
-deck stays, never sold, listed or destroyed (the owner means to complete the
-decks for their trinkets). Never a key, never above common.
+are all done or closed, is destroyed with its reason. A Darkmoon card stays
+only when its holder or a family member has its deck's Ace or four other
+cards; every other tradable card lists on the real auction house, then falls
+back to the vendor after two failed listings. Decks and trinkets stay.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import bag_pressure  # noqa: E402
 import guildjobs  # noqa: E402
 import itemplan  # noqa: E402
+import itemplan_vendor  # noqa: E402
 import itemplan_shadow as shadow  # noqa: E402
 import seatbags  # noqa: E402
 from itemplan import (  # noqa: E402
@@ -68,7 +70,7 @@ class TheNeededTestSeesQuestsNotYetTaken(unittest.TestCase):
         self.assertIn("character_queststatus qs", bag_pressure.STACK_QUEST_NEEDED_SQL)
 
 
-class DarkmoonCardsAreKept(unittest.TestCase):
+class DarkmoonCardsFollowTheDeckThreshold(unittest.TestCase):
     NAMES = (
         "Two of Beasts",
         "Eight of Portals",
@@ -85,14 +87,165 @@ class DarkmoonCardsAreKept(unittest.TestCase):
         for name in ("Torn Page", "Two of Hearts", "Deck of Cards", ""):
             self.assertFalse(bag_pressure.is_darkmoon(name), name)
 
-    def test_the_plan_never_sells_lists_or_destroys_one(self):
-        for name in self.NAMES:
-            card = quest_stack(
-                entry=800, name=name, quality=3, sell=12_500, needed=False
+    def card(self, name, entry, holder="Ana", count=1, sell=12_500):
+        return quest_stack(
+            entry=entry,
+            name=name,
+            holder=holder,
+            count=count,
+            quality=2,
+            sell=sell,
+            needed=False,
+        )
+
+    def test_an_ace_is_kept(self):
+        ace = self.card("Ace of Beasts", 800)
+        d = one([ace], [member()], ace, LOG_READ)
+        self.assertIn(d.route, (BANK_PERSONAL, KEEP_CARRY))
+
+    def test_a_holder_keeps_a_card_when_they_hold_its_decks_ace(self):
+        target = self.card("Two of Beasts", 801)
+        ace = self.card("Ace of Beasts", 802)
+        d = one([target, ace], [member()], target, LOG_READ)
+        self.assertIn(d.route, (BANK_PERSONAL, KEEP_CARRY))
+
+    def test_a_family_member_holding_the_ace_keeps_the_card(self):
+        target = self.card("Two of Beasts", 803)
+        ace = self.card("Ace of Beasts", 804, holder="Bo")
+        d = one([target, ace], [member(), member("Bo")], target, LOG_READ)
+        self.assertIn(d.route, (BANK_PERSONAL, KEEP_CARRY))
+
+    def test_four_other_cards_of_the_same_deck_are_enough(self):
+        target = self.card("Two of Beasts", 805)
+        others = [
+            self.card(name, 806 + n)
+            for n, name in enumerate(
+                ("Four of Beasts", "Five of Beasts", "Six of Beasts", "Seven of Beasts")
             )
-            d = one([card], [member()], card, LOG_READ)
-            self.assertNotIn(d.route, (SELL_VENDOR, AUCTION, DESTROY), name)
+        ]
+        d = one([target, *others], [member()], target, LOG_READ)
+        self.assertIn(d.route, (BANK_PERSONAL, KEEP_CARRY))
+
+    def test_a_family_member_with_four_other_cards_keeps_the_card(self):
+        target = self.card("Two of Beasts", 808)
+        others = [
+            self.card(name, 809 + n, holder="Bo")
+            for n, name in enumerate(
+                ("Four of Beasts", "Five of Beasts", "Six of Beasts", "Seven of Beasts")
+            )
+        ]
+        d = one([target, *others], [member(), member("Bo")], target, LOG_READ)
+        self.assertIn(d.route, (BANK_PERSONAL, KEEP_CARRY))
+
+    def test_each_non_ace_card_without_a_family_set_is_listed_not_destroyed(self):
+        for suit in ("Beasts", "Elementals", "Portals", "Warlords"):
+            for rank in ("Two", "Three", "Four", "Five", "Six", "Seven", "Eight"):
+                with self.subTest(card=f"{rank} of {suit}"):
+                    card = self.card(f"{rank} of {suit}", 850)
+                    d = one([card], [member()], card, LOG_READ)
+                    self.assertEqual(d.route, AUCTION)
+                    self.assertNotEqual(d.route, DESTROY)
+
+    def test_copies_of_the_same_card_are_not_other_cards(self):
+        target = self.card("Two of Beasts", 840, count=5)
+        d = one([target], [member()], target, LOG_READ)
+        self.assertEqual(d.route, AUCTION)
+
+    def test_a_second_stack_of_the_same_card_is_not_another_card(self):
+        target = self.card("Two of Beasts", 841, count=3)
+        twin = self.card("Two of Beasts", 842, count=3)
+        d = one([target, twin], [member()], target, LOG_READ)
+        self.assertEqual(d.route, AUCTION)
+
+    def test_cards_from_a_different_deck_do_not_count(self):
+        target = self.card("Two of Beasts", 809)
+        others = [
+            self.card(name, 810 + n)
+            for n, name in enumerate(
+                (
+                    "Ace of Portals",
+                    "Four of Portals",
+                    "Five of Portals",
+                    "Six of Portals",
+                    "Seven of Portals",
+                )
+            )
+        ]
+        d = one([target, *others], [member()], target, LOG_READ)
+        self.assertEqual(d.route, AUCTION)
+
+    def test_three_other_cards_are_listed_at_the_vendor_quote(self):
+        target = self.card("Two of Beasts", 810)
+        others = [
+            self.card(name, 811 + n)
+            for n, name in enumerate(
+                ("Four of Beasts", "Five of Beasts", "Six of Beasts")
+            )
+        ]
+        d = one([target, *others], [member()], target, LOG_READ)
+        self.assertEqual((d.route, d.target), (AUCTION, itemplan.LIST_AT_VENDOR_QUOTE))
+
+    def test_family_card_counts_are_not_combined_across_members(self):
+        target = self.card("Two of Beasts", 820)
+        ana = self.card("Four of Beasts", 821)
+        bo = [
+            self.card(name, 822 + n, holder="Bo")
+            for n, name in enumerate(
+                ("Five of Beasts", "Six of Beasts", "Seven of Beasts")
+            )
+        ]
+        d = one([target, ana, *bo], [member(), member("Bo")], target, LOG_READ)
+        self.assertEqual(d.route, AUCTION)
+
+    def test_one_failed_listing_still_lists_but_two_choose_vendor_fallback(self):
+        target = self.card("Two of Beasts", 830)
+        rows = [target]
+        members = [member()]
+        once = Context(
+            open_quest_items={"Ana": frozenset()},
+            fire_gear=frozenset(),
+            failed_listings={("Ana", target.entry): 1},
+        )
+        twice = Context(
+            open_quest_items={"Ana": frozenset()},
+            fire_gear=frozenset(),
+            failed_listings={("Ana", target.entry): 2},
+        )
+        self.assertEqual(one(rows, members, target, once).route, AUCTION)
+        self.assertEqual(one(rows, members, target, twice).route, SELL_VENDOR)
+
+    def test_the_itemplan_vendor_route_carries_out_a_card_after_two_failures(self):
+        target = self.card("Two of Beasts", 835, sell=1_000)
+        ctx = Context(
+            open_quest_items={"Ana": frozenset()},
+            fire_gear=frozenset(),
+            failed_listings={("Ana", target.entry): 2},
+        )
+        plan = itemplan.plan([target], [member()], ctx)
+        row = {
+            "holder": "Ana",
+            "entry": target.entry,
+            "item_guid": 835,
+            "name": target.name,
+            "quality": target.quality,
+            "count": target.count,
+            "sell_price": target.sell,
+            "item_class": itemplan.C_QUEST,
+            "quest_item": False,
+            "reagent": False,
+            "profession_needed": False,
+        }
+        sales = itemplan_vendor.sales_for(plan, [(target, row)])
+        self.assertEqual([sale.candidate.item_guid for sale in sales], [835])
+
+    def test_the_plan_never_sells_lists_or_destroys_one(self):
+        # A deck or a finished card trinket: the threshold governs loose cards
+        # only, so these are never sold, listed or destroyed.
+        for name in ("Beasts Deck", "Warlords Deck", "Darkmoon Card: Heroism"):
+            item = self.card(name, 840)
+            d = one([item], [member()], item, LOG_READ)
             self.assertIn(d.route, (BANK_PERSONAL, KEEP_CARRY), name)
+            self.assertNotIn(d.route, (SELL_VENDOR, AUCTION, DESTROY), name)
 
     def test_the_vendor_pass_refuses_one_even_when_no_quest_names_it(self):
         r = row(1, 800, "Three of Beasts", quality=3, sell=12_500, item_class=12)

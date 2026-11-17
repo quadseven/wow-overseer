@@ -120,16 +120,25 @@ LOG_QUEST_NEEDED_SQL = (
 
 # THE DARKMOON DECK CARDS (#2607). A card is "<Ace to Eight> of <Beasts,
 # Elementals, Portals or Warlords>", a deck is "<suit> Deck", and a finished
-# deck turns in for a "Darkmoon Card:" trinket. The operator means to complete
-# the decks, so none is ever sold, listed or destroyed, whatever the plan or
-# the quest test says of it.
+# deck turns in for a "Darkmoon Card:" trinket. Itemplan applies the set
+# threshold to cards; the ordinary sale and destroy passes still protect every
+# Darkmoon item unless itemplan explicitly routes a failed listing to vendor.
 _DARKMOON_RANKS = ("Ace", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight")
 _DARKMOON_SUITS = ("Beasts", "Elementals", "Portals", "Warlords")
+_DARKMOON_CARDS = {
+    "%s of %s" % (rank, suit): (rank, suit)
+    for rank in _DARKMOON_RANKS
+    for suit in _DARKMOON_SUITS
+}
 _DARKMOON_NAMES = frozenset(
-    {"%s of %s" % (r, s) for r in _DARKMOON_RANKS for s in _DARKMOON_SUITS}
-    | {"%s Deck" % s for s in _DARKMOON_SUITS}
+    set(_DARKMOON_CARDS) | {"%s Deck" % s for s in _DARKMOON_SUITS}
 )
-KEPT_DARKMOON = "a Darkmoon deck card, kept for the deck"
+KEPT_DARKMOON = "Darkmoon item reserved for the item plan"
+
+
+def darkmoon_card(name: str) -> tuple[str, str] | None:
+    """Return a recognized card's (rank, deck suit), excluding decks/trinkets."""
+    return _DARKMOON_CARDS.get(str(name or "").strip())
 
 
 def is_darkmoon(name) -> bool:
@@ -204,25 +213,37 @@ KEPT_UNREAD = "sale facts unread"
 KEPT_QUEST = "a quest item"
 KEPT_REAGENT = "a reagent"
 KEPT_PROFESSION = "profession stock"
+KEPT_RECIPE = "recipe waiting for the item plan"
 KEPT_QUALITY = "uncommon or better"
 KEPT_NO_PRICE = "no vendor price"
 KEPT_CONSUMABLE = "food, drink or a potion its own AI uses"
 # Item class 0 in item_template: food, drink, potions, scrolls, bandages.
 CONSUMABLE_CLASS = 0
+RECIPE_CLASS = 9
 _SALE_FLAGS = ("quest_item", "reagent", "profession_needed")
+
+
+def _early_refusal(row: dict, keep_names=()) -> str:
+    """Why a row is kept before its sale facts are read; '' when none applies."""
+    try:
+        if int(row.get("entry", 0)) == GUILD_TABARD_ENTRY:
+            return KEPT_TABARD
+    except (TypeError, ValueError):
+        return KEPT_UNREAD
+    if owner_keeps(row.get("name", ""), keep_names):
+        return KEPT_BY_OWNER
+    if is_darkmoon(row.get("name", "")):
+        return KEPT_DARKMOON
+    if _class_of(row) == RECIPE_CLASS:
+        return KEPT_RECIPE
+    return ""
 
 
 def _vendor_reading(row: dict, keep_names=()) -> tuple:
     """(SellCandidate, '') for a row a vendor may be offered, else (None, why)."""
-    try:
-        if int(row.get("entry", 0)) == GUILD_TABARD_ENTRY:
-            return None, KEPT_TABARD
-    except (TypeError, ValueError):
-        return None, KEPT_UNREAD
-    if owner_keeps(row.get("name", ""), keep_names):
-        return None, KEPT_BY_OWNER
-    if is_darkmoon(row.get("name", "")):
-        return None, KEPT_DARKMOON
+    early = _early_refusal(row, keep_names)
+    if early:
+        return None, early
     try:
         item = ItemForSale(
             quality=int(row["quality"]),

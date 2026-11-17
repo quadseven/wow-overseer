@@ -26,6 +26,7 @@ def ctx(free):
     return itemplan.Context(
         fire_gear=frozenset(),
         guild_free={("Fam", tab): n for tab, n in free.items()},
+        guild_crafters=(("Seatsmith", "alchemy", 50),),
     )
 
 
@@ -49,12 +50,12 @@ class TheOverflow(unittest.TestCase):
         return by_key[item.key]
 
     def test_a_full_materials_tab_sends_a_seat_recipe_to_the_second_tab(self):
-        d = self.one(recipe(rank=250), {0: 0, 1: 98})
+        d = self.one(recipe(rank=150), {0: 0, 1: 98})
         self.assertEqual((d.route, d.tab), (GUILD_BANK, 1))
         self.assertIn("tab 0 was full", d.reason)
 
     def test_the_first_tab_is_kept_while_it_has_room(self):
-        d = self.one(recipe(rank=250), {0: 5, 1: 98})
+        d = self.one(recipe(rank=150), {0: 5, 1: 98})
         self.assertEqual((d.route, d.tab), (GUILD_BANK, 0))
 
     def test_overflow_is_spent_as_stacks_land(self):
@@ -68,7 +69,7 @@ class TheOverflow(unittest.TestCase):
         self.assertNotEqual(d.route, GUILD_BANK)
 
     def test_nothing_overflows_into_the_raid_tab(self):
-        d = self.one(recipe(rank=250), {0: 0, 1: 0, 2: 98})
+        d = self.one(recipe(rank=150), {0: 0, 1: 0, 2: 98})
         self.assertNotEqual((d.route, d.tab), (GUILD_BANK, 2))
 
 
