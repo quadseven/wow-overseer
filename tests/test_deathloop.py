@@ -151,6 +151,107 @@ class TheQuietClockIsTheZones(unittest.TestCase):
         self.assertEqual(entry["step"], "Dying in Feralas")
 
 
+# ---- a slow loop: a dozen deaths in one zone in a day (#2615) --------------------
+
+BARRENS = 17
+
+
+def slow_deaths(n, every=45, start=10, **kw):
+    """`n` deaths `every` minutes apart, never five within one hour."""
+    kw.setdefault("zone", BARRENS)
+    kw.setdefault("killer", "Orgrimmar Grunt")
+    return deaths(n, every=every, start=start, **kw)
+
+
+class ASlowLoop(unittest.TestCase):
+    def test_thirty_two_deaths_in_one_zone_in_a_day_is_a_loop(self):
+        rows = slow_deaths(32)
+        self.assertLessEqual(rows[-1]["age"], deathloop.SLOW_WINDOW_SECONDS)
+        loop = deathloop.loops(rows, {"Clunk": 21}, slow=True)["Clunk"]
+        self.assertEqual((loop.zone, loop.deaths, loop.level), (BARRENS, 32, 21))
+        self.assertTrue(loop.slow)
+        self.assertEqual(loop.killer, "Orgrimmar Grunt")
+        self.assertEqual(loop.first_age, rows[-1]["age"])
+        self.assertEqual(
+            loop.blocker(),
+            "Died 32 times in The Barrens in a day, mostly to Orgrimmar Grunt, "
+            "with no level gained.",
+        )
+
+    def test_the_hourly_rule_alone_does_not_see_it(self):
+        self.assertEqual(deathloop.loops(slow_deaths(32), {"Clunk": 21}), {})
+
+    def test_the_threshold_is_twelve_deaths_inside_the_day(self):
+        at = deathloop.SLOW_MIN_DEATHS
+        found = deathloop.loops(slow_deaths(at, every=100), {"Clunk": 21}, slow=True)
+        self.assertEqual(found["Clunk"].deaths, at)
+        under = deathloop.loops(
+            slow_deaths(at - 1, every=100), {"Clunk": 21}, slow=True
+        )
+        self.assertEqual(under, {})
+        # Twelve deaths, the oldest past the day: eleven count.
+        spread = deathloop.loops(slow_deaths(at, every=131), {"Clunk": 21}, slow=True)
+        self.assertEqual(spread, {})
+
+    def test_deaths_in_other_zones_do_not_add_up(self):
+        rows = slow_deaths(8) + slow_deaths(8, start=30, zone=REDRIDGE)
+        self.assertEqual(deathloop.loops(rows, {"Clunk": 21}, slow=True), {})
+
+    def test_a_level_gained_clears_it(self):
+        self.assertEqual(deathloop.loops(slow_deaths(32), {"Clunk": 22}, slow=True), {})
+        # Deaths at the level before the gain do not count toward the dozen.
+        rows = slow_deaths(6, level=22) + slow_deaths(20, start=300, level=21)
+        self.assertEqual(deathloop.loops(rows, {"Clunk": 22}, slow=True), {})
+
+    def test_it_clears_on_the_quiet_clock(self):
+        quiet = deathloop.QUIET_SECONDS // MINUTE
+        self.assertEqual(
+            deathloop.loops(slow_deaths(20, start=quiet + 1), {"Clunk": 21}, slow=True),
+            {},
+        )
+        self.assertIn(
+            "Clunk",
+            deathloop.loops(slow_deaths(20, start=quiet - 1), {"Clunk": 21}, slow=True),
+        )
+
+    def test_an_hourly_loop_keeps_its_own_sentence_and_window(self):
+        rows = deaths(6) + slow_deaths(20, start=120, zone=REDRIDGE)
+        loop = deathloop.loops(rows, {"Clunk": 21}, slow=True)["Clunk"]
+        self.assertFalse(loop.slow)
+        self.assertEqual(loop.deaths, 6)
+        self.assertIn("within an hour", loop.blocker())
+
+    def test_the_longer_read_does_not_widen_the_hourly_rule(self):
+        # Five deaths in an hour, twenty hours ago, and one death since: the
+        # three-hour read never held that old window, so the day-long read
+        # must not call it an hourly loop either.
+        rows = [death(5)] + deaths(5, start=20 * 60)
+        self.assertEqual(deathloop.loops(rows, {"Clunk": 21}, slow=True), {})
+
+    def test_the_slow_read_covers_the_day_and_the_quiet_clock(self):
+        self.assertEqual(deathloop.SLOW_MIN_DEATHS, 12)
+        self.assertEqual(deathloop.SLOW_WINDOW_SECONDS, 24 * 3600)
+        self.assertEqual(
+            deathloop.SLOW_READ_SECONDS,
+            deathloop.SLOW_WINDOW_SECONDS + deathloop.QUIET_SECONDS,
+        )
+
+    def test_the_stuck_reader_lists_a_slow_loop_with_its_own_sentence(self):
+        view = members.stuck_view(roster(slow_deaths(32)))
+        rows = {r["name"]: r for r in view["members"]}
+        self.assertIn("Clunk", rows)
+        clunk = rows["Clunk"]
+        self.assertEqual(clunk["kind"], "death-loop")
+        self.assertEqual(clunk["step"], "Dying in The Barrens")
+        self.assertIn("Died 32 times in The Barrens in a day", clunk["blocker"])
+        self.assertEqual(clunk["since"], NOW - (10 + 31 * 45) * MINUTE)
+
+    def test_the_stuck_reader_reads_the_day_and_says_so(self):
+        source = (HERE / "apiv2" / "members.py").read_text(encoding="utf-8")
+        self.assertIn("deathloop.SLOW_READ_SECONDS", source)
+        self.assertIn("twelve or more deaths in one zone within a day", members.BASIS)
+
+
 # ---- the stuck reader lists it ---------------------------------------------------
 
 

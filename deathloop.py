@@ -25,6 +25,19 @@ out of the loop, where a clock over every zone kept a loop three hours old
 listed. Nothing is kept between passes: each read sees the last READ_SECONDS
 of deaths and judges them again.
 
+A SLOW LOOP (#2615). Measured on 2026-11-15 over a day of overseer_death: 5 of
+the 69 members with 24 or more deaths were never a loop by the rule above,
+because they die one to two times an hour and never five (one died 32 times
+to the same guard at the same three places). `loops(..., slow=True)` adds a
+second rule for a reader that asks for it and reads SLOW_READ_SECONDS of
+rows: SLOW_MIN_DEATHS or more deaths in one zone within SLOW_WINDOW_SECONDS of
+the zone's newest death, all at the member's level now, the newest under the
+same QUIET_SECONDS clock. Its sentence says "in a day" (`Loop.slow`). The
+hourly rule is judged first and over the same READ_SECONDS of rows as ever,
+so the longer read never widens it. Only the stuck reader asks for it; what
+the guild jobs pass does with a slow loop is that pass's own decision, and
+its reads keep the default.
+
 WHAT IT IS FOR. The stuck reader (apiv2/members.py) lists the member with kind
 KIND and the blocker sentence (`Loop.blocker`), and the guild jobs pass
 (guildjobs.death_loop_step) sends the member to town and plans its next quest
@@ -49,6 +62,11 @@ QUIET_SECONDS = 2 * 3600
 # How far back the deaths are read: a window that ended up to QUIET_SECONDS ago
 # is still seen whole.
 READ_SECONDS = WINDOW_SECONDS + QUIET_SECONDS
+# A dozen deaths in one zone inside a day is a slow loop (#2615).
+SLOW_MIN_DEATHS = 12
+SLOW_WINDOW_SECONDS = 24 * 3600
+# How far back a reader that judges slow loops reads, by the same reasoning.
+SLOW_READ_SECONDS = SLOW_WINDOW_SECONDS + QUIET_SECONDS
 # The stuck reader's kind for the entry.
 KIND = "death-loop"
 
@@ -65,7 +83,7 @@ class Loop:
     """One member's death loop: where, how many deaths, to what, at what level.
 
     `first_age` and `last_age` are the seconds since the window's oldest and
-    newest death."""
+    newest death. `slow` is the day-long rule (#2615), and words the reason."""
 
     name: str
     zone: int
@@ -75,6 +93,7 @@ class Loop:
     level: int
     first_age: int
     last_age: int
+    slow: bool = False
 
     @property
     def place(self) -> str:
@@ -82,11 +101,12 @@ class Loop:
 
     def reason(self) -> str:
         """'died 7 times in Redridge Mountains within an hour, mostly to Great
-        Goretusk, with no level gained'"""
+        Goretusk, with no level gained'; a slow loop says 'in a day'."""
         killer = ", mostly to %s" % self.killer if self.killer else ""
-        return "died %d times in %s within an hour%s, with no level gained" % (
+        return "died %d times in %s %s%s, with no level gained" % (
             self.deaths,
             self.place,
+            "in a day" if self.slow else "within an hour",
             killer,
         )
 
@@ -168,6 +188,35 @@ def _zone_loop(name, deaths, level_now) -> Loop | None:
             last_age=newest.age,
         )
     return None
+
+
+def _slow_zone_loop(name, deaths, level_now) -> Loop | None:
+    """The slow loop in one zone's deaths (newest first), or None (#2615).
+
+    Counted from the zone's newest death back over SLOW_WINDOW_SECONDS, and
+    only while the level holds: a death at another level ends the count, so a
+    level gained inside the day starts it again."""
+    newest = deaths[0]
+    if level_now is not None and int(level_now) != newest.level:
+        return None
+    window = []
+    for d in deaths:
+        if d.age - newest.age > SLOW_WINDOW_SECONDS or d.level != newest.level:
+            break
+        window.append(d)
+    if len(window) < SLOW_MIN_DEATHS:
+        return None
+    return Loop(
+        name=name,
+        zone=newest.zone,
+        map_id=newest.map_id,
+        deaths=len(window),
+        killer=_top_killer(window),
+        level=newest.level,
+        first_age=window[-1].age,
+        last_age=newest.age,
+        slow=True,
+    )
 
 
 RISK_WINDOW_SECONDS = 30 * 60
@@ -312,11 +361,23 @@ def avoided_zones(rows, levels=None) -> dict:
     return out
 
 
-def loops(rows, levels=None) -> dict:
+def _zone_found(name, zone_deaths, level_now, slow) -> Loop | None:
+    """One zone's loop: the hourly rule over its READ_SECONDS of deaths, as
+    every read has judged it, and with `slow` the day-long rule after it."""
+    recent = [d for d in zone_deaths if d.age <= READ_SECONDS] if slow else zone_deaths
+    found = _zone_loop(name, recent, level_now)
+    if found is None and slow:
+        found = _slow_zone_loop(name, zone_deaths, level_now)
+    return found
+
+
+def loops(rows, levels=None, slow=False) -> dict:
     """name -> Loop for every member of SQL's rows in a death loop.
 
     `levels` is name -> the member's level now; a member it does not name is
-    judged by its deaths' levels alone."""
+    judged by its deaths' levels alone. `slow` also judges the day-long rule
+    (#2615) and expects SLOW_READ_SECONDS of rows; the hourly rule still sees
+    only the newest READ_SECONDS of them."""
     levels = levels or {}
     out = {}
     for name, deaths in _deaths_of(rows).items():
@@ -329,9 +390,11 @@ def loops(rows, levels=None) -> dict:
             loop
             for zone, zone_deaths in by_zone.items()
             if zone and zone_deaths[0].age <= QUIET_SECONDS
-            for loop in (_zone_loop(name, zone_deaths, levels.get(name)),)
+            for loop in (_zone_found(name, zone_deaths, levels.get(name), slow),)
             if loop is not None
         ]
         if found:
-            out[name] = min(found, key=lambda lp: (lp.last_age, -lp.deaths, lp.zone))
+            out[name] = min(
+                found, key=lambda lp: (lp.slow, lp.last_age, -lp.deaths, lp.zone)
+            )
     return out
