@@ -148,7 +148,7 @@ def command_for(tab: int, cap=guildroute.FAR_WALK_YARDS) -> str:
     return "walk-to-trainer talents:%d%s" % (tab, guildroute.errand_cap_word(cap))
 
 
-def plan(cands, walkers, recent, busy, per_pass=PER_PASS) -> tuple:
+def plan(cands, walkers, recent, busy, per_pass=PER_PASS, stranded=None) -> tuple:
     """(walks, notes): who walks to a class trainer for the reset now.
 
     The walk's own refusals are the class trainer walk's (classtrain.
@@ -156,8 +156,16 @@ def plan(cands, walkers, recent, busy, per_pass=PER_PASS) -> tuple:
     world waits for the same reasons.
     """
     walks, notes, started = [], [], {}
+    stranded = stranded or {}
     for c in sorted(cands or (), key=lambda c: (-c.money, c.name)):
         if c.name in recent:
+            continue
+        here = getattr((walkers or {}).get(c.name), "map_id", None)
+        if here is not None and stranded.get(c.name) == here:
+            notes.append(
+                "%s waits on a map change: no class trainer stands on map %d for it"
+                % (c.name, here)
+            )
             continue
         if c.name in busy:
             notes.append("%s waits: it is on another guild walk" % c.name)
@@ -197,12 +205,40 @@ def plan(cands, walkers, recent, busy, per_pass=PER_PASS) -> tuple:
     return walks, notes
 
 
+# A walk the restart killed before it reached a trainer (the module's own
+# detail for a claim that expired when the run holding it went away).
+RESTART_DETAIL = "restart: claim expired"
+
+
+def _reached_no_trainer(row) -> bool:
+    """True for a row whose walk bought nothing: the module refused it for
+    having no trainer on the map, or a restart ended it on the way (#2864).
+    Neither is a walk done, so neither starts the cooldown."""
+    if str(row.get("detail") or "").startswith(RESTART_DETAIL):
+        return True
+    return classtrain._is_no_trainer_refusal(classtrain._result_of(row))
+
+
+def stranded(rows) -> dict:
+    """name -> the map each member's newest respec walk was refused on, for
+    those whose newest walk was refused for no trainer of their class there.
+    The class trainer walk's own read (classtrain.stranded), on this pass's
+    rows."""
+    return classtrain.stranded(rows, SOURCE)
+
+
 def recent_walkers(rows, minutes=COOLDOWN_MINUTES) -> set:
-    """Members walked inside the cooldown, from the command log's rows."""
+    """Members walked inside the cooldown, from the command log's rows.
+
+    A refusal for lacking a trainer on the member's map, and a walk a restart
+    ended, are not walks done: the member is walked again as soon as it can be.
+    """
     out = set()
     for row in rows or ():
         source = str(row.get("source") or "")
         if not source.startswith(SOURCE + ":"):
+            continue
+        if _reached_no_trainer(row):
             continue
         try:
             age = int(row.get("age"))
@@ -214,7 +250,7 @@ def recent_walkers(rows, minutes=COOLDOWN_MINUTES) -> set:
 
 
 def pass_line(cands, started) -> str:
-    return "%s %d paladin(s) can pay for the Holy reset; started %d walk(s)" % (
+    return "%s %d healer seat(s) can pay for the talent reset; started %d walk(s)" % (
         LOG_PREFIX,
         len(cands),
         started,

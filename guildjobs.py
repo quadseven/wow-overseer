@@ -144,6 +144,7 @@ import raidteams
 import recipebook
 import restsupply
 import auction
+import bankerloop
 import classreagents
 import situation
 import standstill
@@ -181,6 +182,9 @@ MAX_PRIMARY = 2
 # The roles, as raidlineup.build_lineup names them.
 MAINTENANCE, SUMMONER, RAIDER, FAMILY = "maintenance", "summoner", "raider", "family"
 UNASSIGNED = "unassigned"
+# A guild banker (#2660): in none of the lineup's groups, and it stays in
+# its vault city (bankerloop.py).
+BANKER = bankerloop.BANKER
 
 
 @dataclass(frozen=True)
@@ -730,6 +734,8 @@ class Member:
     # not its own guid): it stands where its leader stands, so its standing
     # still says nothing of it (stood_still_step).
     follows: bool = False
+    # The guild vault spawn a banker stays beside (a Spot), set by bankerloop.
+    vault: object = None
     # A raid seat's bag loop (#2609): what the item plan says to sell and to
     # bank from the stacks it carries, read by seatbags (the guild job read
     # holds only what a vendor buys, so the plan reads the whole bags), and the
@@ -743,6 +749,9 @@ class Member:
     auctioneer: object = None
     # Quest-class stacks the plan destroys as certainly useless (#2607).
     plan_destroy: tuple = ()  # Carried
+    # Untaken quests a quest item it carries names, takable by it
+    # (questuntaken.Untaken, set by seatquests, #2648).
+    untaken: tuple = ()
     # Class reagent item entries used by known spells (classreagents.py, #2622),
     # kept out of vendor sales alongside SOUL_SHARD.
     reagent_entries: frozenset = frozenset()
@@ -873,6 +882,10 @@ class JobsPlan:
     # yields to levelling (class_asking); the bridge logs a line when its key
     # changes.
     ask_yields: tuple = ()
+    # One line per member listed in a death loop that got no escape step this
+    # pass, and why (#2152). Its own field: plan.notes is logged five lines a
+    # pass, which hid every one of these.
+    loop_lines: tuple = ()
     # guild -> {skill: name} of each trade's guinea pig (guineapig.pick).
     pigs: dict = field(default_factory=dict)
     # name -> the (skill, skill) each approved raid seat should hold
@@ -1927,10 +1940,99 @@ def _town_trades_step(m, trades, kept, recent, cap, crafters, master):
     step = _learn_step(m, cap, recent)
     if step is not None:
         return step, note
+    step = _untaken_step(m, cap, recent)
+    if step is not None:
+        return step, note
     if _cooling(m, "craft", recent):
         return None, note
     step, why = _craft_or_room(m, kept, recent, cap, crafters, master)
     return step, _join(note, why)
+
+
+# TAKING THE QUESTS A SEAT'S QUEST ITEMS NAME (#2648). A seat carries items for
+# quests it never took; on a town stop it walks to the giver and takes one,
+# once per quest per UNTAKEN_COOLDOWN_MINUTES (a refusal counts: the row is
+# remembered either way), and never again while a step of this kind is
+# under way. The quest is then finished by the seat's own questing.
+UNTAKEN_ACTION = "untaken"
+UNTAKEN_COOLDOWN_MINUTES = 6 * 60
+UNTAKEN_PAUSE_MINUTES = 15
+UNTAKEN_REACH_YARDS = 1500.0
+UNTAKEN_NEAR = 12.0
+
+
+def _untaken_asked(m, quest, recent) -> bool:
+    """Whether this seat was sent to take this quest inside the cooldown."""
+    word = "take quest:%d" % int(quest)
+    return any(
+        r.name == m.name
+        and r.action == UNTAKEN_ACTION
+        and word in str(r.command or "")
+        and int(r.age_minutes) < UNTAKEN_COOLDOWN_MINUTES
+        for r in recent or ()
+    )
+
+
+def _untaken_under_way(m, recent) -> bool:
+    return any(
+        r.name == m.name
+        and r.action == UNTAKEN_ACTION
+        and int(r.age_minutes) < UNTAKEN_PAUSE_MINUTES
+        for r in recent or ()
+    )
+
+
+def _nearest_giver(m, givers):
+    """The giver spawn on the member's map nearest it within reach, or None."""
+    if m.map_id is None or m.x is None or m.y is None:
+        return None
+    best, best_yards = None, None
+    for spot in givers or ():
+        if int(spot.map_id) != int(m.map_id):
+            continue
+        yards = _yards(m.x, m.y, spot.x, spot.y)
+        if yards <= UNTAKEN_REACH_YARDS and (best_yards is None or yards < best_yards):
+            best, best_yards = spot, yards
+    return best
+
+
+def _untaken_step(m, cap, recent):
+    """The walk to a giver and the take of one quest a carried item names, or
+    None. One quest per step, the lowest id the seat may take now."""
+    if not m.untaken or _untaken_under_way(m, recent):
+        return None
+    known = set(m.quest_log or ()) | set(m.quests_done or ()) | set(m.recently_taken)
+    for u in sorted(m.untaken, key=lambda u: int(u.quest_id)):
+        quest = int(u.quest_id)
+        if quest in known or _untaken_asked(m, quest, recent):
+            continue
+        spot = _nearest_giver(m, u.givers)
+        if spot is None and not u.by_item:
+            continue
+        take = guildcorps.Row(
+            "quest",
+            "take quest:%d" % quest,
+            "",
+            source_for(UNTAKEN_ACTION, m.name),
+        )
+        walk = None
+        if spot is not None and not _near(m, spot, UNTAKEN_NEAR):
+            walk = guildcorps.Row(
+                "job",
+                spot.command + _cap_word(cap),
+                "",
+                source_for(UNTAKEN_ACTION + "-walk", m.name),
+            )
+        return guildcorps.Step(
+            m.name,
+            UNTAKEN_ACTION,
+            quest,
+            "%s takes %s for the quest items it carries" % (m.name, u.title or quest),
+            rows=(take,),
+            walk=walk,
+            goal=(spot.name if spot is not None else m.name),
+        )
+    return None
 
 
 # LISTING A SEAT'S SURPLUS AT A CITY AUCTIONEER (#2611). The item plan routes
@@ -4965,6 +5067,7 @@ class _PlannerState:
     ask_yields: list = field(default_factory=list)
     gear_holds: list = field(default_factory=list)
     class_holds: dict = field(default_factory=dict)
+    refused: dict = field(default_factory=dict)
 
 
 def _plan_counters():
@@ -5033,6 +5136,11 @@ def _plan_members(inputs, state):
 
 def _plan_ordered_member(member, inputs, state):
     """Dispatch one ordered seat to its class-only or full job planner."""
+    if member.role == BANKER:
+        _plan_banker_member(member, inputs, state)
+        return
+    if member.role == UNASSIGNED and _plan_unassigned_escape(member, inputs, state):
+        return
     if member.role == UNASSIGNED and inputs.classes is not None:
         why = _plan_class_only_member(
             member,
@@ -5082,6 +5190,38 @@ def _plan_ordered_member(member, inputs, state):
         return
     if member.role in (MAINTENANCE, SUMMONER, RAIDER):
         _plan_roster_member(member, inputs, state)
+
+
+def _plan_unassigned_escape(member, inputs, state) -> bool:
+    """True when a member outside the lineup was issued its death loop's escape.
+
+    A seat the lineup did not place was offered a class step only, so a looper
+    among them never saw the escape (#2152). The hearth and the walk out are
+    the only rungs it is offered here; anything else stays class-only."""
+    loop = _offer_for(inputs.loops, member.name)
+    if loop is None:
+        return False
+    found = death_loop_first(
+        member,
+        loop,
+        inputs.leveling,
+        inputs.recent,
+        inputs.cap,
+        inputs.campaign,
+        _offer_for(inputs.supply, member.name),
+        inputs.kept,
+        inputs.classes,
+        mates=inputs.members,
+        looping=_member_map_keys(inputs.loops),
+    )
+    if found is None or found[0] is None or found[0].action not in _ESCAPE_ACTIONS:
+        return False
+    step, doing, note, _extra = found
+    if note:
+        state.notes.append(note)
+    state.lines[member.name] = doing
+    _commit_roster_step(member, step, inputs, state)
+    return True
 
 
 def _plan_roster_member(member, inputs, state):
@@ -5147,6 +5287,64 @@ def _plan_roster_member(member, inputs, state):
     _commit_roster_step(member, step, inputs, state)
 
 
+def _plan_banker_member(member, inputs, state):
+    """A banker's one step (bankerloop.py): home, its post, its bags. Never a
+    class quest, a level walk, a trade or a gear step."""
+    step, doing = _banker_step(
+        member,
+        _member_value(inputs.mail, member.name, ()),
+        inputs.kept,
+        inputs.recent,
+        inputs.cap,
+    )
+    state.lines[member.name] = doing
+    if step is not None:
+        _commit_roster_step(member, step, inputs, state)
+
+
+def _banker_step(m, mail, kept, recent, cap):
+    """(the banker's step or None, a line saying what it does)."""
+    if not (m.eligible and m.online and m.alive and not m.in_combat):
+        return None, "%s waits in the vault city" % m.name
+    if not bankerloop.at_home(m):
+        return _banker_home_step(m, recent, cap), "%s goes back to its vault" % m.name
+    step = _collect_first(m, mail, recent, cap)
+    if step is not None:
+        return step, step.said
+    # A banker sells true junk only and never destroys what it holds.
+    junk = replace(m, plan_sales=bankerloop.junk_only(m.plan_sales), plan_destroy=())
+    step = seat_loop_first(junk, kept, recent, cap)
+    if step is not None:
+        return step, step.said
+    return None, "%s keeps the guild's stock in the vault city" % m.name
+
+
+def _banker_home_step(m, recent, cap):
+    """The walk back to the vault, or the hearth when the vault is not on its
+    map or not known; once per HOME_COOLDOWN_MINUTES either way."""
+    if any(
+        r.name == m.name
+        and r.action in (bankerloop.ACTION, "hearth")
+        and int(r.age_minutes) < bankerloop.HOME_COOLDOWN_MINUTES
+        for r in recent or ()
+    ):
+        return None
+    vault = m.vault
+    if (
+        vault is not None
+        and m.map_id is not None
+        and int(vault.map_id) == int(m.map_id)
+    ):
+        return _spot_step(
+            m,
+            vault,
+            bankerloop.ACTION,
+            cap,
+            "%s walks back to the guild vault" % m.name,
+        )
+    return hearth_step(m)
+
+
 def _member_value(mapping, key, default=None):
     """Read one member's value from an optional planner map."""
     return (mapping or {}).get(key, default)
@@ -5172,6 +5370,7 @@ def _commit_roster_step(member, step, inputs, state):
     )
     if why:
         state.notes.append(why)
+        state.refused[member.name] = why
         if step.action == classquest.ACTION:
             state.class_holds[member.name] = _class_hold_reason(member.name, why)
         _release_slots(member.name, state.far, inputs.hunts)
@@ -5247,9 +5446,49 @@ def _finish_plan(inputs, state):
         released=released,
         yields=class_yields(all_members, inputs.classes, inputs.recent),
         ask_yields=tuple(state.ask_yields),
+        loop_lines=_loop_lines(inputs, state, all_members),
         pigs=inputs.pigs,
         assigned=state.assigned,
     )
+
+
+_ESCAPE_ACTIONS = ("hearth", guildlevel.ACTION)
+
+
+def _loop_lines(inputs, state, all_members) -> tuple:
+    """One line per member listed in a death loop that got no escape step.
+
+    The box of #2152: every member the stuck list shows in a death loop has an
+    escape step or a logged reason in the same pass. A member whose escape
+    started is named by that step's own line; every other listed member is
+    named here, with the branch that issued nothing: not placed, a roster
+    family member, already out of the zone, a refusal of the step the pass
+    made, or the escape's own reason (_death_loop_reason)."""
+    escaped = {s.holder for s in state.steps if s.action in _ESCAPE_ACTIONS}
+    seen = {m.name: m for m in all_members}
+    seen.update({m.name: m for m in inputs.family_members or ()})
+    out = []
+    for name, loop in sorted((inputs.loops or {}).items()):
+        if name in escaped:
+            continue
+        m = seen.get(name)
+        out.append(
+            "%s gets no death-loop escape from %s: %s"
+            % (name, loop.place, _loop_line_reason(m, loop, inputs, state))
+        )
+    return tuple(out)
+
+
+def _loop_line_reason(m, loop, inputs, state) -> str:
+    if m is None:
+        return "not placed this pass"
+    if m.role == FAMILY:
+        return "roster member (the family route walks it)"
+    if m.name in state.refused:
+        return "the step was refused: %s" % state.refused[m.name]
+    if not _in_loop_zone(m, loop):
+        return "already out of the zone"
+    return _death_loop_reason(m, loop, inputs.leveling, inputs.recent, inputs.campaign)
 
 
 def _plan_family_class_member(

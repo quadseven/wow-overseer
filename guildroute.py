@@ -51,6 +51,19 @@ _STATUS_WORDS = {
 }
 
 
+# The gain a hand-over carries when the wearer's slot is empty or holds a piece
+# the scorer prices at nothing for it: no ratio exists, and it outranks every
+# one. It sits far above any real percentage and is worded, never added up.
+EMPTY_SLOT_GAIN = 100000
+
+
+def gain_words(gain) -> str:
+    """How a gain reads in a log line: item levels, or the empty or dead slot."""
+    if int(gain) >= EMPTY_SLOT_GAIN:
+        return "an empty or dead slot"
+    return "+%d item levels" % int(gain)
+
+
 def source_for(gain) -> str:
     """The `source` a hand-over row is written with."""
     return "%s:%d" % (SOURCE, max(0, int(gain)))
@@ -94,13 +107,13 @@ def view(rows, item_names=None) -> dict:
         else:
             outcome = _STATUS_WORDS.get(status, status or "unknown")
         lines.append(
-            "%s to %s: %s %s, +%d item levels - %s"
+            "%s to %s: %s %s, %s - %s"
             % (
                 row.get("target_name") or "?",
                 row.get("target_arg") or "?",
                 item,
                 "by post" if posted else "by trade",
-                gain_of(row.get("source")),
+                gain_words(gain_of(row.get("source"))),
                 outcome,
             )
         )
@@ -384,7 +397,7 @@ class MailRun:
         if walker != self.holder:
             return (
                 "%s walks %d yards to the mailbox at %s to post %s (item %d) "
-                "from %s to %s, +%d item levels"
+                "from %s to %s, %s"
                 % (
                     walker,
                     int(round(self.yards)),
@@ -393,11 +406,11 @@ class MailRun:
                     int(self.guid),
                     self.holder,
                     self.taker,
-                    int(self.gain),
+                    gain_words(self.gain),
                 )
             )
         return (
-            "%s walks %d yards to the mailbox at %s to post %s (item %d) to %s, +%d item levels"
+            "%s walks %d yards to the mailbox at %s to post %s (item %d) to %s, %s"
             % (
                 self.holder,
                 int(round(self.yards)),
@@ -405,7 +418,7 @@ class MailRun:
                 self.item,
                 int(self.guid),
                 self.taker,
-                int(self.gain),
+                gain_words(self.gain),
             )
         )
 

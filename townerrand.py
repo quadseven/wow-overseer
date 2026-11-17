@@ -154,6 +154,21 @@ HEARTH_SECONDS = 45.0
 # samples every 30 seconds, so 35 yards catches the completed walk before the
 # leader wanders away. Mailbox operations keep their own in-range checks.
 HUB_YARDS = 35.0
+# THE ARRIVAL IS A FEW SECONDS WIDE. The module completes the walk at the aim
+# and hands the leader back to its quest drive at once, so a leader read 30
+# seconds apart is read at the hub almost never (wow-dev 2026-11-17: arrived
+# 09:00:33, 2,000 yards away by 09:08, the errand still in GO and no sale
+# written). Within this many yards the bridge watches the leader closely.
+ARRIVAL_WATCH_YARDS = 300.0
+ARRIVAL_POLL_SECONDS = 3.0
+ARRIVAL_WATCH_SECONDS = 24.0
+
+
+def watching_arrival(hub: dict, standing) -> bool:
+    """Is the leader near enough the hub that its arrival could be missed?"""
+    return in_range(hub, standing, ARRIVAL_WATCH_YARDS)
+
+
 GATHER_YARDS = 12.0
 
 # The entry test: gear in the post, or a member this short of slots (or with
@@ -667,6 +682,34 @@ def lethal_stops(stops, here: dict, deaths) -> list:
         if count >= DEATHS_MAKE_A_STOP_LETHAL:
             out.append((stop, count))
     return out
+
+
+def with_leader(names, positions: dict, leader: str, everyone: bool = False) -> list:
+    """The members an errand's counter can serve: those standing within
+    WALK_YARDS of the leader on its map, the leader included.
+
+    A member thousands of yards off cannot reach a counter the leader walks to
+    alone (the walk is not gathered, and the module's catch-up takes tens of
+    minutes), so its stacks must not choose the counter: a vendor aim justified
+    by stacks nobody present holds sells nothing and the errand repeats. With
+    `everyone` (the head's stone brings the family to the hub) all are served.
+    A member with no reading is not here.
+    """
+    if everyone:
+        return sorted(names)
+    at = (positions or {}).get(leader)
+    if not at:
+        return sorted(names)
+    here = {
+        "map_id": at.get("map_id"),
+        "x": at.get("pos_x"),
+        "y": at.get("pos_y"),
+    }
+    return sorted(
+        n
+        for n in names
+        if n == leader or in_range(here, (positions or {}).get(n), WALK_YARDS)
+    )
 
 
 def bank_first(why: str, sellable, bank_routed: int) -> bool:

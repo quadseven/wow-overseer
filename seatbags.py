@@ -46,6 +46,7 @@ import itemplan
 import itemplan_shadow
 import itemplan_vendor
 import raidteams
+import bankerloop
 
 ENV_BANK = "GUILD_SEAT_BANK"
 PREFIX = "seat bags:"
@@ -97,7 +98,7 @@ def needs_plan(member) -> bool:
     """A seat or corps member in the world with fewer free slots than the
     plan's trigger."""
     return bool(
-        (is_seat(member) or is_corps_member(member))
+        (is_seat(member) or is_corps_member(member) or bankerloop.is_banker(member))
         and member.online
         and member.alive
         and member.free_slots is not None

@@ -133,7 +133,9 @@ import itemplan
 import itemplan_disenchant
 import itemplan_route
 import itemplan_vendor
+import bankerloop
 import seatbags
+import seatquests
 import itemsource
 import purse
 import pvpgear
@@ -19889,12 +19891,15 @@ class Bridge(discord.Client):
             _log_capped("healer respec", notes)
             return
         now = time.monotonic()
-        recent = healerrespec.recent_walkers(await asyncio.to_thread(_respec_walk_rows))
+        respec_rows = await asyncio.to_thread(_respec_walk_rows)
+        recent = healerrespec.recent_walkers(respec_rows)
+        stranded = healerrespec.stranded(respec_rows)
         busy = self._guild_walkers_busy(now)
         row_walks = now >= self._mail_walk_unsupported_until
         walkers = await asyncio.to_thread(
             _route_walkers, [c.name for c in cands], names, row_walks)
-        walks, plan_notes = healerrespec.plan(cands, walkers, recent, busy)
+        walks, plan_notes = healerrespec.plan(
+            cands, walkers, recent, busy, stranded=stranded)
         _log_capped("healer respec", notes + plan_notes)
         started = 0
         for walk in walks:
@@ -20565,16 +20570,26 @@ class Bridge(discord.Client):
             else classhunt.Slots(classhunt.free_slots(
                 facts.get("hunt_open"), HUNTS_AT_ONCE)))
         self._class_hunts.items = now >= self._class_hunt_itemless_until
+        # A BANKER STAYS BESIDE ITS VAULT (#2660): the vault spawn it walks back
+        # to is read and put on it before the plan.
+        members = await asyncio.to_thread(_banker_vaults, members)
         # A RAID SEAT RUNS THE FAMILY'S BAG LOOP (#2609): the item plan over
         # the seat's whole bags, handed to the plan as what to sell and bank.
         members, seat_lines = await asyncio.to_thread(
             _seat_bag_relief, members, cap)
         for line in seat_lines:
             log.info("guild jobs: %s", line)
+        # A RAID SEAT TAKES THE QUESTS ITS QUEST ITEMS NAME (#2648).
+        members, quest_lines = await asyncio.to_thread(_seat_untaken_quests, members)
+        for line in quest_lines:
+            log.info("guild jobs: %s", line)
         plan = await self._plan_guild_jobs(
             members, facts, busy, cap, spawn_walks, cohort)
         self._log_guild_job_plan(members, plan)
         _log_capped("guild jobs", plan.notes)
+        # The death loop's reasons are never capped (#2152): every listed
+        # member that got no escape step is named, whatever else the pass says.
+        _log_loop_lines(plan.loop_lines)
         # A class quest that yields to levelling is named every pass, uncapped.
         for line in plan.yields:
             log.info("guild jobs: %s", line)
@@ -22698,6 +22713,13 @@ class Bridge(discord.Client):
                 )
         leader_at_hub = townerrand.in_range(
             hub, positions.get(leader), townerrand.HUB_YARDS)
+        if (state.phase == townerrand.GO and not leader_at_hub and not in_run):
+            # THE ARRIVAL IS SEEN, NOT SAMPLED (wow-dev 2026-11-17): see
+            # `_town_errand_watch_arrival`.
+            # Looked up: the adapter tests stub the family.
+            watch = getattr(self, "_town_errand_watch_arrival", None)
+            if watch is not None:
+                leader_at_hub = await watch(hub, leader)
         gathered = all(
             townerrand.in_range(hub, positions.get(n), townerrand.GATHER_YARDS)
             for n in names)
@@ -22755,6 +22777,30 @@ class Bridge(discord.Client):
         if new.phase == townerrand.DONE:
             await self._town_errand_release(names, leader, slot, label)
         _TOWN_ERRANDS[key] = new
+
+    async def _town_errand_watch_arrival(self, hub, leader) -> bool:
+        """Whether the leader is seen at the hub, watched closely when near it.
+
+        The worldserver ends the walk on arrival and returns the leader to its
+        quest drive within seconds, and the pass reads positions every 30
+        seconds after a 6 second settle, so the arrival fell between reads: the
+        errand stayed in GO until its 1,200 second bound, wrote no sale, and
+        the family's bag hold never lifted. A leader inside
+        `townerrand.ARRIVAL_WATCH_YARDS` is read every few seconds for the rest
+        of the pass; any read inside the hub's range is the arrival. Bounded:
+        it only runs near the hub, for one pass's length.
+        """
+        waited = 0.0
+        while True:
+            seen = (await asyncio.to_thread(
+                _fetch_fresh_positions, [leader])).get(leader)
+            if townerrand.in_range(hub, seen, townerrand.HUB_YARDS):
+                return True
+            if (not townerrand.watching_arrival(hub, seen)
+                    or waited >= townerrand.ARRIVAL_WATCH_SECONDS):
+                return False
+            await asyncio.sleep(townerrand.ARRIVAL_POLL_SECONDS)
+            waited += townerrand.ARRIVAL_POLL_SECONDS
 
     async def _aim_stranded_bag_pressure_members(
         self, names: list, leader: str, positions: dict,
@@ -23008,8 +23054,13 @@ class Bridge(discord.Client):
             bankers_of = globals().get("_fetch_errand_banker_stops")
             bank_reads = globals().get("_bank_first_reads")
             if bankers_of and bank_reads and why == townerrand.BAG_PRESSURE_WHY:
+                # ONLY THE MEMBERS WITH THE LEADER CHOOSE THE COUNTER: a
+                # follower thousands of yards off cannot reach it, and its
+                # stacks kept the family on a vendor aim that sold nothing.
+                here = townerrand.with_leader(
+                    names, positions, leader, everyone=bool(hearth_reaches))
                 sellable, bank_routed = await asyncio.to_thread(
-                    bank_reads, list(names))
+                    bank_reads, list(names), here)
                 if townerrand.bank_first(why, sellable, bank_routed):
                     banker_stops = townerrand.vendor_stops(
                         await asyncio.to_thread(bankers_of, leader, standing),
@@ -33613,6 +33664,124 @@ def _seat_bag_relief(members, cap):
         return list(members), ()
 
 
+_BANKER_VAULTS_SQL = (
+    "SELECT g.guid AS spawn, g.map AS map_id, g.position_x AS x, "
+    "g.position_y AS y, gt.name AS name "
+    "FROM acore_world.gameobject g "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE gt.type = %s AND g.zoneId IN ({zones})"
+)
+# GAMEOBJECT_TYPE_GUILD_BANK.
+_GUILD_BANK_GO_TYPE = 34
+
+
+def _banker_vaults(members):
+    """The members, each guild banker carrying the guild vault spawn in its
+    vault city; blocking. A failed read leaves them as they were: a banker
+    with no vault known is walked home by the hearth."""
+    if not any(bankerloop.is_banker(m) for m in members):
+        return list(members)
+    zones = sorted(set(bankerloop.VAULT_CITY_ZONE.values()))
+    sql = _BANKER_VAULTS_SQL.format(zones=",".join(["%s"] * len(zones)))
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, (_GUILD_BANK_GO_TYPE, *zones))
+            found = cur.fetchall()
+    except (OSError, pymysql.err.MySQLError) as exc:
+        log.warning("bankers: could not read the guild vaults: %s", exc)
+        return list(members)
+    spots = tuple(
+        guildjobs.Spot(
+            kind="gameobject", spawn=int(r["spawn"]), map_id=int(r["map_id"]),
+            x=float(r["x"]), y=float(r["y"]), name=str(r["name"] or ""))
+        for r in found)
+    return bankerloop.attach_vaults(members, spots)
+
+
+_SEAT_QUEST_MEMO = seatquests.Memo()
+_SEAT_QUEST_ITEMS_SQL = (
+    "SELECT c.name AS name, ii.itemEntry AS entry "
+    "FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE it.class = 12 AND c.name IN ({names})"
+)
+_SEAT_QUEST_ROWS_SQL = (
+    "SELECT t.ID, t.LogTitle, t.QuestLevel, t.MinLevel, t.AllowableRaces, "
+    "t.Flags, t.StartItem, "
+    + ", ".join("t.RequiredItemId%d" % i for i in range(1, 7)) + ", "
+    + ", ".join("t.ItemDrop%d" % i for i in range(1, 5)) + ", "
+    "a.MaxLevel, a.AllowableClasses, a.PrevQuestID, a.NextQuestID, "
+    "a.ExclusiveGroup "
+    "FROM acore_world.quest_template t "
+    "LEFT JOIN acore_world.quest_template_addon a ON a.ID = t.ID "
+    "WHERE {where}"
+)
+_SEAT_QUEST_GIVERS_SQL = (
+    "SELECT s.quest AS quest, cr.guid AS spawn, cr.map AS map_id, "
+    "cr.position_x AS x, cr.position_y AS y, ct.name AS name "
+    "FROM acore_world.creature_queststarter s "
+    "JOIN acore_world.creature cr ON cr.id = s.id "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE s.quest IN ({quests}) AND " + towntrip.REAL_SPAWN_SQL
+)
+
+
+def _seat_untaken_quests(members):
+    """(members with the quests each seat may take, log lines), blocking.
+
+    A failed read or plan is logged and the pass carries on with the members
+    as they were."""
+    try:
+        return seatquests.relieve(
+            members, _read_seat_quests, time.monotonic(), _SEAT_QUEST_MEMO)
+    except Exception:
+        log.exception("seat quests: the plan failed; the pass carries on without it")
+        return list(members), ()
+
+
+def _read_seat_quests(names):
+    """seatquests.relieve's read for the named seats, None when it failed."""
+    if not names:
+        return seatquests.Read()
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_SEAT_QUEST_ITEMS_SQL.format(
+                names=",".join(["%s"] * len(names))), list(names))
+            carried: dict = {}
+            for row in cur.fetchall():
+                carried.setdefault(str(row["name"]), set()).add(int(row["entry"]))
+            items = sorted({e for found in carried.values() for e in found})
+            if not items:
+                return seatquests.Read(carried=carried)
+            marks = ",".join(["%s"] * len(items))
+            columns = ("StartItem",
+                       *("RequiredItemId%d" % i for i in range(1, 7)),
+                       *("ItemDrop%d" % i for i in range(1, 5)))
+            where = " OR ".join("t.%s IN (%s)" % (c, marks) for c in columns)
+            cur.execute(_SEAT_QUEST_ROWS_SQL.format(where=where),
+                        items * len(columns))
+            rows = tuple(dict(r) for r in cur.fetchall())
+            quest_ids = sorted({int(r["ID"]) for r in rows})
+            givers: dict = {}
+            if quest_ids:
+                cur.execute(_SEAT_QUEST_GIVERS_SQL.format(
+                    quests=",".join(["%s"] * len(quest_ids))), quest_ids)
+                for r in cur.fetchall():
+                    givers.setdefault(int(r["quest"]), []).append(guildjobs.Spot(
+                        kind="creature", spawn=int(r["spawn"]),
+                        map_id=int(r["map_id"]), x=float(r["x"]),
+                        y=float(r["y"]), name=str(r["name"] or ""),
+                        near=int(guildjobs.UNTAKEN_NEAR)))
+    except (OSError, pymysql.err.MySQLError) as exc:
+        log.warning("seat quests: could not read the seats' quest items: %s", exc)
+        return None
+    return seatquests.Read(
+        rows=rows, carried=carried,
+        givers={q: tuple(v) for q, v in givers.items()})
+
+
 def _read_seat_bags(names):
     """seatbags.relieve's read for the named seats, None when it failed."""
     try:
@@ -36169,6 +36338,15 @@ def _log_capped(prefix: str, notes) -> None:
         log.info("%s: and %d more like it", prefix, len(notes) - GUILD_ROUTE_NOTE_LINES)
 
 
+def _log_loop_lines(lines) -> None:
+    """One INFO line per listed death looper that got no escape step (#2152).
+
+    Uncapped on purpose: the cap of _log_capped hid every one of these on the
+    dev realm, with ninety other notes ahead of them in the same pass."""
+    for line in lines or ():
+        log.info("guild jobs: %s", line)
+
+
 # THE LINES A PASS REPEATS UNCHANGED (#1142). Measured read-only on the dev
 # realm bridge 2026-10-18 03:00-06:00 UTC: the bank forecast logged about 250
 # lines a pass, six passes an hour, with 4 to 11 of them changed; the bank
@@ -36819,14 +36997,18 @@ def _fetch_respec_rows(guild: str) -> list:
 
 
 def _respec_walk_rows() -> list:
-    """The talent reset walks of the last day, for healerrespec."""
+    """The talent reset walks of the last day, for healerrespec, and the older
+    refusals for having no trainer on the map (who is stranded, #2864)."""
     with _connect() as conn, conn.cursor() as cur:
         return _corps_read(
             cur, "healer respec walks",
-            "SELECT target_name, source, "
+            "SELECT target_name, source, status, detail, result, "
             "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
-            "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY",
-            (healerrespec.SOURCE + ":%",))
+            "WHERE source LIKE %s AND (created_at > NOW() - INTERVAL 1 DAY "
+            "OR (status = 'error' AND created_at > NOW() - INTERVAL %s DAY "
+            "AND result LIKE %s))",
+            (healerrespec.SOURCE + ":%", classtrain.STRANDED_READ_DAYS,
+             "%" + classtrain.NO_TRAINER_REASON + "%"))
 
 
 def _guild_train_rows() -> list:
@@ -37418,6 +37600,9 @@ _JOB_ROSTER_SQL = "SELECT name FROM overseer_roster WHERE enabled = 1"
 # The hub quests' chains, kinds and spawned givers (guildlevel.QUEST_FACTS_SQL),
 # for a member's open quests. Read once per process: the world does not change.
 _JOB_QUEST_FACTS: list = []
+# When a timed-out read may be asked again (time.monotonic), and the wait.
+_QUEST_FACTS_RETRY_AT = [0.0]
+_QUEST_FACTS_RETRY_SECONDS = 600
 
 
 # THE CLASS QUEST BOOK (classquest.py): every class quest of the classic range,
@@ -37588,9 +37773,27 @@ def _read_job_spawns_once(cur) -> None:
         _JOB_INNS.extend(_job_read(
             cur, "innkeepers", _JOB_INNS_SQL,
             (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP, INNKEEPER_NPC_FLAG)))
-    if not _JOB_QUEST_FACTS:
+    _read_quest_facts_once(cur)
+
+
+def _read_quest_facts_once(cur) -> None:
+    """The hub quest givers, once per process. A timeout on this read must not
+    fail the guild jobs pass, which carries the death-loop escape, the raid
+    seats and the town stops: the pass plans without the quest book (the level
+    step takes none, `guildlevel.quest_book`) and the read is asked again after
+    `_QUEST_FACTS_RETRY_SECONDS`, not on every pass."""
+    if _JOB_QUEST_FACTS or time.monotonic() < _QUEST_FACTS_RETRY_AT[0]:
+        return
+    try:
         _JOB_QUEST_FACTS.extend(_job_read(cur, "hub quest givers",
                                           guildlevel.QUEST_FACTS_SQL))
+    except pymysql.err.MySQLError as exc:
+        if not readtimeout.is_read_timeout(exc):
+            raise
+        _QUEST_FACTS_RETRY_AT[0] = time.monotonic() + _QUEST_FACTS_RETRY_SECONDS
+        log.warning("guild jobs: the 'hub quest givers' read timed out after %.1fs; "
+                    "the pass plans without the quest book and asks again in %d s",
+                    getattr(exc, "read_seconds", 0.0), _QUEST_FACTS_RETRY_SECONDS)
 
 
 # The class quest asks lately, how many said yes to each and why a party that
@@ -37885,6 +38088,12 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
     family = set(family_names)
     guild_members, masters = guildwork.members_from_rows(rows, family_names)
     role_of = {m.name: m.role for m in guild_members}
+    # THE GUILD BANKERS (#2660) sit in no lineup group; they are given their
+    # own role by name, so no class step is ever planned for them.
+    banker_names = raidteams.banker_names()
+    role_of.update({
+        str(r["name"]): guildjobs.BANKER for r in rows
+        if str(r["name"]) in banker_names and str(r["name"]) not in family})
     skills, known = _guild_skills_and_spells(skill_rows, spell_rows)
     carried = guildjobs.carried_from_rows(item_rows)
     quest_state = _class_quest_state(log_rows, done_rows)
@@ -40981,15 +41190,17 @@ def _fetch_errand_banker_stops(leader: str, standing) -> list:
             raise
 
 
-def _bank_first_reads(names: list) -> tuple:
+def _bank_first_reads(names: list, here=None) -> tuple:
     """({member: stacks a vendor would buy or None}, stacks the item plan routes
     to the bank), for the errand's choice of counter. Blocking.
 
     The sale counts are the vendor pass's own, after the loot policy's filter,
     and a member it has not read stays None. The route count is the bank
     pass's: the plan's GUILD_BANK and BANK_PERSONAL moves."""
-    sellable = {name: _VENDOR_SELLABLE.get(name) for name in names}
-    return sellable, len(_itemplan_bank_routes(list(names)).moves)
+    here = list(names) if here is None else list(here)
+    sellable = {name: _VENDOR_SELLABLE.get(name) for name in here}
+    moves = _itemplan_bank_routes(list(names)).moves
+    return sellable, sum(1 for m in moves if m.character in here)
 
 
 # THE HOME TOWN: the mailbox spawn nearest the head's hearthstone point, on its

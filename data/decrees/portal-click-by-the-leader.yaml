@@ -2,11 +2,14 @@
 # map before and after, or a named refusal (mod-overseer issue 410). Oz, the Zug family mage, casts a
 # portal with the cast verb (the first word of a cast row is a spell id: 11418 is Portal: Undercity, which
 # Oz knows at 60 and which takes a Rune of Portals) and Zug stands beside it on Kalimdor. A portal lasts about a
-# minute, so the leader is told to use it 15 seconds after the cast.
+# minute, so the leader is told to use it 25 seconds after the cast (the cast waits 20 seconds: a character that has
+# just logged in is still casting, measured: "character is already casting" at 0 seconds, accepted a few minutes later).
 # Fix: mod-overseer pull 1057.
 # Scope: the map before and after the click is read from the character table. A crossing means the row is
 # applied AND the leader no longer stands on the start map; a refusal means an error row that carries a reason.
-# An unchanged row, or a bare applied row with no crossing, no longer passes.
+# An unchanged row, or a bare applied row with no crossing, no longer passes, and neither does the bare word
+# "refused": measured live, the build before the fix answers a use-portal row with an error row whose whole detail
+# is "refused", which is not a named reason (the fixed build crosses, Kalimdor to the Eastern Kingdoms).
 decree: v1
 id: portal-click-by-the-leader
 proves:
@@ -22,9 +25,9 @@ cast:
 arrange:
   - group: {members: family:zug, leader: Zug}
 act:
-  - at: 0s
+  - at: 20s
     command: {who: Oz, kind: cast, text: "11418"}
-  - at: 15s
+  - at: 45s
     command: {who: Zug, kind: quest, text: "use-portal"}
 observe:
   - name: leader-starts-on-map-1
@@ -51,5 +54,5 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_command c JOIN characters ch ON ch.name = c.target_name
       WHERE c.target_name = 'Zug' AND c.kind = 'quest' AND c.command LIKE 'use-portal%' AND c.created_at >= @t0
-        AND ((c.status = 'applied' AND ch.map <> 1) OR (c.status = 'error' AND c.detail <> ''))
+        AND ((c.status = 'applied' AND ch.map <> 1) OR (c.status = 'error' AND c.detail <> '' AND c.detail <> 'refused'))
     expect: {scalar: ">= 1"}

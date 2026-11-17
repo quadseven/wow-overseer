@@ -87,6 +87,61 @@ class WhatIsWorthWalking(unittest.TestCase):
         self.assertTrue(one.family)
         self.assertEqual(one.alternates, ())
 
+    def test_an_empty_or_dead_slot_route_is_fetched_before_a_ratio(self):
+        w = world(
+            carried={("Cowpoke", 501), ("Dewey", 502)},
+            positions={"Cowpoke": NEAR, "Dewey": NEAR, "Bigmon": FAR, "Gonzo": FAR},
+            free_slots={"Bigmon": 3, "Gonzo": 3},
+            postable=frozenset({"Bigmon", "Gonzo"}),
+        )
+        routes = [
+            route(holder="Cowpoke", wearer="Bigmon", guid=501, gain=0.4),
+            route(holder="Dewey", wearer="Gonzo", guid=502, gain=None, item="Belt"),
+        ]
+        got = self.waiting(routes, w)
+        self.assertEqual([x.guid for x in got], [502, 501])
+
+    def test_ratios_are_fetched_best_first_and_ties_keep_report_order(self):
+        w = world(
+            carried={("A", 1), ("B", 2), ("C", 3)},
+            positions={"A": NEAR, "B": NEAR, "C": NEAR, "Bigmon": FAR},
+            free_slots={"Bigmon": 3},
+            postable=frozenset({"Bigmon"}),
+        )
+        routes = [
+            route(holder="A", guid=1, gain=0.1),
+            route(holder="B", guid=2, gain=0.5),
+            route(holder="C", guid=3, gain=0.1),
+        ]
+        self.assertEqual([x.guid for x in self.waiting(routes, w)], [2, 1, 3])
+
+    def test_the_empty_slot_gain_is_not_worded_as_zero(self):
+        gain = gx._percent(None)
+        self.assertGreater(gain, gx._percent(50.0))
+        self.assertNotEqual(guildroute.source_for(gain), "guildroute:0")
+        self.assertEqual(guildroute.gain_of(guildroute.source_for(gain)), gain)
+        self.assertIn("empty or dead slot", guildroute.gain_words(gain))
+        self.assertNotIn("+0", guildroute.gain_words(gain))
+        self.assertEqual(guildroute.gain_words(40), "+40 item levels")
+
+    def test_a_walk_for_an_empty_slot_says_so_in_its_log_line(self):
+        w = world(postable=frozenset({"Bigmon"}))
+        got = self.waiting([route(gain=None)], w)
+        walker = guildroute.Walker(
+            name="Cowpoke",
+            map_id=0,
+            cohort="",
+            yards=80.0,
+            aim="at:0:1,2,3",
+            by_row=True,
+        )
+        plan = guildroute.plan_mail_runs(
+            got, {"Cowpoke": walker}, {}, 0, family_only=False
+        )
+        (run,) = plan.runs
+        self.assertIn("an empty or dead slot", run.said)
+        self.assertNotIn("+0 item levels", run.said)
+
     def test_what_is_not_apart_is_not_fetched(self):
         w = world(
             carried={("Cowpoke", 501), ("Cowpoke", 502), ("Cowpoke", 503)},

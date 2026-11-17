@@ -40,6 +40,7 @@ import bag_pressure
 import bankforecast
 import gearrouting
 import guildbank
+import guildroute
 import keep
 
 WRITTEN = "written"
@@ -131,8 +132,12 @@ class Result:
 
 def _percent(gain) -> int:
     """The hand-over row's gain column is a whole number; the report's gain is
-    a ratio (None for an empty slot), so it is carried as whole percent."""
-    return 0 if gain is None else max(0, round(gain * 100))
+    a ratio (None for an empty slot or a dead-stat piece), so it is carried as
+    whole percent, and None as guildroute.EMPTY_SLOT_GAIN, which outranks every
+    percent and is worded as an empty or dead slot, never as zero."""
+    if gain is None:
+        return guildroute.EMPTY_SLOT_GAIN
+    return max(0, round(gain * 100))
 
 
 def _as_gear_route(route: gearrouting.Route, postable) -> object:
@@ -418,9 +423,10 @@ class Waiting:
 
 
 def fetchable(result: Result, postable) -> list:
-    """The routes that wait only for their holder to reach a mailbox, in
-    report order. The guild bank cannot walk; a stale, kept, queued or
-    otherwise walled route is not here."""
+    """The routes that wait only for their holder to reach a mailbox, empty or
+    dead-slot routes first, then best gain first, and report order within a tie.
+    The guild bank cannot walk; a stale, kept, queued or otherwise walled route
+    is not here."""
     out = []
     postable = set(postable or ())
     for step in result.steps:
@@ -430,6 +436,7 @@ def fetchable(result: Result, postable) -> list:
         if r.wearer not in postable or not step.why.endswith(APART_NO_MAILBOX):
             continue
         out.append(Waiting(r.holder, r.wearer, r.item, int(r.guid), _percent(r.gain)))
+    out.sort(key=lambda w: -w.gain)
     return out
 
 

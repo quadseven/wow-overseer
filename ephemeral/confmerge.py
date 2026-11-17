@@ -56,6 +56,18 @@ def rename_prefix(text, old, new):
     return "\n".join(out)
 
 
+def drop_keys(text, keys):
+    """The override file without the live lines of `keys`; comments and other keys stay."""
+    nl = chr(10)
+    keep = []
+    for line in (text or "").split(nl):
+        m = _LINE.match(line)
+        if m and not line.lstrip().startswith(("#", "//")) and m.group(1) in keys:
+            continue
+        keep.append(line)
+    return nl.join(keep)
+
+
 def render_value(value):
     if isinstance(value, bool):
         return "1" if value else "0"
