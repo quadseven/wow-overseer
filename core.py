@@ -169,6 +169,16 @@ class QueueDirective:
 
 
 @dataclass(frozen=True)
+class FreeOrder:
+    """A sentence in the overseer's channel that matched no fixed form but
+    reads like an order (#1501). The bridge asks the local model to turn it
+    into one of the fixed forms; freeorders.py holds the rules."""
+
+    text: str
+    source: str
+
+
+@dataclass(frozen=True)
 class FanoutCommand:
     """A group order that is already a playerbot command.
 
@@ -518,6 +528,10 @@ def _unaddressed(text: str, dedicated: bool, author_id: str = "") -> list:
         return [DigestQuery(hours=ask.hours)]
     if _ROSTER_RE.search(text):
         return [RosterQuery()]
+    from freeorders import looks_like_an_order
+
+    if looks_like_an_order(text):
+        return [FreeOrder(text=text.strip(), source=f"discord:{author_id}")]
     return [Reply(f"I command the world, not the conversation - yet. {USAGE}")]
 
 

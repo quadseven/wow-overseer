@@ -63,6 +63,7 @@ import director
 import dungeonpath
 import events
 import familytools
+import freeorders
 import fanout
 import fireplan
 import flightlearn
@@ -9289,6 +9290,7 @@ class Bridge(discord.Client):
         (core.JobDirective, "_set_job"),
         (core.QueueDirective, "_set_queue"),
         (core.DigestQuery, "_report_digest"),
+        (core.FreeOrder, "_free_order"),
         (director.WatchDirective, "_set_watch"),
     )
 
@@ -9316,6 +9318,40 @@ class Bridge(discord.Client):
             await channel.send(core.format_roster(rows).text[:1990])
         else:
             await channel.send(decision.text)
+
+    async def _free_order(self, d: core.FreeOrder, channel) -> None:
+        """A free-phrased order: the local model picks one tool, and the tool
+        becomes the fixed-form directive the existing writer validates (#1501).
+
+        With the model off or unreachable nothing is written and the channel
+        is told so. The decisions never come from this method's own judgement:
+        freeorders.decisions matches every name against the roster."""
+        if freeorders.is_farm(d.text):
+            await channel.send(freeorders.FARM_REFUSAL[:1990])
+            return
+        # Only the two reads that can fail on a dependency are inside a try; the
+        # prompt and the family grouping are this code's own work, so a bug in
+        # them rises instead of passing for an unreachable model.
+        try:
+            roster = await asyncio.to_thread(_fetch_queue_roster)
+        except Exception:
+            log.exception("free order: the roster was unreachable")
+            await channel.send(freeorders.NOT_UNDERSTOOD[:1990])
+            return
+        fams = campaignqueue.families(roster)
+        prompt = freeorders.build_prompt(d.text, fams)
+        try:
+            raw = await llmpool.call(_ask_llm, prompt, freeorders.SYSTEM)
+        except Exception:
+            log.exception("free order: the model was unreachable")
+            await channel.send(freeorders.NOT_UNDERSTOOD[:1990])
+            return
+        found, heard = freeorders.decisions(raw, d.text, d.source, fams)
+        if heard:
+            log.info("free order from %s heard as: %s", d.source, heard)
+            await channel.send(("Understood as: %s" % heard)[:1990])
+        for decision in found:
+            await self._act_on(decision, channel)
 
     async def _interpret(self, d: core.NLDirective, channel) -> None:
         """Natural language -> vocabulary command via the inner voice.
