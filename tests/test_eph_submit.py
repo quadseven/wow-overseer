@@ -19,7 +19,7 @@ CHECKED = GUZZLER.replace("issue: TODO", "issue: 12").replace(
     "commit: TODO", f"commit: {FIX}"
 )
 CONTROL = {
-    "control_worldserver": OLD_WS, "control_pin": OLD,
+    "control_worldserver": OLD_WS, "control_dbimport": OLD_DB, "control_pin": OLD,
 }  # fmt: skip
 BRIDGE_ON = GUZZLER.replace("bridge: off", 'bridge: "on"')
 WITH_BRIDGE = {**CONTROL, "control_bridge": OLD_BRIDGE}
@@ -90,6 +90,49 @@ class SubmitTest(Base):
         lines[1] = "AiPlayerbot.Enabled = 1"
         self.assertEqual(out, chr(10).join(lines))
 
+    def _conf(self, suffix, group="overseer"):
+        cm = next(
+            c for c in self.cluster.of("configmaps", "wow-ephemeral")
+            if c["metadata"]["name"].endswith(suffix)
+        )  # fmt: skip
+        return cm["data"][f"{group}.overrides.conf"]
+
+    def test_control_drop_keys_removes_them_from_the_control_arm_only(self):
+        rec = self.submit(
+            control_drop_keys="Overseer.HeadlessRoster,Playerbots.Enabled", **CONTROL
+        )
+        for suffix in ("-c1", "-c2", "-c3"):
+            self.assertNotIn("Overseer.HeadlessRoster", self._conf(suffix))
+            self.assertNotIn("Playerbots.Enabled", self._conf(suffix, "playerbots"))
+            self.assertIn("Playerbots.MaxRandomBots", self._conf(suffix, "playerbots"))
+        for suffix in ("-t1", "-t2", "-t3"):
+            self.assertIn("Overseer.HeadlessRoster", self._conf(suffix))
+            self.assertIn("Playerbots.Enabled", self._conf(suffix, "playerbots"))
+        delta = [
+            d for d in rec["fidelity_deltas"] if "control arm" in d and "dropped" in d
+        ]
+        self.assertTrue(
+            delta
+            and "Overseer.HeadlessRoster" in delta[0]
+            and "Playerbots.Enabled" in delta[0]
+        )
+
+    def test_drop_keys_and_the_prefix_compose(self):
+        self.submit(
+            control_playerbots_prefix="AiPlayerbot",
+            control_drop_keys="Playerbots.Enabled",
+            **CONTROL,
+        )
+        keys = confmerge.parse(self._conf("-c1", "playerbots"))
+        self.assertNotIn("AiPlayerbot.Enabled", keys)
+        self.assertIn("AiPlayerbot.MaxRandomBots", keys)
+
+    def test_a_malformed_drop_key_is_refused_and_creates_nothing(self):
+        for bad in ("Overseer.X;DROP", "", "Overseer.A,,B", "has space"):
+            with self.assertRaisesRegex(submit.SubmitError, "drop-keys"):
+                self.submit(control_drop_keys=bad, **CONTROL)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
     def test_without_the_prefix_nothing_changes(self):
         self.submit(**CONTROL)
         self.assertIn("Playerbots.Enabled", self._run_conf("-c1"))
@@ -122,8 +165,7 @@ class SubmitTest(Base):
         rec = self.submit(**CONTROL)
         by = {r["arm"]: r["images"] for r in rec["runs"]}
         self.assertEqual(by["treatment"], {"worldserver": WS, "dbimport": DB})
-        # the schema step is the same for both arms: only the worldserver differs
-        self.assertEqual(by["control"], {"worldserver": OLD_WS, "dbimport": DB})
+        self.assertEqual(by["control"], {"worldserver": OLD_WS, "dbimport": OLD_DB})
         text = json.dumps(self.cluster.of("jobs")[0])
         self.assertIn("client-data-a", text)
         self.assertNotIn("{{", text)
@@ -170,26 +212,38 @@ class SubmitTest(Base):
             self.submit()
         self.assertEqual(self.cluster.of("jobs"), [])
 
-    def test_the_control_db_upgrade_is_the_live_one_so_a_changed_update_file_cannot_break_it(
-        self,
-    ):
+    def _db_upgrade(self, job):
+        spec = job["spec"]["template"]["spec"]
+        c = next(c for c in spec["initContainers"] if c["image"] in (DB, OLD_DB))
+        return c["image"], {e["name"]: e["value"] for e in c["env"]}
+
+    def test_a_control_arm_rebuilds_the_world_database_with_its_own_db_import(self):
+        """The template's world database is the live one; the old worldserver needs its era's tables.
+        Characters and auth keep the live schema, so the old db-import is limited to the world."""
         self.submit(**CONTROL)
+        seen = {"control": 0, "treatment": 0}
         for job in self.cluster.of("jobs"):
-            spec = job["spec"]["template"]["spec"]
-            images = [c["image"] for c in spec["initContainers"]]
-            self.assertIn(DB, images, job["metadata"]["name"])
-            self.assertNotIn(OLD_DB, json.dumps(job))
+            arm = job["metadata"]["labels"]["eph/arm"]
+            image, env = self._db_upgrade(job)
+            if arm == "control":
+                self.assertEqual(image, OLD_DB)
+                self.assertEqual(env["EPH_RESET_WORLD"], "1")
+                self.assertEqual(env["AC_UPDATES_ENABLE_DATABASES"], "4")
+            else:
+                self.assertEqual(image, DB)
+                self.assertEqual(env["EPH_RESET_WORLD"], "0")
+                self.assertEqual(env["AC_UPDATES_ENABLE_DATABASES"], "7")
+            seen[arm] += 1
+        self.assertEqual(seen, {"control": 3, "treatment": 3})
 
-    def test_a_control_dbimport_is_refused_with_the_reason(self):
-        with self.assertRaisesRegex(
-            submit.SubmitError, "db-import.*same for both arms"
-        ):
-            self.submit(control_dbimport=OLD_DB, **CONTROL)
-        self.assertEqual(self.cluster.of("jobs"), [])
-
-    def test_a_control_dbimport_is_refused_on_a_treatment_only_submit_too(self):
-        with self.assertRaisesRegex(submit.SubmitError, "db-import"):
-            self.submit(arm="treatment", control_dbimport=OLD_DB)
+    def test_a_control_arm_needs_its_db_import_by_digest(self):
+        no_db = {k: v for k, v in CONTROL.items() if k != "control_dbimport"}
+        with self.assertRaisesRegex(submit.SubmitError, "control-dbimport"):
+            self.submit(**no_db)
+        with self.assertRaisesRegex(submit.SubmitError, "sha256"):
+            self.submit(
+                **{**CONTROL, "control_dbimport": "registry.example.com/db:latest"}
+            )
         self.assertEqual(self.cluster.of("jobs"), [])
 
     def test_control_image_must_be_a_digest(self):

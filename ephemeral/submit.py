@@ -25,6 +25,7 @@ from .miniyaml import YamlError, loads
 REALM_RANGE = range(100, 200)
 # Boot (15 min) plus the judge's bounded wait for the family to log in (10 min).
 BASE_DEADLINE_PAD = 25 * 60
+_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_.]*$")
 _PREFIX = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 BRIDGE = "bridge"  # the sidecar's container name in the template
 BRIDGE_PULL_NAME = "ghcr"  # the bridge image is a private package
@@ -180,11 +181,13 @@ def _images_for(arm, live_images, args, live_bridge=None):
         if live_bridge is not None:
             img["bridge"] = args.get("treatment_bridge") or live_bridge
     else:
-        if not args.get("control_worldserver"):
-            raise SubmitError("a control arm needs --control-worldserver (by digest)")
+        if not (args.get("control_worldserver") and args.get("control_dbimport")):
+            raise SubmitError(
+                "a control arm needs --control-worldserver and --control-dbimport (by digest)"
+            )
         img = {
             "worldserver": args["control_worldserver"],
-            "dbimport": live_images["dbimport"],
+            "dbimport": args["control_dbimport"],
         }
         if live_bridge is not None:
             if not args.get("control_bridge"):
@@ -290,13 +293,6 @@ def submit(
     """Create the suspended Jobs. Returns the submission record (also saved)."""
     args = dict(args or {})
     arm_arg = args.get("arm", "both")
-    if args.get("control_dbimport"):
-        raise SubmitError(
-            "--control-dbimport is no longer taken: the db-import schema step is the same "
-            "for both arms (only the worldserver binary under test differs), and a control "
-            "db-import older than a changed module SQL update file re-applies that file to "
-            "the template and cannot boot. Drop the flag; both arms run the live db-import."
-        )
     if arm_arg not in ("control", "treatment", "both"):
         raise SubmitError("--arm must be control, treatment or both")
     raw, decree = _load_decree(decree_path, args)
@@ -320,6 +316,20 @@ def submit(
     files, deltas = _config_for(world, base_files, bridge_on)
     prefix = args.get("control_playerbots_prefix")
     control_files = files
+    dropped = args.get("control_drop_keys")
+    if dropped is not None:
+        names = dropped.split(",")
+        if not all(_KEY.match(n) for n in names):
+            raise SubmitError(
+                "--control-drop-keys must be a comma-separated list of config keys such as Overseer.Raid.QuorumSeats"
+            )
+        control_files = {
+            g: confmerge.drop_keys(t, set(names)) for g, t in control_files.items()
+        }
+        deltas.append(
+            "control arm: override keys dropped (the control image's dist predates them): "
+            + ", ".join(names)
+        )
     if prefix is not None:
         if not _PREFIX.match(prefix):
             raise SubmitError(
@@ -329,7 +339,7 @@ def submit(
             g: confmerge.rename_prefix(t, "Playerbots.", prefix + ".")
             if g == "playerbots"
             else t
-            for g, t in files.items()
+            for g, t in control_files.items()
         }
         deltas.append(
             f"control arm: playerbots keys written as {prefix}.* (the control image predates the rename to Playerbots.*)"
@@ -363,6 +373,10 @@ def submit(
             "BATCH": batch, "REALM_ID": realm,
             "DEADLINE_SECONDS": duration + BASE_DEADLINE_PAD,
             "WORLDSERVER_IMAGE": img["worldserver"], "DBIMPORT_IMAGE": img["dbimport"],
+            # A control arm rebuilds acore_world with its own db-import and updates only that
+            # database (characters and auth keep the live schema); see docs/EPHEMERAL.md.
+            "RESET_WORLD": "1" if arm == "control" else "0",
+            "UPDATES_MASK": "4" if arm == "control" else "7",
             "TOOLS_IMAGE": cfg.tools_image, "TEMPLATE_IMAGE": cfg.template_images[klass],
             "CLIENT_DATA_CLAIM": nodecfg.claim, **classes[klass],
             "BRIDGE_IMAGE": img.get("bridge", BRIDGE_OFF_IMAGE),

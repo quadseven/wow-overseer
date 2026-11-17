@@ -749,6 +749,9 @@ class Member:
     auctioneer: object = None
     # Quest-class stacks the plan destroys as certainly useless (#2607).
     plan_destroy: tuple = ()  # Carried
+    # Untaken quests a quest item it carries names, takable by it
+    # (questuntaken.Untaken, set by seatquests, #2648).
+    untaken: tuple = ()
     # Class reagent item entries used by known spells (classreagents.py, #2622),
     # kept out of vendor sales alongside SOUL_SHARD.
     reagent_entries: frozenset = frozenset()
@@ -1937,10 +1940,99 @@ def _town_trades_step(m, trades, kept, recent, cap, crafters, master):
     step = _learn_step(m, cap, recent)
     if step is not None:
         return step, note
+    step = _untaken_step(m, cap, recent)
+    if step is not None:
+        return step, note
     if _cooling(m, "craft", recent):
         return None, note
     step, why = _craft_or_room(m, kept, recent, cap, crafters, master)
     return step, _join(note, why)
+
+
+# TAKING THE QUESTS A SEAT'S QUEST ITEMS NAME (#2648). A seat carries items for
+# quests it never took; on a town stop it walks to the giver and takes one,
+# once per quest per UNTAKEN_COOLDOWN_MINUTES (a refusal counts: the row is
+# remembered either way), and never again while a step of this kind is
+# under way. The quest is then finished by the seat's own questing.
+UNTAKEN_ACTION = "untaken"
+UNTAKEN_COOLDOWN_MINUTES = 6 * 60
+UNTAKEN_PAUSE_MINUTES = 15
+UNTAKEN_REACH_YARDS = 1500.0
+UNTAKEN_NEAR = 12.0
+
+
+def _untaken_asked(m, quest, recent) -> bool:
+    """Whether this seat was sent to take this quest inside the cooldown."""
+    word = "take quest:%d" % int(quest)
+    return any(
+        r.name == m.name
+        and r.action == UNTAKEN_ACTION
+        and word in str(r.command or "")
+        and int(r.age_minutes) < UNTAKEN_COOLDOWN_MINUTES
+        for r in recent or ()
+    )
+
+
+def _untaken_under_way(m, recent) -> bool:
+    return any(
+        r.name == m.name
+        and r.action == UNTAKEN_ACTION
+        and int(r.age_minutes) < UNTAKEN_PAUSE_MINUTES
+        for r in recent or ()
+    )
+
+
+def _nearest_giver(m, givers):
+    """The giver spawn on the member's map nearest it within reach, or None."""
+    if m.map_id is None or m.x is None or m.y is None:
+        return None
+    best, best_yards = None, None
+    for spot in givers or ():
+        if int(spot.map_id) != int(m.map_id):
+            continue
+        yards = _yards(m.x, m.y, spot.x, spot.y)
+        if yards <= UNTAKEN_REACH_YARDS and (best_yards is None or yards < best_yards):
+            best, best_yards = spot, yards
+    return best
+
+
+def _untaken_step(m, cap, recent):
+    """The walk to a giver and the take of one quest a carried item names, or
+    None. One quest per step, the lowest id the seat may take now."""
+    if not m.untaken or _untaken_under_way(m, recent):
+        return None
+    known = set(m.quest_log or ()) | set(m.quests_done or ()) | set(m.recently_taken)
+    for u in sorted(m.untaken, key=lambda u: int(u.quest_id)):
+        quest = int(u.quest_id)
+        if quest in known or _untaken_asked(m, quest, recent):
+            continue
+        spot = _nearest_giver(m, u.givers)
+        if spot is None and not u.by_item:
+            continue
+        take = guildcorps.Row(
+            "quest",
+            "take quest:%d" % quest,
+            "",
+            source_for(UNTAKEN_ACTION, m.name),
+        )
+        walk = None
+        if spot is not None and not _near(m, spot, UNTAKEN_NEAR):
+            walk = guildcorps.Row(
+                "job",
+                spot.command + _cap_word(cap),
+                "",
+                source_for(UNTAKEN_ACTION + "-walk", m.name),
+            )
+        return guildcorps.Step(
+            m.name,
+            UNTAKEN_ACTION,
+            quest,
+            "%s takes %s for the quest items it carries" % (m.name, u.title or quest),
+            rows=(take,),
+            walk=walk,
+            goal=(spot.name if spot is not None else m.name),
+        )
+    return None
 
 
 # LISTING A SEAT'S SURPLUS AT A CITY AUCTIONEER (#2611). The item plan routes
