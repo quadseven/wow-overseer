@@ -24542,10 +24542,9 @@ class Bridge(discord.Client):
             facts["asks"], facts.get("answers") or (), facts.get("death_loops") or {},
             free={m.name for m in mates if m.name not in held},
             taken=seated_names)
-        for start in death_starts:
-            log.info("death party: ask %d seats a start: %s leads, %s helps, "
-                     "meeting at %s", start.ask_id, start.leader,
-                     ", ".join(start.helpers), start.place)
+        self._begin_death_parties(
+            death_starts, facts.get("death_loops") or {},
+            {m.name for m in mates if m.name not in held})
         await _say_class_escalation(escalation)
         await _say_guild_pugs(pug_pass)
         if run_id:
@@ -24587,6 +24586,34 @@ class Bridge(discord.Client):
         meter = getattr(self, "_log_seat_meter", None)
         if meter is not None:
             await meter(bounds, facts, mates, held, doors, lent)
+
+    def _begin_death_parties(self, starts, loops=None, free=None) -> None:
+        """Seat each new death party start on the book and log it once.
+
+        A start already seated that the pass's reads no longer prove (its
+        asker left the loop or moved, or a member is no longer free) is
+        released first (StartBook.refresh), so the book never holds a
+        party the runner would act on stale.
+
+        The planner re-plans a filled ask on every social pass until the
+        runner consumes it; the book (deathparty.StartBook) is what keeps
+        one ask from seating, and logging, again on every pass. The
+        runner that walks the two members to the meeting place is the
+        next slice; it releases each ask from the book when its party
+        ends. Looked up so a test driving the social pass on a bare
+        object needs no book set up first.
+        """
+        book = getattr(self, "_death_book", None)
+        if book is None:
+            book = self._death_book = deathparty.StartBook()
+        for start in book.refresh(loops, free):
+            log.info("death party: ask %d released, its start no longer holds",
+                     start.ask_id)
+        for start in starts:
+            if book.seat(start):
+                log.info("death party: ask %d seats a start: %s leads, %s helps, "
+                         "meeting at %s", start.ask_id, start.leader,
+                         ", ".join(start.helpers), start.place)
 
     async def _log_seat_meter(self, bounds, facts: dict, mates: list, held: dict,
                               doors: list, lent) -> None:
