@@ -144,6 +144,7 @@ import raidteams
 import recipebook
 import restsupply
 import auction
+import bankerloop
 import classreagents
 import situation
 import standstill
@@ -181,6 +182,9 @@ MAX_PRIMARY = 2
 # The roles, as raidlineup.build_lineup names them.
 MAINTENANCE, SUMMONER, RAIDER, FAMILY = "maintenance", "summoner", "raider", "family"
 UNASSIGNED = "unassigned"
+# A guild banker (#2660): in none of the lineup's groups, and it stays in
+# its vault city (bankerloop.py).
+BANKER = bankerloop.BANKER
 
 
 @dataclass(frozen=True)
@@ -730,6 +734,8 @@ class Member:
     # not its own guid): it stands where its leader stands, so its standing
     # still says nothing of it (stood_still_step).
     follows: bool = False
+    # The guild vault spawn a banker stays beside (a Spot), set by bankerloop.
+    vault: object = None
     # A raid seat's bag loop (#2609): what the item plan says to sell and to
     # bank from the stacks it carries, read by seatbags (the guild job read
     # holds only what a vendor buys, so the plan reads the whole bags), and the
@@ -5033,6 +5039,9 @@ def _plan_members(inputs, state):
 
 def _plan_ordered_member(member, inputs, state):
     """Dispatch one ordered seat to its class-only or full job planner."""
+    if member.role == BANKER:
+        _plan_banker_member(member, inputs, state)
+        return
     if member.role == UNASSIGNED and inputs.classes is not None:
         why = _plan_class_only_member(
             member,
@@ -5145,6 +5154,64 @@ def _plan_roster_member(member, inputs, state):
         _count_focus(state.tally, member, None, inputs.fields)
         return
     _commit_roster_step(member, step, inputs, state)
+
+
+def _plan_banker_member(member, inputs, state):
+    """A banker's one step (bankerloop.py): home, its post, its bags. Never a
+    class quest, a level walk, a trade or a gear step."""
+    step, doing = _banker_step(
+        member,
+        _member_value(inputs.mail, member.name, ()),
+        inputs.kept,
+        inputs.recent,
+        inputs.cap,
+    )
+    state.lines[member.name] = doing
+    if step is not None:
+        _commit_roster_step(member, step, inputs, state)
+
+
+def _banker_step(m, mail, kept, recent, cap):
+    """(the banker's step or None, a line saying what it does)."""
+    if not (m.eligible and m.online and m.alive and not m.in_combat):
+        return None, "%s waits in the vault city" % m.name
+    if not bankerloop.at_home(m):
+        return _banker_home_step(m, recent, cap), "%s goes back to its vault" % m.name
+    step = _collect_first(m, mail, recent, cap)
+    if step is not None:
+        return step, step.said
+    # A banker sells true junk only and never destroys what it holds.
+    junk = replace(m, plan_sales=bankerloop.junk_only(m.plan_sales), plan_destroy=())
+    step = seat_loop_first(junk, kept, recent, cap)
+    if step is not None:
+        return step, step.said
+    return None, "%s keeps the guild's stock in the vault city" % m.name
+
+
+def _banker_home_step(m, recent, cap):
+    """The walk back to the vault, or the hearth when the vault is not on its
+    map or not known; once per HOME_COOLDOWN_MINUTES either way."""
+    if any(
+        r.name == m.name
+        and r.action in (bankerloop.ACTION, "hearth")
+        and int(r.age_minutes) < bankerloop.HOME_COOLDOWN_MINUTES
+        for r in recent or ()
+    ):
+        return None
+    vault = m.vault
+    if (
+        vault is not None
+        and m.map_id is not None
+        and int(vault.map_id) == int(m.map_id)
+    ):
+        return _spot_step(
+            m,
+            vault,
+            bankerloop.ACTION,
+            cap,
+            "%s walks back to the guild vault" % m.name,
+        )
+    return hearth_step(m)
 
 
 def _member_value(mapping, key, default=None):
