@@ -20481,7 +20481,9 @@ class Bridge(discord.Client):
             family_members=family_members, family_danger=family_danger,
             family_candidates=facts.get("family_members", ()),
             family_holds=family_class_holds,
-            loops=facts.get("death_loops"))
+            loops=facts.get("death_loops"),
+            risks=facts.get("death_risks"),
+            avoided=facts.get("death_avoided"))
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
                  "member(s)%s", time.perf_counter() - plan_started, len(members),
                  _family_label(cohort))
@@ -37203,12 +37205,12 @@ def _fetch_job_facts(family_names: list) -> dict:
     facts["class_book"] = book
     facts["spell_reagents"] = spell_reagents
     facts["quest_asks"] = guildjobs.quest_asks_from_rows(quest_ask_rows)
-    # slow=True: the escape reaches a member whose deaths come one or two an
-    # hour (#2152). The quiet clock still ends the loop, so a member held out
-    # of its zone is listed for QUIET_SECONDS at most, the bound of #3703.
-    facts["death_loops"] = deathloop.loops(
-        death_rows, {str(r["name"]): int(r.get("level") or 0) for r in rows},
-        slow=True)
+    # One judgement of the day's deaths (deathloop.judge): the loops with the
+    # slow rule (#2152), the risks (#2591) and the bounded avoided zones, which
+    # guildjobs.plan takes as loops=, risks= and avoided= (#2663).
+    levels = {str(r["name"]): int(r.get("level") or 0) for r in rows}
+    (facts["death_loops"], facts["death_risks"],
+     facts["death_avoided"]) = deathloop.judge(death_rows, levels)
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}

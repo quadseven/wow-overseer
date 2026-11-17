@@ -613,8 +613,9 @@ class ThePassLeavesTheZone(unittest.TestCase):
 
     def test_the_bridge_reads_the_deaths_and_hands_the_loops_to_the_plan(self):
         bridge = (HERE / "bridge.py").read_text(encoding="utf-8")
-        self.assertIn('facts["death_loops"] = deathloop.loops(', bridge)
-        self.assertIn('loops=facts.get("death_loops"))', bridge)
+        self.assertIn("deathloop.judge(death_rows, levels)", bridge)
+        self.assertIn('facts["death_loops"]', bridge)
+        self.assertIn('loops=facts.get("death_loops"),', bridge)
 
 
 # ---- the pre-loop risk read (#2591) --------------------------------------------
