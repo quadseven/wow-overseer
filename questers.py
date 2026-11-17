@@ -289,6 +289,19 @@ GONE = "no such spawn in the world"
 COMPLETE_HAND_IN = "it is complete; hand it in"
 # A take or a hand-in the world refused this many times in a day is broken.
 FAILS_BEFORE_BROKEN = 3
+# A HUNT THAT NEVER KILLS IS LEFT (#2188). The spawn a quester hunts is the
+# nearest one it has not left, so a creature that cannot be killed (144 pulls
+# and no kill; no living one within reach) stayed the nearest and the same
+# `hunt-spawn` row was written again and again: 34 rows in 16 hours for one
+# quester on the dev realm. FRUITLESS_HUNTS such rows inside FRUITLESS_MINUTES
+# leave that creature entry for that long, after which it is tried once more;
+# a quest with no other creature to hunt then runs its stall clock, so a quest
+# nobody can work is given up as a stalled one is.
+FRUITLESS_HUNT = "fruitless"
+KILLING_HUNT = "killing"
+NO_CREATURE_IN_REACH = "no living creature of the entry within reach"
+FRUITLESS_HUNTS = 3
+FRUITLESS_MINUTES = 120
 # A hand-in the world refused FAILS_BEFORE_BROKEN times is held this long after
 # its last refusal before it is tried once more, the hold doubling with each
 # refusal past those (`turn_in_held`).
@@ -963,6 +976,10 @@ class Attempt:
     # mod-overseer#19, is retryable, so it keeps the three-strike
     # rule instead of being reported as could-not.
     retryable: bool = True
+    # The creature entry of a `hunt-spawn` row, 0 for any other row, and how
+    # the hunt ended (FRUITLESS_HUNT / KILLING_HUNT, "" for any other end).
+    hunt_entry: int = 0
+    hunt_end: str = ""
 
     @property
     def failed(self) -> bool:
@@ -995,9 +1012,30 @@ def attempts(rows) -> tuple:
                 spawn_kind=kind,
                 age_minutes=_int(row.get("age"), 10**6),
                 retryable='"retryable":false' not in str(row.get("result") or ""),
+                hunt_entry=classhunt.entry_of(row.get("command")),
+                hunt_end=_hunt_end(row),
             )
         )
     return tuple(out)
+
+
+def _hunt_end(row) -> str:
+    """How a `hunt-spawn` row ended: FRUITLESS_HUNT when the module's clock ran
+    out with no kill or no creature of the entry stood within reach, KILLING_HUNT
+    when it killed, "" for any other row or end (a full bag, a held character, a
+    refused verb: none says the creature is the trouble)."""
+    if not classhunt.is_hunt_row(row.get("command")):
+        return ""
+    result = str(row.get("result") or "")
+    status = str(row.get("status") or "")
+    kills = re.search(r'"kills":(\d+)', result)
+    if kills and int(kills.group(1)) > 0:
+        return KILLING_HUNT
+    if status == "unchanged" and kills:
+        return FRUITLESS_HUNT
+    if status in _FAILED and NO_CREATURE_IN_REACH in result:
+        return FRUITLESS_HUNT
+    return ""
 
 
 def _spawn_named(command, recent) -> tuple:
@@ -1009,6 +1047,27 @@ def _spawn_named(command, recent) -> tuple:
         return int(recent.spawn), "creature"
     found = re.match(r"walk-to-spawn gameobject:(\d+)\b", str(command or ""))
     return (int(found.group(1)), OBJECT_KIND) if found else (0, "creature")
+
+
+def fruitless_entries(name, tried) -> frozenset:
+    """The creature entries this quester leaves for now: FRUITLESS_HUNTS hunt
+    rows of the entry ended without a kill inside FRUITLESS_MINUTES, with no
+    killing hunt of the entry since (#2188)."""
+    newest_kill = {}
+    for a in tried or ():
+        if a.name == name and a.hunt_entry and a.hunt_end == KILLING_HUNT:
+            newest_kill[a.hunt_entry] = min(
+                a.age_minutes, newest_kill.get(a.hunt_entry, a.age_minutes)
+            )
+    empty = {}
+    for a in tried or ():
+        if a.name != name or not a.hunt_entry or a.hunt_end != FRUITLESS_HUNT:
+            continue
+        if a.age_minutes < FRUITLESS_MINUTES and a.age_minutes < newest_kill.get(
+            a.hunt_entry, 10**9
+        ):
+            empty[a.hunt_entry] = empty.get(a.hunt_entry, 0) + 1
+    return frozenset(e for e, n in empty.items() if n >= FRUITLESS_HUNTS)
 
 
 def gone_spawns(name, tried, kind="creature") -> frozenset:
@@ -1373,7 +1432,12 @@ def in_reach(cat: Catalogue, member, zone, broken=frozenset()) -> list:
 
 
 def _working(
-    cat: Catalogue, member, last_quest=0, left=frozenset(), object_left=frozenset()
+    cat: Catalogue,
+    member,
+    last_quest=0,
+    left=frozenset(),
+    object_left=frozenset(),
+    idle=frozenset(),
 ) -> set:
     """The quests whose stall clock runs now: the quest the quester's last move
     was for, and each quest of its log of the zone it stands in that it has
@@ -1395,7 +1459,7 @@ def _working(
         if (
             cat.facts.get(qid) is not None
             and cat.facts[qid].zone == member.zone
-            and _unhuntable(cat, member, qid, left, object_left)
+            and _unhuntable(cat, member, qid, left, object_left, idle)
         )
     }
     if last_quest and int(last_quest) in member.quest_log:
@@ -1404,7 +1468,12 @@ def _working(
 
 
 def _unhuntable(
-    cat: Catalogue, member, qid, left=frozenset(), object_left=frozenset()
+    cat: Catalogue,
+    member,
+    qid,
+    left=frozenset(),
+    object_left=frozenset(),
+    idle=frozenset(),
 ) -> bool:
     """True when the quester has no objective spawn of this quest to hunt
     (`_hunt`'s own choice: a solo field within its level, on its map, not one
@@ -1415,7 +1484,11 @@ def _unhuntable(
         return True
     if _nearest_chest(member, qid, quest, object_left) is not None:
         return False
-    fields = classquest.within_level(member, classquest.solo_fields(quest))
+    fields = tuple(
+        s
+        for s in classquest.within_level(member, classquest.solo_fields(quest))
+        if s.entry not in idle
+    )
     if _nearest(member, fields, left) is not None:
         return False
     if member.placed:
@@ -1520,6 +1593,7 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
         last_quest,
         left_spawns(member.name, tried),
         left_spawns(member.name, tried, OBJECT_KIND),
+        fruitless_entries(member.name, tried),
     )
     # A quester whose hunts are refused for bag room is not working a quest:
     # its clock waits for the sale (`needs_sale`).
@@ -1801,6 +1875,7 @@ def next_move(
     this pass's Broken rows for the quests it holds (`failures`), `crossings`
     the realm's recent crossing rows (`failed_crossings`)."""
     left = left_spawns(member.name, tried)
+    idle = fruitless_entries(member.name, tried)
     # Quests the module told this quester are complete: due a turn-in, never
     # a drop, even when their log row still says otherwise (#1085).
     complete = _module_complete(member.name, tried)
@@ -1852,7 +1927,7 @@ def next_move(
             never_held,
         )
     # 4. A quest it holds: the nearest objective spawn within its level.
-    move = _hunt(cat, member, skip, left, object_left)
+    move = _hunt(cat, member, skip, left, object_left, idle)
     crossing_wait = ""
     if move is not None and move.kind == classquest.CROSS:
         crossing_wait = crossing_held(member.name, move, crossings)
@@ -1966,7 +2041,7 @@ def _takes(cat: Catalogue, member, skip, left, tried) -> tuple:
     return takes, never_held
 
 
-def _hunt(cat: Catalogue, member, skip, left, object_left=frozenset()):
+def _hunt(cat: Catalogue, member, skip, left, object_left=frozenset(), idle=frozenset()):
     """The hunt at the nearest objective spawn within the quester's level of
     an incomplete quest it holds, or a crossing to one on the other classic
     continent. A nearby hunt always takes priority over a crossing. A chest
@@ -1984,7 +2059,7 @@ def _hunt(cat: Catalogue, member, skip, left, object_left=frozenset()):
         fields = tuple(
             spot
             for spot in _held_objective_fields(member, qid, quest)
-            if spot.guid not in left
+            if spot.guid not in left and spot.entry not in idle
         )
         spot = _nearest(member, fields, left)
         if spot is not None:
@@ -2038,6 +2113,7 @@ def stalled_holds_with_actionable_objectives(
     if not member.placed:
         return frozenset()
     left = left_spawns(member.name, tried)
+    idle = fruitless_entries(member.name, tried)
     object_left = left_spawns(member.name, tried, OBJECT_KIND)
     retry = set()
     for qid, reason in held.items():
@@ -2053,7 +2129,7 @@ def stalled_holds_with_actionable_objectives(
         fields = tuple(
             spot
             for spot in _held_objective_fields(member, qid, quest)
-            if spot.guid not in left
+            if spot.guid not in left and spot.entry not in idle
         )
         if (
             _nearest(member, fields, left) is not None
