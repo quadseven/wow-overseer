@@ -228,7 +228,9 @@ def gather_targets(
     member, by the order that member's own skills advance
     (`farmjob.target_for`); a member with no node trade keeps the loop's job,
     and an ITEM order (`farm:<entry>`) or `quest` is the family's and goes to
-    all. Members in `exempt` are left out.
+    all. Members in `exempt` are left out. Once a member owns an item order
+    (`member_orders`), a member with neither an order nor a node trade of its
+    own gets "": no farm job, so it does not farm another member's trade.
 
     `member_orders` (#2502) is name -> the kill-drop order that member's own
     reagent plan needs (`profloop.member_kill_drops`). In an individual,
@@ -248,8 +250,14 @@ def gather_targets(
         return {n: loop_job for n in names}
     if not (farmjob.order_of(job)[1] or own):
         return {n: loop_job for n in names}
+    # An ITEM order with an owner is that member's need alone: a member with
+    # no order and no node trade of its own gets "" (no farm job), not the
+    # owner's order.
+    owned_item = bool(own) and bool(farmjob.order_of(job)[0])
     return {
-        n: own.get(n) or farmjob.target_for((skills_by_name or {}).get(n)) or loop_job
+        n: own.get(n)
+        or farmjob.target_for((skills_by_name or {}).get(n))
+        or ("" if owned_item else loop_job)
         for n in names
     }
 

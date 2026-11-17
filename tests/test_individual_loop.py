@@ -74,9 +74,26 @@ class TheGatherPhaseHandsOutMemberTargets(unittest.TestCase):
             ENV,
             member_orders={"Og": "farm:4306"},
         )
-        self.assertEqual(
-            {n for n, j in got.items() if j == "farm:4306"}, {"Og", "Bork"}
+        self.assertEqual({n for n, j in got.items() if j == "farm:4306"}, {"Og"})
+
+    def test_a_member_with_no_need_of_its_own_gets_no_farm_order(self):
+        # Bork is the leatherworker and is short on leather; Og is a tailor
+        # with nothing to farm and must not be sent after leather (#2498).
+        got = individual.gather_targets(
+            GATHER_ROWS,
+            SKILLS,
+            "Grug",
+            "farm:2934",
+            ENV,
+            member_orders={"Bork": "farm:2934"},
         )
+        self.assertEqual(got["Og"], "")
+        self.assertEqual(got["Bork"], "farm:2934")
+        self.assertEqual(got["Ugga"], "farm:herbalism")
+
+    def test_a_family_item_order_with_no_owner_still_goes_to_all(self):
+        got = individual.gather_targets(GATHER_ROWS, SKILLS, "Grug", "farm:2934", ENV)
+        self.assertEqual(got["Og"], "farm:2934")
 
     def test_a_member_order_for_a_family_not_named_is_ignored(self):
         got = individual.gather_targets(
@@ -142,6 +159,11 @@ class TheLoopWritesTheTargets(unittest.TestCase):
         )
         got = self.write(targets)
         self.assertEqual(got["Ugga"], "farm:herbalism")
+        self.assertEqual(got["Grug"], "farm:mining")
+
+    def test_a_member_with_an_empty_target_is_not_written_a_job(self):
+        got = self.write({"Og": "", "Grug": "farm:mining"})
+        self.assertNotIn("Og", got)
         self.assertEqual(got["Grug"], "farm:mining")
 
     def test_without_targets_every_member_gets_the_one_job(self):
