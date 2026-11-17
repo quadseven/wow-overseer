@@ -60,6 +60,7 @@ import disposition
 import director
 import dungeonpath
 import events
+import familytools
 import fanout
 import fireplan
 import flightlearn
@@ -10694,7 +10695,7 @@ class Bridge(discord.Client):
         # (the module ticket): its buy rows and its walk join the same single trip.
         queued, needs = await self._buy_blacksmith_hammers(spells, names)
         # The family's own Mining Pick and Skinning Knife: guild jobs never plan for the family.
-        _tool_rows, tool_needs = await self._buy_gather_tools(names)
+        _tool_rows, tool_needs = await self._buy_gather_tools(names, spells)
         needs = [*needs, *tool_needs]
         if not candidates and not multi_candidates:
             if mode == "individual":
@@ -11407,17 +11408,22 @@ class Bridge(discord.Client):
                 log.info("craft_supply: %s - %s", name, note)
         return queued, needs
 
-    async def _buy_gather_tools(self, names: list) -> tuple:
-        """Queue a Mining Pick or Skinning Knife for each member holding the trade without it.
+    async def _buy_gather_tools(self, names: list, spells=None) -> tuple:
+        """Queue the tool of a held trade for each member carrying none.
 
-        Guild jobs plan this buy for guild members outside the family only
-        (ticket 2267). The decision is `craft_supply.gather_tool_errand`, fed
-        the guildjobs tables; this reads the world and writes its answer.
+        A Mining Pick, a Skinning Knife, or a Blacksmith Hammer for a smith
+        with no hammer craft standing (ticket 2269; `spells` is the pass's
+        standing crafts, and a smith whose standing craft needs the hammer
+        is `_buy_blacksmith_hammers`' to judge). Guild jobs plan this buy
+        for guild members outside the family only (ticket 2267). The
+        decision is `craft_supply.gather_tool_errand`, fed the familytools
+        tables; this reads the world and writes its answer.
         One buy per member per pass, and none while an earlier row for the
         same tool is still open. Returns (rows queued, needs for the
         caller's one walk).
         """
-        trades = await asyncio.to_thread(_fetch_gather_trades, names)
+        trades = familytools.trades_owed(
+            await asyncio.to_thread(_fetch_gather_trades, names), spells)
         if not trades:
             return 0, []
         held = await asyncio.to_thread(_fetch_tool_holdings, list(trades))
@@ -11431,14 +11437,14 @@ class Bridge(discord.Client):
             owned = frozenset(held.get(name, ()))
             need = craft_supply.gather_tool_need(
                 name, frozenset(trades[name]), owned, town,
-                guildjobs.TOOLS, guildjobs.TOOL_ENTRIES,
+                familytools.TOOLS, familytools.TOOL_ENTRIES,
             )
             if need:
                 needs.append(need)
             errand, note = craft_supply.gather_tool_errand(
                 name, frozenset(trades[name]), owned,
                 money, free_slots.get(name, 0), town,
-                guildjobs.TOOLS, guildjobs.TOOL_ENTRIES,
+                familytools.TOOLS, familytools.TOOL_ENTRIES,
             )
             if note:
                 log.info("craft_supply: %s", note)
@@ -42973,10 +42979,10 @@ def _fetch_pole_holders(names: list) -> set:
 
 
 def _fetch_gather_trades(names: list) -> dict:
-    """name -> the gathering trades (Mining, Skinning) each of `names` holds."""
+    """name -> the tool trades (Mining, Skinning, Blacksmithing) each of `names` holds."""
     if not names:
         return {}
-    skills = tuple(guildjobs.TOOLS)
+    skills = tuple(familytools.TOOLS)
     marks = ",".join(["%s"] * len(names))
     skill_marks = ",".join(["%s"] * len(skills))
     with _connect() as conn, conn.cursor() as cur:
@@ -42993,14 +42999,14 @@ def _fetch_gather_trades(names: list) -> dict:
 
 
 def _fetch_tool_holdings(names: list) -> dict:
-    """name -> the gathering-tool entries held in the bags or bank.
+    """name -> the trade-tool entries (familytools) held in the bags or bank.
 
     Every slot a character owns counts, as for the hammer: a tool banked is
     still owned and a second must not be bought.
     """
     if not names:
         return {}
-    entries = sorted({e for tools in guildjobs.TOOL_ENTRIES.values() for e in tools})
+    entries = sorted({e for tools in familytools.TOOL_ENTRIES.values() for e in tools})
     marks = ",".join(["%s"] * len(names))
     entry_marks = ",".join(["%s"] * len(entries))
     with _connect() as conn, conn.cursor() as cur:
