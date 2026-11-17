@@ -23,9 +23,6 @@
 <link rel="manifest" href="__OVERSEER_BASE__/manifest.webmanifest">
 <link rel="apple-touch-icon" href="__OVERSEER_BASE__/apple-touch-icon.png">
 <link rel="icon" type="image/png" href="__OVERSEER_BASE__/icon-192.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap">
 <script>
   // The theme the operator picked, before the first paint, so a light
   // choice never flashes dark. No choice means the system's.
@@ -36,6 +33,7 @@
     } catch (e) { /* storage off: the system decides */ }
   })();
 </script>
+<link rel="stylesheet" href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/fonts.css">
 <link rel="stylesheet" href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/tokens.css">
 <link rel="stylesheet" href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/app.css">
 <link rel="modulepreload" href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/main.js">
@@ -60,9 +58,6 @@
 <link rel="modulepreload" href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/deploy.js">
 <link rel="modulepreload" href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/realmstate.js">
 <link rel="modulepreload" href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/models/time.js">
-<!-- Phosphor icons, regular and fill, pinned with integrity hashes. -->
-<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css" integrity="sha384-6p9AefaqUhEVheRlj1mpAkbngHXy9mbYMrIdcIt4Jlc9lOLIablJq3bBsLOjGwZ7" crossorigin="anonymous">
-<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css" integrity="sha384-pPVoXE8ft+zxKtxIDDI7SfTK6y95NHm4qa+hKEg/hs8VkjW5IP+9/dGOPCbDpUPl" crossorigin="anonymous">
 </head>
 <body>
 <button type="button" class="skip" data-action="skip">Skip to the page</button>
