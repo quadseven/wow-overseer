@@ -185,16 +185,52 @@ class DarkmoonCardsFollowTheDeckThreshold(unittest.TestCase):
         d = one([target, *others], [member()], target, LOG_READ)
         self.assertEqual((d.route, d.target), (AUCTION, itemplan.LIST_AT_VENDOR_QUOTE))
 
-    def test_family_card_counts_are_not_combined_across_members(self):
+    def test_four_other_ranks_split_across_two_members_keep_the_card(self):
         target = self.card("Two of Beasts", 820)
-        ana = self.card("Four of Beasts", 821)
+        ana = [
+            self.card(name, 821 + n)
+            for n, name in enumerate(("Four of Beasts", "Five of Beasts"))
+        ]
         bo = [
-            self.card(name, 822 + n, holder="Bo")
+            self.card(name, 825 + n, holder="Bo")
+            for n, name in enumerate(("Six of Beasts", "Seven of Beasts"))
+        ]
+        d = one([target, *ana, *bo], [member(), member("Bo")], target, LOG_READ)
+        self.assertIn(d.route, (BANK_PERSONAL, KEEP_CARRY))
+
+    def test_split_ranks_of_another_family_do_not_count(self):
+        target = self.card("Two of Beasts", 830)
+        ana = self.card("Four of Beasts", 831)
+        bo = [
+            self.card(name, 832 + n, holder="Bo")
             for n, name in enumerate(
                 ("Five of Beasts", "Six of Beasts", "Seven of Beasts")
             )
         ]
-        d = one([target, ana, *bo], [member(), member("Bo")], target, LOG_READ)
+        d = one(
+            [target, ana, *bo],
+            [member(), member("Bo", family="Other")],
+            target,
+            LOG_READ,
+        )
+        self.assertEqual(d.route, AUCTION)
+
+    def test_an_emptied_stack_does_not_count_as_a_card(self):
+        target = self.card("Two of Beasts", 835)
+        held = [
+            self.card(name, 836 + n)
+            for n, name in enumerate(
+                ("Four of Beasts", "Five of Beasts", "Six of Beasts")
+            )
+        ]
+        empty = self.card("Seven of Beasts", 840, count=0)
+        d = one([target, *held, empty], [member()], target, LOG_READ)
+        self.assertEqual(d.route, AUCTION)
+
+    def test_an_emptied_ace_stack_does_not_keep_the_card(self):
+        target = self.card("Two of Beasts", 845)
+        ace = self.card("Ace of Beasts", 846, count=0)
+        d = one([target, ace], [member()], target, LOG_READ)
         self.assertEqual(d.route, AUCTION)
 
     def test_one_failed_listing_still_lists_but_two_choose_vendor_fallback(self):
