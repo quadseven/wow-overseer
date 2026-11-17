@@ -11,12 +11,16 @@ derived from the row, the state is one of two words, and every value is bound.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+import stat
 import tempfile
 import threading
 import time
 from datetime import datetime
+
+log = logging.getLogger(__name__)
 
 MAX_UPLOAD = 128 * 1024 * 1024
 CHUNK = 64 * 1024
@@ -33,7 +37,19 @@ _SLOTS = threading.BoundedSemaphore(MAX_UPLOADS)
 
 NO_DIR = "The clip folder is not set up on this site, so the cutter API is off."
 
+# The name a body is written under until its row takes it, and how long one
+# may sit unwritten before the sweep removes it. A live upload is cut off at
+# UPLOAD_SECONDS, so a file twice that old belongs to a process that died.
+PART_PREFIX, PART_SUFFIX = ".upload-", ".part"
+PART_MAX_AGE = 2 * UPLOAD_SECONDS
 _PATH = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+# The oldest newest-segment age a poll may report, in seconds. A recorder whose
+# last segment is older than a week is reported as a week old or not at all.
+MAX_SEGMENT_AGE = 7 * 24 * 3600
+_BAD_AGE = (
+    "A segment age is path:seconds for a path this poll names, once each, "
+    "as ages=a:3,b:41, with whole seconds from 0 to %d." % MAX_SEGMENT_AGE
+)
 _KIND = re.compile(r"[a-z0-9_]{1,16}")
 _COLUMNS = "id, kind, stream_path, event_at, window_start, window_end, state, file_name"
 # S608 below: each statement joins module constants only; values are bound.
@@ -123,6 +139,30 @@ def paths_of(raw_paths: str) -> list[str]:
     return list(dict.fromkeys(p for p in (raw_paths or "").split(",") if p))
 
 
+def ages_of(raw_ages: str, paths: list[str]):
+    """(ages, None) or (None, refusal) for a poll's ages=path:seconds,... value.
+
+    Each item gives the age in whole seconds of the newest segment the recorder
+    for one of the poll's own paths has written. A path may be left out: the
+    view then carries no segment clock. A path the poll does not name, a path
+    named twice, or an age that is not a whole number of seconds from 0 to
+    MAX_SEGMENT_AGE refuses the whole poll, so a bad age is never half applied.
+    """
+    ages: dict[str, int] = {}
+    if not raw_ages:
+        return ages, None
+    for item in raw_ages.split(","):
+        path, colon, seconds = item.partition(":")
+        if not colon or path not in paths or path in ages:
+            return None, _err(400, _BAD_AGE)
+        if not (seconds.isascii() and seconds.isdigit()) or len(seconds) > 9:
+            return None, _err(400, _BAD_AGE)
+        if int(seconds) > MAX_SEGMENT_AGE:
+            return None, _err(400, _BAD_AGE)
+        ages[path] = int(seconds)
+    return ages, None
+
+
 def pending(rd, raw_paths: str):
     """GET /api/clips/pending: the pending rows on the asked paths, oldest
     first, at most MAX_PENDING, with the database clock. `rd` is a realm
@@ -199,6 +239,40 @@ def result(cur, raw_id, state, reason):
     return 200, _public(_lookup(cur, row["id"]), *_COLUMNS.split(", "))
 
 
+def sweep_partials(root: str, now: float | None = None) -> int:
+    """Remove the partial uploads in `root` a dead process left behind.
+
+    A partial upload is a regular file directly in `root` named
+    PART_PREFIX...PART_SUFFIX, which is the only name `_receive` writes a body
+    under; a finished clip is renamed out of that shape, so no rule here can
+    reach one. One is removed only when it was last written more than
+    PART_MAX_AGE seconds before `now` (the wall clock when left out). A folder
+    or a link with the name is left alone. A file that cannot be read or
+    removed logs one warning and the pass goes on. Returns how many it removed.
+    """
+    now = time.time() if now is None else now
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return 0
+    removed = 0
+    for name in names:
+        if not (name.startswith(PART_PREFIX) and name.endswith(PART_SUFFIX)):
+            continue
+        path = os.path.join(root, name)
+        try:
+            info = os.lstat(path)
+            if not stat.S_ISREG(info.st_mode) or now - info.st_mtime <= PART_MAX_AGE:
+                continue
+            os.unlink(path)
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            log.warning("partial upload %s not removed: %s", name, exc.strerror or exc)
+    return removed
+
+
 def _discard(path):
     if path is None:
         return
@@ -259,7 +333,7 @@ def stage(rfile, length, root, clock=time.monotonic, bound=_no_bound):
             return None, _err(
                 400, "The body is not an MP4 file (no ftyp box at the start)."
             )
-        fd, tmp = tempfile.mkstemp(prefix=".upload-", suffix=".part", dir=root)
+        fd, tmp = tempfile.mkstemp(prefix=PART_PREFIX, suffix=PART_SUFFIX, dir=root)
         with os.fdopen(fd, "wb") as out:
             out.write(head)
             left = length - len(head)

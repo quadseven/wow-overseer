@@ -70,12 +70,14 @@ import json
 import math
 import os
 import zlib
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
 import campaignplan
 import gearscore
 import gearupgrades
 import guildrun
+import guildsaid
 import jev
 import recap
 
@@ -223,7 +225,8 @@ ASKS_SQL = (
     "WHERE created_at > NOW() - INTERVAL %s MINUTE ORDER BY id"
 )
 ANSWERS_SQL = (
-    "SELECT id, ask_id, member, role, stance, said, state FROM overseer_guild_answer "
+    "SELECT id, ask_id, member, role, stance, said, state, created_at "
+    "FROM overseer_guild_answer "
     "WHERE ask_id IN ({holes}) ORDER BY id"
 )
 INSERT_ASK_SQL = (
@@ -355,6 +358,7 @@ class Answer:
     stance: str
     said: str
     state: str
+    created_at: object = None
 
 
 def roles_text(roles) -> str:
@@ -392,6 +396,7 @@ def answer_from_row(row: dict) -> Answer:
         stance=str(row.get("stance") or NEED),
         said=str(row.get("said") or ""),
         state=str(row.get("state") or YES),
+        created_at=row.get("created_at"),
     )
 
 
@@ -744,6 +749,14 @@ def _pick_new(options: tuple, avoid, render, *keys, vary: int = 0) -> str:
     return options[start % len(options)]
 
 
+def _pick_unsaid(options: tuple, said, render, *keys, vary: int = 0):
+    """`_pick_new` for a member whose lines are read with their age
+    (guildsaid.lately): with every template used, the one said longest ago,
+    or None when even that one was said this sitting (#1636)."""
+    seed = zlib.crc32("|".join(str(k) for k in keys).encode("utf-8"))
+    return guildsaid.pick(options, render, said, seed + vary)
+
+
 def _pick(options: tuple, *keys, vary: int = 0) -> str:
     """A stable choice among templates, varied by who and what.
 
@@ -795,58 +808,94 @@ _ASK_CAMPAIGN = (
     "Family's heading into {place}. Shout if you want anything from there.",
     "We're running {place} again. See you on the other side.",
 )
+# SIX OR MORE WORDINGS PER SEAT AND STANCE (#1636). A busy member answers
+# about two asks an hour; three wordings were used up inside one sitting, and
+# the fourth answer repeated one of them.
 _ANSWER = {
     (TANK, NEED): (
         "I'll tank {place}.",
         "Tank here, count me in.",
         "I can tank, inv me.",
+        "I'll take the front for {place}.",
+        "Been wanting to tank that one, I'm in.",
+        "Shield's ready, invite me.",
+        "I need that run too, I'll tank.",
     ),
     (HEALER, NEED): (
         "I'll heal {place}.",
         "Healer here, I'm in.",
         "I can heal, been wanting to go there.",
+        "I'll keep you all standing in {place}.",
+        "Heals here, invite me.",
+        "I need that one as well, I'll heal.",
+        "Got mana and time, I'll heal it.",
     ),
     (DPS, NEED): (
         "I'm in!",
         "Count me in for {place}.",
         "Sure, I'll come. Need the xp.",
+        "Room for one more dps? I want {place} too.",
+        "Yes please, invite me.",
+        "I'll come along, I still need things in there.",
+        "Dps here, I'm up for it.",
     ),
     (TANK, HELPS): (
         "I can tank it for you, I've outleveled it.",
         "Nothing left for me in there, but I'll tank it for you.",
         "I'll take the tank spot, it's an easy one for me now.",
+        "I've tanked {place} enough to know it, I'll come.",
+        "No drops for me there, happy to tank anyway.",
+        "I'll hold them for you, invite me.",
     ),
     (HEALER, HELPS): (
         "I'll come heal, nothing in there for me but happy to help.",
         "I can heal it, I've got no reason to go but sure.",
         "Happy to heal this one for you, it's easy now.",
+        "I'm past {place} but I'll heal it for you.",
+        "Don't need anything there, I'll heal all the same.",
+        "I'll come keep you alive, invite me.",
     ),
     (DPS, HELPS): (
         "I'll come help, I know the way.",
         "Nothing there for me but sure, I'll help out.",
         "I've done it plenty, I'll tag along and help.",
         "Sure, I'll come, I can show you where it goes wrong.",
+        "I'm done with {place} but I'll lend a hand.",
+        "I've got time, I'll come along for the company.",
+        "No loot for me in there, I'll help anyway.",
     ),
     (TANK, CARRIES): (
         "I can tank this run and carry the group.",
         "I'll tank it, you'll get through easy with me up front.",
         "Tank here, I'll lead you through it.",
+        "I'll walk you through {place}, stay behind me.",
+        "Way past that one, I'll tank and we'll be quick.",
+        "I'll pull the lot, just keep up.",
     ),
     (HEALER, CARRIES): (
         "I'll heal this run and carry the group.",
         "I'll keep everyone up, it's easy for me now.",
         "Healer here, I'll get you through it.",
+        "Nobody dies in {place} while I'm healing, I'm in.",
+        "Way past that one, I'll heal you through.",
+        "I'll come heal, pull as much as you like.",
     ),
     (DPS, CARRIES): (
         "I'll come carry the group through.",
         "I'll come along and do the heavy lifting.",
         "I can carry the damage, count me in.",
+        "Way past {place}, I'll burn it down for you.",
+        "I'll come, things die fast with me there.",
+        "Happy to speed that run up for you.",
     ),
 }
 _ANSWER_ITEM = (
     "I'm in, I want {item} too.",
     "Count me in, {item} would be nice.",
     "Yes! I need {item}.",
+    "I'll come, still hunting {item}.",
+    "In, {item} hasn't dropped for me yet.",
+    "Me too, I'm after {item}.",
 )
 _FORMED_BY_OTHER = (
     "{proposer}'s {place} group is heading in. I'll lead.",
@@ -926,16 +975,14 @@ def answer_line(
         )
 
     # A member does not say a sentence again that it said lately: the first
-    # wording it has not used, from where the stable pick starts.
-    if stance == NEED and gains_here:
-        template = _pick_new(
-            _ANSWER_ITEM, avoid, render, member, door.keyword, vary=vary
-        )
-    else:
-        template = _pick_new(
-            _ANSWER[(role, stance)], avoid, render, member, door.keyword, vary=vary
-        )
-    return render(template)
+    # wording it has not used, from where the stable pick starts. When
+    # `avoid` carries each line's age (guildsaid.lately) and every wording
+    # was used, the one said longest ago is said again, and none at all
+    # ("") when that one too was said this sitting: the member still joins.
+    choose = _pick_unsaid if isinstance(avoid, Mapping) else _pick_new
+    pool = _ANSWER_ITEM if stance == NEED and gains_here else _ANSWER[(role, stance)]
+    template = choose(pool, avoid, render, member, door.keyword, vary=vary)
+    return render(template) if template is not None else ""
 
 
 def short_place(place: str) -> str:
@@ -1211,8 +1258,9 @@ class _Board:
     # for one of these doors came to nothing within
     # ASK_REPEAT_COOLDOWN_MINUTES, so the member is not offered it again yet.
     recent_doors: set = field(default_factory=set)
-    # member -> the answers it said in the asks read (ASKS_READ_MINUTES back):
-    # an answer is worded to differ from them (#1636).
+    # member -> {answer line: minutes since it said it}, over the asks read
+    # (ASKS_READ_MINUTES back, guildsaid.lately): an answer is worded to
+    # differ from them (#1636).
     said: dict = field(default_factory=dict)
 
     @property
@@ -1913,7 +1961,7 @@ def plan_pass(
     # The bars read the asks as this pass leaves them, not as they were read.
     asks = _as_closed(asks, expire, cancel)
     board.recent_doors = _recent_doors(asks, now)
-    board.said = _said_by_member(answers)
+    board.said = guildsaid.lately(answers, now)
     board.gone = set(withdraw)
     form, filled = _form(board, still, can_form)
     complete = set(filled) | ({form.ask.id} if form else set())
@@ -1937,15 +1985,6 @@ def plan_pass(
         form=form,
         notes=notes,
     )
-
-
-def _said_by_member(answers) -> dict:
-    """member -> the set of lines it answered with, over the answers read."""
-    out: dict = {}
-    for a in answers or ():
-        if a.said:
-            out.setdefault(a.member, set()).add(a.said)
-    return out
 
 
 def _seat_for(member: guildrun.Member, open_seats: list, door=None) -> str:

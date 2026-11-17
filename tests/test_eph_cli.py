@@ -28,6 +28,26 @@ class CliTest(unittest.TestCase):
             self.assertEqual(code, 2, argv)
             self.assertIn("no runner config", out)
 
+    def test_submit_passes_the_bridge_images_through(self):
+        from unittest import mock
+
+        seen = {}
+
+        def fake_submit(cfg, k, gh, decree, opts):
+            seen.update(opts)
+
+        with (
+            mock.patch("ephemeral.__main__._runner", lambda a: (None, None, None)),
+            mock.patch("ephemeral.submit.submit", fake_submit),
+        ):
+            code, _ = self.run_cli(
+                "submit", "d.yaml", "--control-bridge", "c@sha256:" + "1" * 64,
+                "--treatment-bridge", "t@sha256:" + "2" * 64,
+            )  # fmt: skip
+        self.assertEqual(code, 0)
+        self.assertEqual(seen["control_bridge"], "c@sha256:" + "1" * 64)
+        self.assertEqual(seen["treatment_bridge"], "t@sha256:" + "2" * 64)
+
     def test_example_config_loads_once_filled_in(self):
         import json
 

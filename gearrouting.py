@@ -314,12 +314,13 @@ def _routing_pool(carried, wearers, spoken):
     return pool
 
 
-def _available_for(wearer_name, guild, guilds, pool, routed):
+def _available_for(wearer_name, guild, guilds, pool, routed, barred=frozenset()):
     return [
         row
         for row in pool
         if str(row.get("holder") or "") != wearer_name
         and _int(row.get("item_guid")) not in routed
+        and (wearer_name, _int(row.get("item_guid"))) not in barred
         and _same_guild(row, guilds, guild)
     ]
 
@@ -340,13 +341,42 @@ def _route_pick(pick, row, wearer, worn, book):
     )
 
 
-def _routes_for(wearers, guilds, worn, carried, pool, book):
+def _bars(barred, wearers, pool) -> frozenset:
+    """The (wearer, guid) bars that name a judged wearer and a pooled piece."""
+    guids = {_int(row.get("item_guid")) for row in pool}
+    return frozenset(
+        (str(name), _int(guid))
+        for name, guid in barred or ()
+        if str(name) in wearers and _int(guid) in guids
+    )
+
+
+def _bar_notes(bars) -> tuple:
+    """One note per barred wearer: the recorded reason a piece skips it."""
+    count: dict = {}
+    for name, _guid in bars:
+        count[name] = count.get(name, 0) + 1
+    return tuple(
+        "%d piece%s not planned for %s: it had no free bag slot to receive "
+        "%s and no slot could be freed; planned for it again when its bags "
+        "have room"
+        % (
+            count[name],
+            " is" if count[name] == 1 else "s are",
+            name,
+            "it" if count[name] == 1 else "them",
+        )
+        for name in sorted(count)
+    )
+
+
+def _routes_for(wearers, guilds, worn, carried, pool, book, barred=frozenset()):
     routes: list = []
     routed: set = set()
     for name in sorted(wearers):
         wearer = wearers[name]
         guild = guilds.get(name, "")
-        available = _available_for(name, guild, guilds, pool, routed)
+        available = _available_for(name, guild, guilds, pool, routed, barred)
         if not available:
             continue
         by_guid = {_int(r.get("item_guid")): r for r in available}
@@ -385,7 +415,15 @@ def _notes(unjudged, has_bank_rows):
     return tuple(notes)
 
 
-def plan(wearer_rows, gear_rows, bank_rows=(), keep_names=(), tanks=(), book=None):
+def plan(
+    wearer_rows,
+    gear_rows,
+    bank_rows=(),
+    keep_names=(),
+    tanks=(),
+    book=None,
+    barred=(),
+):
     """Every cross-member upgrade in the guilds the rows describe.
 
     `wearer_rows` are member rows for `equipscore.wearer_from_row` (one per
@@ -395,6 +433,10 @@ def plan(wearer_rows, gear_rows, bank_rows=(), keep_names=(), tanks=(), book=Non
     `bank_rows` are the guild bank's rows in the same shape, holder
     BANK_HOLDER. A member the scorer cannot judge is counted and named,
     never routed to or from.
+
+    `barred` is (wearer, item guid) pairs a piece is not planned for (#2245:
+    the wearer had no bag room for it past the bound, gearroomwait.py). The
+    piece goes to the next member it is an upgrade for, and a note says why.
     """
     members = list(wearer_rows or ())
     gear = list(gear_rows or ())
@@ -403,14 +445,15 @@ def plan(wearer_rows, gear_rows, bank_rows=(), keep_names=(), tanks=(), book=Non
     worn, carried, unjudged = _gear_by_holder(gear, bank, keep_names, guilds, unjudged)
     spoken = _spoken_items(wearers, worn, carried, book)
     pool = _routing_pool(carried, wearers, spoken)
-    routes = _routes_for(wearers, guilds, worn, carried, pool, book)
+    bars = _bars(barred, wearers, pool)
+    routes = _routes_for(wearers, guilds, worn, carried, pool, book, bars)
     return Report(
         routes=tuple(routes),
         members=len(guilds),
         judged=len(wearers),
         unjudged=tuple(sorted(unjudged)),
         candidates=len(pool),
-        notes=_notes(unjudged, bool(bank)),
+        notes=_notes(unjudged, bool(bank)) + _bar_notes(bars),
     )
 
 
