@@ -495,6 +495,17 @@ class TheBridgeReadsTheFarMaster(unittest.TestCase):
         self.assertIn("weaponskill.choose_far_master(", body)
         self.assertIn("weaponskill.far_maps(", body)
 
+    def test_the_family_crosses_when_no_local_master_teaches_the_skill(self):
+        body = BRIDGE.split("async def _weapon_skill_once", 1)[1].split(
+            "\n    async def _weapon_skill_train", 1
+        )[0]
+        expected = (
+            "weaponskill.far_maps(", "weaponskill.choose_far_master(",
+            "guildjobs.weapon_cross_step(", "_fetch_weapon_crossings, names",
+            "self._class_cross_row(",
+        )
+        self.assertTrue(all(part in body for part in expected))
+
     def test_the_master_read_takes_a_list_of_maps(self):
         sql = BRIDGE.split("_WEAPON_MASTERS_SQL = (", 1)[1].split("\n)", 1)[0]
         self.assertIn("cr.map IN ({maps})", sql)
