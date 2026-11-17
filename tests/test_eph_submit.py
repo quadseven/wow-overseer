@@ -57,6 +57,50 @@ class Base(unittest.TestCase):
 
 
 class SubmitTest(Base):
+    def _run_conf(self, suffix):
+        cm = next(
+            c for c in self.cluster.of("configmaps", "wow-ephemeral")
+            if c["metadata"]["name"].endswith(suffix)
+        )  # fmt: skip
+        return cm["data"]["playerbots.overrides.conf"]
+
+    def test_a_control_prefix_renames_only_the_control_arms_playerbots_keys(self):
+        rec = self.submit(control_playerbots_prefix="AiPlayerbot", **CONTROL)
+        for suffix in ("-c1", "-c2", "-c3"):
+            keys = confmerge.parse(self._run_conf(suffix))
+            self.assertIn("AiPlayerbot.Enabled", keys)
+            self.assertIn("AiPlayerbot.MaxRandomBots", keys)
+            self.assertFalse([k for k in keys if k.startswith("Playerbots.")], suffix)
+        for suffix in ("-t1", "-t2", "-t3"):
+            keys = confmerge.parse(self._run_conf(suffix))
+            self.assertIn("Playerbots.Enabled", keys)
+            self.assertFalse([k for k in keys if k.startswith("AiPlayerbot.")], suffix)
+        self.assertTrue(any("AiPlayerbot" in d for d in rec["fidelity_deltas"]))
+
+    def test_the_rename_keeps_values_and_leaves_comments_and_other_keys(self):
+        lines = [
+            "# Playerbots.Enabled is documented here",
+            "Playerbots.Enabled = 1",
+            "Overseer.X = 2",
+            "",
+        ]
+        out = confmerge.rename_prefix(
+            chr(10).join(lines), "Playerbots.", "AiPlayerbot."
+        )
+        lines[1] = "AiPlayerbot.Enabled = 1"
+        self.assertEqual(out, chr(10).join(lines))
+
+    def test_without_the_prefix_nothing_changes(self):
+        self.submit(**CONTROL)
+        self.assertIn("Playerbots.Enabled", self._run_conf("-c1"))
+        self.assertNotIn("AiPlayerbot", self._run_conf("-c1"))
+
+    def test_a_malformed_prefix_is_refused_and_creates_nothing(self):
+        for bad in ("Ai Playerbot", "AiPlayerbot.", "", "x" + chr(10) + "y"):
+            with self.assertRaisesRegex(submit.SubmitError, "prefix"):
+                self.submit(control_playerbots_prefix=bad, **CONTROL)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
     def test_creates_six_suspended_jobs_with_owned_run_configs(self):
         rec = self.submit(**CONTROL)
         jobs = self.cluster.of("jobs")

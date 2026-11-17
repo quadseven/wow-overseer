@@ -120,6 +120,9 @@ SQL are checked against a snapshot of the game databases
 - `kind: gm` is rejected: bot sessions are SEC_PLAYER, so it silently does nothing.
 - Auction rows and the auction house bot are refused unless the decree sets
   `family: auction-house`.
+- `free_backpack_slots: N` (1 to 16) deletes items from the highest used backpack slots of the
+  world's own copy until N are free, so an `items` grant has a slot (the family carries full
+  backpacks). It grants nothing and needs no ceiling by itself.
 - A grant (level, money, skills, spells, items) needs a `ceiling`, and a grant
   above what the ceiling text allows is rejected.
 - At least one precondition and one check. This only stops a decree with no
@@ -333,6 +336,14 @@ db-import and `--control-dbimport` is refused with that reason. Rejected
 alternatives: a template forged per control era (a forge run and a template per
 image, so a nightly refresh would multiply), and seeding the `updates` table so
 changed files are skipped (it would hide a real schema difference).
+
+The override files come from the live realm, so they carry its key names. A
+control image built before the module renamed `AiPlayerbot.*` to `Playerbots.*`
+has a `playerbots.conf.dist` that knows only the old names, and `seed-conf`
+refuses the live keys by name. `--control-playerbots-prefix AiPlayerbot` writes
+the control arm's playerbots keys (the baseline, the base file and the decree's
+own `config:`) with that prefix; the treatment arm is untouched, and a fidelity
+delta records it. Any other key the control dist lacks still fails closed.
 
 With `world.bridge: "on"` the template's bridge sidecar is kept, at the arm's own
 image: the control arm's is `--control-bridge` (the build before the fix), the

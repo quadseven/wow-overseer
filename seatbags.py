@@ -40,6 +40,7 @@ import math
 import os
 from dataclasses import dataclass, field, replace
 
+import auction
 import guildjobs
 import itemplan
 import itemplan_shadow
@@ -110,6 +111,7 @@ class SeatPlan:
     banks: dict = field(default_factory=dict)  # name -> Carried to bank
     destroys: dict = field(default_factory=dict)  # name -> Carried to destroy
     lines: tuple = ()  # one log line per seat that got a plan
+    auctions: dict = field(default_factory=dict)  # name -> auction.Sale to list
 
 
 def _int(value, default=0) -> int:
@@ -197,6 +199,7 @@ def plan_for(
             continue
         into = banked if d.route == itemplan.BANK_PERSONAL else destroyed
         into.setdefault(d.holder, []).append(carried_of(row))
+    auctions = auction_sales(report.plan, row_of, stacks, extras, names)
     lines = tuple(
         "%s %s: %d free slot(s), the plan sells %d stack(s), banks %d and destroys %d"
         % (
@@ -215,7 +218,59 @@ def plan_for(
         {k: tuple(v) for k, v in banked.items()},
         {k: tuple(v) for k, v in destroyed.items()},
         lines,
+        auctions,
     )
+
+
+def auction_sales(plan, row_of, stacks, extras, names, environ=None) -> dict:
+    """name -> the `auction.Sale`s the item plan routes to the auction house.
+
+    The same judgement the family's `_itemplan_auction` makes, at the plan's
+    own price: the house's lowest live unit price when it has one, else four
+    times the vendor price for a stack the plan lists at the vendor quote.
+    Only while ITEMPLAN_AUCTION is on, the switch the family's listing rides.
+    """
+    if not itemplan_shadow.auction_enabled(environ):
+        return {}
+    by_key = {stack.key: stack for stack in stacks}
+    candidates = []
+    for d in plan.decisions:
+        if d.route != itemplan.AUCTION or d.from_loc not in itemplan.CARRIED:
+            continue
+        stack, row = by_key.get(d.key), row_of.get(d.key)
+        if stack is None or row is None or not stack.tradable or d.stuck:
+            continue
+        quote = (extras.market or {}).get(d.entry)
+        price = (
+            int(quote[0])
+            if quote
+            else stack.sell * 4
+            if d.target == itemplan.LIST_AT_VENDOR_QUOTE
+            else 0
+        )
+        if not price:
+            continue
+        candidates.append(
+            {
+                "holder": d.holder,
+                "item_guid": _int(row.get("item_guid")),
+                "entry": d.entry,
+                "label": d.name,
+                "quality": stack.quality,
+                "binding": "none",
+                "quest_item": False,
+                "sell_price": stack.sell,
+                "market_price": price,
+                "count": d.count,
+            }
+        )
+    out: dict = {}
+    seats = set(names)
+    for sale in auction.plan_sales(
+        [c for c in candidates if c["holder"] in seats], max_items=10**6
+    ):
+        out.setdefault(sale.candidate.holder, []).append(sale)
+    return {k: tuple(v) for k, v in out.items()}
 
 
 def nearest_banker(member, spots, cap):
@@ -232,14 +287,33 @@ def nearest_banker(member, spots, cap):
     return best
 
 
-def attach(members, seat_plan, bankers, cap, bank=True) -> list:
+def nearest_auctioneer(member, counters, cap):
+    """The auctioneer spawn on the member's map nearest it within `cap` yards
+    whose house the member's team can shop in (auction.counter_house). `counters` is (Spot, faction)."""
+    if member.map_id is None or member.x is None or member.y is None:
+        return None
+    team = auction.team_of(member.race)
+    best, best_yards = None, None
+    for spot, faction in counters or ():
+        if int(spot.map_id) != int(member.map_id):
+            continue
+        if not auction.counter_house(team, int(faction)):
+            continue
+        yards = math.hypot(float(member.x) - spot.x, float(member.y) - spot.y)
+        if yards <= float(cap) and (best_yards is None or yards < best_yards):
+            best, best_yards = spot, yards
+    return best
+
+
+def attach(members, seat_plan, bankers, cap, bank=True, auctioneers=()) -> list:
     """The members, each seat carrying its plan and its nearest banker."""
     out = []
     for m in members:
         sales = seat_plan.sales.get(m.name, ())
         banks = seat_plan.banks.get(m.name, ()) if bank else ()
         destroys = seat_plan.destroys.get(m.name, ())
-        if not sales and not banks and not destroys:
+        listings = seat_plan.auctions.get(m.name, ())
+        if not sales and not banks and not destroys and not listings:
             out.append(m)
             continue
         out.append(
@@ -249,6 +323,10 @@ def attach(members, seat_plan, bankers, cap, bank=True) -> list:
                 plan_bank=tuple(banks),
                 plan_destroy=tuple(destroys),
                 banker=nearest_banker(m, bankers, cap) if banks else None,
+                plan_auctions=tuple(listings),
+                auctioneer=nearest_auctioneer(m, auctioneers, cap)
+                if listings
+                else None,
             )
         )
     return out
@@ -272,14 +350,16 @@ class Memo:
                 seat_plan.sales.get(name, ()),
                 seat_plan.banks.get(name, ()),
                 seat_plan.destroys.get(name, ()),
+                seat_plan.auctions.get(name, ()),
             )
 
     def merged(self, names, seat_plan) -> SeatPlan:
         sales = dict(seat_plan.sales)
         banks = dict(seat_plan.banks)
         destroys = dict(seat_plan.destroys)
+        listings = dict(seat_plan.auctions)
         for name in names:
-            if name in sales or name in banks or name in destroys:
+            if name in sales or name in banks or name in destroys or name in listings:
                 continue
             old = self._plan.get(name)
             if old is None:
@@ -290,10 +370,14 @@ class Memo:
                 banks[name] = old[1]
             if old[2]:
                 destroys[name] = old[2]
-        return SeatPlan(sales, banks, destroys, seat_plan.lines)
+            if old[3]:
+                listings[name] = old[3]
+        return SeatPlan(sales, banks, destroys, seat_plan.lines, listings)
 
 
-def relieve(members, read, bankers_for, cap, now, memo, environ=None):
+def relieve(
+    members, read, bankers_for, cap, now, memo, environ=None, auctioneers_for=None
+):
     """(members with the seats' plans attached, log lines).
 
     `read(names)` returns (family, rows, free_slots, extras, gear_rows,
@@ -337,4 +421,14 @@ def relieve(members, read, bankers_for, cap, now, memo, environ=None):
             }
         )
         spots = bankers_for(maps) if maps else ()
-    return attach(members, plan, spots, cap, bank), fresh_plan.lines
+    counters = ()
+    if auctioneers_for is not None and plan.auctions:
+        maps = sorted(
+            {
+                int(m.map_id)
+                for m in seats
+                if m.name in plan.auctions and m.map_id is not None
+            }
+        )
+        counters = auctioneers_for(maps) if maps else ()
+    return attach(members, plan, spots, cap, bank, counters), fresh_plan.lines

@@ -19,6 +19,7 @@ import pathlib
 import re
 import secrets
 import shlex
+import shutil
 import socket
 import subprocess
 import time
@@ -34,6 +35,9 @@ STAMP_RE = re.compile(r"^\d{8}T\d{6}Z$")
 TAG_RE = re.compile(r"^(?P<cls>lean|full)-(?P<stamp>\d{8}T\d{6}Z)$")
 KEEP_STAMPS = 3
 DEFAULT_PORT = 3307
+EXIT_TIMEOUT = 600
+DBIMPORT_CONF = "dbimport.conf"
+DBIMPORT_DIST = "dbimport.conf.dist"
 
 # Throwaway server: durability is worthless for a datadir built once and copied.
 MYSQL_FLAGS = (
@@ -43,6 +47,22 @@ MYSQL_FLAGS = (
     "--skip-log-bin",
     "--innodb-doublewrite=0",
 )
+
+
+def server_flags(workdir: pathlib.PurePath) -> tuple[str, ...]:
+    """Settings that keep every file the server touches inside the workdir.
+
+    Without them mysqld falls back to compiled-in paths (a secure-file-priv
+    directory, a socket and lock under /var, an X Protocol socket) that a pod
+    with only its workdir writable does not have.
+    """
+    base = workdir.as_posix()
+    return (
+        f"--socket={base}/mysql.sock",
+        f"--pid-file={base}/mysqld.pid",
+        "--mysqlx=OFF",
+        "--secure-file-priv=NULL",
+    )
 
 
 class StepFailed(RuntimeError):
@@ -110,6 +130,8 @@ class Step:
     identity: tuple[int, str] | None = None
     # True when the step reaches MySQL through its own command (a restore pipe).
     needs_server: bool = False
+    # True when the step waits for the spawned server process to exit.
+    await_exit: bool = False
 
 
 def image_tag(template_class: str, stamp: str) -> str:
@@ -176,7 +198,14 @@ def plan(cfg: Config, classes: dict[str, TableClass]) -> list[Step]:
     layer = cfg.workdir / "layer.tar"
     tag = image_tag(cfg.template_class, backup.stamp)
     port = str(cfg.mysql_port)
-    flags = " ".join([*MYSQL_FLAGS, f"--server-id={int(cfg.server_id)}"])
+    flags = " ".join(
+        [
+            *MYSQL_FLAGS,
+            *(shlex.quote(f) for f in server_flags(cfg.workdir)),
+            f"--server-id={int(cfg.server_id)}",
+        ]
+    )
+    dbimport_conf = cfg.workdir / DBIMPORT_CONF
     datadir_flag = shlex.quote(f"--datadir={datadir.as_posix()}")
     start = (
         f"mysqld {flags} --initialize-insecure {datadir_flag} && "
@@ -205,7 +234,25 @@ def plan(cfg: Config, classes: dict[str, TableClass]) -> list[Step]:
             argv=tuple(restore.restore_command(backup, cfg.mysql_port, cfg.mysql_host)),
             needs_server=True,
         ),
-        Step("db-import", argv=cfg.db_import_cmd, env=db_env, needs_server=True),
+        # The restored dump carries neither schema; without them dbimport asks on
+        # stdin whether to create them and a Job has no stdin.
+        Step(
+            "create-databases",
+            sql=(
+                "CREATE DATABASE IF NOT EXISTS acore_auth",
+                "CREATE DATABASE IF NOT EXISTS acore_world",
+            ),
+        ),
+        Step(
+            "dbimport-conf",
+            fn=lambda: write_dbimport_conf(cfg.db_import_cmd, dbimport_conf),
+        ),
+        Step(
+            "db-import",
+            argv=(*cfg.db_import_cmd, "-c", dbimport_conf.as_posix()),
+            env=db_env,
+            needs_server=True,
+        ),
     ]
 
     if cfg.auth_dump is not None:
@@ -250,6 +297,9 @@ def plan(cfg: Config, classes: dict[str, TableClass]) -> list[Step]:
             ),
         ),
         Step("shutdown", sql=("SET GLOBAL innodb_fast_shutdown=0", "SHUTDOWN")),
+        # SHUTDOWN returns before the server has finished writing; packaging a
+        # datadir that is still changing is not a clean-shutdown copy.
+        Step("server-exit", await_exit=True),
         Step(
             "package",
             argv=(
@@ -279,6 +329,27 @@ def plan(cfg: Config, classes: dict[str, TableClass]) -> list[Step]:
     return steps
 
 
+def write_dbimport_conf(db_import_cmd: Sequence[str], target: pathlib.Path) -> None:
+    """Write dbimport.conf from the dist file shipped beside the binary.
+
+    The image entrypoint normally does this; the forge calls the binary directly.
+    Database addresses come from AC_* environment overrides, so the dist defaults
+    are enough.
+    """
+    exe = shutil.which(db_import_cmd[0]) or db_import_cmd[0]
+    base = pathlib.Path(exe).resolve().parent
+    for candidate in (
+        base / DBIMPORT_DIST,
+        base.parent / "etc" / DBIMPORT_DIST,
+        base / "etc" / DBIMPORT_DIST,
+    ):
+        if candidate.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(candidate, target)
+            return
+    raise StepFailed(f"dbimport-conf: no {DBIMPORT_DIST} found beside {exe}")
+
+
 def _port_in_use(host: str, port: int) -> bool:
     """True when something accepts a connection on host:port."""
     try:
@@ -297,6 +368,10 @@ class Runner:
     def sql(self, step: Step) -> list[list[int]]:
         raise NotImplementedError
 
+    def wait_for_exit(self) -> bool:
+        """Block until the server the runner started has exited; False on timeout."""
+        raise NotImplementedError
+
     def close(self) -> None:
         """Stop anything the runner started. Safe to call twice."""
 
@@ -313,7 +388,10 @@ def execute(steps: Sequence[Step], runner: Runner) -> None:
 
 def _execute(steps: Sequence[Step], runner: Runner) -> None:
     for step in steps:
-        if step.fn is not None:
+        if step.await_exit:
+            if not runner.wait_for_exit():
+                raise StepFailed(f"{step.name}: the server did not exit")
+        elif step.fn is not None:
             try:
                 step.fn()
             except restore.IncompleteDump as err:
@@ -361,6 +439,16 @@ class SubprocessRunner(Runner):
         except subprocess.TimeoutExpired:
             server.kill()
             server.wait()
+
+    def wait_for_exit(self, timeout: float = EXIT_TIMEOUT) -> bool:
+        server = self._server
+        if server is None:
+            return True
+        try:
+            server.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False
+        return True
 
     def _mysql(self, statement: str) -> list[str]:
         return [
@@ -415,7 +503,8 @@ class SubprocessRunner(Runner):
             self._verify(step)
         if step.keep:
             return self._prune(step)
-        return self._run(list(step.argv), env=env).returncode
+        # No stdin: a prompt in a Job must fail fast, not hang or be answered.
+        return self._run(list(step.argv), env=env, stdin=subprocess.DEVNULL).returncode
 
     def _start_server(self, step: Step, env: dict[str, str]) -> int:
         if step.identity is None:

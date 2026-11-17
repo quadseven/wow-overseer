@@ -1096,6 +1096,15 @@ def _drive_slot_refusal(row: dict, by_slot: dict, off_hand: bool) -> str:
         _int(r.get("entry")) == _int(row.get("entry")) for r in by_slot.values()
     ):
         return "unique-equipped and already worn"
+    # A TRINKET IS WORN ONCE (mod-overseer, wow-overseer#2358): two copies of
+    # one effect share a cooldown, so a second copy is refused. A pair of the
+    # same ring is two real rings and stays allowed.
+    if _int(row.get("inventory_type")) == 12 and any(
+        _int(r.get("entry")) == _int(row.get("entry"))
+        for slot, r in by_slot.items()
+        if slot in (EQUIP_SLOT_TRINKET, EQUIP_SLOT_TRINKET + 1)
+    ):
+        return "a trinket is worn once and this one is worn already"
     return ""
 
 

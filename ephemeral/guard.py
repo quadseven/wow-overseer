@@ -119,6 +119,18 @@ class GuardedConnection:
         finally:
             cur.close()
 
+    def end_read(self):
+        """End the transaction a read opened, so the next read sees the world as it is now.
+
+        MySQL's default REPEATABLE READ freezes what a connection sees at its first
+        read. A judge that polls for the family to log in would read the empty world
+        for ever (measured 2026-11-17: a start precondition read 0 for ten minutes
+        while the rows were there). The seed must NOT call this: its reads and its
+        writes are one transaction.
+        """
+        self._require_opened()
+        self._conn.commit()
+
     def set_query_timeout(self, seconds):
         """Cap every later SELECT on this session (the server kills it past the cap)."""
         ms = int(seconds * 1000)

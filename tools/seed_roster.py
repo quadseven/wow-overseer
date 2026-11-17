@@ -109,8 +109,8 @@ def statements(which: str) -> list[str]:
     for name in order:
         note = f"{which} family - {family[name].role}"
         out.append(
-            "INSERT IGNORE INTO overseer_roster (name, note) VALUES "  # noqa: S608 - this script's whole PRODUCT is SQL text; every value is a name or a skill-id from tables in this repo, quoted by _quote, and it connects to no database
-            f"({_quote(name)}, {_quote(note)});"
+            "INSERT IGNORE INTO overseer_roster (name, family, note) VALUES "  # noqa: S608 - this script's whole PRODUCT is SQL text; every value is a name or a skill-id from tables in this repo, quoted by _quote, and it connects to no database
+            f"({_quote(name)}, {_quote(head)}, {_quote(note)});"
         )
 
     out += [

@@ -1,0 +1,86 @@
+# Blackfathom Deeps: two members stranded out of range at Gelihast are rescued
+# instead of the party stopping every 180 seconds.
+#
+# The two followers start in the Gelihast pool area the tank is fighting toward.
+# Gelihast is the anchor; the module's stranded threshold decides the rescue.
+# Scope: the window is now two hours and a quarter, as the issue asks. The wait line is module log text and
+# a log assertion is an exact count of one pattern, so 'more than twice in a row at the same boss for the same
+# members' cannot be grouped or required: the earlier three-in-one-line pattern could never match a log of one
+# message per line, so it is dropped rather than left as a check that cannot fail. What the rows prove: the two
+# stranded members started on the entrance map, Gelihast fell (the core credited him), no run ended on the party
+# wait, and no run sat active with no progress for twenty minutes at the end.
+# Fix: mod-dungeon-clear pull 67 (the pin port is no. 87).
+decree: v1
+id: blackfathom-gelihast-stranded-rescue
+proves:
+  - {repo: quadseven/mod-dungeon-clear, issue: 66, criterion: "over two hours the stranded members are rescued: Gelihast is credited and no run ends on the party wait (the same-boss same-members grouping is log text, not asserted here)"}
+fix: {repo: quadseven/mod-dungeon-clear, commit: "449b0628f9f1710b08fca9daac9db97cc4ddef25"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 135m
+cast:
+  - who: family:zug
+    set: {alive: true, health_pct: 100, at: {creature: "Gelihast"}}
+    ceiling: "nothing granted but position"
+  - who: Zork
+    set: {alive: true, at: {areatrigger: 257}}                      # left at the Blackfathom entrance; the distance behind the tank is not asserted
+    ceiling: "nothing granted but position"
+  - who: Zrog
+    set: {alive: true, at: {areatrigger: 257}}
+    ceiling: "nothing granted but position"
+arrange:
+  - instance: {map: "Blackfathom Deeps", as: bfd, bind: family:zug}
+  - group: {members: family:zug, leader: Zug}
+act:
+  - at: 0s
+    roster: {who: family:zug, job: "dungeon:blackfathom"}
+observe:
+  - name: run-opened-in-bfd
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run
+      WHERE map_id = 48 AND started_at >= @t0
+    expect: {scalar: ">= 1"}
+  # The judge needs the core's own credited-encounter record when an instance is arranged.
+  - name: encounter-credited
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM log_encounter
+      WHERE map = 48 AND time >= @t0
+    expect: {scalar: ">= 1"}
+  - name: gelihast-was-credited
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM log_encounter le
+      JOIN acore_world.creature_template t ON t.entry = le.creditEntry
+      WHERE le.map = 48 AND le.time >= @t0 AND le.creditType = 0 AND t.name = 'Gelihast'
+    expect: {scalar: ">= 1"}
+  - name: two-members-start-away-from-the-tank
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid IN (@Zork, @Zrog) AND map = 1
+    expect: {scalar: "= 2"}
+  - name: both-stranded-members-ended-inside-the-instance
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid IN (@Zork, @Zrog) AND map = 48
+    expect: {scalar: "= 2"}
+  - name: no-run-is-active-with-no-progress-for-twenty-minutes
+    role: check
+    when: end
+    sql: |
+      SELECT id FROM overseer_dungeon_run
+      WHERE map_id = 48 AND started_at >= @t0 AND state <> 'ended' AND last_progress_at <= DATE_SUB(NOW(), INTERVAL 20 MINUTE)
+    expect: {rows: 0}
+  - name: run-did-not-end-on-the-wait
+    role: check
+    when: end
+    sql: |
+      SELECT id, ended_reason FROM overseer_dungeon_run
+      WHERE map_id = 48 AND started_at >= @t0 AND ended_reason LIKE '%never%ready%'
+    expect: {rows: 0}
