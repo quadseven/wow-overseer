@@ -655,9 +655,10 @@ def urllib_http(ca_path=None):
     def call(method, url, headers, body):
         req = urllib.request.Request(url, data=body, method=method, headers=headers)  # noqa: S310 - https to the API server only
         try:
-            with urllib.request.urlopen(
+            opened = urllib.request.urlopen(  # noqa: S310 - https to the API server only
                 req, context=ctx, timeout=HTTP_TIMEOUT_SECONDS
-            ) as resp:  # noqa: S310
+            )
+            with opened as resp:
                 return resp.status, resp.read()
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read()
