@@ -6154,6 +6154,13 @@ def _economy_aim_hold(claimant: str, name: str, inside=None) -> str:
     return said
 
 
+def _economy_aimable(claimant: str, names, inside=()) -> tuple:
+    """`names` less the members the pass `claimant` may not aim now, with
+    `inside` the members already read inside an instance (#2323)."""
+    return tuple(
+        n for n in names if not _economy_aim_hold(claimant, n, n in inside))
+
+
 def _errand_clock_start(key: tuple, head_id: int, now: float) -> float:
     """When the fresh hold clock `key` (leader, name, state) counts from: now,
     or for an errand taken up again after a recall under the same queue entry,
@@ -10947,8 +10954,8 @@ class Bridge(discord.Client):
         slot = self._cohort_town_slot(cohort)
         # A RECALLED MEMBER, OR ONE INSIDE AN INSTANCE, TAKES NO ECONOMY
         # ERRAND (#2323). Looked up: adapter tests load this door in isolation.
-        held = globals().get("_economy_aim_hold")
-        if held is not None and await asyncio.to_thread(held, claimant, character):
+        held = globals().get("_economy_aim_hold", lambda *_a: "")
+        if await asyncio.to_thread(held, claimant, character):
             return False
         # GROUND THE FAMILY DIED ON TWICE IS NOT A WALK (#2457): a ground aim
         # whose line from the leader crosses a death disc is not written.
@@ -22558,10 +22565,9 @@ class Bridge(discord.Client):
         )
         # ...NOR ONE RECALLED FROM AN ERRAND LATELY (#2280): the one check
         # every economy aim writer asks (#2323).
-        held = globals().get("_economy_aim_hold")
-        if held is not None:
-            targets = tuple(
-                n for n in targets if not held("bag pressure", n, n in inside))
+        # Looked up: the adapter tests load this method in isolation.
+        aimable = globals().get("_economy_aimable", lambda _c, names, _i: names)
+        targets = aimable("bag pressure", targets, inside)
         aimed = 0
         for name in targets:
             current = await asyncio.to_thread(_current_travel_npc, name)

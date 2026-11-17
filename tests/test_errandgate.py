@@ -77,12 +77,16 @@ class TheVerdict(unittest.TestCase):
 
     def test_a_recall_stamped_after_now_holds_nothing(self):
         """A clock that reads earlier than the stamp is no evidence of a
-        recent recall."""
+        recent recall, the way dungeonstall.recall_cooling reads it."""
         self.assertTrue(gate.decide(900.0, 1000.0, "bank").allow)
 
-    def test_the_cooldown_can_be_given(self):
-        self.assertTrue(gate.decide(1060.0, 1000.0, "bank", cooldown=60).allow)
-        self.assertFalse(gate.decide(1059.0, 1000.0, "bank", cooldown=60).allow)
+    def test_the_verdict_is_the_cooling_read_for_every_age(self):
+        for age in (0, 1, COOLDOWN - 1, COOLDOWN, COOLDOWN + 1):
+            self.assertEqual(
+                dungeonstall.recall_cooling(1000.0, 1000.0 + age),
+                not gate.decide(1000.0 + age, 1000.0, "economy").allow,
+                age,
+            )
 
 
 class TheSentence(unittest.TestCase):

@@ -22,6 +22,7 @@ from unittest.mock import patch
 
 from _stub_modules import PYMYSQL
 from test_campaign_queue import FakeWorld, _load, _Log, _q
+from test_errand_recall_loop import bag_pressure_pass, vendor_pass_release
 
 import bag_pressure  # noqa: E402
 import campaignplan  # noqa: E402
@@ -1083,6 +1084,13 @@ class AMemberInsideAnInstanceIsNeverGivenAnErrand(unittest.TestCase):
             bag_pressure.members_inside_instance(self.NAMES, None, {230}),
         )
 
+    def test_the_bridge_reads_who_is_inside_before_aiming(self):
+        """The pass is run with the bridge's own helpers beside it (#2323);
+        it was pinned as text, which a renamed helper passed."""
+        self.assertEqual((2, ["Bork", "Grog"]), bag_pressure_pass())
+        self.assertEqual((1, ["Grog"]), bag_pressure_pass(maps={"Bork": 230}))
+        self.assertEqual((0, []), bag_pressure_pass(maps={"Bork": 230, "Grog": 230}))
+
     def release(self, aims, maps):
         released = []
         fakes = {
@@ -1119,6 +1127,13 @@ class AMemberInsideAnInstanceIsNeverGivenAnErrand(unittest.TestCase):
         drop, released = self.release(aims, {"Grug": 230})
         self.assertEqual([], drop(["Grug"]))
         self.assertEqual([], released)
+
+    def test_the_vendor_pass_hands_back_aims_inside_during_a_run(self):
+        """The whole vendor pass is run (#2323), during a run and with no
+        run row at all; it was pinned as text."""
+        self.assertEqual([("Zug", "vendor")], vendor_pass_release(in_run=True))
+        self.assertEqual([("Zug", "vendor")], vendor_pass_release(in_run=False))
+        self.assertEqual([], vendor_pass_release(in_run=True, inside=False))
 
 
 if __name__ == "__main__":
@@ -1896,10 +1911,19 @@ class TheErrandARunWaitsOn(unittest.TestCase):
         self.assertEqual(("Oz",), stall.errand_recalls(ages))
 
     def test_a_recalled_member_is_not_sent_straight_back_out(self):
-        self.assertFalse(errandgate.decide(100.0 + 60, 100.0, "economy").allow)
-        self.assertTrue(
-            errandgate.decide(
-                100.0 + stall.RECALL_COOLDOWN_SECONDS, 100.0, "economy"
-            ).allow
+        self.assertTrue(stall.recall_cooling(100.0, 100.0 + 60))
+        self.assertFalse(
+            stall.recall_cooling(100.0, 100.0 + stall.RECALL_COOLDOWN_SECONDS)
         )
-        self.assertTrue(errandgate.decide(100.0, None, "economy").allow)
+        self.assertFalse(stall.recall_cooling(None, 100.0))
+
+    def test_the_bag_pressure_aim_skips_a_member_in_its_cooldown(self):
+        """The pass is run with a recalled member (#2323); it was pinned as
+        text."""
+        self.assertEqual(
+            (1, ["Bork"]), bag_pressure_pass(recalled={"Grog": 940.0}, now=1000.0)
+        )
+        over = 940.0 + stall.RECALL_COOLDOWN_SECONDS
+        self.assertEqual(
+            (2, ["Bork", "Grog"]), bag_pressure_pass(recalled={"Grog": 940.0}, now=over)
+        )

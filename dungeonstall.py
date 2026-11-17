@@ -360,7 +360,7 @@ ERRAND_STATE = "on an errand of its own"
 RECALL_SECONDS = 10 * 60
 # After a recall the bridge does not send that member off on a self-contained
 # errand again for this long, or the recall would be undone on the next pass.
-# The rule that reads it is errandgate.decide (#2323).
+# Every economy aim writer reads it through errandgate.decide (#2323).
 RECALL_COOLDOWN_SECONDS = 30 * 60
 
 _ERRAND_WORDS = {
@@ -401,6 +401,14 @@ def errand_recalls(ages) -> tuple:
             and float(seconds) >= RECALL_SECONDS
         )
     )
+
+
+def recall_cooling(recalled_at, now) -> bool:
+    """Was this member recalled from an errand recently enough that it is not
+    sent off on another of its own yet?"""
+    if recalled_at is None:
+        return False
+    return 0 <= float(now) - float(recalled_at) < RECALL_COOLDOWN_SECONDS
 
 
 def party_held(

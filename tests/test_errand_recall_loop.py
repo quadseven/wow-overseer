@@ -292,14 +292,8 @@ class NoEconomyAimInsideAnInstance(unittest.TestCase):
         inside stood, because the vendor pass released only in its in-run
         branch. The whole vendor pass is run here with no run row (its
         `_mid_run` answers False), beside the bridge's own release."""
-        world = World()
-        ns = world.namespace()
-        world.maps["Zug"] = INSTANCE_MAP
-        world.aims["Zug"] = "banker"
-        drop = ns["_release_instance_economy_aims"]
-        _run_vendor_once(queued=False, extra={"_release_instance_economy_aims": drop})
-        self.assertEqual([("Zug", "banker")], world.released)
-        self.assertEqual({}, world.aims)
+        released = vendor_pass_release(in_run=False, aim="banker")
+        self.assertEqual([("Zug", "banker")], released)
 
     def test_a_member_inside_with_no_run_row_is_not_aimed_by_the_bank_pass(self):
         """Fails before the change: only the bag pressure aim read the map."""
@@ -311,32 +305,11 @@ class NoEconomyAimInsideAnInstance(unittest.TestCase):
         self.assertEqual({}, world.aims)
 
     def test_the_vendor_pass_still_releases_during_a_run(self):
-        world = World()
-        ns = world.namespace()
-        world.maps["Zug"] = INSTANCE_MAP
-        world.aims["Zug"] = "vendor"
-        drop = ns["_release_instance_economy_aims"]
-
-        async def mid_run(self, names):
-            return True
-
-        with unittest.mock.patch.object(_FakeEconomySelf, "_mid_run", mid_run):
-            _run_vendor_once(
-                queued=False, extra={"_release_instance_economy_aims": drop}
-            )
-        self.assertEqual([("Zug", "vendor")], world.released)
+        self.assertEqual([("Zug", "vendor")], vendor_pass_release(in_run=True))
 
     def test_a_member_outside_keeps_its_aim_through_the_vendor_pass(self):
-        world = World()
-        ns = world.namespace()
-        world.aims["Zug"] = "banker"
-        _run_vendor_once(
-            queued=False,
-            extra={
-                "_release_instance_economy_aims": ns["_release_instance_economy_aims"]
-            },
-        )
-        self.assertEqual({"Zug": "banker"}, world.aims)
+        self.assertEqual([], vendor_pass_release(in_run=False, inside=False))
+        self.assertEqual([], vendor_pass_release(in_run=True, inside=False))
 
     def test_every_economy_pass_refuses_a_member_inside(self):
         world = World()
@@ -361,74 +334,98 @@ class NoEconomyAimInsideAnInstance(unittest.TestCase):
         self.assertEqual({"Oz": "trainer:985"}, world.aims)
 
 
+PRESSED = ["Grug", "Bork", "Grog"]
+PRESSED_AT = {
+    "Grug": {"map_id": 0, "pos_x": 0.0, "pos_y": 0.0},
+    "Bork": {"map_id": 0, "pos_x": 2000.0, "pos_y": 0.0},
+    "Grog": {"map_id": 0, "pos_x": 1400.0, "pos_y": 0.0},
+}
+PRESSED_SLOTS = {"Grug": 13, "Bork": 2, "Grog": 0}
+
+
+def bag_pressure_pass(maps=None, recalled=None, now=1000.0):
+    """Run the bag pressure aim for Grug's family, Bork and Grog cut off and
+    short of bag room, with the bridge's own helpers beside it. Returns (the
+    count it reports, the members it wrote an aim for)."""
+    writes = []
+    maps = maps or {}
+
+    async def to_thread(fn, *args):
+        return fn(*args)
+
+    ns = {
+        "asyncio": types.SimpleNamespace(to_thread=to_thread),
+        "bag_pressure": bag_pressure,
+        "dungeonpath": types.SimpleNamespace(PORTAL_MAPS={"brd": INSTANCE_MAP}),
+        "errandgate": errandgate,
+        "log": types.SimpleNamespace(info=lambda *a, **k: None),
+        "professions": professions,
+        "raidrun": types.SimpleNamespace(MAPS={}),
+        "time": types.SimpleNamespace(monotonic=lambda: now),
+        "townslot": townslot,
+        "_ERRAND_HOLD_SAID": {},
+        "_ERRAND_RECALLED": dict(recalled or {}),
+        "_current_travel_npc": lambda name: "",
+        "_fetch_live_maps": lambda names: {n: maps.get(n, 0) for n in names},
+        "_is_economy_aim": lambda aim: aim == "vendor",
+        "_write_trade_errand": lambda errand: writes.append(errand.character) or True,
+    }
+    _load(
+        [
+            "_aim_stranded_bag_pressure_members",
+            "_economy_aim_hold",
+            "_economy_aimable",
+            "_members_inside_instance",
+        ],
+        ns,
+    )
+    adapter = types.SimpleNamespace(_stranded_vendor_slots={})
+    aimed = asyncio.run(
+        ns["_aim_stranded_bag_pressure_members"](
+            adapter, PRESSED, "Grug", PRESSED_AT, PRESSED_SLOTS, False
+        )
+    )
+    return aimed, writes
+
+
+def vendor_pass_release(in_run, inside=True, aim="vendor"):
+    """Run the whole vendor pass for Zug carrying `aim`, with or without a run
+    row, beside the bridge's own release. Returns what was handed back."""
+    world = World()
+    ns = world.namespace()
+    world.maps["Zug"] = INSTANCE_MAP if inside else 0
+    world.aims["Zug"] = aim
+
+    async def mid_run(self, names):
+        return in_run
+
+    with unittest.mock.patch.object(_FakeEconomySelf, "_mid_run", mid_run):
+        _run_vendor_once(
+            queued=False,
+            extra={
+                "_release_instance_economy_aims": ns["_release_instance_economy_aims"]
+            },
+        )
+    return world.released
+
+
 class TheBagPressureAimAsksTheSameHelper(unittest.TestCase):
     """The wiring, driven: the pass itself is run with the bridge's own
     helpers beside it, and what it wrote is read."""
 
-    NAMES = ["Grug", "Bork", "Grog"]
-    POSITIONS = {
-        "Grug": {"map_id": 0, "pos_x": 0.0, "pos_y": 0.0},
-        "Bork": {"map_id": 0, "pos_x": 2000.0, "pos_y": 0.0},
-        "Grog": {"map_id": 0, "pos_x": 1400.0, "pos_y": 0.0},
-    }
-    SLOTS = {"Grug": 13, "Bork": 2, "Grog": 0}
-
-    def run_pass(self, maps=None, recalled=None, now=1000.0):
-        writes = []
-        maps = maps or {}
-
-        async def to_thread(fn, *args):
-            return fn(*args)
-
-        ns = {
-            "asyncio": types.SimpleNamespace(to_thread=to_thread),
-            "bag_pressure": bag_pressure,
-            "dungeonpath": types.SimpleNamespace(PORTAL_MAPS={"brd": INSTANCE_MAP}),
-            "errandgate": errandgate,
-            "log": types.SimpleNamespace(info=lambda *a, **k: None),
-            "professions": professions,
-            "raidrun": types.SimpleNamespace(MAPS={}),
-            "time": types.SimpleNamespace(monotonic=lambda: now),
-            "townslot": townslot,
-            "_ERRAND_HOLD_SAID": {},
-            "_ERRAND_RECALLED": dict(recalled or {}),
-            "_current_travel_npc": lambda name: "",
-            "_fetch_live_maps": lambda names: {n: maps.get(n, 0) for n in names},
-            "_is_economy_aim": lambda aim: aim == "vendor",
-            "_write_trade_errand": lambda errand: (
-                writes.append(errand.character) or True
-            ),
-        }
-        _load(
-            [
-                "_aim_stranded_bag_pressure_members",
-                "_economy_aim_hold",
-                "_members_inside_instance",
-            ],
-            ns,
-        )
-        adapter = types.SimpleNamespace(_stranded_vendor_slots={})
-        aimed = asyncio.run(
-            ns["_aim_stranded_bag_pressure_members"](
-                adapter, self.NAMES, "Grug", self.POSITIONS, self.SLOTS, False
-            )
-        )
-        return aimed, writes
-
     def test_both_cut_off_members_are_aimed_when_nothing_holds_them(self):
-        self.assertEqual((2, ["Bork", "Grog"]), self.run_pass())
+        self.assertEqual((2, ["Bork", "Grog"]), bag_pressure_pass())
 
     def test_the_pass_reads_who_is_inside_before_it_aims(self):
-        aimed, writes = self.run_pass(maps={"Bork": INSTANCE_MAP})
-        self.assertEqual((1, ["Grog"]), (aimed, writes))
+        got = bag_pressure_pass(maps={"Bork": INSTANCE_MAP})
+        self.assertEqual((1, ["Grog"]), got)
 
     def test_the_pass_skips_a_member_in_its_recall_cooldown(self):
-        aimed, writes = self.run_pass(recalled={"Grog": 940.0})
-        self.assertEqual((1, ["Bork"]), (aimed, writes))
+        self.assertEqual((1, ["Bork"]), bag_pressure_pass(recalled={"Grog": 940.0}))
 
     def test_the_pass_aims_a_member_whose_cooldown_is_over(self):
         recalled = {"Grog": 1000.0 - stall.RECALL_COOLDOWN_SECONDS}
-        self.assertEqual((2, ["Bork", "Grog"]), self.run_pass(recalled=recalled))
+        self.assertEqual((2, ["Bork", "Grog"]), bag_pressure_pass(recalled=recalled))
 
 
 def _mentions(node) -> set:
@@ -478,6 +475,8 @@ class NoAimWriterBypassesTheHelper(unittest.TestCase):
     quotes these names in prose while it explains them."""
 
     HELPER = "_economy_aim_hold"
+    # The same check over a list of names, for a pass that aims several.
+    HELPERS = frozenset({"_economy_aim_hold", "_economy_aimable"})
     DOOR = "_claim_town_slot"
     WRITE = "_write_trade_errand"
     # The functions that write the travel column without asking the helper,
@@ -534,7 +533,7 @@ class NoAimWriterBypassesTheHelper(unittest.TestCase):
             if name == self.DOOR or name in self.NOT_ECONOMY_WRITERS:
                 continue
             names = _mentions(node)
-            if self.WRITE in names and self.HELPER not in names:
+            if self.WRITE in names and not names & self.HELPERS:
                 offenders.append("%s (line %d)" % (name, node.lineno))
         self.assertEqual(
             [],
@@ -558,7 +557,10 @@ class NoAimWriterBypassesTheHelper(unittest.TestCase):
         ).body[0]
         names = _mentions(rogue)
         self.assertIn(self.WRITE, names)
-        self.assertNotIn(self.HELPER, names)
+        self.assertFalse(names & self.HELPERS)
+
+    def test_the_list_helper_asks_the_one_check(self):
+        self.assertIn(self.HELPER, _mentions(FUNCTIONS["_economy_aimable"]))
 
 
 if __name__ == "__main__":

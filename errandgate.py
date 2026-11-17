@@ -124,13 +124,7 @@ class Verdict:
 ALLOWED = Verdict(True)
 
 
-def decide(
-    now,
-    last_recall_at,
-    aim_kind,
-    inside_instance: bool = False,
-    cooldown: float = dungeonstall.RECALL_COOLDOWN_SECONDS,
-) -> Verdict:
+def decide(now, last_recall_at, aim_kind, inside_instance: bool = False) -> Verdict:
     """May the pass `aim_kind` (its town slot claimant) aim a member now?
 
     `last_recall_at` is when the member's errand was last handed back at a
@@ -140,12 +134,10 @@ def decide(
         return ALLOWED
     if inside_instance:
         return Verdict(False, INSIDE_INSTANCE)
-    if last_recall_at is None:
+    if not dungeonstall.recall_cooling(last_recall_at, now):
         return ALLOWED
-    since = float(now) - float(last_recall_at)
-    if 0 <= since < float(cooldown):
-        return Verdict(False, RECALL_COOLDOWN, float(cooldown) - since)
-    return ALLOWED
+    left = dungeonstall.RECALL_COOLDOWN_SECONDS - (float(now) - float(last_recall_at))
+    return Verdict(False, RECALL_COOLDOWN, left)
 
 
 @dataclass(frozen=True)
