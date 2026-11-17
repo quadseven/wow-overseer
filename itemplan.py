@@ -740,11 +740,12 @@ class _World:
         for s in stacks:
             held[(s.holder, s.entry)] = held.get((s.holder, s.entry), 0) + s.count
             card = bag_pressure.darkmoon_card(s.name)
-            if card:
+            # An emptied stack holds no card, so it counts for nothing.
+            if card and s.count > 0:
                 rank, suit = card
                 key = (s.holder, suit)
                 darkmoon_counts.setdefault(key, set()).add(rank)
-                if rank == "Ace" and s.count > 0:
+                if rank == "Ace":
                     darkmoon_aces.add(key)
         self.held = held
         self.darkmoon_counts = darkmoon_counts
@@ -793,16 +794,17 @@ class _World:
         if rank == "Ace":
             return True
         family = self.members[stack.holder].family
+        # The decision is per family: union the distinct ranks over every
+        # member, so cards split across members still add up.
+        ranks: set = set()
         for member in self.by_family.get(family, ()):
             key = (member.name, suit)
             if key in self.darkmoon_aces:
                 return True
-            # Distinct ranks only: a copy of the card itself, or a second
-            # stack of it, is not another card of the deck.
-            others = self.darkmoon_counts.get(key, set()) - {rank}
-            if len(others) >= 4:
-                return True
-        return False
+            ranks |= self.darkmoon_counts.get(key, set())
+        # Distinct ranks only: a copy of the card itself, or a second stack of
+        # it, is not another card of the deck.
+        return len(ranks - {rank}) >= 4
 
 
 def _certainly_useless(s: Stack) -> bool:
