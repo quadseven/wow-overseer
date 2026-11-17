@@ -936,7 +936,14 @@ def advance(
         return end(
             state, now, "bag room is made, so the campaign takes the family back"
         )
-    if stalled >= HOLD_CEILING_SECONDS and not bag_pressure_needed:
+    # THE PROFESSION LOOP'S ERRAND IS NOT HELD BY THE CAMPAIGN CEILING. should_start
+    # lets it through that ceiling (its whole point is bags that hold the
+    # campaign back), so ending it on the same ceiling released it on its first
+    # pass, before anybody left (wow-dev 2026-11-17: a family 1017 minutes into
+    # its wait was released within seconds, four times, and never reached the
+    # vendor). TOTAL_SECONDS and the walk bounds still end it.
+    loop_errand = state.why.startswith(LOOP_WHY)
+    if stalled >= HOLD_CEILING_SECONDS and not (bag_pressure_needed or loop_errand):
         return end(
             state,
             now,

@@ -382,6 +382,34 @@ class TheHoldCeiling(unittest.TestCase):
         self.assertTrue(held.active, line)
         self.assertEqual("", line)
 
+    def test_a_profession_loop_errand_survives_the_campaign_ceiling(self):
+        # wow-dev 2026-11-17: Zug's family had waited 1017 minutes for a run
+        # while stuck at the bag floor. should_start lets the loop's errand
+        # through the ceiling, and advance released it on its first pass, so
+        # the family never left for the vendor and the hold never cleared.
+        state = te.start(0.0, HUB, te.LOOP_WHY + "Oz (0) below 8 free bag slots")
+        held, line = te.advance(state, 7.0, stalled=1017 * 60.0)
+        self.assertTrue(held.active, line)
+        self.assertEqual("", line)
+
+    def test_a_loop_errand_still_ends_at_its_own_total_ceiling(self):
+        state = te.start(0.0, HUB, te.LOOP_WHY + "Oz (0) below 8 free bag slots")
+        gone, line = te.advance(state, te.TOTAL_SECONDS + 1.0, stalled=1017 * 60.0)
+        self.assertFalse(gone.active)
+        self.assertIn("ceiling", line)
+
+    def test_a_loop_errand_still_ends_when_its_walk_never_lands(self):
+        state = te.start(0.0, HUB, te.LOOP_WHY + "Oz (0) below 8 free bag slots")
+        gone, line = te.advance(state, te.GO_SECONDS + 1.0, stalled=1017 * 60.0)
+        self.assertFalse(gone.active)
+        self.assertIn(te.DID_NOT_LAND, line)
+
+    def test_a_gear_errand_is_still_released_past_the_campaign_ceiling(self):
+        state = te.start(0.0, HUB, "Og short of gear with gold to spend")
+        gone, line = te.advance(state, 100.0, stalled=1017 * 60.0)
+        self.assertFalse(gone.active)
+        self.assertIn("waited 1017 minutes", line)
+
 
 class TheErrandEndsWhenTheRoomIsMade(unittest.TestCase):
     """#2116. wow-dev 2026-11-08: the vendor step was done at 14:04 and the
