@@ -698,9 +698,9 @@ def run_line() -> str:
         seats, tanks, healers = first_kill_quorum()
         head += (
             " The plain order is refused unless all 40 approved seats are online "
-            "at level %d; \"queue <family>: moltencore first kill 1\" forms the "
+            'at level %d; "queue <family>: moltencore first kill 1" forms the '
             "raid from the eligible seats instead and is refused below %d seats, "
-            "%d tanks and %d healers. \"queue <family>: upper spire 1\" orders the "
+            '%d tanks and %d healers. "queue <family>: upper spire 1" orders the '
             "ten-seat Upper Blackrock Spire rehearsal."
             % (MIN_LEVEL[MOLTEN_CORE], seats, tanks, healers)
         )
