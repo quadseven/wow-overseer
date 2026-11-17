@@ -20,7 +20,7 @@ TOKENS = (
     "RUN_ID DECREE_ID ARM CLASS BATCH REALM_ID DEADLINE_SECONDS WORLDSERVER_IMAGE "
     "DBIMPORT_IMAGE TOOLS_IMAGE TEMPLATE_IMAGE CLIENT_DATA_CLAIM WS_CPU_REQUEST "
     "WS_CPU_LIMIT WS_MEMORY MYSQL_MEMORY BUFFER_POOL DATADIR_LIMIT EPHEMERAL_REQUEST "
-    "EPHEMERAL_LIMIT BRIDGE_IMAGE"
+    "EPHEMERAL_LIMIT BRIDGE_IMAGE RESET_WORLD UPDATES_MASK"
 ).split()
 
 # JSON is valid YAML, and the fake's dry-run reads JSON: the shape of the real
@@ -60,6 +60,13 @@ TEMPLATE = json.dumps(
                         {
                             "name": "mysql",
                             "image": "{{DBIMPORT_IMAGE}}",
+                            "env": [
+                                {
+                                    "name": "AC_UPDATES_ENABLE_DATABASES",
+                                    "value": "{{UPDATES_MASK}}",
+                                },
+                                {"name": "EPH_RESET_WORLD", "value": "{{RESET_WORLD}}"},
+                            ],
                             "restartPolicy": "Always",
                             "resources": {
                                 "requests": {
