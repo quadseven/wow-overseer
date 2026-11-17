@@ -48,6 +48,7 @@ class Base(unittest.TestCase):
         return submit.submit(
             self.cfg, self.kube, self.gh, self.decree, args,
             clock=self.clock, out=lambda *_: None,
+            image_env=getattr(self, "image_env", None),
         )  # fmt: skip
 
     def compare(self, pin, status):
@@ -454,6 +455,77 @@ class BridgeTest(Base):
         self.assertNotIn("bridge: off", text)
         off = self.submit(**CONTROL)
         self.assertIn("bridge: off", "; ".join(off["fidelity_deltas"]))
+
+
+BRIDGE_FIX = (
+    BRIDGE_ON.replace("issue: TODO", "issue: 12")
+    .replace("commit: TODO", f"commit: {FIX}")
+    .replace("quadseven/mod-dungeon-clear", "quadseven/wow-overseer")
+)
+
+
+class BridgePinTest(Base):
+    """A bridge fix proves presence from the commit baked into each arm's bridge image (no manual pins)."""
+
+    def setUp(self):
+        super().setUp()
+        self.asked = []
+        self.commits = {BRIDGE: SHA, OLD_BRIDGE: OLD}
+
+        def image_env(ref, name):
+            self.asked.append((ref, name))
+            return self.commits.get(ref)
+
+        self.image_env = image_env
+
+    def compare(self, pin, status):
+        path = f"repos/quadseven/wow-overseer/compare/{FIX}...{pin}"
+        self.fake_gh.answers[("GET", path)] = {"status": status}
+
+    def test_the_map_has_the_bridge_repo(self):
+        from ephemeral import runcfg
+
+        self.assertEqual(
+            runcfg.DEFAULT_FIX_PIN_ENV["quadseven/wow-overseer"], "OVERSEER_COMMIT"
+        )
+
+    def test_both_arms_are_checked_from_their_own_images(self):
+        self.compare(SHA, "ahead")
+        self.compare(OLD, "diverged")
+        rec = self.submit(BRIDGE_FIX, **WITH_BRIDGE)
+        self.assertEqual(rec["presence"]["treatment"], {"pin": SHA, "state": "present"})
+        self.assertEqual(rec["presence"]["control"], {"pin": OLD, "state": "absent"})
+        self.assertIn((BRIDGE, "OVERSEER_COMMIT"), self.asked)
+        self.assertIn((OLD_BRIDGE, "OVERSEER_COMMIT"), self.asked)
+
+    def test_a_control_image_that_already_has_the_fix_is_refused(self):
+        self.compare(SHA, "ahead")
+        self.compare(OLD, "ahead")
+        with self.assertRaisesRegex(submit.SubmitError, "control"):
+            self.submit(BRIDGE_FIX, **WITH_BRIDGE)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_an_explicit_pin_beats_the_image(self):
+        other = "e" * 40
+        self.compare(other, "diverged")
+        self.compare(SHA, "ahead")
+        rec = self.submit(BRIDGE_FIX, **{**WITH_BRIDGE, "control_pin": other})
+        self.assertEqual(rec["presence"]["control"]["pin"], other)
+
+    def test_an_image_whose_commit_cannot_be_read_is_unchecked_not_an_error(self):
+        self.commits = {}
+        rec = self.submit(BRIDGE_FIX, **WITH_BRIDGE)
+        self.assertEqual(rec["presence"]["treatment"]["state"], "unchecked")
+        self.assertEqual(rec["presence"]["control"]["state"], "unchecked")
+
+    def test_a_malformed_commit_from_an_image_is_not_trusted(self):
+        self.commits = {BRIDGE: "not-a-sha", OLD_BRIDGE: "abc"}
+        rec = self.submit(BRIDGE_FIX, **WITH_BRIDGE)
+        self.assertEqual(rec["presence"]["treatment"]["state"], "unchecked")
+
+    def test_other_repos_still_read_the_worldserver_pins_not_the_image(self):
+        self.submit(CHECKED, arm="treatment")
+        self.assertEqual(self.asked, [])
 
 
 class ConfMergeTest(unittest.TestCase):
