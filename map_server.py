@@ -4505,9 +4505,13 @@ def _clip_path(name: str) -> str:
     return family.broadcast_path(name) if family.is_streamed(name) else ""
 
 
-def _clip_view_read(path: str) -> str:
-    """The liveness read of a stream path for the suppression log line: how
-    long ago the cutter last polled it and how old its newest segment is."""
+def _clip_view_read(name: str, path: str = "") -> str:
+    """The liveness read of a tier's stream path for the suppression log line:
+    how long ago the cutter last polled it and how old its newest segment is.
+    A tier with no streamed path is read on the path it would broadcast on."""
+    path = path or family.broadcast_path(name)
+    if not path:
+        return "no broadcast path"
     now = time.time()
     with _VIEW_SEEN_LOCK:
         seen = _VIEW_SEEN.get(path)

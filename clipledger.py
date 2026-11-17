@@ -454,20 +454,22 @@ def plan_requests(
     return out
 
 
-def suppression_line(row: Mapping, reads: Callable[[str], str] | None = None) -> str:
+def suppression_line(
+    row: Mapping, reads: Callable[[str, str], str] | None = None
+) -> str:
     """One log line for a suppressed (no_view) row: the tiers tried, who was
     asked at each, and why none gave a view, so the cause is readable from the
-    log and not only from the Chronicle note. `reads(path)` may add a liveness
-    read (poll and frame age) for a tier that had a path."""
+    log and not only from the Chronicle note. `reads(name, path)` adds the
+    liveness read (poll and frame age) for EVERY tier, including one with no
+    streamed path: a suppressed row's tiers all lack a path, so the read of the
+    path that tier would have broadcast on is what shows the view was down."""
     tiers = []
     for tier, name, path in row.get("tried") or ():
-        if path:
-            read = reads(path) if reads else ""
-            tiers.append(
-                "%s %s: path %s%s" % (tier, name, path, " (%s)" % read if read else "")
-            )
-        else:
-            tiers.append("%s %s: not streamed" % (tier, name))
+        read = reads(name, path) if reads else ""
+        shown = "path %s" % path if path else "not streamed"
+        tiers.append(
+            "%s %s: %s%s" % (tier, name, shown, " (%s)" % read if read else "")
+        )
     return "clip suppressed: %s (%s) for %s at %s; tried %s; %s" % (
         row.get("event_key", "?"),
         row["kind"],

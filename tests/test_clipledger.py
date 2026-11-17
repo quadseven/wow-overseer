@@ -801,9 +801,30 @@ class SuppressionLineTests(unittest.TestCase):
             "tried": [("subject", "Cedar", "wdcedar")],
         }
         line = clipledger.suppression_line(
-            row, lambda path: "poll 4s ago, frame 90s old"
+            row, lambda name, path: "poll 4s ago, frame 90s old"
         )
         self.assertIn("subject Cedar: path wdcedar (poll 4s ago, frame 90s old)", line)
+
+    def test_a_tier_with_no_path_still_shows_its_liveness_read(self):
+        # A suppressed row's tiers all lack a path (that is why it is
+        # suppressed), so the read is made for every tier by name.
+        row = {
+            "kind": "loot",
+            "character": "Cedar",
+            "event_at": NOW,
+            "detail": "",
+            "tried": [("subject", "Cedar", ""), ("leader", "Alder", "")],
+        }
+        seen = []
+
+        def read(name, path):
+            seen.append((name, path))
+            return "poll never, segment unknown"
+
+        line = clipledger.suppression_line(row, read)
+        self.assertEqual([("Cedar", ""), ("Alder", "")], seen)
+        self.assertIn("subject Cedar: not streamed (poll never, segment unknown)", line)
+        self.assertIn("leader Alder: not streamed (poll never, segment unknown)", line)
 
 
 if __name__ == "__main__":
