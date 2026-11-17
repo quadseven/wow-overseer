@@ -21329,9 +21329,11 @@ class Bridge(discord.Client):
         # A stranded knight's recall is asked again within the step. A recall
         # step carries exactly one row (guildjobs.stranded_recall_step), so the
         # asks cannot stack across rows.
-        if row.kind == "hearth" and guildjobs.is_recall_row(row.command):
+        # So is every other hearth row of a guild step (#2152): a death loop's
+        # hearth came back "in combat" or "moving" for 19 of 55 rows in a day.
+        if row.kind == "hearth" and guildjobs.hearth_asks_again(row.command):
             went = await self._recall_row(step, row)
-            if went:
+            if went and guildjobs.is_recall_row(row.command):
                 self._note_follow_up()
             return went
         # A quest use row (classuse.py) is followed by what it answers.
@@ -21359,8 +21361,8 @@ class Bridge(discord.Client):
         return True
 
     async def _recall_row(self, step, row) -> bool:
-        """Write a stranded knight's `hearth recall` and ask again every
-        guildjobs.RECALL_ASK_SECONDS while the answer says the next moment may
+        """Write a hearth row (a stranded knight's `recall`, a member's `use`)
+        and ask again every guildjobs.RECALL_ASK_SECONDS while the answer says the next moment may
         change it (a fight, a move, a cast that never started); True when it
         went home."""
         for attempt in range(1, guildjobs.RECALL_ATTEMPTS + 1):
@@ -21370,8 +21372,8 @@ class Bridge(discord.Client):
             answer = await self._await_corps_answer(row_id, CORPS_ROW_FOLLOW_SECONDS) or {}
             status = str(answer.get("status") or "")
             detail = str(answer.get("detail") or "")
-            log.info("guild jobs: recall row %d for %s (ask %d of %d): %s %s", row_id,
-                     step.holder, attempt, guildjobs.RECALL_ATTEMPTS, status or "unanswered",
+            log.info("guild jobs: hearth row %d for %s (%s, ask %d of %d): %s %s", row_id,
+                     step.holder, row.command, attempt, guildjobs.RECALL_ATTEMPTS, status or "unanswered",
                      detail)
             if status in ("applied", "delivered"):
                 return True
