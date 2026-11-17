@@ -944,7 +944,7 @@ def _restarts(steps, now_at, window=900) -> int:
     return n
 
 
-def restart_count(steps, now_at, since_at=0) -> int:
+def restart_count(steps, now_at, since_at=0, window=900) -> int:
     """The restart fold above for the dungeon run's own walk, for a caller
     outside this module: the bridge's stall breaker judges a door by it
     (#2151).
@@ -960,7 +960,7 @@ def restart_count(steps, now_at, since_at=0) -> int:
         if str(s.get("doing") or "").endswith(_DUNGEON_WALK_TAIL)
         and int(s.get("first_at") or 0) >= int(since_at or 0)
     ]
-    return _restarts(own, now_at)
+    return _restarts(own, now_at, window)
 
 
 def _first_restart(steps, now_at, window=900):
