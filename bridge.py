@@ -9056,6 +9056,7 @@ class Bridge(discord.Client):
         # THE GUILD'S OWN POST (#625): who is on a walk to take its letters
         # out, and when each grounded walker last used its hearthstone.
         self._post_walks: dict = {}
+        self._post_held_until: dict = {}
         self._ground_hearths: dict = {}
         # THE ACTIVITY CHOICE (#216). Per family key: what the last cycle saw
         # (breakpoint marks, when Jev was last asked, since when the family has
@@ -19632,8 +19633,12 @@ class Bridge(discord.Client):
                 getattr(self, "_job_steps", ()),
                 getattr(self, "_train_walks", ()))
         sitting = await asyncio.to_thread(_sitting_out_to_walk, names)
+        held_until = getattr(self, "_post_held_until", {})
+        held = {n for n, until in held_until.items() if until > time.monotonic()}
+        for gone in set(held_until) - held:
+            held_until.pop(gone, None)
         plan, notes = guildpost.visits(letters, online, busy, free_slots, roster,
-                                       sitting)
+                                       sitting, held)
         log.info("%s %d letter(s) with items or gold wait for %d guild member(s) of %s's "
                  "guild; %d walk(s) this pass", guildpost.LOG_PREFIX, len(letters),
                  len({x.receiver for x in letters}), names[0] if names else "?",
@@ -19679,6 +19684,9 @@ class Bridge(discord.Client):
                 self._mail_walk_unsupported_until = (
                     time.monotonic() + guildroute.WALK_UNSUPPORTED_SECONDS)
             if answer.state != guildroute.ARRIVED:
+                if guildpost.is_held(answer.said):
+                    self._post_held_until[visit.receiver] = (
+                        time.monotonic() + guildpost.HELD_BACKOFF_SECONDS)
                 log.info("%s walk row %d for %s: %s; the post stays in the "
                          "mailbox", guildpost.LOG_PREFIX, row_id, visit.receiver,
                          answer.said or answer.state)
