@@ -131,12 +131,21 @@ def held_fetch_bound(
     since: dict,
     now: float,
     bound: float = HELD_FETCH_BOUND_SECONDS,
+    waited_seconds: float = 0.0,
 ) -> HeldFetch:
     """Apply the bound to the sellable followers held for `leader` right now.
 
     `since` maps (leader, name) -> [first seen held, already announced] and is
     kept by the caller between passes. A follower no longer held drops out of
     it, so its next hold starts a fresh clock.
+
+    `waited_seconds` is the sellers' vendor wait read from the step store (the
+    age of the fresh no-vendor step). That clock survives a bridge restart and
+    a member's state flipping between held and not held, which the in-memory
+    `since` does not: on the dev realm the bridge restarted four minutes before
+    a pass that blocked the trip while the sellers had already waited over an
+    hour. A wait that has stood for the whole bound leaves every held follower
+    behind at once, whatever `since` says.
     """
     held = tuple(dict.fromkeys(n for n in held if n))
     for key in [k for k in since if k[0] == leader and k[1] not in held]:
@@ -144,7 +153,7 @@ def held_fetch_bound(
     waiting, left, newly = [], [], []
     for name in held:
         entry = since.setdefault((leader, name), [now, False])
-        if now - entry[0] < bound:
+        if now - entry[0] < bound and waited_seconds < bound:
             waiting.append(name)
             continue
         left.append(name)

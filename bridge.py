@@ -6033,11 +6033,15 @@ def _door_wedge_evidence(leader: str, head_id: int) -> tuple:
         except pymysql.err.MySQLError as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
                 raise
-    restarts = 0
+    restarts = (0, 0)
     if steps:
         now_at = int(steps[0].get("now_at") or 0) or int(time.time())
         since_at = int(steps[0].get("since_at") or 0)
-        restarts = nowstatus.restart_count(steps, now_at, since_at)
+        restarts = (
+            nowstatus.restart_count(steps, now_at, since_at),
+            nowstatus.restart_count(
+                steps, now_at, since_at, window=dungeonstall.DOOR_RESTART_WINDOW),
+        )
     row = _fetch_family_intents().get(leader, {})
     members = jev_family_intent.parse_members(row.get("members_state"))
     return restarts, members
@@ -6762,13 +6766,14 @@ _HELD_FETCH_SINCE: dict = {}
 
 def _vendor_seller_fetch_blocks_trip(
     names: list, leader: str, free_slots: dict, sellable_counts: dict,
-    in_run: bool, since=None, now=None,
+    in_run: bool, since=None, now=None, waited_seconds: float = 0.0,
 ):
     """Leave travel to the module while a sellable follower needs fetching.
 
     For at most vendor_stall.HELD_FETCH_BOUND_SECONDS per hold (#1983): a
     follower held past it is left behind, named once, and the trip is judged
-    for the members standing with the leader. Returns a vendor_stall.HeldFetch
+    for the members standing with the leader. `waited_seconds` is the sellers'
+    vendor wait from the step store, which a restart does not reset. Returns a vendor_stall.HeldFetch
     (truthy while the trip is blocked), or False when nothing is held.
     """
     if in_run or not (
@@ -6781,7 +6786,8 @@ def _vendor_seller_fetch_blocks_trip(
         return False
     since = _HELD_FETCH_SINCE if since is None else since
     now = time.monotonic() if now is None else now
-    result = vendor_stall.held_fetch_bound(leader, held, since, now)
+    result = vendor_stall.held_fetch_bound(
+        leader, held, since, now, waited_seconds=waited_seconds)
     for name in result.newly_left:
         member = held[name]
         log.info(
@@ -15474,6 +15480,8 @@ class Bridge(discord.Client):
         held_seller_for_leader = await asyncio.to_thread(
             _vendor_seller_fetch_blocks_trip, names, leader, free_slots,
             sellable_counts, in_run,
+            waited_seconds=await asyncio.to_thread(
+                _fetch_vendor_wait_seconds, names),
         )
         # A FOLLOWER HELD PAST THE BOUND IS LEFT BEHIND (#1983): the trip is
         # judged on the goods of the members who walk with the leader, so it
@@ -22467,18 +22475,32 @@ class Bridge(discord.Client):
             townerrand.in_range(hub, positions.get(n), townerrand.GATHER_YARDS)
             for n in names)
         step_done = False
+        aim_lost = False
         if state.phase == townerrand.STEPS:
             step_done = await self._town_errand_step(
                 state, names, leader, positions, cohort, now)
         elif townerrand.aim_now(state, now):
-            await self._town_errand_aim(leader, _hub_aim(hub), cohort)
+            # A WALK THAT KEEPS ENDING IS COUNTED (#2151). The aim this pass
+            # wrote last time is gone from the leader's column: the module
+            # ended the walk (a refusal, a stuck leader, a quest drive that
+            # took over) and the write below starts it again. Only an EMPTY
+            # column counts; another writer's aim is the lease's business
+            # (infra#3703). advance releases the errand at the bound.
+            # Looked up: the adapter tests load this method in isolation.
+            column = globals().get("_current_travel_npc")
+            if (state.phase == townerrand.GO and state.go_aimed
+                    and column is not None):
+                aim_lost = not await asyncio.to_thread(column, leader)
+            if await self._town_errand_aim(leader, _hub_aim(hub), cohort):
+                state = townerrand.aimed(state)
         new, line = townerrand.advance(
             state, now, in_run=in_run, leader_at_hub=leader_at_hub,
             gathered=gathered, step_done=step_done,
             bag_pressure_needed=bag_pressure_needed,
             bag_room_made=bag_room_made,
             stalled=_queue_stall_floor(names),
-            hub_yards=townerrand.yards_to(hub, positions.get(leader)))
+            hub_yards=townerrand.yards_to(hub, positions.get(leader)),
+            aim_lost=aim_lost)
         failed = townerrand.unlanded_aim(state, new)
         if failed:
             memory = globals().get("_TOWN_ERRAND_RELEASED")
@@ -37159,12 +37181,13 @@ _JOB_QUEST_ASKS_SQL = (
 
 def _job_deaths(cur, names: list) -> list:
     """The deaths deathloop.loops judges: a member dying over and over in one
-    zone leaves it (#1464)."""
+    zone leaves it (#1464). A day of them (deathloop.SLOW_READ_SECONDS), so a
+    member dying once or twice an hour is judged too (#2152, #2615)."""
     if not names:
         return []
     return _job_read(
         cur, "deaths", deathloop.SQL.format(holes=",".join(["%s"] * len(names))),
-        (*names, deathloop.READ_SECONDS))
+        (*names, deathloop.SLOW_READ_SECONDS))
 
 
 def _fetch_job_facts(family_names: list) -> dict:
@@ -37231,8 +37254,12 @@ def _fetch_job_facts(family_names: list) -> dict:
     facts["class_book"] = book
     facts["spell_reagents"] = spell_reagents
     facts["quest_asks"] = guildjobs.quest_asks_from_rows(quest_ask_rows)
+    # slow=True: the escape reaches a member whose deaths come one or two an
+    # hour (#2152). The quiet clock still ends the loop, so a member held out
+    # of its zone is listed for QUIET_SECONDS at most, the bound of #3703.
     facts["death_loops"] = deathloop.loops(
-        death_rows, {str(r["name"]): int(r.get("level") or 0) for r in rows})
+        death_rows, {str(r["name"]): int(r.get("level") or 0) for r in rows},
+        slow=True)
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}

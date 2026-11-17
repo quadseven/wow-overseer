@@ -287,6 +287,14 @@ def silent_run(keyword: str, seconds) -> Stuck | None:
 # past this the world is refusing the walk, and reissuing it identically
 # is not a plan.
 RESTART_BOUND = 10
+# A walk restarted every few minutes never holds ten inside a quarter hour:
+# the quest drive and a town errand take the leader between tries, so the
+# rows split and the fold above ages out (#2151, a run of eleven restarts over
+# forty minutes was never stood down). Over this wider window the bound is
+# lower, because a walk to a door that has failed this many times in an hour
+# is not staging either.
+DOOR_RESTART_BOUND = 4
+DOOR_RESTART_WINDOW = 60 * 60
 # A member held on an errand of its own, or held still, this long while its
 # family waits at a door. The errand's own backstops release an aim that
 # cannot land in the open world; inside a split run the aim is renewed by
@@ -314,19 +322,33 @@ def door_unreachable(keyword: str, restarts) -> Stuck | None:
     """The leader's walk to this door keeps ending without arriving.
 
     `restarts` is the watch's fold over the leader's steps (nowstatus): how
-    many times his present walk ended and restarted inside its window. The
-    verdict is the count, nothing else: not the family's progress events,
-    which a member questing on another map can keep warm forever, and not
-    anybody's presence inside, which is how a wedged run reads as under
-    way while it goes nowhere.
+    many times his present walk ended and restarted inside its window, or a
+    pair (quarter-hour count, DOOR_RESTART_WINDOW count). The verdict is the
+    count, nothing else: not the family's progress events, which a member
+    questing on another map can keep warm forever, and not anybody's presence
+    inside, which is how a wedged run reads as under way while it goes
+    nowhere.
     """
-    if restarts is None or int(restarts) < RESTART_BOUND:
+    if restarts is None:
         return None
-    return _wedged(
-        keyword,
-        "the leader's walk to the door ended and restarted %d times without "
-        "arriving; the run is stood down and the door left" % int(restarts),
-    )
+    if isinstance(restarts, (tuple, list)):
+        quick, spread = int(restarts[0] or 0), int(restarts[1] or 0)
+    else:
+        quick, spread = int(restarts), 0
+    if quick >= RESTART_BOUND:
+        return _wedged(
+            keyword,
+            "the leader's walk to the door ended and restarted %d times without "
+            "arriving; the run is stood down and the door left" % quick,
+        )
+    if spread >= DOOR_RESTART_BOUND:
+        return _wedged(
+            keyword,
+            "the leader's walk to the door ended and restarted %d times in "
+            "%d minutes without arriving; the run is stood down and the door "
+            "left" % (spread, DOOR_RESTART_WINDOW // 60),
+        )
+    return None
 
 
 ERRAND_STATE = "on an errand of its own"
