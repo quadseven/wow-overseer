@@ -223,19 +223,27 @@ RECIPE_CLASS = 9
 _SALE_FLAGS = ("quest_item", "reagent", "profession_needed")
 
 
-def _vendor_reading(row: dict, keep_names=()) -> tuple:
-    """(SellCandidate, '') for a row a vendor may be offered, else (None, why)."""
+def _early_refusal(row: dict, keep_names=()) -> str:
+    """Why a row is kept before its sale facts are read; '' when none applies."""
     try:
         if int(row.get("entry", 0)) == GUILD_TABARD_ENTRY:
-            return None, KEPT_TABARD
+            return KEPT_TABARD
     except (TypeError, ValueError):
-        return None, KEPT_UNREAD
+        return KEPT_UNREAD
     if owner_keeps(row.get("name", ""), keep_names):
-        return None, KEPT_BY_OWNER
+        return KEPT_BY_OWNER
     if is_darkmoon(row.get("name", "")):
-        return None, KEPT_DARKMOON
+        return KEPT_DARKMOON
     if _class_of(row) == RECIPE_CLASS:
-        return None, KEPT_RECIPE
+        return KEPT_RECIPE
+    return ""
+
+
+def _vendor_reading(row: dict, keep_names=()) -> tuple:
+    """(SellCandidate, '') for a row a vendor may be offered, else (None, why)."""
+    early = _early_refusal(row, keep_names)
+    if early:
+        return None, early
     try:
         item = ItemForSale(
             quality=int(row["quality"]),

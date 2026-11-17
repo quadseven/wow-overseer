@@ -240,7 +240,7 @@ class EverythingElseIsListed(unittest.TestCase):
         once = ctx(failed_listings={("Uzza", r.entry): 1})
         self.assertEqual(one([r], [UZZA], r, once).route, AUCTION)
 
-    def test_two_failed_listings_fall_back_to_the_vendor(self):
+    def test_two_failed_listings_let_the_vendor_have_it(self):
         r = recipe(subclass=10, skill=JEWELCRAFTING, sell=300)
         twice = ctx(
             failed_listings={("Uzza", r.entry): itemplan.FAILED_LISTINGS_BEFORE_VENDOR}
@@ -256,9 +256,7 @@ class EverythingElseIsListed(unittest.TestCase):
         d = one([r], [UZZA], r, twice)
         self.assertEqual(d.route, SELL_VENDOR)
 
-    def test_a_dear_recipe_uses_the_vendor_after_two_failures_but_waits_for_release(
-        self,
-    ):
+    def test_two_failed_listings_of_a_dear_recipe_still_wait_for_a_release(self):
         r = recipe(subclass=10, skill=JEWELCRAFTING, sell=40_000)
         twice = ctx(
             failed_listings={("Uzza", r.entry): itemplan.FAILED_LISTINGS_BEFORE_VENDOR}
