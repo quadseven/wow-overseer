@@ -168,5 +168,89 @@ class AChestQuestIsWorkedNotUnsourced(unittest.TestCase):
         self.assertFalse(hasattr(questers, "FORGOTTEN_HEIRLOOM"))
 
 
+def used(age, status="unchanged"):
+    """A `use-gameobject 290` row of the quester's own, `age` minutes old."""
+    return questers.Attempt(
+        "Mirra", "use-gameobject %d" % WARDROBE, status, age_minutes=age
+    )
+
+
+class AChestThatOpenedNothingIsLeftForAWhile(unittest.TestCase):
+    """A use the module read back as `unchanged` (the chest opened and nothing
+    reached the quest log) was written again every pass: eight rows in
+    forty-five minutes for one quester on the dev realm, each one a walk back
+    to the same chest. Three such rows inside CHEST_UNCHANGED_MINUTES leave
+    the chest for that long."""
+
+    def test_the_row_reads_which_chest_it_used(self):
+        self.assertEqual(used(5).use_entry, WARDROBE)
+        self.assertEqual(
+            questers.Attempt(
+                "Mirra", "walk-to-spawn gameobject:2290", "applied"
+            ).use_entry,
+            0,
+        )
+
+    def test_two_unchanged_uses_do_not_leave_the_chest(self):
+        tried = (used(5), used(12))
+        p = questers.plan(
+            heirloom_world(), holder(), questers.Clock(), 0.0, tried=tried
+        )
+        self.assertEqual(p.move.kind, classquest.USE)
+
+    def test_three_unchanged_uses_leave_the_chest(self):
+        tried = (used(5), used(12), used(20))
+        cat = heirloom_world()
+        self.assertEqual(
+            questers.unchanged_chest_spawns(cat, "Mirra", tried), frozenset({2290})
+        )
+        p = questers.plan(cat, holder(), questers.Clock(), 0.0, tried=tried)
+        self.assertTrue(p.move is None or p.move.kind != classquest.USE)
+
+    def test_the_chest_is_tried_again_once_the_hold_is_over(self):
+        old = questers.CHEST_UNCHANGED_MINUTES + 1
+        tried = (used(old), used(old + 5), used(old + 9))
+        p = questers.plan(
+            heirloom_world(), holder(), questers.Clock(), 0.0, tried=tried
+        )
+        self.assertEqual(p.move.kind, classquest.USE)
+
+    def test_a_use_that_took_since_clears_the_count(self):
+        tried = (used(2, "applied"), used(5), used(12), used(20))
+        self.assertEqual(
+            questers.unchanged_chest_spawns(heirloom_world(), "Mirra", tried),
+            frozenset(),
+        )
+
+    def test_another_quester_rows_do_not_count(self):
+        other = [
+            questers.Attempt(
+                "Velo", "use-gameobject %d" % WARDROBE, "unchanged", age_minutes=a
+            )
+            for a in (5, 12, 20)
+        ]
+        self.assertEqual(
+            questers.unchanged_chest_spawns(heirloom_world(), "Mirra", other),
+            frozenset(),
+        )
+
+    def test_a_refused_use_is_not_an_unchanged_one(self):
+        # Moving, too far, held: the chest was never opened, so it says
+        # nothing about the chest.
+        tried = tuple(used(a, "error") for a in (5, 12, 20))
+        self.assertEqual(
+            questers.unchanged_chest_spawns(heirloom_world(), "Mirra", tried),
+            frozenset(),
+        )
+
+    def test_the_stall_clock_does_not_treat_a_left_chest_as_work(self):
+        tried = (used(5), used(12), used(20))
+        left = questers.unchanged_chest_spawns(heirloom_world(), "Mirra", tried)
+        working = questers._working(
+            heirloom_world(), holder(), last_quest=0, object_left=left
+        )
+        self.assertIn(64, working)
+
+
 if __name__ == "__main__":
     unittest.main()

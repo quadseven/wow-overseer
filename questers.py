@@ -317,6 +317,16 @@ KILLING_HUNT = "killing"
 NO_CREATURE_IN_REACH = "no living creature of the entry within reach"
 FRUITLESS_HUNTS = 3
 FRUITLESS_MINUTES = 120
+# A chest use the module read back as `unchanged` (the cast went off and
+# nothing reached the quest log) was written again every pass: eight rows in
+# forty-five minutes for one quester at one chest, each a walk back to it.
+# CHEST_UNCHANGED_USES such rows inside CHEST_UNCHANGED_MINUTES, with no use
+# that took since, leave that chest for that long, after which it is tried
+# once more. A quest with no other way to its item then runs its stall clock,
+# as a quest nobody can work does.
+CHEST_UNCHANGED_USES = 3
+CHEST_UNCHANGED_MINUTES = 90
+_USE_ROW = re.compile(r"^use-gameobject (\d+)\s*$")
 # A hand-in the world refused FAILS_BEFORE_BROKEN times is held this long after
 # its last refusal before it is tried once more, the hold doubling with each
 # refusal past those (`turn_in_held`).
@@ -330,6 +340,7 @@ QUESTER_NPC_NEAR = 12
 QUESTER_HUNT_NEAR = 12
 
 _FAILED = ("error", "failed", "refused", "expired")
+UNCHANGED = "unchanged"
 _WENT = ("applied", "delivered")
 _CHAIN_ROW = re.compile(r"^(take|turnin|abandon) quest:(\d+)")
 
@@ -1037,6 +1048,11 @@ class Attempt:
     hunt_end: str = ""
 
     @property
+    def use_entry(self) -> int:
+        """The gameobject entry of a `use-gameobject` row, 0 for any other."""
+        return _use_entry(self.command)
+
+    @property
     def failed(self) -> bool:
         return self.status in _FAILED
 
@@ -1072,6 +1088,12 @@ def attempts(rows) -> tuple:
             )
         )
     return tuple(out)
+
+
+def _use_entry(command) -> int:
+    """The gameobject entry a `use-gameobject <entry>` row names, else 0."""
+    found = _USE_ROW.match(str(command or ""))
+    return int(found.group(1)) if found else 0
 
 
 def _hunt_end(row) -> str:
@@ -1123,6 +1145,48 @@ def fruitless_entries(name, tried) -> frozenset:
         ):
             empty[a.hunt_entry] = empty.get(a.hunt_entry, 0) + 1
     return frozenset(e for e, n in empty.items() if n >= FRUITLESS_HUNTS)
+
+
+def unchanged_chest_spawns(cat: Catalogue, name, tried) -> frozenset:
+    """The gameobject spawn ids of the chests this quester leaves for now:
+    CHEST_UNCHANGED_USES of its `use-gameobject` rows at one entry ended
+    `unchanged` inside CHEST_UNCHANGED_MINUTES, with no use of the entry that
+    went through since. A use refused before the cast (moving, too far, held)
+    says nothing about the chest and does not count."""
+    newest_taken = {}
+    for a in tried or ():
+        if a.name == name and a.use_entry and a.status in _WENT:
+            newest_taken[a.use_entry] = min(
+                a.age_minutes, newest_taken.get(a.use_entry, a.age_minutes)
+            )
+    empty = {}
+    for a in tried or ():
+        if a.name != name or not a.use_entry or a.status != UNCHANGED:
+            continue
+        if a.age_minutes < CHEST_UNCHANGED_MINUTES and a.age_minutes < newest_taken.get(
+            a.use_entry, 10**9
+        ):
+            empty[a.use_entry] = empty.get(a.use_entry, 0) + 1
+    entries = {e for e, n in empty.items() if n >= CHEST_UNCHANGED_USES}
+    if not entries:
+        return frozenset()
+    return frozenset(
+        spot.guid
+        for quest in cat.book.quests.values()
+        for use in quest.uses
+        if use.verb == classquest.USE_OBJECT and use.item
+        for spot in use.spots
+        if int(spot.entry) in entries
+    )
+
+
+def object_spawns_left(cat: Catalogue, name, tried) -> frozenset:
+    """The gameobject spawn ids this quester leaves for now: the ones
+    `left_spawns` names, and the chests that opened nothing
+    (`unchanged_chest_spawns`)."""
+    return left_spawns(name, tried, OBJECT_KIND) | unchanged_chest_spawns(
+        cat, name, tried
+    )
 
 
 def gone_spawns(name, tried, kind="creature") -> frozenset:
@@ -1685,7 +1749,7 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
         member,
         last_quest,
         left_spawns(member.name, tried),
-        left_spawns(member.name, tried, OBJECT_KIND),
+        object_spawns_left(cat, member.name, tried),
         fruitless_entries(member.name, tried),
     )
     # A quester whose hunts are refused for bag room is not working a quest:
@@ -1995,7 +2059,7 @@ def next_move(
     hand_skip = turn_in_held(member.name, tried, member.free_slots) | {
         b.quest for b in found if b.reason in (ENDER_MISSING, OBJECT_ENDER_MISSING)
     }
-    object_left = left_spawns(member.name, tried, OBJECT_KIND)
+    object_left = object_spawns_left(cat, member.name, tried)
     move = _hand_in(cat, member, hand_skip, left, complete, object_left)
     if move is not None:
         return move, "", []
@@ -2209,7 +2273,7 @@ def stalled_holds_with_actionable_objectives(
         return frozenset()
     left = left_spawns(member.name, tried)
     idle = fruitless_entries(member.name, tried)
-    object_left = left_spawns(member.name, tried, OBJECT_KIND)
+    object_left = object_spawns_left(cat, member.name, tried)
     retry = set()
     for qid, reason in held.items():
         if not str(reason).startswith(STALLED):
