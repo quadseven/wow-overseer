@@ -104,13 +104,16 @@ REWARD_SQL = (
 VENDOR_SQL = (
     "SELECT DISTINCT item, entry FROM acore_world.npc_vendor WHERE item IN ({ids})"
 )
+# Counted by map, never by zoneId: creature.zoneId is unset on almost every
+# row of the dev realm, so a zone filter reads 0 for creatures that stand on
+# the right map and files a false "broken quest" ticket.
 SPAWN_COUNTS_SQL = (
-    "SELECT id AS entry, zoneId AS zone, COUNT(*) AS n FROM acore_world.creature "
-    "WHERE id IN ({ids}) GROUP BY id, zoneId"
+    "SELECT id AS entry, map, COUNT(*) AS n FROM acore_world.creature "
+    "WHERE id IN ({ids}) GROUP BY id, map"
 )
 OBJECT_COUNTS_SQL = (
-    "SELECT id AS entry, zoneId AS zone, COUNT(*) AS n FROM acore_world.gameobject "
-    "WHERE id IN ({ids}) GROUP BY id, zoneId"
+    "SELECT id AS entry, map, COUNT(*) AS n FROM acore_world.gameobject "
+    "WHERE id IN ({ids}) GROUP BY id, map"
 )
 
 # Every map a quest's starters and enders stand on. creature.id, not id1, as
@@ -145,6 +148,7 @@ class Quest:
     follows: int  # PrevQuestID; 0 is none
     items: tuple = ()
     objectives: tuple = ()
+    maps: frozenset = frozenset()  # maps its starters and enders stand on
 
     def view(self) -> dict:
         return {
@@ -257,6 +261,10 @@ def build(quest_rows, giver_rows) -> tuple:
                 races=_int(row.get("races")),
                 classes=_int(row.get("classes")),
                 follows=_int(row.get("follows")),
+                maps=frozenset(
+                    by_quest.get(quest_id, {}).get("start", set())
+                    | by_quest.get(quest_id, {}).get("end", set())
+                ),
             )
         )
     return tuple(sorted(out, key=lambda q: q.id))
@@ -384,10 +392,10 @@ def load(read) -> tuple:
                             "name": object_names.get(entry, "")
                             if kind == "object"
                             else creature_names.get(entry, ""),
-                            "zone_count": sum(
+                            "map_count": sum(
                                 int(r["n"])
                                 for r in counts
-                                if int(r["zone"]) == quest.zone
+                                if int(r["map"]) in quest.maps
                             ),
                             "total_count": sum(int(r["n"]) for r in counts),
                         }

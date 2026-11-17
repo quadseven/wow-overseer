@@ -71,6 +71,7 @@ import campaignplan
 import classic
 import council
 import flightlearn
+import places
 import transform
 
 HORDE = "horde"
@@ -959,8 +960,23 @@ def route(facts: Facts) -> list:
     return out
 
 
-def zone_name(zone_id) -> str:
-    """A zone's name: a hub's, a dungeon's, the rectangles', or "somewhere"."""
+# Area ids the zone rectangles do not draw, named as the game does (#1881). A
+# dungeon's own map is named by the map; these are the ids a death or a
+# snapshot reports on a continent map (a dungeon's door area) or on a start
+# map that is not a continent (the Death Knight start).
+UNDRAWN_ZONES = {
+    25: "Blackrock Mountain",
+    491: "Razorfen Kraul",
+    721: "Gnomeregan",
+    1337: "Uldaman",
+    1477: "The Temple of Atal'Hakkar",
+    4298: "Plaguelands: The Scarlet Enclave",
+}
+
+
+def zone_name(zone_id, map_id=None) -> str:
+    """A zone's name: a hub's, a dungeon's, the rectangles', the map's own name
+    inside an instance (`map_id`), or "somewhere"."""
     zone_id = int(zone_id or 0)
     for hub in HUBS + STARTING_LAND_HUBS:
         if hub.zone_id == zone_id:
@@ -968,7 +984,14 @@ def zone_name(zone_id) -> str:
     for run in campaignplan.RUNS:
         if run.zone == zone_id:
             return run.place
-    return GEO.zone_by_id(zone_id) or "somewhere this page cannot place"
+    drawn = GEO.zone_by_id(zone_id)
+    if drawn:
+        return drawn
+    if zone_id in UNDRAWN_ZONES:
+        return UNDRAWN_ZONES[zone_id]
+    if map_id is not None and places.is_instance(map_id):
+        return places.map_name(map_id)
+    return "somewhere this page cannot place"
 
 
 def where_line(facts: Facts) -> str:
