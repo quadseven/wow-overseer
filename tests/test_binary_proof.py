@@ -15,6 +15,7 @@ import json
 import pathlib
 import tarfile
 import unittest
+import urllib.request
 
 TESTS = pathlib.Path(__file__).resolve().parent
 REPO = TESTS.parent
@@ -137,7 +138,8 @@ class FakeRegistry:
     def manifest(self, reference, platform=None):
         return {
             "layers": [
-                {"digest": d, "mediaType": k} for d, k in zip(self.blobs, self.kinds)
+                {"digest": d, "mediaType": k}
+                for d, k in zip(self.blobs, self.kinds, strict=True)
             ]
         }
 
@@ -201,6 +203,20 @@ class TheProof(unittest.TestCase):
         )
         self.assertEqual(bp.UNREADABLE, code)
         self.assertIn("no layer of the image holds", out)
+
+    def test_the_docker_and_oci_gzip_layer_types_are_both_read(self):
+        for kind in (
+            "application/vnd.oci.image.layer.v1.tar+gzip",
+            "application/vnd.docker.image.rootfs.diff.tar.gzip",
+        ):
+            with self.subTest(kind=kind):
+                self.assertEqual("tar+gzip", bp.layer_kind(kind))
+                registry = FakeRegistry([layer({bp.BINARY: BINARY})], kinds=[kind])
+                code, _ = self.run_main(registry, "--needle", "NewSymbol")
+                self.assertEqual(bp.OK, code)
+        self.assertEqual("tar", bp.layer_kind("application/vnd.oci.image.layer.v1.tar"))
+        for other in ("application/vnd.oci.image.layer.v1.tar+zstd", "gzip", ""):
+            self.assertEqual("", bp.layer_kind(other))
 
     def test_a_layer_encoding_it_cannot_read_is_no_verdict(self):
         registry = FakeRegistry(
@@ -284,6 +300,16 @@ class TheRegistryClient(unittest.TestCase):
         found = registry.manifest("v1")
         self.assertEqual("sha256:l", found["layers"][0]["digest"])
         self.assertEqual([None, "Bearer t", "Bearer t"], [a[1] for a in asked])
+
+    def test_a_url_that_is_not_https_is_never_opened(self):
+        opened = []
+        registry = bp.Registry("ghcr.io", "example/world", opened.append)
+        for url in ("file:///etc/hostname", "http://ghcr.io/v2/"):
+            with self.subTest(url=url), self.assertRaises(bp.ProofError):
+                # The refusal is the thing under test; nothing is opened.
+                request = urllib.request.Request(url)  # noqa: S310
+                registry.open(request, timeout=1)
+        self.assertEqual([], opened)
 
 
 class TheDoc(unittest.TestCase):

@@ -49,7 +49,15 @@ MANIFEST_TYPES = (
     "application/vnd.oci.image.manifest.v1+json",
     "application/vnd.docker.distribution.manifest.v2+json",
 )
-READABLE_LAYERS = ("tar", "tar+gzip", "tar.gzip")
+# How a layer's media type ends, and the encoding that names. OCI writes
+# `...layer.v1.tar+gzip`, Docker writes `...rootfs.diff.tar.gzip`; both are a
+# gzip tar. Longest ending first, so `.tar` does not answer for a longer one.
+LAYER_ENDINGS = (
+    (".tar+gzip", "tar+gzip"),
+    (".tar.gzip", "tar+gzip"),
+    (".tar", "tar"),
+)
+READABLE_LAYERS = ("tar", "tar+gzip")
 
 OK, MISSING, UNREADABLE = 0, 1, 2
 
@@ -149,8 +157,12 @@ def pick_platform(index: dict, platform: str = PLATFORM) -> str:
 
 
 def layer_kind(media_type: str) -> str:
-    """`tar+gzip` and the like: the part after the last dot of the type."""
-    return media_type.rsplit(".", 1)[-1]
+    """`tar` or `tar+gzip` for a layer this script reads, by how its media
+    type ends; any other type answers "" and is not read."""
+    for ending, kind in LAYER_ENDINGS:
+        if media_type.endswith(ending):
+            return kind
+    return ""
 
 
 # --- reading a layer as a stream ------------------------------------------
@@ -167,9 +179,16 @@ def binary_chunks(layer, path: str, size: int = CHUNK) -> Iterator[bytes] | None
     archive = tarfile.open(fileobj=layer, mode="r|*")
     for member in archive:
         if member.isfile() and _same_path(member.name, path):
-            handle = archive.extractfile(member)
-            return iter(lambda: handle.read(size), b"")
+            return _chunks_of(archive.extractfile(member), size)
     return None
+
+
+def _chunks_of(handle, size: int) -> Iterator[bytes]:
+    while True:
+        chunk = handle.read(size)
+        if not chunk:
+            return
+        yield chunk
 
 
 # --- the registry ---------------------------------------------------------
@@ -180,8 +199,16 @@ class Registry:
 
     def __init__(self, host: str, repo: str, opener: Callable | None = None):
         self.host, self.repo = host, repo
-        self.open = opener or urllib.request.urlopen
+        self.opener = opener or urllib.request.urlopen
         self._token: str | None = None
+
+    def open(self, request, timeout: int):
+        """Open a request to the registry, over https only. Every URL here
+        is built from the `https://` literal; this refuses anything else
+        (a `file:` URL, say) should a later edit build one another way."""
+        if not request.full_url.startswith("https://"):
+            raise ProofError("refusing a URL that is not https: %s" % request.full_url)
+        return self.opener(request, timeout=timeout)  # noqa: S310 - https checked above
 
     def _url(self, tail: str) -> str:
         return "https://%s/v2/%s/%s" % (self.host, self.repo, tail)
@@ -189,7 +216,8 @@ class Registry:
     def token(self) -> str:
         if self._token is None:
             url = "https://%s/token?scope=repository:%s:pull" % (self.host, self.repo)
-            with self.open(urllib.request.Request(url), timeout=30) as answer:
+            request = urllib.request.Request(url)  # noqa: S310 - https literal above
+            with self.open(request, timeout=30) as answer:
                 body = json.load(answer)
             self._token = body.get("token") or body.get("access_token") or ""
             if not self._token:
@@ -197,7 +225,7 @@ class Registry:
         return self._token
 
     def get(self, tail: str, accept: Iterable[str] = ()):
-        request = urllib.request.Request(self._url(tail))
+        request = urllib.request.Request(self._url(tail))  # noqa: S310 - _url is https
         request.add_header("Authorization", "Bearer " + self.token())
         if accept:
             request.add_header("Accept", ", ".join(accept))
