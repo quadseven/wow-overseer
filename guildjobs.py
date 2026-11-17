@@ -4723,7 +4723,7 @@ def plan(
     (death_loop_first), None or {} for none; `risks` name -> deathloop.Risk
     for a member heading into a loop (death_risk_first, #2591), None or {}
     for none; `avoided` name -> the zones a formed loop leaves avoided for
-    that member until a level gain (deathloop.avoided_zones), None or {} for
+    that member until a level gain or deathloop.AVOID_SECONDS (deathloop.avoided_zones), None or {} for
     none; `campaign` the family's
     campaign door (the bridge's _guild_campaign_door), "" for none, which
     keeps a roster member's death loop escape off the level walk (level_step);
