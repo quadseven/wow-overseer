@@ -10852,6 +10852,13 @@ class Bridge(discord.Client):
                 "member(s) still need a trip", mode, queued, trips,
             )
             return
+        # ANY OTHER JOB BUYS THE POLE ONLY WHERE THE MEMBER ALREADY STANDS
+        # (mod-overseer#530): it costs 23 copper, and waiting for job=fish
+        # left the roster with no pole while the family never fished. No walk
+        # is made for it, so no other order loses its traveller.
+        # A dungeon family is inside or staging for a run: it shops for nothing.
+        if not str(mode).startswith("dungeon"):
+            await self._buy_fishing_poles(names, cohort, walk=False)
         # INDIVIDUAL MODE (#2395): members that disagree are not a
         # half-landed order outside a dungeon, so the members on craft or
         # quest are bought for and the rest are left alone.
@@ -11660,7 +11667,8 @@ class Bridge(discord.Client):
                     log.info("craft_supply: %s - %s", name, note)
         return queued, needs
 
-    async def _buy_fishing_poles(self, names: list, cohort=None) -> tuple:
+    async def _buy_fishing_poles(
+            self, names: list, cohort=None, walk: bool = True) -> tuple:
         """Queue a Fishing Pole for every member holding none (mod-overseer#530).
 
         The same two halves `_craft_supply_once` runs for a reagent: a buy
@@ -11669,6 +11677,10 @@ class Bridge(discord.Client):
         turns into one walk on the leader. The decisions are
         `craft_supply.pole_errand` / `pole_need`; this only reads the world
         and writes their answers. Returns (rows queued, needs walked for).
+
+        `walk` False is the buy on any other job: only a member already at a
+        counter that stocks the pole is sold one, no needs are walked for, and
+        a counter without the pole is not worth a log line.
         """
         holders = await asyncio.to_thread(_fetch_pole_holders, names)
         purses = await asyncio.to_thread(_fetch_purses, names)
@@ -11686,12 +11698,13 @@ class Bridge(discord.Client):
                 name, held, money, free_slots.get(name, 0), town,
             )
             if note:
-                log.info("craft_supply: %s", note)
+                if walk:
+                    log.info("craft_supply: %s", note)
                 continue
             if errand and await asyncio.to_thread(_insert_town_errand, errand):
                 queued += 1
                 log.info("craft_supply: %s %s - %s", name, errand.command, errand.why)
-        if needs:
+        if needs and walk:
             await self._walk_for_reagents(needs, cohort)
         return queued, len(needs)
 
