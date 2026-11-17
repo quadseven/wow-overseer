@@ -55,7 +55,11 @@ price (`across`), and `next_move` makes it CROSS (`crossing_move`): one
 crossing, written by the guild job step as the class quest's is. On the far
 side the vendor stands on the member's map and the buy goes as before. With
 the gate shut nothing changes: the member counts only the stock where it
-stands. The trip back is its own slice (#1649).
+stands. The trip back (#1649) is the same lone crossing: a buyer that carries
+its purchase on the far continent while its family stands on the other one
+crosses home (`return_move`), through the dock gate alone (the family need
+not be idle: the buyer is in no run or group out there, and a stranded buyer
+waits on no one). It starts no trip while the dock cannot be reached.
 Inside a battleground the rule is not read: the member plays out its game.
 An unread map is not a continent, so a member without a fresh snapshot
 counts nothing.
@@ -413,6 +417,9 @@ class Crossing:
     # is not this buyer's own crossing under way: no crossing row would be
     # written this pass, so the buyer waits (ACROSS) and is not held (#1921).
     cooling: bool = False
+    # The classic continent its family stands on (`home_continent`), None when
+    # it cannot be read: the trip back is made only to a known home (#1649).
+    home_map: int | None = None
 
     @property
     def open(self) -> bool:
@@ -436,6 +443,22 @@ def family_rows_for(name: str, guild: str, roster_rows) -> list:
             return []
         family = min(counts, key=lambda k: (-counts[k], k))
     return [r for r in rows if str(r["family"]) == family]
+
+
+def home_continent(name: str, family_rows) -> int | None:
+    """The classic continent most of a buyer's family stands on, the family
+    rows' `snapshot_map` read for every member but the buyer itself; ties go
+    to the lower map id. None when no other member is read on one (#1649)."""
+    counts: dict = {}
+    for row in family_rows or ():
+        where = row.get("snapshot_map")
+        if row.get("name") == name or where is None:
+            continue
+        if int(where) in classquest.CONTINENTS:
+            counts[int(where)] = counts.get(int(where), 0) + 1
+    if not counts:
+        return None
+    return min(counts, key=lambda m: (-counts[m], m))
 
 
 def family_idle_in_town(family_rows) -> bool:
@@ -762,6 +785,25 @@ def crossing_move(
     )
 
 
+def return_move(aim: Aim, map_id, gate: Crossing | None) -> Move | None:
+    """The CROSS move home after the purchase (#1649), or None: only for a
+    buyer that carries its item on a classic continent other than its
+    family's, whose dock is reachable and whose crossing is not cooling.
+    The crossing is the same lone `cross-to-map` row as the way out; it
+    needs neither an idle family nor a reachable vendor."""
+    to_map = gate.home_map if gate else None
+    if to_map is None or other_continent(map_id) != to_map:
+        return None
+    if not gate.dock_reachable or gate.cooling:
+        return None
+    return Move(
+        CROSS,
+        "%s carries %s and crosses back to %s by boat or zeppelin"
+        % (aim.name, aim.item, classquest.CONTINENTS[to_map]),
+        to_map=to_map,
+    )
+
+
 def _buy_move(aim: Aim, map_id, crossing: Crossing | None) -> Move:
     """BUY where the vendor stands on the member's map, else the crossing to
     it, else ACROSS: the gate is shut and the member waits."""
@@ -797,6 +839,9 @@ def next_move(
             INSIDE, "%s plays a battleground for honor toward %s" % (aim.name, aim.item)
         )
     if carried:
+        back = return_move(aim, map_id, crossing)
+        if back is not None:
+            return back
         return Move(CARRIED, "%s carries %s and puts it on" % (aim.name, aim.item))
     if not aim.filler and aim.held >= aim.honor:
         return _buy_move(aim, map_id, crossing)
