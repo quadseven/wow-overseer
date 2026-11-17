@@ -1418,14 +1418,27 @@ def _ensure_roster(names: list) -> int:
     """
     if not names:
         return 0
+    family = bonds.head_of_family()
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.executemany(
-                "INSERT IGNORE INTO overseer_roster (name, note) VALUES (%s, %s)",
-                [(n, "notable character") for n in names],
+                "INSERT IGNORE INTO overseer_roster (name, family, note) "
+                "VALUES (%s, %s, %s)",
+                [(n, family, "notable character") for n in names],
             )
             return cur.rowcount or 0
         except pymysql.err.ProgrammingError as exc:
+            if (
+                exc.args
+                and exc.args[0] == 1054
+                and "Unknown column 'family'" in str(exc)
+            ):
+                cur.executemany(
+                    "INSERT IGNORE INTO overseer_roster (name, note) "
+                    "VALUES (%s, %s)",
+                    [(n, "notable character") for n in names],
+                )
+                return cur.rowcount or 0
             if "overseer_roster" in str(exc):
                 log.warning(
                     "overseer_roster missing - roster login needs the worldserver "
