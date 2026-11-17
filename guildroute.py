@@ -645,6 +645,38 @@ def hearth_due(name, last_hearths, now, on_roster) -> bool:
     return last is None or now - last >= GROUND_HEARTH_SECONDS
 
 
+# A REFUSED MAILBOX WALK IS NOT WRITTEN AGAIN AT ONCE (#2895). Eight hours on
+# the dev realm read 17 "character is held by another verb" and 9 "the road to
+# the mailbox crosses ground far above its level" refusals of `walk-to-mailbox`
+# rows: every writer (gear route, dues, post, crafters) forgot the refusal and
+# wrote the same walk again. The hold lapses in about 11.5 minutes (guildpost
+# keeps it 12). The above-level refusal is the module's own judgement of the
+# road to the nearest box, which the bridge cannot change, so that holder is
+# passed over for the hour a ground refusal waits (GROUND_HEARTH_SECONDS).
+HELD_WORDS = "character is held by another verb"
+HELD_BACKOFF_SECONDS = 12 * 60
+ABOVE_LEVEL_WORDS = "ground far above its level"
+ABOVE_LEVEL_BACKOFF_SECONDS = 3600
+
+
+def refusal_backoff(detail) -> int:
+    """Seconds a holder is left alone after the module refused its mailbox walk
+    with `detail`; 0 for a refusal that is no reason to wait."""
+    text = str(detail or "")
+    if HELD_WORDS in text:
+        return HELD_BACKOFF_SECONDS
+    if ABOVE_LEVEL_WORDS in text:
+        return ABOVE_LEVEL_BACKOFF_SECONDS
+    return 0
+
+
+def walk_waits(detail, age_seconds) -> bool:
+    """Whether a walk row refused `age_seconds` ago still bars the next one."""
+    if age_seconds is None:
+        return False
+    return int(age_seconds) < refusal_backoff(detail)
+
+
 def judge_walk(
     holder, status, detail, result, far=False, goal="a mailbox"
 ) -> WalkAnswer:
