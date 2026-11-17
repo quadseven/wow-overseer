@@ -639,3 +639,155 @@ class EveryMemberIsCheckedFromItsOwnPlace(unittest.TestCase):
             body.index("_member_death_disc_refusals"),
             body.index("trainjob.statements(plan)"),
         )
+
+
+# A banker route is judged by the ground it ends on (wow-dev 2026-11-17): the
+# Ironforge bank stands at z 504 over a lava pool whose deaths sit at z 373, and
+# a family standing on lower ground (a Stormwind walker at z 101, a Badlands one
+# at z 256) was refused the walk for a pool 130 yards under the counter.
+STORMWIND_WALKER = {"map_id": 0, "x": -8664.0, "y": 521.0, "z": 101.0}
+BADLANDS_WALKER = {"map_id": 0, "x": -6711.0, "y": -2216.0, "z": 256.0}
+VAULT_AIM = "at:0:-4887.3,-977.4,503.9"
+
+
+class AGoalStandingHighOverThePool(unittest.TestCase):
+    def setUp(self):
+        self.discs = dc.discs(FORGE)
+
+    def test_a_walker_on_lower_ground_may_walk_to_a_counter_over_the_pool(self):
+        for walker in (STORMWIND_WALKER, BADLANDS_WALKER):
+            self.assertEqual(dc.aim_refusal(self.discs, walker, VAULT_AIM), "")
+            self.assertEqual(
+                dc.aim_refusal(self.discs, walker, "banker", spawn=BANKER), ""
+            )
+
+    def test_a_walker_standing_at_the_liquids_own_level_is_still_refused(self):
+        for z in (364.0, 374.0, 383.0):
+            walker = dict(STORMWIND_WALKER, z=z)
+            self.assertIn("lava", dc.aim_refusal(self.discs, walker, VAULT_AIM), z)
+
+    def test_a_walker_with_no_height_keeps_the_refusal(self):
+        walker = {k: v for k, v in STORMWIND_WALKER.items() if k != "z"}
+        self.assertIn("lava", dc.aim_refusal(self.discs, walker, VAULT_AIM))
+
+    def test_a_goal_low_over_the_pool_is_still_refused(self):
+        low = "at:0:-4887.3,-977.4,380.0"
+        self.assertIn("lava", dc.aim_refusal(self.discs, STORMWIND_WALKER, low))
+
+    def test_a_goal_with_no_height_is_still_refused(self):
+        bare = "at:0:-4887.3,-977.4"
+        self.assertIn("lava", dc.aim_refusal(self.discs, STORMWIND_WALKER, bare))
+
+    def test_a_line_through_the_pool_to_a_goal_beyond_it_is_still_refused(self):
+        # The goal is not in the disc: the line itself crosses it at a height
+        # nobody has measured, so the refusal stands.
+        beyond = {"map_id": 0, "x": -4600.0, "y": -750.0, "z": 504.0}
+        start = {"map_id": 0, "x": -5100.0, "y": -1200.0, "z": 256.0}
+        self.assertIsNotNone(dc.crossing(self.discs, start, beyond))
+
+    def test_a_slime_pool_is_judged_the_same_way(self):
+        slime = dc.discs([row(-4858.0, -973.0, z=373.0, liquid="slime")] * 2)
+        self.assertEqual(dc.aim_refusal(slime, STORMWIND_WALKER, VAULT_AIM), "")
+        self.assertNotEqual(
+            dc.aim_refusal(slime, STORMWIND_WALKER, "at:0:-4887.3,-977.4,380.0"), ""
+        )
+
+    def test_a_fall_disc_is_not_cleared_by_it(self):
+        falls = dc.discs([row(-4858.0, -973.0, z=373.0, liquid="none", fell=150.0)] * 2)
+        self.assertEqual(falls[0].kind, "fall")
+        self.assertIsNone(falls[0].surface_z)
+        # a fall disc has no liquid surface, so only its own rules apply
+        self.assertFalse(dc._goal_over_the_liquid(falls[0], STORMWIND_WALKER, BANKER))
+
+
+class AKeywordHolderIsOneTheWalkersSideMayUse(unittest.TestCase):
+    """The nearest banker is judged for the walker's own side: a Horde family in
+    the Badlands was judged against the Ironforge bankers, the other side's
+    capital, and refused for a pool under a city it would never be sent to."""
+
+    def holder(self, race, rows):
+        body = BRIDGE.split("def _nearest_keyword_spawn", 1)[1].split(NEXT_DEF, 1)[0]
+        node = ast.parse("def _nearest_keyword_spawn" + body).body[0]
+        calls = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql, params=()):
+                calls.append((sql, params))
+                self.last = sql
+
+            def fetchone(self):
+                if "FROM characters" in self.last:
+                    return {"race": race} if race else None
+                return rows[0] if rows else None
+
+            def fetchall(self):
+                return rows
+
+        class Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def cursor(self):
+                return Cursor()
+
+        import situation
+        import towntrip
+
+        ns = {
+            "deathcells": dc,
+            "situation": situation,
+            "towntrip": towntrip,
+            "_connect": Conn,
+            "_KEYWORD_SPAWN_SQL": self.sql(),
+            "_DETOUR_RACE_SQL": self.sql("_DETOUR_RACE_SQL"),
+            "pymysql": types.SimpleNamespace(
+                err=types.SimpleNamespace(MySQLError=Exception)
+            ),
+            "log": logging.getLogger("t"),
+        }
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "bridge", "exec"), ns)  # noqa: S102
+        got = ns["_nearest_keyword_spawn"]("Zug", "banker")
+        return got, calls
+
+    def sql(self, name="_KEYWORD_SPAWN_SQL"):
+        tree = ast.parse(BRIDGE)
+        for n in tree.body:
+            if isinstance(n, ast.Assign) and n.targets[0].id == name:
+                scope = {"towntrip": __import__("towntrip")}
+                return eval(compile(ast.Expression(n.value), "bridge", "eval"), scope)  # noqa: S307
+        raise AssertionError(name)
+
+    def test_the_query_skips_holders_that_attack_the_walkers_side(self):
+        sql = self.sql()
+        self.assertIn("factiontemplate_dbc", sql)
+        self.assertIn("EnemyGroup", sql)
+        self.assertIn("cr.position_z AS z FROM overseer_snapshot s", sql)
+
+    def test_a_horde_walker_passes_the_horde_mask_to_the_query(self):
+        import situation
+
+        got, calls = self.holder(2, [{"map_id": 0, "x": 1.0, "y": 2.0, "z": 3.0}])
+        self.assertEqual(got["x"], 1.0)
+        sql, params = calls[-1]
+        self.assertIn(situation.HORDE_MASK, params)
+        self.assertIn(situation.PLAYER_MASK, params)
+
+    def test_an_alliance_walker_passes_the_alliance_mask(self):
+        import situation
+
+        _, calls = self.holder(1, [{"map_id": 0, "x": 1.0, "y": 2.0, "z": 3.0}])
+        self.assertIn(situation.ALLIANCE_MASK, calls[-1][1])
+
+    def test_a_walker_whose_side_cannot_be_read_is_judged_as_before(self):
+        got, calls = self.holder(None, [{"map_id": 0, "x": 1.0, "y": 2.0, "z": 3.0}])
+        self.assertIsNotNone(got)
+        self.assertEqual(calls[-1][1][-1], 0)
