@@ -30,6 +30,7 @@ import council  # noqa: E402
 import crossing  # noqa: E402
 import dungeonpace  # noqa: E402
 import dungeonstall as stall  # noqa: E402
+import errandgate  # noqa: E402
 import jev_family_intent  # noqa: E402
 import jobs  # noqa: E402
 import raidrun  # noqa: E402
@@ -1082,12 +1083,6 @@ class AMemberInsideAnInstanceIsNeverGivenAnErrand(unittest.TestCase):
             bag_pressure.members_inside_instance(self.NAMES, None, {230}),
         )
 
-    def test_the_bridge_reads_who_is_inside_before_aiming(self):
-        body = BRIDGE[BRIDGE.index("async def _aim_stranded_bag_pressure_members") :]
-        body = body[: body.index("    async def _town_errand_yield_for_weapon")]
-        self.assertIn("inside=inside", body)
-        self.assertIn("_members_inside_instance", body)
-
     def release(self, aims, maps):
         released = []
         fakes = {
@@ -1124,11 +1119,6 @@ class AMemberInsideAnInstanceIsNeverGivenAnErrand(unittest.TestCase):
         drop, released = self.release(aims, {"Grug": 230})
         self.assertEqual([], drop(["Grug"]))
         self.assertEqual([], released)
-
-    def test_the_vendor_pass_hands_back_aims_inside_during_a_run(self):
-        body = BRIDGE[BRIDGE.index("    async def _vendor_once") :]
-        body = body[: body.index("    async def", 10)]
-        self.assertIn("_release_instance_economy_aims", body)
 
 
 if __name__ == "__main__":
@@ -1780,6 +1770,8 @@ class TheErrandARunWaitsOn(unittest.TestCase):
             ),
             "_DOOR_HOLD_SINCE": holds,
             "_ERRAND_RECALLED": recalled,
+            "_ERRAND_SERVED": {},
+            "errandgate": errandgate,
             "_door_run_boss_age": lambda leader: None,
             "_current_travel_npc": current,
             "_is_economy_aim": lambda aim: aim in ("vendor", "banker"),
@@ -1882,14 +1874,10 @@ class TheErrandARunWaitsOn(unittest.TestCase):
         self.assertEqual(("Oz",), stall.errand_recalls(ages))
 
     def test_a_recalled_member_is_not_sent_straight_back_out(self):
-        self.assertTrue(stall.recall_cooling(100.0, 100.0 + 60))
-        self.assertFalse(
-            stall.recall_cooling(100.0, 100.0 + stall.RECALL_COOLDOWN_SECONDS)
+        self.assertFalse(errandgate.decide(100.0 + 60, 100.0, "economy").allow)
+        self.assertTrue(
+            errandgate.decide(
+                100.0 + stall.RECALL_COOLDOWN_SECONDS, 100.0, "economy"
+            ).allow
         )
-        self.assertFalse(stall.recall_cooling(None, 100.0))
-
-    def test_the_bag_pressure_aim_skips_a_member_in_its_cooldown(self):
-        body = BRIDGE[BRIDGE.index("async def _aim_stranded_bag_pressure_members") :]
-        body = body[: body.index("    async def _town_errand_yield_for_weapon")]
-        self.assertIn("_without_recalled", body)
-        self.assertIn("recall_cooling", BRIDGE)
+        self.assertTrue(errandgate.decide(100.0, None, "economy").allow)

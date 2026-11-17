@@ -148,6 +148,7 @@ import dungeonprogression
 import dungeonstall
 import enchantfor
 import equipscore
+import errandgate
 import item_plan
 import jev
 import jev_items
@@ -6071,7 +6072,10 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
     for key, member in seen.items():
         stamp = _DOOR_HOLD_SINCE.get(key)
         if stamp is None or stamp[0] != head_id:
-            stamp = (head_id, now)
+            # AN ERRAND TAKEN UP AGAIN AFTER A RECALL GOES ON COUNTING (#2323).
+            # Looked up: the verdict harness loads this function in isolation.
+            start = globals().get("_errand_clock_start")
+            stamp = (head_id, start(key, head_id, now) if start else now)
             _DOOR_HOLD_SINCE[key] = stamp
         ages[member.name] = (member.state, now - stamp[1])
     return ages
@@ -6115,18 +6119,44 @@ def _door_run_boss_age(leader: str):
 
 # name -> monotonic time its errand of its own was handed back at a door (#2280).
 _ERRAND_RECALLED: dict = {}
+# (leader, name) -> errandgate.Served: the errand time the member had served
+# when it was recalled, so its next errand clock goes on from there (#2323).
+_ERRAND_SERVED: dict = {}
+# (name, claimant) -> the reason last logged, so a held aim is said once.
+_ERRAND_HOLD_SAID: dict = {}
 
 
-def _without_recalled(targets):
-    """`targets` less the members recalled from an errand at a door lately: a
-    recalled member is not sent straight back out (#2280), or the next pass
-    would undo the recall. Looked up: adapter tests load callers in isolation."""
-    recalled = globals().get("_ERRAND_RECALLED", {})
-    cooling = getattr(globals().get("dungeonstall"), "recall_cooling", None)
-    if cooling is None or not recalled:
-        return targets
-    now = time.monotonic()
-    return tuple(n for n in targets if not cooling(recalled.get(n), now))
+def _economy_aim_hold(claimant: str, name: str, inside=None) -> str:
+    """Why the pass `claimant` may not aim `name` now, or "" when it may (#2323).
+
+    THE ONE CHECK EVERY ECONOMY AIM WRITER ASKS. The recall cooldown (#2280)
+    was read by the bag pressure aim only, so the bank, guild bank, repair,
+    craft supply and forge passes aimed a recalled member again on the next
+    cycle, and the instance guard had the same single reader. The rule is
+    errandgate.decide; this gathers its facts. `inside` is whether the member
+    stands inside an instance when the caller has already read it, else it is
+    read here. A pass that is not the economy's reads nothing and is allowed."""
+    if not errandgate.is_economy(claimant):
+        return ""
+    if inside is None:
+        inside = name in _members_inside_instance([name])
+    verdict = errandgate.decide(
+        time.monotonic(), _ERRAND_RECALLED.get(name), claimant, bool(inside))
+    said = verdict.said(name, claimant)
+    if _ERRAND_HOLD_SAID.get((name, claimant)) != verdict.reason:
+        _ERRAND_HOLD_SAID[(name, claimant)] = verdict.reason
+        if said:
+            log.info("economy: %s", said)
+    return said
+
+
+def _errand_clock_start(key: tuple, head_id: int, now: float) -> float:
+    """When the fresh hold clock `key` (leader, name, state) counts from: now,
+    or for an errand taken up again after a recall under the same queue entry,
+    when the recalled errand began (#2323)."""
+    if key[2] != dungeonstall.ERRAND_STATE:
+        return now
+    return errandgate.resume_since(now, _ERRAND_SERVED.get(key[:2]), head_id)
 
 
 def _members_inside_instance(names: list) -> frozenset:
@@ -6159,7 +6189,7 @@ def _release_instance_economy_aims(names: list) -> list:
     return released
 
 
-def _recall_door_errands(leader: str, ages: dict) -> list:
+def _recall_door_errands(leader: str, ages: dict, head_id: int = 0) -> list:
     """Hand back the errand of every member whose errand of its own has kept
     the family waiting at the door past dungeonstall.RECALL_SECONDS (#2280).
 
@@ -6168,15 +6198,25 @@ def _recall_door_errands(leader: str, ages: dict) -> list:
     it short of the 30 minute stand-down. The recall is the bound well inside
     that: the economy's own aim (`_is_economy_aim`) is released, so the member
     follows the leader again; an aim the economy did not write is left alone
-    for the stand-down. Returns the names released."""
+    for the stand-down. Returns the names released.
+
+    THE STAND-DOWN CLOCK IS KEPT ACROSS THE RECALL (#2323). The errand time
+    served is recorded under queue entry `head_id`, and a member whose clock
+    has reached the stand-down bound is not recalled again: recall after
+    recall would put the stand-down off for good."""
     released = []
     for name in dungeonstall.errand_recalls(ages):
+        if not errandgate.recall_due(ages[name][1]):
+            continue
         aim = _current_travel_npc(name)
         if not aim or not _is_economy_aim(aim):
             continue
         if not _release_trade_errand(name, aim):
             continue
-        _ERRAND_RECALLED[name] = time.monotonic()
+        now = time.monotonic()
+        _ERRAND_RECALLED[name] = now
+        _ERRAND_SERVED[(leader, name)] = errandgate.Served(
+            head_id, ages[name][1], now)
         released.append(name)
         log.info(
             "door recall: %s had been on an errand of its own (%s) for %d "
@@ -6224,9 +6264,10 @@ def _door_wedge(head: dict, names: list, leader: str):
     # function in isolation.
     recall = globals().get("_recall_door_errands")
     if recall is not None and ages:
-        for name in recall(leader, ages):
+        # The member's hold clock is NOT restarted (#2323): it ends when the
+        # errand state does, and an errand taken up again counts on.
+        for name in recall(leader, ages, head_id):
             ages.pop(name, None)
-            _DOOR_HOLD_SINCE.pop((leader, name, dungeonstall.ERRAND_STATE), None)
     # The stall line names the errand that held the run (#2280).
     errand_of = globals().get("_current_travel_npc")
     for name, (state, age) in ages.items():
@@ -10898,6 +10939,11 @@ class Bridge(discord.Client):
         else:
             leader = await asyncio.to_thread(_cohort_leader, cohort)
         slot = self._cohort_town_slot(cohort)
+        # A RECALLED MEMBER, OR ONE INSIDE AN INSTANCE, TAKES NO ECONOMY
+        # ERRAND (#2323). Looked up: adapter tests load this door in isolation.
+        held = globals().get("_economy_aim_hold")
+        if held is not None and await asyncio.to_thread(held, claimant, character):
+            return False
         # GROUND THE FAMILY DIED ON TWICE IS NOT A WALK (#2457): a ground aim
         # whose line from the leader crosses a death disc is not written.
         # Looked up like _fetch_family_death_spots above: the check is advisory.
@@ -15195,11 +15241,13 @@ class Bridge(discord.Client):
             # comes alive the moment ENTER lifts the stage holds.
             await self._release_stranded_ground_errands(names, leader,
                                                         run_doors=True)
-            # AND NO ECONOMY AIM ON A MEMBER INSIDE THE INSTANCE (#2280).
-            # Looked up: the adapter tests load this method in isolation.
-            drop = globals().get("_release_instance_economy_aims")
-            if drop is not None:
-                await asyncio.to_thread(drop, names)
+        # AND NO ECONOMY AIM ON A MEMBER INSIDE AN INSTANCE (#2280), RUN ROW
+        # OR NOT (#2323): a member inside whose run row is stale or ended
+        # kept its aim while this sat in the in-run branch.
+        # Looked up: the adapter tests load this method in isolation.
+        drop = globals().get("_release_instance_economy_aims")
+        if drop is not None:
+            await asyncio.to_thread(drop, names)
 
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
 
@@ -22486,9 +22534,12 @@ class Bridge(discord.Client):
             pressure=True, in_run=in_run, at_counter=at_counter,
             inside=inside,
         )
-        without = globals().get("_without_recalled")
-        if without is not None:
-            targets = without(targets)
+        # ...NOR ONE RECALLED FROM AN ERRAND LATELY (#2280): the one check
+        # every economy aim writer asks (#2323).
+        held = globals().get("_economy_aim_hold")
+        if held is not None:
+            targets = tuple(
+                n for n in targets if not held("bag pressure", n, n in inside))
         aimed = 0
         for name in targets:
             current = await asyncio.to_thread(_current_travel_npc, name)
