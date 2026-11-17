@@ -101,7 +101,7 @@ class FakeClient:
     def __init__(self, fail=None):
         self.filed, self.unlinked, self.fail = [], [], fail
 
-    def file(self, heading, text):
+    def file(self, heading, text, labels=None):
         if self.fail:
             raise self.fail
         self.filed.append(heading)

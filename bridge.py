@@ -60,6 +60,7 @@ import disposition
 import director
 import dungeonpath
 import events
+import familytools
 import fanout
 import fireplan
 import flightlearn
@@ -6031,11 +6032,15 @@ def _door_wedge_evidence(leader: str, head_id: int) -> tuple:
         except pymysql.err.MySQLError as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
                 raise
-    restarts = 0
+    restarts = (0, 0)
     if steps:
         now_at = int(steps[0].get("now_at") or 0) or int(time.time())
         since_at = int(steps[0].get("since_at") or 0)
-        restarts = nowstatus.restart_count(steps, now_at, since_at)
+        restarts = (
+            nowstatus.restart_count(steps, now_at, since_at),
+            nowstatus.restart_count(
+                steps, now_at, since_at, window=dungeonstall.DOOR_RESTART_WINDOW),
+        )
     row = _fetch_family_intents().get(leader, {})
     members = jev_family_intent.parse_members(row.get("members_state"))
     return restarts, members
@@ -6720,13 +6725,14 @@ _HELD_FETCH_SINCE: dict = {}
 
 def _vendor_seller_fetch_blocks_trip(
     names: list, leader: str, free_slots: dict, sellable_counts: dict,
-    in_run: bool, since=None, now=None,
+    in_run: bool, since=None, now=None, waited_seconds: float = 0.0,
 ):
     """Leave travel to the module while a sellable follower needs fetching.
 
     For at most vendor_stall.HELD_FETCH_BOUND_SECONDS per hold (#1983): a
     follower held past it is left behind, named once, and the trip is judged
-    for the members standing with the leader. Returns a vendor_stall.HeldFetch
+    for the members standing with the leader. `waited_seconds` is the sellers'
+    vendor wait from the step store, which a restart does not reset. Returns a vendor_stall.HeldFetch
     (truthy while the trip is blocked), or False when nothing is held.
     """
     if in_run or not (
@@ -6739,7 +6745,8 @@ def _vendor_seller_fetch_blocks_trip(
         return False
     since = _HELD_FETCH_SINCE if since is None else since
     now = time.monotonic() if now is None else now
-    result = vendor_stall.held_fetch_bound(leader, held, since, now)
+    result = vendor_stall.held_fetch_bound(
+        leader, held, since, now, waited_seconds=waited_seconds)
     for name in result.newly_left:
         member = held[name]
         log.info(
@@ -10694,7 +10701,7 @@ class Bridge(discord.Client):
         # (the module ticket): its buy rows and its walk join the same single trip.
         queued, needs = await self._buy_blacksmith_hammers(spells, names)
         # The family's own Mining Pick and Skinning Knife: guild jobs never plan for the family.
-        _tool_rows, tool_needs = await self._buy_gather_tools(names)
+        _tool_rows, tool_needs = await self._buy_gather_tools(names, spells)
         needs = [*needs, *tool_needs]
         if not candidates and not multi_candidates:
             if mode == "individual":
@@ -11407,17 +11414,22 @@ class Bridge(discord.Client):
                 log.info("craft_supply: %s - %s", name, note)
         return queued, needs
 
-    async def _buy_gather_tools(self, names: list) -> tuple:
-        """Queue a Mining Pick or Skinning Knife for each member holding the trade without it.
+    async def _buy_gather_tools(self, names: list, spells=None) -> tuple:
+        """Queue the tool of a held trade for each member carrying none.
 
-        Guild jobs plan this buy for guild members outside the family only
-        (ticket 2267). The decision is `craft_supply.gather_tool_errand`, fed
-        the guildjobs tables; this reads the world and writes its answer.
+        A Mining Pick, a Skinning Knife, or a Blacksmith Hammer for a smith
+        with no hammer craft standing (ticket 2269; `spells` is the pass's
+        standing crafts, and a smith whose standing craft needs the hammer
+        is `_buy_blacksmith_hammers`' to judge). Guild jobs plan this buy
+        for guild members outside the family only (ticket 2267). The
+        decision is `craft_supply.gather_tool_errand`, fed the familytools
+        tables; this reads the world and writes its answer.
         One buy per member per pass, and none while an earlier row for the
         same tool is still open. Returns (rows queued, needs for the
         caller's one walk).
         """
-        trades = await asyncio.to_thread(_fetch_gather_trades, names)
+        trades = familytools.trades_owed(
+            await asyncio.to_thread(_fetch_gather_trades, names), spells)
         if not trades:
             return 0, []
         held = await asyncio.to_thread(_fetch_tool_holdings, list(trades))
@@ -11431,14 +11443,14 @@ class Bridge(discord.Client):
             owned = frozenset(held.get(name, ()))
             need = craft_supply.gather_tool_need(
                 name, frozenset(trades[name]), owned, town,
-                guildjobs.TOOLS, guildjobs.TOOL_ENTRIES,
+                familytools.TOOLS, familytools.TOOL_ENTRIES,
             )
             if need:
                 needs.append(need)
             errand, note = craft_supply.gather_tool_errand(
                 name, frozenset(trades[name]), owned,
                 money, free_slots.get(name, 0), town,
-                guildjobs.TOOLS, guildjobs.TOOL_ENTRIES,
+                familytools.TOOLS, familytools.TOOL_ENTRIES,
             )
             if note:
                 log.info("craft_supply: %s", note)
@@ -15420,6 +15432,8 @@ class Bridge(discord.Client):
         held_seller_for_leader = await asyncio.to_thread(
             _vendor_seller_fetch_blocks_trip, names, leader, free_slots,
             sellable_counts, in_run,
+            waited_seconds=await asyncio.to_thread(
+                _fetch_vendor_wait_seconds, names),
         )
         # A FOLLOWER HELD PAST THE BOUND IS LEFT BEHIND (#1983): the trip is
         # judged on the goods of the members who walk with the leader, so it
@@ -22415,18 +22429,32 @@ class Bridge(discord.Client):
             townerrand.in_range(hub, positions.get(n), townerrand.GATHER_YARDS)
             for n in names)
         step_done = False
+        aim_lost = False
         if state.phase == townerrand.STEPS:
             step_done = await self._town_errand_step(
                 state, names, leader, positions, cohort, now)
         elif townerrand.aim_now(state, now):
-            await self._town_errand_aim(leader, _hub_aim(hub), cohort)
+            # A WALK THAT KEEPS ENDING IS COUNTED (#2151). The aim this pass
+            # wrote last time is gone from the leader's column: the module
+            # ended the walk (a refusal, a stuck leader, a quest drive that
+            # took over) and the write below starts it again. Only an EMPTY
+            # column counts; another writer's aim is the lease's business
+            # (infra#3703). advance releases the errand at the bound.
+            # Looked up: the adapter tests load this method in isolation.
+            column = globals().get("_current_travel_npc")
+            if (state.phase == townerrand.GO and state.go_aimed
+                    and column is not None):
+                aim_lost = not await asyncio.to_thread(column, leader)
+            if await self._town_errand_aim(leader, _hub_aim(hub), cohort):
+                state = townerrand.aimed(state)
         new, line = townerrand.advance(
             state, now, in_run=in_run, leader_at_hub=leader_at_hub,
             gathered=gathered, step_done=step_done,
             bag_pressure_needed=bag_pressure_needed,
             bag_room_made=bag_room_made,
             stalled=_queue_stall_floor(names),
-            hub_yards=townerrand.yards_to(hub, positions.get(leader)))
+            hub_yards=townerrand.yards_to(hub, positions.get(leader)),
+            aim_lost=aim_lost)
         failed = townerrand.unlanded_aim(state, new)
         if failed:
             memory = globals().get("_TOWN_ERRAND_RELEASED")
@@ -42980,10 +43008,10 @@ def _fetch_pole_holders(names: list) -> set:
 
 
 def _fetch_gather_trades(names: list) -> dict:
-    """name -> the gathering trades (Mining, Skinning) each of `names` holds."""
+    """name -> the tool trades (Mining, Skinning, Blacksmithing) each of `names` holds."""
     if not names:
         return {}
-    skills = tuple(guildjobs.TOOLS)
+    skills = tuple(familytools.TOOLS)
     marks = ",".join(["%s"] * len(names))
     skill_marks = ",".join(["%s"] * len(skills))
     with _connect() as conn, conn.cursor() as cur:
@@ -43000,14 +43028,14 @@ def _fetch_gather_trades(names: list) -> dict:
 
 
 def _fetch_tool_holdings(names: list) -> dict:
-    """name -> the gathering-tool entries held in the bags or bank.
+    """name -> the trade-tool entries (familytools) held in the bags or bank.
 
     Every slot a character owns counts, as for the hammer: a tool banked is
     still owned and a second must not be bought.
     """
     if not names:
         return {}
-    entries = sorted({e for tools in guildjobs.TOOL_ENTRIES.values() for e in tools})
+    entries = sorted({e for tools in familytools.TOOL_ENTRIES.values() for e in tools})
     marks = ",".join(["%s"] * len(names))
     entry_marks = ",".join(["%s"] * len(entries))
     with _connect() as conn, conn.cursor() as cur:

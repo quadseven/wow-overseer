@@ -49,6 +49,7 @@ import chat
 import core  # noqa: F401 - named by SUCCESS_STATUSES' comment, and by the suite
 import fanout
 import guildrun
+import individual
 import jobs
 import priorities
 import professions
@@ -1871,13 +1872,86 @@ def _rows_of(roster_rows: list, key: str) -> list:
     return [r for r in roster_rows if _family_key(r) == key]
 
 
-def family_views(roster_rows: list, queue_rows: list | None = None) -> list:
-    """One standing job, one campaign counter and one queue per family."""
+def member_jobs(rows: list) -> list:
+    """Each enabled member's own job, leader first then by name (#2408).
+
+    A row read without the `job` column (a roster that predates it) is left
+    out: no column means "not read", never the default job.
+    """
+    return [
+        {
+            "name": str(r["name"]),
+            "job": agenda._mode(r),
+            "words": campaignqueue.job_words(agenda._mode(r)),
+        }
+        for r in agenda._enabled(rows)
+        if "job" in r
+    ]
+
+
+def members_line(members: list) -> str:
+    """ "Og on quest, Grug on craft" when the members differ, '' when they
+    agree: one job for the family is then the whole answer (#2408)."""
+    if len({m["job"] for m in members}) < 2:
+        return ""
+    return ", ".join("%s on %s" % (m["name"], m["words"]) for m in members)
+
+
+# What re-links a family that the job column does not show. Said beside an
+# "individual" answer, because individual.standing reads the jobs alone.
+ALSO_LINKS = (
+    "A run in progress, a campaign queue that owns the job or a summon links it again."
+)
+
+
+def link_view(members: list, key: str, environ=None) -> dict:
+    """Whether the family is linked or individual, and why, as a sentence.
+
+    The judgement is individual.standing's; this only words it. An unread
+    setting is said as unread, never guessed either way.
+    """
+    jobs_of = {m["name"]: m["job"] for m in members}
+    standing = individual.standing(jobs_of, key, environ)
+    state, reason = standing["state"], standing["reason"]
+    if reason == "job":
+        held = ", ".join(
+            "%s is on %s" % (n, campaignqueue.job_words(jobs_of[n]))
+            for n in standing["by"]
+        )
+        line = "Linked: %s, and a dungeon or raid job links the whole family." % held
+    elif reason == "unnamed":
+        line = (
+            "Linked: no dungeon or raid job is set, but %s does not name this "
+            "family, so it moves as one." % individual.ENV
+        )
+    elif reason == "named":
+        line = (
+            "Individual: no member is on a dungeon or raid job and %s names "
+            "this family, so each member works its own job. %s"
+            % (individual.ENV, ALSO_LINKS)
+        )
+    elif reason == "setting":
+        line = (
+            "Not known: no dungeon or raid job links this family, and this "
+            "page is not given %s, so it cannot say whether the members work "
+            "on their own." % individual.ENV
+        )
+    else:
+        line = ""
+    return {"state": state, "reason": reason, "by": list(standing["by"]), "line": line}
+
+
+def family_views(
+    roster_rows: list, queue_rows: list | None = None, environ=None
+) -> list:
+    """One standing job, one campaign counter and one queue per family, and
+    each member's own job where the members differ (#2408)."""
     out = []
     queued = campaignqueue.pending_by_family(queue_rows or [])
     for key in family_keys(roster_rows):
         standing = agenda.standing_orders(_rows_of(roster_rows, key))
         split = standing["job_split"]
+        members = member_jobs(_rows_of(roster_rows, key))
         # ONE READING FOR BOTH SECTIONS (#2249): the campaign line and the
         # queue line are said off the same campaign_state.
         state = campaignqueue.campaign_state(queued.get(key, []), standing["campaign"])
@@ -1899,6 +1973,9 @@ def family_views(roster_rows: list, queue_rows: list | None = None) -> list:
                         job_line(standing["job"], standing["leader"]),
                     ),
                     "split_line": agenda.split_sentence(split) if split else "",
+                    "members": members,
+                    "members_line": members_line(members),
+                    "link": link_view(members, key, environ),
                 },
                 "campaign": dict(
                     campaign,

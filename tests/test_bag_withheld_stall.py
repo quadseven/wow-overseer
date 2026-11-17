@@ -629,7 +629,7 @@ def _run_vendor_once(queued, at_vendor=True):
             "_fetch_free_slots": lambda names: dict(free),
             "_present_members": lambda names, leader="": list(names),
             "_fetch_vendor_wait_seconds": lambda names: 0,
-            "_vendor_seller_fetch_blocks_trip": lambda *args: False,
+            "_vendor_seller_fetch_blocks_trip": lambda *args, **kw: False,
             "_fetch_vendor_items": lambda names: _vendor_rows(),
             "_fetch_surplus_bags": lambda names: [],
             "_fetch_equipped_bag_slots": lambda names: {},

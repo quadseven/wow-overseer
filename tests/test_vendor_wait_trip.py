@@ -404,6 +404,32 @@ class TheHeldFollowerGuardHasABound(unittest.TestCase):
         self.assertTrue(again)
         self.assertEqual((), again.left_behind)
 
+    def test_a_restart_or_a_flipping_member_state_cannot_restart_the_bound(self):
+        """The bound's own clock is in memory and starts over with the bridge
+        or with any pass that reads the member as not held. The sellers' vendor
+        wait is read from the step store, so it is neither: once it has stood
+        for the whole bound the held follower is left behind at once."""
+        since = {}
+        fresh = vendor_stall.held_fetch_bound(
+            "Zug", ["Zork"], since, 0.0, waited_seconds=self.BOUND - 1
+        )
+        self.assertTrue(fresh)
+        old = vendor_stall.held_fetch_bound(
+            "Zug", ["Zork"], {}, 0.0, waited_seconds=4880
+        )
+        self.assertFalse(old)
+        self.assertEqual(("Zork",), old.left_behind)
+        self.assertEqual(("Zork",), old.newly_left)
+
+    def test_the_pass_reads_the_vendor_wait_for_the_guard(self):
+        lines, since = [], {}
+        guard = self._guard(lines)
+        args = (self.NAMES, "Zug", self.FREE, self.SELLABLE, False)
+        released = guard(*args, since=since, now=5.0, waited_seconds=4880)
+        self.assertFalse(released)
+        self.assertEqual(("Zork",), released.left_behind)
+        self.assertEqual(1, len(lines))
+
     def test_one_follower_still_inside_its_bound_keeps_the_guard(self):
         since = {}
         vendor_stall.held_fetch_bound("Zug", ["Zork"], since, 0.0)
