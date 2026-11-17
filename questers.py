@@ -150,6 +150,7 @@ import guildroute
 import levelroute
 import questlog
 import vendorsale
+import weaponskill
 
 # The step's action word, in the command log's source (guildjobs.source_for).
 ACTION = "quester"
@@ -778,11 +779,34 @@ def hostile_givers(giver_rows) -> dict:
     return {side: frozenset(guids) for side, guids in out.items()}
 
 
+# THE OTHER SIDE'S HOME GROUND (#1912). Teldrassil, with Darnassus on it, is
+# the Alliance's island (weaponskill.ISLANDS): its guards killed a Horde
+# quester 1045 times in six days, because a quest it held names a creature that
+# also spawns there and the hunt took the nearest spawn. A Horde quester is
+# never given a spawn on the island, as a giver or as an objective. The
+# Alliance has no island of the Horde's in the world data, so nothing is
+# skipped for it yet.
+OTHER_SIDES_ISLANDS = {levelroute.HORDE: frozenset({"Teldrassil"})}
+
+
+def on_other_sides_ground(member, spot) -> bool:
+    """Whether `spot` lies on ground whose guards are hostile to the quester's
+    side (OTHER_SIDES_ISLANDS)."""
+    islands = OTHER_SIDES_ISLANDS.get(side_of(member.race), frozenset())
+    return bool(islands) and (
+        weaponskill.ground_of(spot.map_id, spot.x, spot.y) in islands
+    )
+
+
 def friendly_starters(cat: Catalogue, member, quest) -> tuple:
     """The creature spawns that give the quest which the quester's side can
-    take it from (`hostile_givers`)."""
+    take it from (`hostile_givers`), and not on the other side's home ground."""
     hostile = cat.hostile.get(side_of(member.race), frozenset())
-    return tuple(s for s in quest.starters if s.guid not in hostile)
+    return tuple(
+        s
+        for s in quest.starters
+        if s.guid not in hostile and not on_other_sides_ground(member, s)
+    )
 
 
 def _rep(row, end):
@@ -1470,6 +1494,7 @@ def _nearest_chest(member, qid, quest, object_left=frozenset()):
         if spot.guid not in object_left
         and member.placed
         and int(spot.map_id) == int(member.map_id)
+        and not on_other_sides_ground(member, spot)
     ]
     if not here:
         return None
@@ -2093,7 +2118,11 @@ def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
     }
     return classquest.within_level(
         member,
-        tuple(s for s in classquest.solo_fields(quest) if s.entry in targets),
+        tuple(
+            s
+            for s in classquest.solo_fields(quest)
+            if s.entry in targets and not on_other_sides_ground(member, s)
+        ),
     )
 
 
