@@ -110,6 +110,12 @@ KILL_LEVELS_BELOW = 30
 # Linen (2589) and Wool (2592) only drop from low-level humanoids, well below
 # a level-60 family's KILL_LEVELS_BELOW floor.
 LOW_CLOTH_TIERS = frozenset({2589, 2592})
+# Leather is a SKINNING drop (#2502): it is in `skinning_loot_template`, not in
+# a creature's own loot, so the survey reads a different table. Light Leather
+# and Ruined Leather Scraps drop only off beasts of level 2 to 20, so like
+# Linen and Wool they lower the floor to 1.
+SKIN_DROPS = frozenset({2318, 2934, 2319, 4234})
+LOW_LEATHER_TIERS = frozenset({2318, 2934})
 
 END = "end"
 TOWN = "town"
@@ -429,7 +435,9 @@ def kill_band(levels, item: int = 0) -> tuple:
     if not lowest:
         return 0, 0
     floor = (
-        1 if int(item or 0) in LOW_CLOTH_TIERS else max(1, lowest - KILL_LEVELS_BELOW)
+        1
+        if int(item or 0) in LOW_CLOTH_TIERS | LOW_LEATHER_TIERS
+        else max(1, lowest - KILL_LEVELS_BELOW)
     )
     return floor, lowest + LEVEL_MARGIN
 

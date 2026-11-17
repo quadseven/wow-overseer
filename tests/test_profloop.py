@@ -291,6 +291,19 @@ class GatherTarget(unittest.TestCase):
         self.assertEqual("farm:4338", job)
         self.assertIn("Mageweave Cloth", why)
 
+    def test_a_leatherworker_short_of_light_leather_farms_it(self):
+        short = reagentplan.Short(
+            reagentplan.Reagent(2318, "Light Leather", 3),
+            reagentplan.Stock(),
+            reagentplan.GATHER,
+            "Bork",
+            "Bork holds Skinning, which gathers Light Leather",
+        )
+        plan = reagentplan.Plan("Bork", 3756, True, 0, (short,))
+        job, why = profloop.gather_job(self.SKILLS, {"Bork": plan})
+        self.assertEqual("farm:2318", job)
+        self.assertIn("Light Leather", why)
+
     def test_sandworm_meat_entry_comes_from_gathered(self):
         self.assertIn(20424, profloop.KILL_DROP_ENTRIES)
         self.assertNotIn(20401, profloop.KILL_DROP_ENTRIES)

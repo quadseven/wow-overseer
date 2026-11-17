@@ -55,6 +55,7 @@ import os
 from dataclasses import dataclass, field, replace
 
 import craft_rhythm
+import farmjob
 import jobs
 import reagentplan
 
@@ -80,6 +81,12 @@ KILL_DROP_ENTRIES = frozenset(
     reagent.entry
     for spell in _KILL_DROP_SPELLS
     for reagent in craft_rhythm.GATHERED[spell]
+) | frozenset(
+    # Leather a leatherworker eats: a skinning drop, farmed off beasts (#2502).
+    reagent.entry
+    for reagents in craft_rhythm.GATHERED.values()
+    for reagent in reagents
+    if reagent.entry in farmjob.SKIN_DROPS
 )
 
 ENV_SWITCH = "PROFESSION_LOOP"
