@@ -17921,7 +17921,8 @@ class Bridge(discord.Client):
                                   moves_unasked: bool,
                                   cohort: str | None = None,
                                   waiting: int = 0,
-                                  party: list | None = None) -> str:
+                                  party: list | None = None,
+                                  planned: dict | None = None) -> str:
         """Aim, hold or hand back the bank pass's `banker` errand (infra#3728).
 
         THE HALF THAT WAS NEVER BUILT, HERE TOO. `banker` is one of the four
@@ -18011,8 +18012,9 @@ class Bridge(discord.Client):
             log.warning(
                 "bank: leader=%s is not taking a banker trip while the family "
                 "has remained split for %d seconds; %d planned move(s) waiting "
-                "for a member to stand at a banker",
+                "for a member to stand at a banker; far members: %s",
                 leader, int(family_stall.split_seconds), waiting,
+                vendor_stall.far_members(family_stall, planned) or "none read",
             )
         elif step == bank.BANK_ERRAND_HOLD:
             # THE TWO HOLDS READ IDENTICALLY IN A LOG AND ARE DIFFERENT STATES
@@ -18163,7 +18165,8 @@ class Bridge(discord.Client):
                                                    if not at_the_counter[h]),
                                        party=[leader] + [
                                            h for h in dict.fromkeys(holders)
-                                           if h != leader])
+                                           if h != leader],
+                                       planned={h: holders.count(h) for h in set(holders)})
         # Below the settling, so the aim still precedes the row, and above the
         # `no moves` return, so a family that walked here for a bag step alone
         # has it written on the cycle it arrives.

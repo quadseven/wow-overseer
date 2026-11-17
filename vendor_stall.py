@@ -292,6 +292,38 @@ def _family_position_rows(positions: Mapping[str, Mapping], names: tuple[str, ..
     return tuple(normalized)
 
 
+def far_members(
+    progress: FamilyProgress,
+    planned: Mapping[str, int] | None = None,
+    cohesion_yards: float = FAMILY_COHESION_YARDS,
+) -> str:
+    """Name the members that hold a split open, for the deferral log line.
+
+    The split verdict alone could not say whether the far member holds bank
+    work (the rule working) or has none (the straggler defect, #2568). Each
+    far member is named with how far it stands from the anchor (the first
+    member) and how many planned moves it holds. "" when nothing is far or the
+    positions were not read."""
+    current = progress.current
+    if not progress.readable or current is None or len(current.positions) < 2:
+        return ""
+    _anchor, anchor_map, anchor_x, anchor_y = current.positions[0]
+    held = planned or {}
+    parts = []
+    for name, map_id, x, y in current.positions[1:]:
+        if map_id != anchor_map:
+            where = "on map %d" % map_id
+        else:
+            yards = math.hypot(x - anchor_x, y - anchor_y)
+            if yards <= cohesion_yards:
+                continue
+            where = "%d yards away" % int(yards)
+        parts.append(
+            "%s %s, %d planned move(s)" % (name, where, int(held.get(name, 0)))
+        )
+    return "; ".join(parts)
+
+
 def family_progress(
     previous: FamilyMovement | None,
     positions: Mapping[str, Mapping],
