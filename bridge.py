@@ -6296,6 +6296,41 @@ def _order_parked(key: str, door: str, head_id: int = 0) -> dict | None:
         return dict(rows[0]) if rows else None
 
 
+# The ids of the regroup holds whose order has run again (#2280). A hold gates
+# one restart, the one after its stand-down: the pace row stays the door's
+# newest hold for as long as the order lives, and without this a later pause
+# of the same order (a town trip between runs) would be held on it again. A
+# bridge restart forgets it, and the party is then asked to stand together
+# once more before the order next starts, which is the safe side.
+_REGROUP_SPENT: dict = {}
+
+
+def _regroup_wait(head: dict, parked: dict | None, leader: str, names: list):
+    """The dungeonstall.Restart that keeps operator order `head` waiting for
+    its party after its backoff, or None when the order may run (#2280).
+
+    dungeonstall.restart_after_hold decides; this gathers what it reads, and
+    reads nothing unless the hold carries the regroup mark and is not spent.
+    The family is running the order again once any member is back on its
+    dungeon job."""
+    hold_id = int((parked or {}).get("id") or 0)
+    if (
+        str((parked or {}).get("target") or "") != dungeonstall.REGROUP
+        or hold_id in _REGROUP_SPENT
+    ):
+        return None
+    job = jobs.dungeon_job(str(head.get("keyword") or ""))
+    running = bool(job) and job in _jobs_of(names).values()
+    positions = {} if running else _fetch_positions(list(names))
+    verdict = dungeonstall.restart_after_hold(
+        parked, running, leader, names, positions)
+    if verdict.reason in (dungeonstall.TOGETHER, dungeonstall.RUNNING):
+        if len(_REGROUP_SPENT) > 256:
+            _REGROUP_SPENT.clear()
+        _REGROUP_SPENT[hold_id] = True
+    return None if verdict.allowed else verdict
+
+
 # (family key, door) -> the id of the pace row whose hold was last said, so
 # the held-door line is logged once per door per hold window (#1078).
 _STALL_HOLD_SAID: dict = {}
@@ -6315,8 +6350,9 @@ def _stall_write(key: str, leave) -> None:
                 cur.execute(dungeonstall.CANCEL_SQL, (qid,))
             # An operator's order is held, never cancelled (#2216): its rows
             # are not in `drop`, and its pace row is the hold's own decision.
+            # The target marks an order held for an unassembled party (#2280).
             cur.execute(dungeonpace.INSERT_SQL, (
-                key, leave.decision, leave.door, "",
+                key, leave.decision, leave.door, leave.target,
                 (leave.drop or leave.park)[0], "rule",
                 None, leave.why[:255], ""))
             cur.execute(dungeonpace.CLOSE_SQL, ("left", int(cur.lastrowid or 0)))
@@ -25411,6 +25447,14 @@ class Bridge(discord.Client):
         parked, resting = await self._order_hold(key, rows[0])
         if resting:
             return self._order_step_past(key, rows, parked)
+        # NO RESTART UNTIL THE PARTY STANDS TOGETHER (#2280): an order held
+        # for an unassembled party waits past its backoff for every member
+        # to stand with the leader. dungeonstall.restart_after_hold decides.
+        waits = await asyncio.to_thread(
+            _regroup_wait, rows[0], parked, str(fam["leader"].get("name") or ""),
+            names)
+        if waits is not None:
+            return self._order_step_past(key, rows, parked, waits)
         stuck = await asyncio.to_thread(_stall_reads, names, rows[0], parked)
         silent_stall = await asyncio.to_thread(_silent_stall, rows[0], names)
         if silent_stall is not None:
@@ -25460,21 +25504,26 @@ class Bridge(discord.Client):
             _order_parked, key, door, int(head["id"])))
         return parked, parked is not None and int(parked.get("left_s") or 0) > 0
 
-    def _order_step_past(self, key: str, rows: list, parked: dict) -> bool:
+    def _order_step_past(self, key: str, rows: list, parked: dict,
+                         waits=None) -> bool:
         """The head order is held (#2216): step past it until its backoff
         ends, saying so once per hold. Only when nothing is left behind it
-        does the queue hold (True)."""
+        does the queue hold (True). `waits` is the dungeonstall.Restart of an
+        order past its backoff and waiting for its party (#2280): that is
+        said once per change in who is away."""
         door = campaignplan.wing_of(str(rows[0].get("keyword") or ""))
         rest = [r for r in rows
                 if campaignplan.wing_of(str(r.get("keyword") or "")) != door]
         marker = (key, door)
-        if _STALL_HOLD_SAID.get(marker) != parked["id"]:
-            _STALL_HOLD_SAID[marker] = parked["id"]
+        said = parked["id"] if waits is None else (parked["id"], waits.apart)
+        if _STALL_HOLD_SAID.get(marker) != said:
+            _STALL_HOLD_SAID[marker] = said
             after = ("%s runs meanwhile" % council.keyword_place(str(rest[0]["keyword"]))
                      if rest else "nothing else is queued, so the family waits")
+            until = (dungeonstall.held_until_said(parked["left_s"])
+                     if waits is None else waits.said())
             log.info("stall: %s: the order for %s is held, not cancelled; it %s; %s",
-                     campaignqueue._family(key), door,
-                     dungeonstall.held_until_said(parked["left_s"]), after)
+                     campaignqueue._family(key), door, until, after)
         if not rest:
             return True
         rows[:] = rest

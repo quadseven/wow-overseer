@@ -416,6 +416,7 @@ class StoreCursor:
                     "created_at": store.park_at,
                     "left_s": left,
                     "ordered_after": int(params[1] in store.ordered_after),
+                    "target": r[3],
                 }
                 for n, r in reversed(list(enumerate(store.records, 1)))
                 if tuple(r[:3]) == want
@@ -493,6 +494,8 @@ class StallWorld(FakeWorld):
         self.silent_seconds = None
         self.wedge = None
         self.dungeonquest_held = set()
+        self.positions = {}
+        self.regroup_spent = {}
         self.world = self
 
     def cancel(self, qid):
@@ -524,6 +527,7 @@ def _pass(world):
             "_order_parked",
             "_order_hold",
             "_order_step_past",
+            "_regroup_wait",
             "_stall_write",
             "_silent_stall",
             "_stuck_doors",
@@ -544,6 +548,8 @@ def _pass(world):
             "_OFF_DUNGEON_JOB_AT": {},
             "_door_wedge": lambda head, names, leader: world.wedge,
             "_jobs_of": lambda names: {n: world.member_job(n) for n in names},
+            "_fetch_positions": lambda names: dict(world.positions),
+            "_REGROUP_SPENT": world.regroup_spent,
             "_fetch_queue_rows": world.fetch_queue,
             "_fetch_queue_roster": world.fetch_roster,
             "_fetch_module_crossing": lambda: "",
@@ -1762,6 +1768,252 @@ class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
         write = BRIDGE[BRIDGE.index("def _stall_write(") :]
         write = write[: write.index("\n\n\n", 10)]
         self.assertIn("leave.decision", write)
+
+
+def standing(map_id=0, x=0.0, y=0.0, instance=0):
+    """One member's snapshot row, as the bridge's position read returns it."""
+    return {"map_id": map_id, "instance_id": instance, "pos_x": x, "pos_y": y}
+
+
+class NoRestartUntilThePartyStandsTogether(unittest.TestCase):
+    """#2280: an operator's order whose run was stood down for an unassembled
+    party is not restarted when its backoff ends unless every member stands
+    with the leader. The backoff is a clock; the party standing together is
+    the fact the clock was waiting for."""
+
+    OPERATOR = "web:overseer"
+    NAMES = ("Zug", "Oz", "Bork")
+    HOLD = {"id": 9, "left_s": 0, "target": stall.REGROUP}
+
+    def together(self):
+        return {
+            "Zug": standing(0, 100.0, 100.0),
+            "Oz": standing(0, 110.0, 105.0),
+            "Bork": standing(0, 95.0, 90.0),
+        }
+
+    def judge(self, positions, hold=None, running=False):
+        return stall.restart_after_hold(
+            self.HOLD if hold is None else hold,
+            running,
+            "Zug",
+            self.NAMES,
+            positions,
+        )
+
+    def held_member(self):
+        return stall.party_held("blackrock-depths", "Oz", stall.ERRAND_STATE, 1800)
+
+    def test_a_stand_down_for_a_held_member_is_a_regroup_stand_down(self):
+        self.assertTrue(self.held_member().regroup)
+        still = stall.party_held("blackrock-depths", "Oz", "held still", 1800)
+        self.assertTrue(still.regroup)
+
+    def test_two_stalls_and_a_silent_run_are_not(self):
+        self.assertFalse(stall.silent_run("blackrock-depths", 3 * 3600).regroup)
+        twice = AnOperatorOrderIsHeldNotCancelled().stuck()
+        self.assertFalse(twice["blackrock-depths"].regroup)
+
+    def test_the_held_order_carries_the_regroup_mark_and_says_so(self):
+        order = dict(queue_row(501, "blackrock-depths"), source=self.OPERATOR)
+        got = stall.leave([order], {"blackrock-depths": self.held_member()})
+        self.assertEqual((501,), got.park)
+        self.assertEqual(stall.REGROUP, got.target)
+        self.assertIn("once every member stands together", got.why)
+        self.assertIn("the order is held, not left", got.why)
+
+    def test_a_two_stall_hold_and_a_left_door_carry_no_mark(self):
+        twice = AnOperatorOrderIsHeldNotCancelled().stuck()
+        order = dict(queue_row(501, "blackrock-depths"), source=self.OPERATOR)
+        self.assertEqual("", stall.leave([order], twice).target)
+        own = [queue_row(7, "blackrock-depths")]
+        left = stall.leave(own, {"blackrock-depths": self.held_member()})
+        self.assertEqual((7,), left.drop)
+        self.assertEqual("", left.target)
+
+    def test_a_member_on_another_map_holds_the_restart_and_is_named(self):
+        positions = self.together()
+        positions["Oz"] = standing(1, 110.0, 105.0)
+        got = self.judge(positions)
+        self.assertFalse(got.allowed)
+        self.assertEqual(stall.APART, got.reason)
+        self.assertEqual((("Oz", "on another map"),), got.apart)
+        self.assertIn("Oz is on another map", got.said())
+        self.assertIn("stands together", got.said())
+
+    def test_a_member_far_from_the_leader_holds_it_with_the_yards(self):
+        positions = self.together()
+        positions["Bork"] = standing(0, 100.0, 100.0 + 1639.0)
+        got = self.judge(positions)
+        self.assertFalse(got.allowed)
+        self.assertEqual((("Bork", "1639 yards from Zug"),), got.apart)
+
+    def test_a_member_in_another_copy_of_the_map_is_apart(self):
+        positions = self.together()
+        positions["Oz"] = standing(0, 110.0, 105.0, instance=7)
+        self.assertEqual((("Oz", "on another map"),), self.judge(positions).apart)
+
+    def test_a_member_nobody_can_see_holds_it(self):
+        positions = self.together()
+        del positions["Oz"]
+        got = self.judge(positions)
+        self.assertFalse(got.allowed)
+        self.assertEqual((("Oz", "not seen in the world"),), got.apart)
+
+    def test_an_unseen_leader_holds_it_too(self):
+        positions = self.together()
+        del positions["Zug"]
+        got = self.judge(positions)
+        self.assertFalse(got.allowed)
+        self.assertEqual("Zug", got.apart[0][0])
+
+    def test_the_edge_of_the_range_is_together(self):
+        positions = self.together()
+        positions["Oz"] = standing(0, 100.0 + stall.REGROUP_YARDS, 100.0)
+        self.assertTrue(self.judge(positions).allowed)
+        positions["Oz"] = standing(0, 100.0 + stall.REGROUP_YARDS + 1, 100.0)
+        self.assertFalse(self.judge(positions).allowed)
+
+    def test_every_member_beside_the_leader_lets_the_order_run(self):
+        got = self.judge(self.together())
+        self.assertTrue(got.allowed)
+        self.assertEqual(stall.TOGETHER, got.reason)
+        self.assertEqual((), got.apart)
+
+    def test_the_backoff_still_holds_a_party_that_stands_together(self):
+        got = self.judge(self.together(), hold=dict(self.HOLD, left_s=600))
+        self.assertFalse(got.allowed)
+        self.assertEqual(stall.BACKOFF, got.reason)
+
+    def test_a_hold_with_no_regroup_mark_runs_on_the_clock_alone(self):
+        apart = {"Zug": standing(0), "Oz": standing(1), "Bork": standing(1)}
+        got = self.judge(apart, hold={"id": 9, "left_s": 0, "target": ""})
+        self.assertTrue(got.allowed)
+        self.assertEqual(stall.NOT_REGROUP, got.reason)
+        self.assertTrue(self.judge(apart, hold={}).allowed)
+
+    def test_an_order_already_running_again_is_not_held_mid_run(self):
+        apart = {"Zug": standing(230), "Oz": standing(0), "Bork": standing(230)}
+        got = self.judge(apart, running=True)
+        self.assertTrue(got.allowed)
+        self.assertEqual(stall.RUNNING, got.reason)
+
+    def test_a_realm_that_shows_nobody_does_not_hold_the_order_for_ever(self):
+        got = self.judge({})
+        self.assertTrue(got.allowed)
+        self.assertEqual(stall.UNREAD, got.reason)
+
+    def test_an_unreadable_position_is_apart_not_a_crash(self):
+        positions = self.together()
+        positions["Oz"] = {"map_id": 0, "instance_id": 0, "pos_x": None}
+        got = self.judge(positions)
+        self.assertEqual((("Oz", "not seen in the world"),), got.apart)
+
+    # --- the bridge's queue pass ---
+
+    def world(self):
+        w = StallWorld(
+            [dict(_q(501, "blackrock-depths", 20, "active", 0), source=self.OPERATOR)],
+            [],
+            [],
+        )
+        for r in w.family("Zug"):
+            r["job"] = "dungeon:blackrock-depths"
+        names = [r["name"] for r in w.family("Zug")]
+        self.straggler = next(n for n in names if n != "Zug")
+        w.wedge = stall.party_held(
+            "blackrock-depths", self.straggler, stall.ERRAND_STATE, 1800, "vendor"
+        )
+        w.positions = {n: standing(0, 100.0, 100.0) for n in names}
+        return w
+
+    def stood_down(self):
+        """The world one pass after the stand-down, its backoff over."""
+        w = self.world()
+        _pass(w)
+        w.wedge = None
+        w.park_left = 0
+        w.park_at = datetime(2026, 11, 12, 2, 42, 0)
+        return w
+
+    def jobs_of(self, w):
+        return {r["job"] for r in w.family("Zug")}
+
+    def test_the_stand_down_writes_the_regroup_mark_on_the_hold(self):
+        w = self.world()
+        _pass(w)
+        self.assertEqual(1, len(w.records))
+        self.assertEqual(stall.ORDER_DECISION, w.records[0][1])
+        self.assertEqual(stall.REGROUP, w.records[0][3])
+        self.assertEqual({jobs.DEFAULT}, self.jobs_of(w))
+
+    def test_the_order_is_not_restarted_while_a_member_is_away(self):
+        w = self.stood_down()
+        w.positions[self.straggler] = standing(1, 5.0, 5.0)
+        lines = _pass(w)
+        self.assertEqual({jobs.DEFAULT}, self.jobs_of(w), lines)
+        self.assertEqual("active", w.queue[0]["status"])
+        self.assertEqual(1, len(w.records))
+        said = [ln for ln in lines if "stands together" in ln]
+        self.assertEqual(1, len(said), lines)
+        self.assertIn("%s is on another map" % self.straggler, said[0])
+
+    def test_the_wait_is_said_once_not_every_pass(self):
+        w = self.stood_down()
+        w.positions[self.straggler] = standing(1, 5.0, 5.0)
+        said = []
+        for _ in range(3):
+            said += [ln for ln in _pass(w) if "stands together" in ln]
+        self.assertEqual(1, len(said), said)
+        self.assertEqual({jobs.DEFAULT}, self.jobs_of(w))
+
+    def test_another_entry_runs_while_the_order_waits_for_the_party(self):
+        w = self.stood_down()
+        w.positions[self.straggler] = standing(1, 5.0, 5.0)
+        w.queue.append(_q(170, "uldaman", 10, "queued", 1))
+        _pass(w)
+        self.assertEqual({"dungeon:uldaman"}, self.jobs_of(w))
+        self.assertEqual("active", w.queue[0]["status"])
+
+    def test_the_order_runs_again_once_every_member_stands_together(self):
+        w = self.stood_down()
+        w.positions[self.straggler] = standing(1, 5.0, 5.0)
+        _pass(w)
+        self.assertEqual({jobs.DEFAULT}, self.jobs_of(w))
+        w.positions[self.straggler] = standing(0, 104.0, 98.0)
+        lines = _pass(w)
+        self.assertEqual({"dungeon:blackrock-depths"}, self.jobs_of(w), lines)
+        self.assertEqual(1, len(w.records))
+
+    def test_the_restarted_run_is_not_held_when_a_member_dies_far_away(self):
+        w = self.stood_down()
+        _pass(w)
+        self.assertEqual({"dungeon:blackrock-depths"}, self.jobs_of(w))
+        w.positions[self.straggler] = standing(1, 5.0, 5.0)
+        lines = _pass(w)
+        self.assertEqual({"dungeon:blackrock-depths"}, self.jobs_of(w), lines)
+        self.assertEqual([], [ln for ln in lines if "stands together" in ln])
+
+    def test_the_hold_gates_one_restart_not_every_later_pause_of_the_order(self):
+        w = self.stood_down()
+        _pass(w)
+        self.assertEqual({"dungeon:blackrock-depths"}, self.jobs_of(w))
+        # A town trip between runs takes the job away and scatters the party.
+        for r in w.family("Zug"):
+            r["job"] = jobs.DEFAULT
+        w.positions[self.straggler] = standing(1, 5.0, 5.0)
+        lines = _pass(w)
+        self.assertEqual({"dungeon:blackrock-depths"}, self.jobs_of(w), lines)
+        self.assertEqual([], [ln for ln in lines if "stands together" in ln])
+
+    def test_the_call_site_is_thin_and_reads_after_the_backoff(self):
+        body = BRIDGE[BRIDGE.index("    async def _stall_breaker(") :]
+        body = body[: body.index("\n    def ", 10)]
+        self.assertLess(body.index("if resting:"), body.index("_regroup_wait"))
+        self.assertLess(body.index("_regroup_wait"), body.index("_stall_reads"))
+        write = BRIDGE[BRIDGE.index("def _stall_write(") :]
+        write = write[: write.index("\n\n\n", 10)]
+        self.assertIn("leave.target", write)
 
 
 class TheErrandARunWaitsOn(unittest.TestCase):
