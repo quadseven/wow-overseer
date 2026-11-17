@@ -6187,6 +6187,7 @@ def _upkeep_first(
     levelling=False,
     class_reagents=None,
     spell_reagents=None,
+    loop=None,
 ):
     """(the member's step as _member_step returns it, or None; the supply
     note; the gear note): food for a member with nothing to eat or drink, then
@@ -6205,7 +6206,7 @@ def _upkeep_first(
             return (step, doing, quest_note, ""), supply_note, ""
     step = (
         _full_bags_first(m, kept, recent, cap)
-        or _inn_first(m, leveling, recent, cap)[0]
+        or _inn_first(m, leveling, recent, cap, loop)[0]
     )
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
@@ -6531,6 +6532,7 @@ def _member_step(
         levelling,
         class_reagents=class_reagents,
         spell_reagents=spell_reagents,
+        loop=loop,
     )
     if found is not None:
         return found
@@ -6620,7 +6622,7 @@ def _level_blocked(m, world, campaign, loop) -> bool:
     # nobody, and Cave's level 14-15 priests stayed in their starting zones.
     if world is None or not m.online or m.in_combat:
         return True
-    if m.level >= guildlevel.LEVEL_CAP:
+    if m.level >= guildlevel.LEVEL_CAP and not _in_loop_zone(m, loop):
         return True
     return bool(m.name in world.roster and (campaign or not _in_loop_zone(m, loop)))
 
@@ -6667,7 +6669,12 @@ def level_step(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
     bands = world.bands.get(guildlevel.side_of(m.race), {})
     # A ZONE IS LEFT WHEN ITS QUESTS RUN OUT (2026-10-10): its open quests for
     # this member (guildlevel.open_quests), once its rewarded quests are read.
-    opens = guildlevel.member_opens(world, m.race, m.level, m.rewarded)
+    # A member at the cap has no quests to count (its walk out of a death loop
+    # is to any hub whose band reaches its level, #2152).
+    at_cap = m.level >= guildlevel.LEVEL_CAP
+    opens = (
+        None if at_cap else guildlevel.member_opens(world, m.race, m.level, m.rewarded)
+    )
     why = guildlevel.outgrown(
         m.level, m.race, m.map_id, m.zone_id, bands, opens
     ) or _loop_why(m, loop)
@@ -7164,14 +7171,26 @@ def death_loop_first(
     return None, held, _join(note, held, line, help_line), ""
 
 
-def inn_step(m, world, recent, cap):
+def inn_step(m, world, recent, cap, loop=None):
     """(step or None): a member that has reached a zone whose band fits its
     level, with its hearthstone bound somewhere it has outgrown, walks to that
     zone's innkeeper and sets its hearth there (guildlevel.bind_inn): the spawn
-    walk ending within guildlevel.INN_NEAR_YARDS, then `kind='bind'` `here`."""
+    walk ending within guildlevel.INN_NEAR_YARDS, then `kind='bind'` `here`.
+
+    A HEARTH BOUND IN THE LOOP'S ZONE IS MOVED OUT OF IT (#2152). With `loop`
+    (the member's deathloop.Loop), a member standing out of the loop's zone
+    whose hearthstone is bound in it binds at the inn of the zone it stands
+    in, at any level: the hearth skips such a home (death_loop_hearth), so
+    leaving it bound there leaves the member's every later hearth, and the
+    town errand that ends in one, a way back into the loop."""
     if world is None or not (m.online and m.alive and not m.in_combat):
         return None
-    if int(m.level) >= guildlevel.LEVEL_CAP or m.name in getattr(world, "roster", ()):
+    leaves = (
+        loop is not None and not _in_loop_zone(m, loop) and home_in_loop_zone(m, loop)
+    )
+    if m.name in getattr(world, "roster", ()):
+        return None
+    if int(m.level) >= guildlevel.LEVEL_CAP and not leaves:
         return None
     if _cooling(m, guildlevel.INN_ACTION, recent):
         return None
@@ -7197,6 +7216,7 @@ def inn_step(m, world, recent, cap):
         home,
         world.bands,
         getattr(world, "inns", {}),
+        leaves=leaves,
     )
     if inn is None:
         return None
@@ -7218,9 +7238,9 @@ def inn_step(m, world, recent, cap):
     )
 
 
-def _inn_first(m, world, recent, cap):
+def _inn_first(m, world, recent, cap, loop=None):
     """The inn walk (inn_step) as a _member_step rung."""
-    step = inn_step(m, world, recent, cap)
+    step = inn_step(m, world, recent, cap, loop)
     if step is None:
         return None, "", ""
     return step, step.said, ""
