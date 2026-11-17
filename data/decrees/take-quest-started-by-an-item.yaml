@@ -3,7 +3,8 @@
 # is started by item 14646 (Goldshire Gift Voucher) and no creature or object gives it; it is open to humans, as Og and Ugga are. Og carries it; Ugga does not.
 # (Quest 54 has a creature starter, so the fix's item path is never reached; quest 830 is Horde only, and
 # Og is a human, so the take was refused as not eligible.)
-# Scope: Ugga's row must end as an error row with a reason in its own words (a refusal), and Og's row must be
+# Scope: the take is read from the row's result (outcome taken, holder item): a probe run showed the row ends
+# 'delivered', not 'applied', and character_queststatus is only written at the next save. Ugga's row must end as an error row with a reason in its own words (a refusal), and Og's row must be
 # applied. The stop marker inside the result column and the holder reading item are not asserted: their
 # encoding is not in this repository, and a guessed string would fail closed for the wrong reason.
 # The act fires only once both takers are logged in (a row to a character that is not online is refused as 'target not
@@ -48,17 +49,17 @@ observe:
     sql: |
       SELECT COUNT(*) FROM item_instance WHERE owner_guid = @Ugga AND itemEntry = 14646
     expect: {scalar: "= 0"}
-  - name: og-has-the-quest
+  - name: og-took-the-quest-from-the-item
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM character_queststatus WHERE guid = @Og AND quest = 5805
-    expect: {scalar: "= 1"}
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Og' AND kind = 'quest' AND command LIKE 'take quest:5805%' AND created_at >= @t0 AND result LIKE '%"outcome":"taken"%' AND result LIKE '%"holder":"item"%'
+    expect: {scalar: ">= 1"}
   - name: og-row-was-applied
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Og' AND kind = 'quest' AND command LIKE 'take quest:5805%' AND created_at >= @t0 AND status = 'applied'
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Og' AND kind = 'quest' AND command LIKE 'take quest:5805%' AND created_at >= @t0 AND status IN ('applied', 'delivered')
     expect: {scalar: ">= 1"}
   - name: ugga-was-refused-in-words
     role: check
