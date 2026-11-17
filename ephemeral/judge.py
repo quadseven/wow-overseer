@@ -40,12 +40,20 @@ PASS, FAIL, INVALID = "PASS", "FAIL", "INVALID"
 POLL_SECONDS = 10
 CREDIT_DB, CREDIT_TABLE = "acore_characters", "log_encounter"
 QUERY_TIMEOUT_SECONDS = 30
+# The world's port opens before the family has logged in (measured: one to two
+# minutes later), so `start` preconditions are polled for up to this long.
+START_WAIT_SECONDS = 600
 MAX_SAMPLE_ROWS = 20
 MAX_MATCHED_LINES = 20
 MAX_CELL_CHARS = 300
 RESULT_CAP_BYTES = 256 * 1024
 # MySQL: 3024 max_execution_time, 1317 interrupted, 2013 lost connection (client read timeout)
 TIMEOUT_CODES = (3024, 1317, 2013)
+# The result write retries for this long (seconds), backing off 2, 4, 8 ... up to the cap.
+WRITE_RETRY_SECONDS = 300
+WRITE_BACKOFF_START = 2
+WRITE_BACKOFF_CAP = 30
+HTTP_TIMEOUT_SECONDS = 15
 SA_DIR = pathlib.Path("/var/run/secrets/kubernetes.io/serviceaccount")
 
 
@@ -257,7 +265,11 @@ class Judge:
         sha="",
         arm="",
         schema=None,
+        start_wait=0,
     ):
+        self.start_wait = start_wait
+        self.start_waited = 0
+        self.t0 = None
         self.decree = decree
         self.world = world
         self.handoff = handoff
@@ -275,14 +287,13 @@ class Judge:
     # -- entry --
     def run(self):
         started = self.clock()
-        t0 = None
         try:
-            t0 = self.world.db_now()
-            reasons = self._execute(t0, started)
+            self.t0 = self.world.db_now()
+            reasons = self._execute(self.t0, started)
         except JudgeError as exc:
             reasons = [f"harness refused: {exc}"]
             self._mark_unreached(reasons)
-        return self._result(t0, self.clock() - started, reasons)
+        return self._result(self.t0, self.clock() - started, reasons)
 
     def _mark_unreached(self, reasons):
         for row in self.act_rows:
@@ -307,6 +318,7 @@ class Judge:
             "arm": self.arm,
             "t0": t0,
             "elapsed_s": int(elapsed),
+            "start_wait_s": int(self.start_waited),
             "assertions": records,
             "acts": self.act_rows,
         }
@@ -314,6 +326,9 @@ class Judge:
     # -- setup --
     def _execute(self, t0, started):
         duration, steps = self._prepare(t0)
+        # The family logs in after the port opens: wait for the start
+        # preconditions, then start every clock (t0, the act timeline, the window).
+        started = self._await_start(started)
         # start observations, once, before any order is given
         for name, o in self.observes.items():
             if o.get("when") == "start":
@@ -325,6 +340,37 @@ class Judge:
             if o.get("when") == "end" or "log" in o:
                 self._observe(name, started)
         return self._invalid_reasons()
+
+    def _await_start(self, started):
+        """Poll the `start` preconditions until they hold, for at most `start_wait`.
+
+        Nothing is recorded and no order is given while waiting: a look that
+        fails (violated, timed out, errored) is simply "not yet". When the wait
+        ends, held or not, the normal single start sampling follows and decides:
+        a precondition that still does not hold is INVALID, naming it. Returns
+        the new clock origin for the act timeline and the window.
+        """
+        names = [
+            n
+            for n, o in self.observes.items()
+            if o.get("when") == "start" and o.get("role") == "precondition"
+        ]
+        if names and self.start_wait > 0:
+            waiting_from = self.clock()
+            while True:
+                if all(self._evaluate(n)["status"] == "held" for n in names):
+                    break
+                waited = self.clock() - waiting_from
+                if waited >= self.start_wait:
+                    break
+                self.sleep(min(self.poll, self.start_wait - waited))
+            self.start_waited = self.clock() - waiting_from
+            started = self.clock()
+            self.t0 = self.world.db_now()
+            self.rendered = self._render(
+                self.observes, {**self.handoff["variables"], "t0": self.t0}
+            )
+        return started
 
     @staticmethod
     def _unheld_precondition(r):
@@ -339,6 +385,12 @@ class Judge:
         duration = lint.duration_seconds(self.decree.get("duration"))
         if duration is None:
             raise JudgeError("decree has no valid duration")
+        rendered = self._render(observes, variables)
+        steps = self._plan_acts(observes)
+        self.observes, self.rendered = observes, rendered
+        return duration, steps
+
+    def _render(self, observes, variables):
         rendered = {}
         for name, o in observes.items():
             if "sql" in o:
@@ -347,9 +399,7 @@ class Judge:
                 if problems:
                     raise JudgeError(f"observation {name}: " + "; ".join(problems))
                 rendered[name] = sql
-        steps = self._plan_acts(observes)
-        self.observes, self.rendered = observes, rendered
-        return duration, steps
+        return rendered
 
     def _window(self, steps, duration, started):
         """The measured window: fire due acts, sample continuous observations."""
@@ -640,6 +690,7 @@ def result_configmap(result, namespace):
     }
 
 
+RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 _NAME = re.compile(r"^eph-result-[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
 
 
@@ -649,7 +700,10 @@ def urllib_http(ca_path=None):
     def call(method, url, headers, body):
         req = urllib.request.Request(url, data=body, method=method, headers=headers)  # noqa: S310 - https to the API server only
         try:
-            with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:  # noqa: S310
+            opened = urllib.request.urlopen(  # noqa: S310 - https to the API server only
+                req, context=ctx, timeout=HTTP_TIMEOUT_SECONDS
+            )
+            with opened as resp:
                 return resp.status, resp.read()
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read()
@@ -660,13 +714,23 @@ def urllib_http(ca_path=None):
 class ConfigMapStore:
     """Creates the result ConfigMap, and nothing else, in the world's own namespace."""
 
-    def __init__(self, base_url, token, namespace, http):
+    def __init__(
+        self,
+        base_url,
+        token,
+        namespace,
+        http,
+        sleep=time.sleep,
+        log=print,
+        retry_seconds=WRITE_RETRY_SECONDS,
+    ):
         self.base_url, self.token, self.namespace, self.http = (
             base_url,
             token,
             namespace,
             http,
         )
+        self.sleep, self.log, self.retry_seconds = sleep, log, retry_seconds
 
     @classmethod
     def in_cluster(cls, namespace=None, env=None, sa_dir=SA_DIR):
@@ -696,17 +760,36 @@ class ConfigMapStore:
             )
         if meta.get("namespace") != self.namespace:
             raise JudgeError("the judge writes into its own namespace only")
-        status, body = self.http(
-            "POST",
-            f"{self.base_url}/api/v1/namespaces/{self.namespace}/configmaps",
-            {
-                "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json",
-            },
-            json.dumps(cm).encode("utf-8"),
-        )
-        if status not in (200, 201):
-            raise JudgeError(f"result ConfigMap refused with HTTP {status}")
+        url = f"{self.base_url}/api/v1/namespaces/{self.namespace}/configmaps"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+        }
+        payload = json.dumps(cm).encode("utf-8")
+        spent, delay, attempt = 0.0, WRITE_BACKOFF_START, 0
+        while True:
+            attempt += 1
+            began = time.monotonic()
+            try:
+                status = self.http("POST", url, headers, payload)[0]
+                problem = None if status not in RETRYABLE_STATUS else f"HTTP {status}"
+            except OSError as exc:  # URLError, connect and read timeouts
+                status, problem = None, f"{type(exc).__name__}: {exc}"
+            spent += time.monotonic() - began
+            if problem is None:
+                break
+            self.log(f"result write attempt {attempt} failed: {problem}")
+            if spent + delay > self.retry_seconds:
+                raise JudgeError(
+                    f"result ConfigMap not written after {attempt} attempts: {problem}"
+                )
+            self.sleep(delay)
+            spent += delay
+            delay = min(delay * 2, WRITE_BACKOFF_CAP)
+        # A retry after a lost answer finds the ConfigMap already there: it is written.
+        if status in (200, 201) or (status == 409 and attempt > 1):
+            return
+        raise JudgeError(f"result ConfigMap refused with HTTP {status}")
 
 
 # -- the entry point -------------------------------------------------------------
@@ -724,6 +807,15 @@ def _invalid(decree_id, env, sha, reason):
         "arm": env.get("EPH_ARM", ""), "t0": None, "elapsed_s": 0,
         "assertions": [], "acts": [],
     }  # fmt: skip
+
+
+def start_wait_from_env(env):
+    """EPH_START_WAIT_SECONDS, or the default when unset, unreadable or negative."""
+    try:
+        value = int(env.get("EPH_START_WAIT_SECONDS", ""))
+    except ValueError:
+        return START_WAIT_SECONDS
+    return value if value >= 0 else START_WAIT_SECONDS
 
 
 def _read_log(path):
@@ -822,7 +914,7 @@ def _judge(raw, sha, env, connect, log_path, clock, anchors_path):
             log_text=lambda: _read_log(log_path),
             clock=clock.monotonic, sleep=clock.sleep,
             run_id=env.get("EPH_RUN_ID", ""), sha=sha, arm=env.get("EPH_ARM", ""),
-            schema=live,
+            schema=live, start_wait=start_wait_from_env(env),
         ).run()  # fmt: skip
     except Exception as exc:  # noqa: BLE001 - a broken world is INVALID, never a verdict on the fix
         return _invalid(decree_id, env, sha, f"the world could not be judged: {exc!r}")

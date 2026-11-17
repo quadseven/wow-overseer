@@ -240,6 +240,11 @@ _CHAT_CALLS = threading.BoundedSemaphore(CHAT_MAX_CALLS)
 # ordered over HTTP at all (the Discord door has its own allow-list of users).
 _DIRECTOR_TOKEN = os.environ.get("OVERSEER_DIRECTOR_TOKEN", "").strip()
 
+# The shared secret the clip cutter sends as a bearer header on the pending read
+# and the three cutter POSTs. Unset, those four routes refuse (503): they fail
+# closed. The value comes from the deployment's secret store, never the repo.
+CUTTER_TOKEN = os.environ.get("CUTTER_TOKEN", "").strip()
+
 # What the inner voice is told the character IS. panel.py has its own copy
 # for the panel's own labels; importing it here would couple the prompt's
 # wording to the panel's rendering choices.
@@ -7546,8 +7551,20 @@ class Handler(BaseHTTPRequestHandler):
                              what="the clip shelf")
         return 200, clipledger.shelf(rows)
 
+    def _cutter_refused(self) -> bool:
+        """True after answering a cutter call that lacks the cutter token."""
+        refusal = clipcutter.check_token(self.headers.get("Authorization"), CUTTER_TOKEN)
+        if refusal is None:
+            return False
+        self._send(refusal[0], "application/json", json.dumps(refusal[1]).encode())
+        return True
+
+    def _clips_pending(self, query: dict) -> None:
+        if not self._cutter_refused():
+            self._clips_pending_read(query)
+
     @_get_route("pending clips query failed")
-    def _clips_pending(query: dict, ctx) -> tuple[int, dict]:
+    def _clips_pending_read(query: dict, ctx) -> tuple[int, dict]:
         """GET /api/clips/pending?paths=a,b&ages=a:3 - the pending rows on those stream
         paths, oldest first, at most 10, with the database clock.
 
@@ -7582,6 +7599,8 @@ class Handler(BaseHTTPRequestHandler):
         With `late`, call gets a connect() to open itself instead of a cursor.
         No clip folder is a 503 with a sentence; a failed write is the same 503
         as every other route's."""
+        if self._cutter_refused():
+            return
         query = parse_qs(urlsplit(self.path).query)
         root = _clips_root()
         if not root:
@@ -7614,7 +7633,8 @@ class Handler(BaseHTTPRequestHandler):
             length = -1
         self._cutter_call(lambda connect, q, root: clipcutter.upload(
             connect, q.get("id", [""])[0], self.rfile, length, root,
-            q.get("note", [""])[0], bound=self.connection.settimeout),
+            q.get("note", [""])[0], bound=self.connection.settimeout,
+            stream_path=q.get("path", [""])[0]),
             late=True)
 
     def _clips_result(self) -> None:
@@ -7688,8 +7708,8 @@ class Handler(BaseHTTPRequestHandler):
         "/api/director": _director_post,
         "/api/spectate": _spectate_post,
         "/api/frame": _frame_post,
-        # The cutter routes trust what /api/frame trusts: the capture agent's
-        # network path, with no token and no new credential.
+        # The cutter routes need the shared CUTTER_TOKEN as a bearer header
+        # (_cutter_refused); with it unset they refuse.
         "/api/clips/claim": _clips_claim,
         "/api/clips/file": _clips_file,
         "/api/clips/result": _clips_result,

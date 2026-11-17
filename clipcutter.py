@@ -12,6 +12,7 @@ derived from the row, the state is one of two words, and every value is bound.
 from __future__ import annotations
 
 import logging
+import hmac
 import os
 import re
 import stat
@@ -78,6 +79,31 @@ _DROP = (
     + " WHERE id = %s AND state IN ('pending', 'cutting')"
 )
 DROP_STATES = ("no_view", "failed")
+
+
+def check_token(sent, expected: str):
+    """None when `sent` (an Authorization header value) is `Bearer <expected>`,
+    else a refusal. With `expected` empty every call is refused (503): the
+    routes fail closed, they never open. Compared in constant time."""
+    if not expected:
+        return _err(
+            503,
+            "The cutter routes are off here: no CUTTER_TOKEN is configured.",
+        )
+    scheme, _, secret = (sent or "").partition(" ")
+    if scheme.lower() != "bearer" or not hmac.compare_digest(
+        secret.strip().encode(), expected.encode()
+    ):
+        return _err(403, "The cutter routes need the cutter token as a bearer header.")
+    return None
+
+
+def owns(row, stream_path: str):
+    """None when the caller named no stream path or named the row's own, else a
+    refusal: a valid caller may not write another job's file."""
+    if stream_path and stream_path != row.get("stream_path"):
+        return _err(403, "That stream path does not belong to the clip request.")
+    return None
 
 
 def _err(code: int, sentence: str):
@@ -363,12 +389,15 @@ def stage(rfile, length, root, clock=time.monotonic, bound=_no_bound):
     return tmp, None
 
 
-def _precheck(connect, raw_id, root):
+def _precheck(connect, raw_id, root, stream_path=""):
     """A short read-only look, connection closed before the body is read: the
     row exists, is cutting and has no file. A cheap filter; the conditional
     UPDATE after the body is still the gate. Returns a refusal or None."""
     with connect() as cur:
         row, refusal = _find(cur, raw_id)
+    if refusal:
+        return refusal
+    refusal = owns(row, stream_path)
     if refusal:
         return refusal
     if row["state"] != "cutting":
@@ -391,6 +420,7 @@ def upload(
     raw_note,
     clock=time.monotonic,
     bound=_no_bound,
+    stream_path="",
 ):
     """POST /api/clips/file: `length` bytes of MP4 from `rfile` into `root`
     under the name the row gives, then the row becomes ready.
@@ -400,7 +430,8 @@ def upload(
     connection held; then `connect()` opens a cursor only for the conditional
     UPDATE and the link into place. The link fails if the name exists, so an
     existing file is never overwritten. A row that moved on while the body
-    streamed loses its new file."""
+    streamed loses its new file. A `stream_path` the caller names must be the
+    row's own (403 otherwise)."""
     if parse_id(raw_id) is None:
         return _err(400, "The id must be a whole number above zero, as id=N.")
     note = clean_note(raw_note)
@@ -411,13 +442,15 @@ def upload(
     if not _SLOTS.acquire(blocking=False):
         return _err(503, "Too many uploads are running; try again shortly.")
     try:
-        return _store(connect, raw_id, rfile, length, root, note, clock, bound)
+        return _store(
+            connect, raw_id, rfile, length, root, note, clock, bound, stream_path
+        )
     finally:
         _SLOTS.release()
 
 
-def _store(connect, raw_id, rfile, length, root, note, clock, bound):
-    refusal = _precheck(connect, raw_id, root)
+def _store(connect, raw_id, rfile, length, root, note, clock, bound, stream_path=""):
+    refusal = _precheck(connect, raw_id, root, stream_path)
     if refusal:
         return refusal
     tmp, refusal = stage(rfile, length, root, clock, bound)
@@ -426,6 +459,9 @@ def _store(connect, raw_id, rfile, length, root, note, clock, bound):
     try:
         with connect() as cur:
             row, refusal = _find(cur, raw_id)
+            if refusal:
+                return refusal
+            refusal = owns(row, stream_path)
             if refusal:
                 return refusal
             if row["state"] != "cutting":

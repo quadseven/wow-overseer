@@ -526,7 +526,7 @@ class BridgeShapeTest(unittest.TestCase):
     def test_one_guarded_call_after_the_sale_inputs_exist(self):
         at = BRIDGE.index('"_shadow_itemplan", lambda')
         self.assertEqual(BRIDGE.count('"_shadow_itemplan", lambda'), 1)
-        self.assertLess(BRIDGE.index("_count_sales(sellable_counts, gear_sales)"), at)
+        self.assertLess(BRIDGE.index("_count_sales(sellable_counts, gear_sales,"), at)
         self.assertLess(at, BRIDGE.index("held_seller_for_leader = await"))
 
 

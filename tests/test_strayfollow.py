@@ -129,6 +129,56 @@ class ThePlan(unittest.TestCase):
         self.assertEqual(len(rows), sf.LEAVES_PER_PASS)
 
 
+class TheBackoff(unittest.TestCase):
+    GUILDS = frozenset({"Cave", "Bonkers"})
+
+    def plan(self, tries):
+        return sf.plan(
+            [follower()],
+            {"Chop": 0.0},
+            10**6,
+            {"Chop": sf.COOLDOWN_MINUTES},
+            self.GUILDS,
+            tries,
+        )
+
+    def test_a_member_whose_leave_never_takes_stops_after_the_limit(self):
+        rows, _ = self.plan({"Chop": sf.MAX_TRIES - 1})
+        self.assertEqual(len(rows), 1)
+        rows, lines = self.plan({"Chop": sf.MAX_TRIES})
+        self.assertEqual(rows, ())
+        self.assertEqual(lines, ())
+
+    def test_another_members_tries_do_not_count(self):
+        rows, _ = self.plan({"Other": 99})
+        self.assertEqual(len(rows), 1)
+
+    def test_the_limit_is_a_few_not_dozens(self):
+        self.assertLessEqual(sf.MAX_TRIES, 5)
+        self.assertGreaterEqual(sf.MAX_TRIES, 2)
+
+    def test_gave_up_names_the_member_the_leader_the_count_and_the_reason(self):
+        lines = sf.gave_up(
+            [follower()], {"Chop": 0.0}, 10**6, {"Chop": sf.MAX_TRIES}, self.GUILDS
+        )
+        self.assertEqual(len(lines), 1)
+        self.assertIn("Chop", lines[0])
+        self.assertIn("Stranger", lines[0])
+        self.assertIn("%d leave-group rows" % sf.MAX_TRIES, lines[0])
+        self.assertIn("did not take", lines[0])
+
+    def test_gave_up_is_silent_for_a_member_still_under_the_limit(self):
+        lines = sf.gave_up([follower()], {"Chop": 0.0}, 10**6, {"Chop": 1}, self.GUILDS)
+        self.assertEqual(lines, ())
+
+    def test_gave_up_is_silent_for_a_guildmates_group_or_a_member_not_apart(self):
+        for f in (follower(leader_guild="Cave"), follower(leader_map=530)):
+            lines = sf.gave_up(
+                [f], {"Chop": 0.0}, 10**6, {"Chop": sf.MAX_TRIES}, self.GUILDS
+            )
+            self.assertEqual(lines, ())
+
+
 class FromRows(unittest.TestCase):
     def test_rows_become_followers(self):
         (f,) = sf.followers_from_rows([row()])
@@ -151,6 +201,8 @@ class TheBridgePass(unittest.TestCase):
         start = BRIDGE.index("async def _stray_follow_loop(")
         body = BRIDGE[start : BRIDGE.index("\n    async def ", start + 1)]
         self.assertIn("strayfollow.plan(", body)
+        self.assertIn("strayfollow.gave_up(", body)
+        self.assertIn("tries", body)
         self.assertIn("_insert_guild, r.name, r.command, r.source", body)
         self.assertIn('log.info("stray followers: %s (row %d)"', body)
         sql = BRIDGE.split("_STRAY_FOLLOWERS_SQL = (", 1)[1][:1500]

@@ -4445,24 +4445,28 @@ _STRAY_FOLLOWERS_SQL = (
     "LIMIT 500"
 )
 _STRAY_RECENT_SQL = (
-    "SELECT target_name, MIN(TIMESTAMPDIFF(MINUTE, created_at, NOW())) AS age "
+    "SELECT target_name, MIN(TIMESTAMPDIFF(MINUTE, created_at, NOW())) AS age, "
+    "COUNT(*) AS tries "
     "FROM overseer_command WHERE source LIKE %s "
     "AND created_at > NOW() - INTERVAL 1 DAY GROUP BY target_name"
 )
 
 
 def _fetch_stray_followers() -> tuple:
-    """(followers, name -> minutes since its last leave row) for strayfollow."""
+    """(followers, name -> minutes since its last leave row, name -> leave rows
+    in the last day) for strayfollow."""
     guilds = sorted(raidteams.GROUPS)
     if not guilds:
-        return (), {}
+        return (), {}, {}
     sql = _STRAY_FOLLOWERS_SQL.format(guilds=",".join(["%s"] * len(guilds)))
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, guilds)
         followers = strayfollow.followers_from_rows(cur.fetchall())
         cur.execute(_STRAY_RECENT_SQL, (strayfollow.SOURCE + ":%",))
-        recent = {str(r["target_name"]): int(r["age"]) for r in cur.fetchall()}
-    return followers, recent
+        asked = cur.fetchall()
+    recent = {str(r["target_name"]): int(r["age"]) for r in asked}
+    tries = {str(r["target_name"]): int(r["tries"]) for r in asked}
+    return followers, recent, tries
 
 
 # THE RARE NODES AND THE RIDERS' READS (memberloop.py). The world does not
@@ -15384,7 +15388,9 @@ class Bridge(discord.Client):
         # rows and the two plans just made, and nothing waits on the answer.
         self._jev_keep_shadow(names, leader, rows, clear, locks, free_slots,
                               auction_open=True)
-        _count_sales(sellable_counts, lock_sales + clear_sales)
+        refuse = globals().get("_policy_refused_pairs", lambda sales: frozenset())
+        _count_sales(sellable_counts, lock_sales + clear_sales,
+                     await asyncio.to_thread(refuse, lock_sales + clear_sales))
         # WHAT A VENDOR CAN DO FOR EACH MEMBER AT THE FLOOR (#986), read the
         # way the sale itself is decided, for the bag hold to name. Looked up:
         # the economy tests load this pass in isolation.
@@ -15514,7 +15520,8 @@ class Bridge(discord.Client):
         )
         bank_keeps = await asyncio.to_thread(_bank_policy, names, True)
         gear_sales = _without_bank_keeps(gear_sales, bank_keeps, "economy")
-        _count_sales(sellable_counts, gear_sales)
+        _count_sales(sellable_counts, gear_sales,
+                     await asyncio.to_thread(refuse, gear_sales))
         # THE ITEM PLAN RUNS BESIDE THE PASSES, LOGS, AND CHANGES NOTHING (#1972).
         # Off unless ITEMPLAN_SHADOW is on; a failure inside it is logged there.
         # Looked up: the economy tests load this pass in isolation.
@@ -28451,13 +28458,23 @@ class Bridge(discord.Client):
         await self.wait_until_ready()
         cycle = float(os.environ.get("STRAY_FOLLOW_SECONDS", "300"))
         since: dict = {}
+        told: set = set()
         while not self.is_closed():
             try:
-                followers, recent = await asyncio.to_thread(_fetch_stray_followers)
+                followers, recent, tries = await asyncio.to_thread(
+                    _fetch_stray_followers)
                 now = time.monotonic()
                 since = strayfollow.track(since, followers, now)
+                guilds = frozenset(raidteams.GROUPS)
                 rows, lines = strayfollow.plan(
-                    followers, since, now, recent, frozenset(raidteams.GROUPS))
+                    followers, since, now, recent, guilds, tries)
+                # One line a member, not one a cycle, for a member given up.
+                for line in strayfollow.gave_up(followers, since, now, tries, guilds):
+                    if line not in told:
+                        told.add(line)
+                        log.info("stray followers: %s", line)
+                if len(told) > 500:
+                    told.clear()
                 for r, line in zip(rows, lines):
                     row_id = await asyncio.to_thread(
                         _insert_guild, r.name, r.command, r.source)
@@ -33430,7 +33447,8 @@ def _route_sales_for_trip(names, leader, rows, free_slots, sellable_counts,
         names, leader, rows, free_slots, gear_rows=gear_rows,
         worn_rows=worn_rows, keep_names=OWNER_KEEPS,
         sellable_counts=sellable_counts)
-    _count_sales(sellable_counts, sales)
+    refuse = globals().get("_policy_refused_pairs", lambda sales: frozenset())
+    _count_sales(sellable_counts, sales, refuse(sales))
     return sales
 
 
@@ -33530,15 +33548,62 @@ def _drive_verdicts(names) -> dict:
         _fetch_wearers(names), _fetch_scored_gear(names), names, _jev_item_book())
 
 
-def _count_sales(counts: dict, sales) -> None:
+def _sale_guid(sale):
+    """The item guid of a sale: a SellCandidate, or an item plan route Sale
+    whose candidate sits one level down."""
+    guid = getattr(sale, "item_guid", None)
+    if guid is None:
+        guid = getattr(getattr(sale, "candidate", None), "item_guid", None)
+    return guid
+
+
+def _count_sales(counts: dict, sales, refused=frozenset()) -> None:
     """Add one to `counts` per sale, under the sale's holder.
 
     The vendor pass counts what a trip could sell (#88, #148, #145) twice, for
     lockbox and clearance sales and then for gear. One loop, so the two counts
     cannot be kept two different ways (wow-overseer#977).
+
+    A STACK THE LOOT POLICY WILL KEEP IS NOT A SALE (#1261). `refused` is the
+    (holder, item guid) pairs `_policy_refused_pairs` read: the writer turns
+    each of those away at the counter, so counting it told the trip, the
+    errand and the quest hold that a vendor would make room when it would sell
+    nothing.
     """
     for sale in sales:
+        if (sale.holder, _sale_guid(sale)) in refused:
+            continue
         counts[sale.holder] = counts.get(sale.holder, 0) + 1
+
+
+def _policy_refused_pairs(sales) -> frozenset:
+    """The (holder, item guid) of each sale the loot policy keeps from a vendor.
+
+    Blocking: the pass runs it in a thread. It asks the writer's own question
+    (`_loot_policy_blocks`: `_policy_verdict` and `lootpolicy.allowed`), so
+    the count cannot drift from the sale it predicts. A stack whose facts are
+    unread is refused, as the writer holds it; a failed read refuses nothing,
+    so a broken read cannot hide a real trip.
+    """
+    sales = list(sales or ())
+    if not sales:
+        return frozenset()
+    guids = sorted({int(_sale_guid(sale)) for sale in sales})
+    try:
+        rows = {int(r["item_guid"]): r for r in _fetch_epic_facts(guids)}
+        classes = _guild_classes()
+    except Exception:
+        log.exception("economy: cannot read the loot policy's facts for the "
+                      "trip count, so every stack is counted")
+        return frozenset()
+    refused = set()
+    for sale in sales:
+        guid = int(_sale_guid(sale))
+        row = rows.get(guid)
+        if row is None or not lootpolicy.allowed(
+                _policy_verdict(sale.holder, row, classes), "sell"):
+            refused.add((sale.holder, guid))
+    return frozenset(refused)
 
 
 async def _queue_route_sales(route_sales, holders, candidates) -> tuple:

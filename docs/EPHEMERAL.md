@@ -221,8 +221,12 @@ the `act` steps (by time, or when a named observation first holds), samples the
   read, a guard refusal, a missing seed handoff and a decree that does not lint.
   INVALID beats FAIL, never counts as a pass and never closes an issue.
 
-Observations are `when: start` (once, before any order; a failing precondition
-ends the run early), `continuous` (every ten seconds) or `end` (after the
+Observations are `when: start` (the world's port opens before the family has
+logged in, so the judge first polls the start preconditions every ten seconds
+for up to ten minutes, `EPH_START_WAIT_SECONDS`; no order is given meanwhile, and
+the act clock and `@t0` start when the wait ends. Then they are sampled once,
+before any order; a precondition that still fails ends the run INVALID, naming
+it), `continuous` (every ten seconds) or `end` (after the
 window). Log assertions count regex matches in the worldserver log and are
 checked at the end. A log assertion's `expect` is a bound on that count:
 
@@ -273,7 +277,7 @@ All three read one settings file, never the repository: copy
 client-data claim and a world cap), the nodes that are never used, and the
 digest-pinned tools image. A missing or malformed file is an error.
 
-    python3 -m ephemeral submit [--arm both] [--node N] --control-worldserver REF         --control-dbimport REF --control-pin SHA data/decrees/<name>.yaml
+    python3 -m ephemeral submit [--arm both] [--node N] --control-worldserver REF --control-pin SHA data/decrees/<name>.yaml
     python3 -m ephemeral dispatch [--once]
     python3 -m ephemeral collect [--dry-run]
 
@@ -283,7 +287,7 @@ running image digests and override files, merges the decree's config onto them
 run plus a ConfigMap of that run's inputs, owned by the Job. It starts nothing.
 It refuses: a decree that does not lint, an image other than `follow-dev`, a
 bridge-on decree whose template has no bridge sidecar, a control arm without
-control images (with `bridge: on`, also without `--control-bridge`), and a fix that is wrongly present or absent in an arm's image
+a control worldserver image (with `bridge: on`, also without `--control-bridge`), and a fix that is wrongly present or absent in an arm's image
 (checked by asking GitHub whether the fix commit is an ancestor of the commit
 each image was built from; a `TODO` commit is recorded as unchecked, and an
 unchecked decree can never close or disprove anything). It saves a submission
@@ -317,6 +321,18 @@ nothing to the issue. A decree not yet merged posts to its own pull request when
 `--decree-pr` was given. The comment author is read back and must be the
 configured App, and `collect` refuses to write unless `GH_TOKEN` and
 `GH_CONFIG_DIR` are set.
+
+Both arms run the live db-import. The template is forged from the live realm's
+database, so its `updates` table already holds every module SQL file at its
+current hash. A control db-import built before an edit to such a file sees a
+different hash, re-applies the file, and fails (for example "Duplicate column
+name" on a column that file adds), so the pod never boots and the decree could
+never produce its control FAIL. The schema step is the same for both arms (only
+the worldserver binary under test differs), so the control arm takes the live
+db-import and `--control-dbimport` is refused with that reason. Rejected
+alternatives: a template forged per control era (a forge run and a template per
+image, so a nightly refresh would multiply), and seeding the `updates` table so
+changed files are skipped (it would hide a real schema difference).
 
 With `world.bridge: "on"` the template's bridge sidecar is kept, at the arm's own
 image: the control arm's is `--control-bridge` (the build before the fix), the
