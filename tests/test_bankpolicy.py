@@ -615,10 +615,14 @@ class JevIsAskedWithTheBankOnOffer(unittest.TestCase):
             jev_items.AUCTION,
             jev_items.KEEP,
             jev_items.EQUIP,
-            jev_items.BANK,
         ):
             judged = types.SimpleNamespace(jev=answer, heuristic=jev_items.BANK)
             self.assertFalse(jev_items._disposition_can(judged), answer)
+
+    def test_an_answer_that_agrees_with_the_bank_route_needs_no_path(self):
+        """Agreement overrides nothing: the heuristic's own route stands (#2134)."""
+        judged = types.SimpleNamespace(jev=jev_items.BANK, heuristic=jev_items.BANK)
+        self.assertTrue(jev_items._disposition_can(judged))
 
 
 class ThePageSaysWhy(unittest.TestCase):

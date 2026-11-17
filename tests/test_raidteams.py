@@ -165,7 +165,7 @@ class TheLineupSeatsTheApprovedTeams(unittest.TestCase):
             sorted(raidteams.LEAVING["Cave"]),
         )
 
-    def test_nobody_respecs_but_the_three_named_paladins(self):
+    def test_nobody_respecs_but_the_six_named_seats(self):
         lineup = raidlineup.build_lineup(_guild("Cave", recruits_joined=True))
         marked = {
             m["approved_name"]
@@ -175,7 +175,7 @@ class TheLineupSeatsTheApprovedTeams(unittest.TestCase):
         }
         # This read carries no talents, so only the named seats are unproven.
         self.assertEqual(marked, set(raidteams.RESPEC_HEALERS["Cave"]))
-        self.assertEqual(lineup["counts"]["respec"], 3)
+        self.assertEqual(lineup["counts"]["respec"], 6)
         bonkers = raidlineup.build_lineup(_guild("Bonkers", recruits_joined=True))
         self.assertEqual(bonkers["counts"]["respec"], 0)
 

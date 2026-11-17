@@ -234,6 +234,9 @@ class Stuck:
     door: str
     earlier: Stall
     later: Stall
+    # The run was stood down because the party was not assembled (#2280): an
+    # operator's order held for it waits for the party, not only for a clock.
+    regroup: bool = False
 
     @property
     def why(self) -> str:
@@ -308,14 +311,14 @@ HOLD_SECONDS = 30 * 60
 DEAD_SECONDS = 15 * 60
 
 
-def _wedged(keyword: str, reason: str) -> Stuck | None:
+def _wedged(keyword: str, reason: str, regroup: bool = False) -> Stuck | None:
     """The Stuck for `reason` at the queue keyword's door, or None when the
     keyword names no door the campaign runs."""
     door = campaignplan.wing_of(keyword)
     if not door:
         return None
     stall = Stall(0, 0, reason)
-    return Stuck(door, stall, stall)
+    return Stuck(door, stall, stall, regroup)
 
 
 def door_unreachable(keyword: str, restarts) -> Stuck | None:
@@ -428,6 +431,7 @@ def party_held(
         "%s has been %s%s for over %d minutes while the family waits at this "
         "door; the run is stood down so the party regroups"
         % (member, state, " (%s)" % what if what else "", HOLD_SECONDS // 60),
+        regroup=True,
     )
 
 
@@ -554,11 +558,19 @@ class Leave:
     drop: tuple
     why: str
     park: tuple = ()
+    regroup: bool = False
 
     @property
     def decision(self) -> str:
         """The pace row's decision: a door left, or an order held."""
         return ORDER_DECISION if self.park else DECISION
+
+    @property
+    def target(self) -> str:
+        """The pace row's target: REGROUP on an order held for an unassembled
+        party (#2280), which `restart_after_hold` reads back; "" otherwise. A
+        door that was left has no order waiting, so it carries no mark."""
+        return REGROUP if self.park and self.regroup else ""
 
 
 # THE BREAKER NEVER CANCELS AN OPERATOR'S ORDER (#2216). Once, an operator's
@@ -595,12 +607,20 @@ def leave(rows: list, stuck: dict) -> Leave | None:
     )
     if park:
         minutes = int(ORDER_BACKOFF.total_seconds() // 60)
+        regroup = bool(stuck[door].regroup)
         return Leave(
             door,
             drop,
-            "%s; the order is held, not left, and runs again in %d minutes; "
-            "meanwhile %s" % (stuck[door].why, minutes, after),
+            "%s; the order is held, not left, and runs again in %d minutes%s; "
+            "meanwhile %s"
+            % (
+                stuck[door].why,
+                minutes,
+                " once every member stands together" if regroup else "",
+                after,
+            ),
             park,
+            regroup,
         )
     return Leave(door, drop, "%s; left, %s" % (stuck[door].why, after))
 
@@ -610,7 +630,7 @@ def leave(rows: list, stuck: dict) -> Leave | None:
 PARKED_SQL = (
     "SELECT id, created_at, TIMESTAMPDIFF(SECOND, NOW(), created_at + INTERVAL %s "
     "SECOND) AS left_s, COALESCE((SELECT q.created_at FROM overseer_dungeon_queue q "
-    "WHERE q.id = %s) > created_at, 0) AS ordered_after "
+    "WHERE q.id = %s) > created_at, 0) AS ordered_after, target "
     "FROM overseer_dungeon_pace WHERE family = %s "
     "AND decision = %s AND door = %s ORDER BY created_at DESC, id DESC LIMIT 1"
 )
@@ -648,3 +668,121 @@ def held_until_said(left_s) -> str:
     """The sentence for the order's hold: how long until it runs again."""
     minutes = max(1, int(-(-max(0, int(left_s or 0)) // 60)))
     return "runs again in about %d minute(s)" % minutes
+
+
+# --- no restart until the party stands together (#2280) -------------------------
+#
+# The backoff above is a clock. An order held because the party was not
+# assembled (a member away on an errand of its own, or held still, past
+# HOLD_SECONDS) ran again fifteen minutes later whether or not the member had
+# come back, and the same family was stood down for the same straggler twice
+# in one night. For such a hold the clock is necessary and not enough: the
+# order runs again only once every member stands with the leader.
+
+# The pace row's `target` on an order held for an unassembled party. Written
+# by the stand-down (Leave.target), read back with the hold (PARKED_SQL).
+REGROUP = "regroup"
+# How far from the leader still counts as standing with him, planar. The same
+# reach as "beside" in the family's movement read (jev_movement.BESIDE_YARDS):
+# well inside the range a follower holds, far outside a member in another
+# town.
+REGROUP_YARDS = 40.0
+
+# Why `restart_after_hold` allowed or held the restart.
+BACKOFF = "backoff"
+NOT_REGROUP = "not_regroup"
+RUNNING = "running"
+UNREAD = "unread"
+APART = "apart"
+TOGETHER = "together"
+
+_UNSEEN = "not seen in the world"
+
+
+@dataclass(frozen=True)
+class Restart:
+    """Whether a held operator order may run again, and why, as data.
+
+    `reason` is one of the words above. `apart` names every member that does
+    not stand with the leader, each with what the read saw of it."""
+
+    allowed: bool
+    reason: str
+    apart: tuple = ()
+
+    def said(self) -> str:
+        """The clause for the hold line: what the order waits for."""
+        who = "; ".join("%s is %s" % pair for pair in self.apart)
+        return "runs again once every member stands together (%s)" % who
+
+
+def _spot(row) -> tuple | None:
+    """(map, instance, x, y) from a snapshot row, or None when it holds no
+    readable position."""
+    try:
+        return (
+            int(row["map_id"]),
+            int(row.get("instance_id") or 0),
+            float(row["pos_x"]),
+            float(row["pos_y"]),
+        )
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def _apart_from(leader: str, lead: tuple, spot: tuple | None) -> str:
+    """What keeps a member at `spot` from standing with the leader at `lead`,
+    or "" when it stands with him."""
+    if spot is None:
+        return _UNSEEN
+    if spot[:2] != lead[:2]:
+        return "on another map"
+    yards = ((spot[2] - lead[2]) ** 2 + (spot[3] - lead[3]) ** 2) ** 0.5
+    if yards > REGROUP_YARDS:
+        return "%d yards from %s" % (round(yards), leader)
+    return ""
+
+
+def restart_after_hold(
+    hold: dict | None, running: bool, leader: str, names, positions
+) -> Restart:
+    """May the operator order under `hold` run again? (#2280)
+
+    `hold` is `order_hold`'s row (or None), `running` whether the family is
+    already back on this order's dungeon job, `positions` name -> its fresh
+    snapshot row (map_id, instance_id, pos_x, pos_y) for `names`.
+
+    The backoff holds every order. A hold with no REGROUP mark then runs on
+    the clock alone, as before. A regroup hold runs only when every member is
+    on the leader's map, in his copy of it, within REGROUP_YARDS of him; a
+    member the read cannot see is not standing with him. Two reads let the
+    order run without that proof. An order already running again is past its
+    restart: a member who dies or is held mid-run is the wedge's to judge, on
+    its own clocks, not a reason to step the queue past an open run. And a
+    read that shows nobody at all (a realm with no snapshot table, a world
+    that is down) is no evidence about the party, so it holds nothing: the
+    order is the operator's, and it is not parked for ever on a missing table.
+    """
+    if not hold:
+        return Restart(True, NOT_REGROUP)
+    if int(hold.get("left_s") or 0) > 0:
+        return Restart(False, BACKOFF)
+    if str(hold.get("target") or "") != REGROUP:
+        return Restart(True, NOT_REGROUP)
+    if running:
+        return Restart(True, RUNNING)
+    spots = {n: _spot((positions or {}).get(n)) for n in names}
+    if not any(spots.values()):
+        return Restart(True, UNREAD)
+    lead = spots.get(leader)
+    if lead is None:
+        return Restart(False, APART, ((leader, _UNSEEN),))
+    apart = tuple(
+        (name, why)
+        for name in sorted(n for n in spots if n != leader)
+        for why in (_apart_from(leader, lead, spots[name]),)
+        if why
+    )
+    if apart:
+        return Restart(False, APART, apart)
+    return Restart(True, TOGETHER)
