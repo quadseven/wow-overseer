@@ -324,6 +324,41 @@ EQUIPPED_SQL = (  # noqa: S608 - the bound is an int from armory, names stay pla
     + str(len(armory.EQUIPPED_SLOTS))
 )
 
+# The bags a member wears: the four bag positions of the paper doll, slots 19
+# to 22 of bag 0 (the bound `bag_pressure` and the gear routing reads use).
+# The carried query holds only what is inside the bags, so without this the
+# plan's "no bigger than a worn bag" was true of every carried bag (#2274).
+WORN_BAGS_SQL = (
+    "SELECT c.name AS member, ci.slot AS slot, "
+    "it.ContainerSlots AS container_slots "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND ci.bag = 0 AND ci.slot BETWEEN 19 AND 22"
+)
+
+
+def worn_bags(rows, names) -> dict:
+    """{member: (slot count of each worn bag, largest first)} from
+    `WORN_BAGS_SQL` rows, for every one of `names`.
+
+    A member with no row wears no bag: the read ran, so its answer is `()`,
+    not unknown. A row for another member, or one whose size does not read as
+    a positive number, is skipped.
+    """
+    out: dict = {str(n): [] for n in names or ()}
+    for row in rows or ():
+        try:
+            member = str(row["member"])
+            size = _int(row["container_slots"])
+        except (KeyError, TypeError, AttributeError):
+            continue
+        if member in out and size is not None and size > 0:
+            out[member].append(size)
+    return {m: tuple(sorted(sizes, reverse=True)) for m, sizes in out.items()}
+
+
 _WORN_FIELDS = (
     "entry",
     "item_class",
@@ -533,6 +568,7 @@ __all__ = [
     "NO_PRICE_SOURCE",
     "QUEST_LOG_SQL",
     "QUEST_TEMPLATE_SQL",
+    "WORN_BAGS_SQL",
     "absent_reason",
     "auction_prices",
     "equipped",
@@ -542,6 +578,7 @@ __all__ = [
     "quest_needs",
     "upgrade_verdicts",
     "verdict_rows",
+    "worn_bags",
     "worn_entries",
 ]
 

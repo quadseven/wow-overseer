@@ -75,6 +75,12 @@ class SaleReadingLine(unittest.TestCase):
         self.assertIn("per-axis=6.0/6.0/0.0", line)
         self.assertIn("refused 120s ago", line)
 
+    def test_it_names_the_vendor_entry_for_a_refused_sale(self):
+        line = item_plan.sale_reading(
+            "Ekka", HERE, (6.0, 6.0, 0.0), 120, vendor_entry=12345
+        )
+        self.assertIn("vendor entry=12345", line)
+
     def test_no_counter_and_no_refusal_still_say_so(self):
         line = item_plan.sale_reading("Ekka", None, None, None)
         self.assertIn("no counter", line)
@@ -101,6 +107,14 @@ class Wired(unittest.TestCase):
 
     def test_the_counter_yards_box_is_untouched(self):
         self.assertIn("\nTOWN_COUNTER_YARDS = 8\n", BRIDGE)
+
+    def test_the_sale_reading_queries_and_logs_the_vendor_entry(self):
+        query = _function("_nearest_vendor_reading")
+        self.assertIn("cr.id AS entry", BRIDGE)
+        self.assertIn('row["entry"]', query)
+        reading = _function("_log_sale_reading")
+        self.assertIn("_nearest_vendor_reading", reading)
+        self.assertIn("vendor_entry", reading)
 
 
 def _run_pass(refusals, standing, spot):

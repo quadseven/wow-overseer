@@ -94,7 +94,7 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 
 ## `GET /api/clips/pending`
 
-- Query: `paths`
+- Query: `paths`, `ages`
 - Answers: the pending rows on those stream paths, oldest first, at most 10, with the database clock.
 - Example: `overseer get /api/clips/pending paths=X`
 

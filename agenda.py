@@ -856,6 +856,7 @@ def build_agenda(
     creatures: dict | None = None,
     leader_now=NOT_READ,
     standin_rows: list[dict] | None = None,
+    queue_rows: list[dict] | None = None,
 ) -> dict:
     """Rows in, the current-goal banner's JSON out.
 
@@ -875,6 +876,10 @@ def build_agenda(
                   out, the line says only how long the family has been still.
     standin_rows  overseer_family_standin: who sits out the family's runs to
                   craft and who takes the seat (standin.py, sitting_out)
+    queue_rows    overseer_dungeon_queue's pending rows, any family: the
+                  campaign's state is read off this family's (queue_state),
+                  so a queued entry waiting to start is not a finished
+                  campaign (#2796). Left out, the counter alone decides.
 
     EVERY ONE OF THOSE MAY BE EMPTY. A realm whose worldserver predates a table
     hands in [] for it and gets a thinner sentence, never an exception. The
@@ -902,6 +907,7 @@ def build_agenda(
     rows = _enabled(roster_rows)
     names = [str(r["name"]) for r in rows]
     counter = campaign(rows)
+    state = queue_state(rows, queue_rows, counter)
     run = active_run(run_rows)
     err = errand(rows, trade_rows, creatures)
     order = orders(goal_rows, quest_titles, err)
@@ -930,6 +936,7 @@ def build_agenda(
         quest_titles,
         order,
         is_stalled,
+        state,
     )
     detail = list(detail) + [
         sitting_line(sitting[n], len(rows)) for n in sorted(sitting)
@@ -971,6 +978,9 @@ def build_agenda(
         "job_split": jsplit,
         "quest_split": qsplit,
         "campaign": counter,
+        # campaignqueue.campaign_state's word for where the campaign stands,
+        # the one the queue view and the console sections carry too.
+        "campaign_state": state["state"],
         "leader": counter["recorded_by"],
         "sitting_out": [sitting[n] for n in sorted(sitting)],
     }
@@ -1017,6 +1027,7 @@ def _decide(
     quest_titles,
     order,
     is_stalled,
+    state=None,
 ):
     """(activity, headline, detail lines, when the goal last changed).
 
@@ -1059,7 +1070,7 @@ def _decide(
     mode = _mode(rows[0])
     # Match the dungeon job forms accepted by the run coordinator.
     if jobs.is_dungeon_job(mode):
-        return _between_runs(run_rows, counter)
+        return _between_runs(run_rows, counter, state)
     if mode != jobs.DEFAULT:
         return _another_job(mode)
     return _questing(rows, err, qsplit, quest_titles, order)
@@ -1170,7 +1181,45 @@ def _side_errand_line(err: dict) -> str:
     return "Meanwhile %s is walking to %s%s." % (err["name"], err["target_text"], what)
 
 
-def _between_runs(run_rows: list, counter: dict):
+def queue_state(rows: list, queue_rows: list | None, counter: dict) -> dict:
+    """campaignqueue.campaign_state for the family these roster rows are.
+
+    The queue is keyed by the roster's `family` value, so the leader's row
+    names which rows are this family's. With no queue rows handed in the
+    counter alone decides, which is every sentence as it was before #2796.
+    """
+    leader = _leader(rows)
+    key = str((leader or {}).get("family") or "")
+    pending = campaignqueue.pending_by_family(queue_rows or [])
+    return campaignqueue.campaign_state(pending.get(key, []), counter)
+
+
+def _runs(count: int) -> str:
+    return "%d run%s" % (count, "" if count == 1 else "s")
+
+
+def _queued_next(state: dict, counter: dict):
+    """(headline, detail) while a queued entry waits for its start.
+
+    THE COUNTER STILL HOLDS THE CAMPAIGN BEFORE (#2796). It counts the active
+    queue head only, so until the queue pass starts the waiting entry it reads
+    the last campaign at its full count. Calling that "finished" and telling
+    the reader to queue more dungeons contradicted the queue line printed
+    right under the headline, which already read "(starting)".
+    """
+    headline = "Between dungeon campaigns: %s, %s, starts next." % (
+        state["place"],
+        _runs(state["runs"]),
+    )
+    detail = [
+        "It is queued and waits for its start. The count of %d of %d is the "
+        "campaign before it, and begins again when this one starts."
+        % (counter["done"], counter["wanted"])
+    ]
+    return headline, detail
+
+
+def _between_runs(run_rows: list, counter: dict, state: dict | None = None):
     """Set to dungeon with no run under way.
 
     Three genuinely different states wear this shape and the page must tell
@@ -1182,6 +1231,10 @@ def _between_runs(run_rows: list, counter: dict):
       - a run just ended and the next is about to start;
       - nothing has ever started, which on this module usually means the
         instance reset was refused three times running.
+
+    `state` is the campaign's state by its queue (queue_state). A queued entry
+    waiting to start is none of the three: it is the next campaign, and it is
+    said as that before the counter is read at all.
     """
     last = last_ended_run(run_rows)
     where = (
@@ -1189,13 +1242,19 @@ def _between_runs(run_rows: list, counter: dict):
         if last and last.get("map_id") is not None
         else None
     )
-    if counter["over"]:
+    state = state or {}
+    after = state.get("next") if state.get("state") == campaignqueue.OVER else None
+    if state.get("state") == campaignqueue.STARTING:
+        headline, detail = _queued_next(state, counter)
+    elif counter["over"]:
         headline = "The dungeon campaign is finished: %d of %d runs done." % (
             counter["done"],
             counter["wanted"],
         )
         detail = [
-            "Start the count again on the Decree tab, or queue more dungeons "
+            "The queue moves on to %s, %s." % (after["place"], _runs(after["runs"]))
+            if after
+            else "Start the count again on the Decree tab, or queue more dungeons "
             "there, to go again."
         ]
     else:
