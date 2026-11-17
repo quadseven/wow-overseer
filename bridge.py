@@ -223,6 +223,8 @@ import tabard
 import teamsync
 import towntrip
 import deathcells
+import hearthcast
+import hearthcast_data
 import townerrand
 import townslot
 import claims
@@ -6760,6 +6762,25 @@ def _movement_reads(names: list) -> dict:
                               tuple(names))
         out["hearthed"] = frozenset(str(r["target_name"]) for r in rows or ())
     return out
+
+
+def _hearth_hub_kept(hub: dict, leader: str, names: list, positions: dict,
+                     reads: dict) -> bool:
+    """Do the family's hearthstones carry it to `hub` (wow-overseer#2333)?
+
+    hearthcast decides, per member, from what hearthcast_data reads here: the
+    carried stone, its saved cooldown and the live pulse. A read that fails,
+    or a connection that does not open, is logged once there and reads as
+    "cannot cast", so the hub is not kept and nothing raises into the errand.
+    Reads only.
+    """
+    facts = hearthcast_data.read_from(_connect, names, log)
+    verdict = hearthcast.keeps_hub(hub, leader, hearthcast.members(
+        names, positions, reads.get("binds"), reads.get("hearthed"), facts))
+    if verdict.said:
+        log.info("town errand: the hearthstone hub is not kept as the aim: "
+                 "%s", verdict.said)
+    return verdict.keep
 
 
 # --- the family intent choice's reads and writer (jev_family_intent.py) -------
@@ -22790,9 +22811,14 @@ class Bridge(discord.Client):
         # A BIND HUB THE HEAD'S STONE REACHES IS NOT A LONG WALK (#2329): the
         # family casts there together, so the aim stays on the hub.
         reads = await asyncio.to_thread(_movement_reads, list(names))
-        casts = townerrand.to_hearth(hub, positions, names, reads["hearthed"],
-                                     reads["binds"])
         if why == townerrand.BAG_PRESSURE_WHY and standing and stops_of:
+            # THE CAST IS READ, NOT INFERRED (#2333): the head holds a stone
+            # that is off cooldown and is alive, and no member is left with
+            # the long walk. Looked up like the stops above; without the
+            # reader no hub is kept, as before #2329.
+            kept_of = globals().get("_hearth_hub_kept", lambda *a: False)
+            hearth_reaches = await asyncio.to_thread(
+                kept_of, hub, leader, list(names), positions, reads)
             stops = townerrand.vendor_stops(
                 await asyncio.to_thread(stops_of, leader, standing),
                 situation.ALLIANCE_MASK if teams.get(leader) == "alliance"
@@ -22828,7 +22854,7 @@ class Bridge(discord.Client):
 
             chosen = townerrand.choose_aim(
                 hub, stops, standing, why, released, now, deaths=deaths,
-                hearth_reaches=leader in casts, walled=walled)
+                hearth_reaches=hearth_reaches, walled=walled)
             if chosen != hub:
                 log.info("town errand: %s%s aims at %s instead of %s (%s)",
                          why, label, chosen.get("place", "a vendor"),
