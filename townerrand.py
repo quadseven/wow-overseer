@@ -175,6 +175,11 @@ class State:
     # GO stall bound). Negative `go_best` means no reading yet.
     go_best: float = -1.0
     go_best_at: float = 0.0
+    # The errand has written the leader's aim at least once on this walk, and
+    # how many times the aim was found cleared since the leader last gained
+    # GO_PROGRESS_YARDS (#2151): a walk that restarts is not a walk.
+    go_aimed: bool = False
+    go_restarts: int = 0
 
     @property
     def active(self) -> bool:
@@ -518,6 +523,10 @@ LOOP_UNLANDED_RETRY_SECONDS = 1800.0
 # to an errand after 300s, so this is longer than that.
 GO_STALL_SECONDS = 600.0
 GO_PROGRESS_YARDS = 20.0
+# The aim written for the leader found cleared, and written again, this many
+# times without the leader gaining GO_PROGRESS_YARDS: the world is refusing the
+# walk, and a fifth identical try is not a plan (#2151).
+GO_RESTART_BOUND = 4
 AIM_MEMORY_SECONDS = 4 * 3600.0
 # Two aims this close on one map are the same aim (a town square's counters).
 AIM_SAME_YARDS = 120.0
@@ -715,6 +724,12 @@ def choose_aim(
     return dict(stop)
 
 
+def aimed(state: State) -> State:
+    """The errand once its aim for the leader was written: from now on a
+    cleared column is a walk that ended, not one that never began."""
+    return state if state.go_aimed else replace(state, go_aimed=True)
+
+
 def hearthing(state: State, now: float) -> State:
     """The errand after hearth rows were written at `now`: the leader is left
     alone for the cast. A member still far from home while the family walks
@@ -755,6 +770,7 @@ def advance(
     bag_pressure_needed: bool = False,
     bag_room_made: bool = False,
     hub_yards: float | None = None,
+    aim_lost: bool = False,
 ) -> tuple:
     """The next state and one sentence about what changed ('' when nothing).
 
@@ -805,7 +821,10 @@ def advance(
             )
         if hub_yards is not None and now >= state.hearth_until:
             if state.go_best < 0 or hub_yards <= state.go_best - GO_PROGRESS_YARDS:
-                state = replace(state, go_best=hub_yards, go_best_at=now)
+                state = replace(
+                    state, go_best=hub_yards, go_best_at=now,
+                    go_restarts=0 if state.go_best >= 0 else state.go_restarts,
+                )
             elif now - state.go_best_at >= GO_STALL_SECONDS:
                 return end(
                     state,
@@ -817,6 +836,21 @@ def advance(
                         int(hub_yards),
                         int(GO_PROGRESS_YARDS),
                         int(now - state.go_best_at),
+                    ),
+                )
+        if aim_lost:
+            state = replace(state, go_restarts=state.go_restarts + 1)
+            if state.go_restarts >= GO_RESTART_BOUND:
+                return end(
+                    state,
+                    now,
+                    "the walk to the capital %s: it restarted %d times with "
+                    "the leader gaining no %d yards; the aim is dropped and "
+                    "the family released"
+                    % (
+                        DID_NOT_LAND,
+                        state.go_restarts,
+                        int(GO_PROGRESS_YARDS),
                     ),
                 )
         return state, ""

@@ -1529,3 +1529,70 @@ class TheBridgeReadsTheLeaderTowardTheHub(unittest.TestCase):
         self.assertIn(
             "hub_yards=townerrand.yards_to(hub, positions.get(leader))", BRIDGE
         )
+
+
+class AWalkThatKeepsRestartingIsReleased(unittest.TestCase):
+    """#2151, #1261. The leader's walk to the mailbox ended and restarted
+    again and again (the module cleared the aim, the errand wrote it back)
+    and the family held its one travel column the whole time. The yard
+    bound did not see it: each restart gained a few yards. A walk that has
+    restarted GO_RESTART_BOUND times without gaining GO_PROGRESS_YARDS is
+    released as one that did not land, by name."""
+
+    def _aimed(self):
+        s = te.start(0.0, HUB, te.BAG_PRESSURE_WHY)
+        s, _ = te.advance(s, 5.0, hub_yards=900.0)
+        return te.aimed(s)
+
+    def test_it_stops_at_the_bound_and_names_the_restarts(self):
+        s = self._aimed()
+        for tick in range(1, te.GO_RESTART_BOUND):
+            s, line = te.advance(s, 5.0 + tick * 30.0, hub_yards=900.0,
+                                 aim_lost=True)
+            self.assertEqual(te.GO, s.phase, line)
+        s, line = te.advance(s, 400.0, hub_yards=900.0, aim_lost=True)
+        self.assertEqual(te.DONE, s.phase)
+        self.assertIn(te.DID_NOT_LAND, line)
+        self.assertIn("restarted %d times" % te.GO_RESTART_BOUND, line)
+        self.assertTrue(s.unlanded)
+
+    def test_a_walk_that_gains_ground_between_restarts_is_not_cut(self):
+        s = self._aimed()
+        yards = 900.0
+        for tick in range(1, 3 * te.GO_RESTART_BOUND):
+            yards -= 2 * te.GO_PROGRESS_YARDS
+            s, line = te.advance(s, 5.0 + tick * 30.0, hub_yards=yards,
+                                 aim_lost=True)
+            self.assertEqual(te.GO, s.phase, line)
+
+    def test_a_walk_with_its_aim_standing_is_never_counted(self):
+        s = self._aimed()
+        for tick in range(1, 4 * te.GO_RESTART_BOUND):
+            s, _ = te.advance(s, 5.0 + tick * 10.0, hub_yards=900.0)
+            self.assertEqual(0, s.go_restarts)
+
+    def test_arriving_on_the_restart_still_gathers(self):
+        s = self._aimed()
+        s, line = te.advance(s, 40.0, leader_at_hub=True, aim_lost=True)
+        self.assertEqual(te.GATHER, s.phase, line)
+
+    def test_the_release_is_remembered_so_the_next_errand_picks_another_aim(self):
+        s = self._aimed()
+        old = s
+        for tick in range(1, te.GO_RESTART_BOUND + 1):
+            old = s
+            s, _ = te.advance(s, 5.0 + tick * 30.0, hub_yards=900.0,
+                              aim_lost=True)
+        self.assertEqual(HUB, te.unlanded_aim(old, s))
+
+
+class TheBridgeCountsALostAim(unittest.TestCase):
+    def test_the_pass_hands_advance_whether_the_aim_was_cleared(self):
+        self.assertIn("aim_lost=aim_lost", BRIDGE)
+        self.assertIn("townerrand.aimed(state)", BRIDGE)
+
+    def test_only_an_empty_column_after_our_own_aim_is_a_lost_aim(self):
+        self.assertIn("state.go_aimed", BRIDGE)
+        self.assertIn(
+            "aim_lost = not await asyncio.to_thread(column, leader)", BRIDGE
+        )
