@@ -41,6 +41,7 @@ import guildgather
 import lowrung
 import bag_pressure
 import lootpolicy
+import speakgate
 import bag_upgrade
 import bank
 import bankbags
@@ -527,10 +528,26 @@ def _record_strategy(cmd: core.InsertCommand) -> None:
                       cmd.command, cmd.target_name)
 
 
+_SPEAK_GATE = speakgate.SpeakGate.from_environ()
+
+
 def _insert_speak(cmd: relay.SpeakCommand) -> int:
     # The line is fitted to the column in orders.speak_order (#217). The
     # council keeps the whole line in overseer_thought, whose text column
     # holds it.
+    # The same line from the same speaker is spoken once inside a short window,
+    # and a standing request only after its interval (speakgate, #2247).
+    verdict = _SPEAK_GATE.check(
+        cmd.target_name, cmd.channel, cmd.whisper_to, cmd.text, cmd.source,
+        time.monotonic(),
+    )
+    if verdict != speakgate.SEND:
+        log.info(
+            "not speaking: %s's line on %s is %s (%d held back so far): %.60s",
+            cmd.target_name, cmd.channel, verdict,
+            sum(_SPEAK_GATE.suppressed.values()), cmd.text,
+        )
+        return 0
     return orders.send(_orders_store(), orders.speak_order(cmd))
 
 
