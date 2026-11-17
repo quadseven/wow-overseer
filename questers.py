@@ -176,6 +176,10 @@ SELL_FLOOR = 1
 # walk and the rows run inside it, and a vendor out of reach is not asked
 # every pass.
 SELL_COOLDOWN_MINUTES = 20
+# A hunt refused for a full bag gets a longer retry window than a sale. The
+# sale step runs first; if it cannot make room, a three-hour window keeps the
+# same refusal from recurring every pass while still retrying in bounded time.
+BAG_HUNT_RETRY_MINUTES = 3 * 60
 # A quester's crossing row has its own source action (quest takes, hand-ins
 # and hunts are ACTION), so it shares the one crossing clock and the walls of
 # the class quest's and the level step's crossings (guildjobs.CROSS_ACTIONS).
@@ -1336,14 +1340,17 @@ def bag_room_refused(name, tried) -> frozenset:
     return frozenset(out)
 
 
-def bags_full_hunt(name, tried) -> bool:
-    """Whether a hunt of this quester was refused for a full bag
-    (classhunt.BAGS_FULL_REASON) inside SELL_COOLDOWN_MINUTES. The module calls
-    that refusal retryable, but nothing in a hunt makes room, so asking again
-    every pass was the same refusal (142 in a day for one member): the quester
-    sells first and the hunt waits out the cooldown."""
+def bags_full_hunt(name, tried, free_slots=None) -> bool:
+    """Whether a full-bag hunt refusal still holds this quester.
+
+    A free slot releases the hold early after the sale step makes room. With
+    no room (or unread bags), the hold lasts through BAG_HUNT_RETRY_MINUTES so
+    the retry is bounded without repeating the same refusal every pass.
+    """
+    if free_slots is not None and int(free_slots) > 0:
+        return False
     for a in tried or ():
-        if a.name != name or not a.failed or a.age_minutes >= SELL_COOLDOWN_MINUTES:
+        if a.name != name or not a.failed or a.age_minutes >= BAG_HUNT_RETRY_MINUTES:
             continue
         if classhunt.is_hunt_row(a.command) and classhunt.BAGS_FULL_REASON in a.reason:
             return True
@@ -1759,7 +1766,7 @@ def failures(
     # A quester whose hunts are refused for bag room is not working a quest:
     # its clock waits for the sale (`needs_sale`).
     playing = bool(member.online and member.alive) and not bags_full_hunt(
-        member.name, tried
+        member.name, tried, member.free_slots
     )
     out = []
     for qid in sorted(member.quest_log):
@@ -2085,12 +2092,12 @@ def next_move(
             quest.title,
         )
         return _move(classquest.TAKE, member, quest, spot, said), "", never_held
-    # A hunt just refused for a full bag waits on the sale.
-    if bags_full_hunt(member.name, tried):
+    # A hunt just refused for a full bag waits for room or its bounded retry.
+    if bags_full_hunt(member.name, tried, member.free_slots):
         return (
             None,
-            "%s's last hunt was refused for a full bag and waits on a sale"
-            % member.name,
+            "%s's last hunt was refused for a full bag and waits for room or its %d-minute retry"
+            % (member.name, BAG_HUNT_RETRY_MINUTES),
             never_held,
         )
     # 4. A quest it holds: the nearest objective spawn within its level.
