@@ -95,6 +95,7 @@ import guildshare
 import guildpost
 import guildroute
 import gearrouting
+import gearroomwait
 import gearroutingexec
 import gearroutingread
 import orders
@@ -14049,16 +14050,32 @@ class Bridge(discord.Client):
         `_insert_route`, the guild hand-over writer: a trade when holder and
         wearer stand together, a letter when the holder stands at a mailbox and
         the wearer is family; otherwise the piece goes by post when its holder
-        next stands at a mailbox. Never a give, nothing granted, never a piece an
-        overseer_keep reservation holds, and at most GEAR_ROUTING_PER_PASS rows.
+        next stands at a mailbox. The piece never goes by a give, nothing is
+        granted, never a piece an overseer_keep reservation holds, and at most
+        GEAR_ROUTING_PER_PASS rows.
         One log line per hand-off decision; the waits are counted.
+
+        A WEARER WITH FULL BAGS MAKES ROOM FIRST, AND ITS WAIT ENDS (#2245):
+        beside the holder it gives its cheapest grey to the holder ahead of the
+        move (the #550 step), and a move still blocked for room past
+        GEAR_ROUTING_ROOM_WAIT_MINUTES is planned without that wearer until its
+        bags have room (gearroomwait.py), each change on one log line.
         """
         family = sorted(await asyncio.to_thread(_roster_names))
         if not family:
             return
         wearers, gear_rows, bank_rows = await asyncio.to_thread(_read_gear_routing, family)
+        waits = getattr(self, "_gear_room_waits", {})
+        held = gearroomwait.barred_wearers(waits)
+        if held:
+            waits, said = gearroomwait.release(
+                waits, await asyncio.to_thread(_fetch_free_slots, held))
+            for line in said:
+                log.info("gear routing: %s", line)
+        self._gear_room_waits = waits
         report = gearrouting.plan(wearers, gear_rows, bank_rows=bank_rows,
-                                  keep_names=gearroutingread.KEEPS)
+                                  keep_names=gearroutingread.KEEPS,
+                                  barred=gearroomwait.barred(waits))
         # A PIECE IN THE GUILD BANK IS TAKEN OUT BY A MEMBER (#2504): the guild
         # bank pass, which owns the walk to the vault and its town slot lease,
         # reads these on its next turn.
@@ -14066,6 +14083,9 @@ class Bridge(discord.Client):
             report, bank_rows, wearers)
         if not report.routes:
             log.info("gear routing: no routes this pass")
+            # No move waits on room this pass, so no wait keeps its clock.
+            self._gear_room_waits, _ = gearroomwait.observe(
+                waits, gearroutingexec.Result(), time.time(), 0)
             return
         who = gearroutingexec.members_to_read(
             report, [str(r.get("name") or "") for r in wearers])
@@ -14092,11 +14112,16 @@ class Bridge(discord.Client):
             # post pass collects a member's letters (guildpost.py, #625).
             postable=frozenset(family) | frozenset(
                 str(r.get("name") or "") for r in wearers),
+            freeables=await self._gear_routing_freeables(who, free_slots),
         )
         result = await asyncio.to_thread(
             gearroutingexec.execute, report, world, _insert_route,
-            per_pass=GEAR_ROUTING_PER_PASS,
+            per_pass=GEAR_ROUTING_PER_PASS, insert_free=_insert_room_step,
         )
+        self._gear_room_waits, said = gearroomwait.observe(
+            waits, result, time.time(), GEAR_ROUTING_ROOM_WAIT_MINUTES * 60)
+        for line in said:
+            log.info("gear routing: %s", line)
         for line in gearroutingexec.decision_lines(result):
             log.info("gear routing: %s", line)
         _log_capped("gear routing", [
@@ -14106,6 +14131,24 @@ class Bridge(discord.Client):
         log.info("gear routing: %s", gearroutingexec.summary(result))
         if GEAR_ROUTING_WALKS:
             await self._gear_routing_walks(result, world)
+
+    async def _gear_routing_freeables(self, names: list, free_slots: dict) -> dict:
+        """name -> the grey a full member may give away to make room (#2245).
+
+        Only full members the AI drives now are read, so nothing leaves the
+        bags of a character a person is playing, and a stack the operator
+        reserved (overseer_keep) is never offered: the rule `_guild_gear_share_once`
+        keeps for the same step (#550).
+        """
+        full = [name for name in names if free_slots.get(name, 0) <= 0]
+        if not full:
+            return {}
+        driven = await asyncio.to_thread(_bot_held_names, full)
+        junk = await asyncio.to_thread(_fetch_vendor_items, driven)
+        junk = [row for row in junk
+                if not _KEEP.blocks(str(row.get("holder", "")),
+                                    "guid:%s" % row.get("item_guid"))]
+        return bag_pressure.freeable_greys(junk, OWNER_KEEPS)
 
     async def _gear_bank_requests(self, report, bank_rows, wearers) -> tuple:
         """(clock, ((route, tab, guild), ...), name -> guild) for the report's
@@ -35479,6 +35522,10 @@ GEAR_BANK_ROUTES_SECONDS = 1800.0
 # THE WALKS A WAITING GEAR ROUTE ASKS FOR (#2503). Its own budget, because the
 # guild route pass spends guildroute.MAIL_RUNS_PER_DAY (6) and a 341-route
 # report would use all of it. Off switch: GEAR_ROUTING_WALKS=0.
+# How long a routed piece waits on a wearer whose bags stay full before it is
+# planned for the next member (#2245, gearroomwait.py). 0 turns the bar off.
+GEAR_ROUTING_ROOM_WAIT_MINUTES = int(os.environ.get(
+    "GEAR_ROUTING_ROOM_WAIT_MINUTES", str(gearroomwait.ROOM_WAIT_MINUTES)))
 GEAR_ROUTING_WALKS = os.environ.get("GEAR_ROUTING_WALKS", "1") != "0"
 GEAR_ROUTING_WALKS_PER_DAY = int(os.environ.get("GEAR_ROUTING_WALKS_PER_DAY", "30"))
 GEAR_ROUTING_WALKS_PER_PASS = int(os.environ.get("GEAR_ROUTING_WALKS_PER_PASS", "2"))
@@ -37731,6 +37778,12 @@ def _insert_route(route) -> int:
                 return 0
             raise
         return cur.lastrowid or 0
+
+
+def _insert_room_step(free) -> int:
+    """The make-room give ahead of a routed piece, under its own source
+    (#2245), so the gear pass's retry window does not read it as its own."""
+    return _insert_gear_handoff(free, gearroutingexec.ROOM_SOURCE)
 
 
 def _recent_trade_keys(minutes: int) -> set:

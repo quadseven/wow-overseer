@@ -58,6 +58,14 @@ _BANK_WAIT = (
     "piece waits for a member to withdraw it"
 )
 
+# Why a route waits, as data, when the reason is the wearer's bags (#2245): the
+# wearer stands beside the holder with no free slot and no slot could be freed.
+BLOCKED_ROOM = "room"
+
+# The `overseer_command.source` of the make-room step written ahead of a
+# routed piece: the full wearer's cheapest grey, given to the holder (#2245).
+ROOM_SOURCE = "gearroute-room"
+
 # The `overseer_command.source` of a withdrawal for a routed piece (#2504).
 # Not stock for sale: `bankforecast.WITHDRAWN_SQL` leaves it out.
 BANK_SOURCE = "guildbank-gear"
@@ -80,6 +88,9 @@ class World:
     # is postable: the guild post pass walks a member off the roster to its
     # mailbox and takes its post out (guildpost.py, #625).
     postable: frozenset | set | None = None
+    # name -> the junk stacks a full wearer may give away to make room
+    # (bag_pressure.freeable_greys). None: nobody read them, no step is made.
+    freeables: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -90,12 +101,14 @@ class Step:
     status: str
     why: str = ""
     row: object = None  # the gear.Route handed to `insert`, when there was one
+    blocked: str = ""  # BLOCKED_ROOM when the wait is for the wearer's bags
+    frees: tuple = ()  # the make-room steps ordered ahead of the move
 
     @property
     def said(self) -> str:
         """Who gave, who received, what piece - the audit line."""
         if self.row is not None:
-            return self.row.said
+            return "; then ".join([f.said for f in self.frees] + [self.row.said])
         r = self.route
         return "%s -> %s, %s (item %d): %s" % (
             r.holder,
@@ -158,8 +171,36 @@ def _kept(route, reservations) -> bool:
     ) in reservations.entries
 
 
+def _write(chosen, route, insert, insert_free) -> Step:
+    """The make-room step first, so the trade that follows has its slot. A
+    step that cannot be written holds its move with it."""
+    for free in chosen.frees:
+        if not insert_free(free):
+            return Step(
+                route,
+                WAITING,
+                "the make-room step (%s) could not be written, so the move waits"
+                % free.said,
+                blocked=BLOCKED_ROOM,
+            )
+    if insert(chosen):
+        return Step(route, WRITTEN, row=chosen, frees=chosen.frees)
+    return Step(
+        route,
+        DECLINED,
+        "the hand-over writer declined the row",
+        row=chosen,
+        frees=chosen.frees,
+    )
+
+
 def execute(
-    report, world: World, insert, dry_run: bool = False, per_pass=None
+    report,
+    world: World,
+    insert,
+    dry_run: bool = False,
+    per_pass=None,
+    insert_free=None,
 ) -> Result:
     """Decide, and unless `dry_run`, write, every route in `report`.
 
@@ -167,6 +208,12 @@ def execute(
     it wrote (0: declined, e.g. already in the retry window or reserved).
     `per_pass` caps how many routes are written (None: every one that can
     be); a route past the cap waits, with the machinery's own words.
+
+    A FULL WEARER BESIDE THE HOLDER MAKES ROOM FIRST (#2245). With
+    `world.freeables` read and `insert_free(gear.Free) -> int` to write it, the
+    wearer's cheapest grey goes to the holder ahead of the move. Without a
+    writer no step is planned, so no trade is written that needs one. A route
+    that still waits on the wearer's bags carries `blocked == BLOCKED_ROOM`.
     """
     postable = (
         set(world.family or ()) if world.postable is None else set(world.postable)
@@ -207,21 +254,25 @@ def execute(
         world.at_mailbox,
         world.free_slots,
         per_pass=max(len(live), 1) if per_pass is None else max(int(per_pass), 0),
+        freeables=world.freeables if dry_run or insert_free is not None else None,
     )
     by_key = {(g.holder, g.guid): g for g in ready.grants}
+    crowded = set(ready.crowded)
     for index, planned in live:
         route = report.routes[index]
         chosen = by_key.get((planned.holder, planned.guid))
         if chosen is None:
-            steps[index] = Step(route, WAITING, _wait_reason(route, ready.notes))
-        elif dry_run:
-            steps[index] = Step(route, WOULD_WRITE, row=chosen)
-        elif insert(chosen):
-            steps[index] = Step(route, WRITTEN, row=chosen)
-        else:
+            full = (route.holder, int(route.guid), route.wearer) in crowded
             steps[index] = Step(
-                route, DECLINED, "the hand-over writer declined the row", row=chosen
+                route,
+                WAITING,
+                _wait_reason(route, ready.notes),
+                blocked=BLOCKED_ROOM if full else "",
             )
+        elif dry_run:
+            steps[index] = Step(route, WOULD_WRITE, row=chosen, frees=chosen.frees)
+        else:
+            steps[index] = _write(chosen, route, insert, insert_free)
     return Result(
         steps=tuple(steps[i] for i in range(len(report.routes))), dry_run=dry_run
     )
@@ -517,11 +568,22 @@ def dry_run_view(report, world: World) -> dict:
                 "status": step.status,
                 "verb": step.row.verb if step.row is not None else "",
                 "why": step.why,
+                "blocked": step.blocked,
+                "frees": [
+                    {
+                        "holder": f.holder,
+                        "taker": f.taker,
+                        "guid": f.guid,
+                        "item": f.name,
+                    }
+                    for f in step.frees
+                ],
             }
         )
     return {
         "dry_run": True,
         "would_write": sum(1 for s in steps if s["status"] == WOULD_WRITE),
+        "blocked_for_room": sum(1 for s in steps if s["blocked"] == BLOCKED_ROOM),
         "steps": steps,
         "lines": ["%s: %s" % (step.status, step.said) for step in result.steps],
         "notes": [
