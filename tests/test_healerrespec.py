@@ -11,6 +11,7 @@ healing strategy). Nothing wrote that row. healerrespec.py is the planner that
 does.
 """
 
+import json
 import unittest
 
 import guildroute
@@ -219,6 +220,114 @@ class ThePlan(unittest.TestCase):
             {"source": "guildtrain:Clobba", "age": 1, "target_name": "Clobba"},
         ]
         self.assertEqual({"Embo"}, healerrespec.recent_walkers(rows))
+
+
+NO_TRAINER = json.dumps(
+    {
+        "outcome": "refused",
+        "reason": "no trainer of this character's class on this map resets talents",
+        "retryable": False,
+        "map": 1,
+    }
+)
+
+
+def log_row(name, age, status="applied", detail="", result=""):
+    return {
+        "source": "healerrespec:" + name,
+        "target_name": name,
+        "age": age,
+        "status": status,
+        "detail": detail,
+        "result": result,
+    }
+
+
+class TheWalkThatReachedNoTrainer(unittest.TestCase):
+    """#2864: a walk that bought nothing is not a walk done."""
+
+    def test_a_no_trainer_refusal_does_not_hold_the_cooldown(self):
+        rows = [log_row("Bluk", 30, "error", "no trainer", NO_TRAINER)]
+        self.assertEqual(set(), healerrespec.recent_walkers(rows))
+
+    def test_an_applied_walk_still_holds_the_cooldown(self):
+        rows = [log_row("Embo", 30, "applied")]
+        self.assertEqual({"Embo"}, healerrespec.recent_walkers(rows))
+
+    def test_a_walk_ended_by_a_restart_does_not_hold_the_cooldown(self):
+        rows = [
+            log_row(
+                "Gakk", 30, "error", "restart: claim expired: the run holding it is gone"
+            )
+        ]
+        self.assertEqual(set(), healerrespec.recent_walkers(rows))
+
+    def test_other_errors_still_hold_the_cooldown(self):
+        rows = [log_row("Gakk", 30, "error", "character is on a flight path")]
+        self.assertEqual({"Gakk"}, healerrespec.recent_walkers(rows))
+
+
+class TheStrandedHealer(unittest.TestCase):
+    def _cand(self, name="Embo"):
+        found, _ = healerrespec.candidates("Cave", [row(name)], roster=set())
+        return found
+
+    def test_stranded_reads_the_map_of_the_newest_refusal(self):
+        rows = [log_row("Bluk", 30, "error", "no trainer", NO_TRAINER)]
+        self.assertEqual({"Bluk": 1}, healerrespec.stranded(rows))
+
+    def test_a_later_walk_of_another_kind_frees_the_member(self):
+        rows = [
+            log_row("Bluk", 300, "error", "no trainer", NO_TRAINER),
+            log_row("Bluk", 10, "applied"),
+        ]
+        self.assertEqual({}, healerrespec.stranded(rows))
+
+    def test_other_sources_do_not_strand_a_healer(self):
+        rows = [dict(log_row("Bluk", 30, "error", "x", NO_TRAINER), source="guildtrain:Bluk")]
+        self.assertEqual({}, healerrespec.stranded(rows))
+
+    def test_a_member_still_on_the_refused_map_waits_and_says_which(self):
+        stuck = guildroute.Walker("Embo", map_id=1, by_row=True)
+        walks, notes = healerrespec.plan(
+            self._cand(), {"Embo": stuck}, recent=set(), busy=set(), stranded={"Embo": 1}
+        )
+        self.assertEqual([], walks)
+        self.assertEqual(1, len(notes))
+        self.assertIn("map 1", notes[0])
+        self.assertIn("Embo", notes[0])
+
+    def test_a_member_on_another_map_is_walked(self):
+        moved = guildroute.Walker("Embo", map_id=0, by_row=True)
+        walks, notes = healerrespec.plan(
+            self._cand(), {"Embo": moved}, recent=set(), busy=set(), stranded={"Embo": 1}
+        )
+        self.assertEqual(["Embo"], [w.name for w in walks])
+        self.assertEqual([], notes)
+
+
+class TheBridgeReadsTheRefusals(unittest.TestCase):
+    def test_the_respec_rows_carry_status_and_result_and_the_old_refusals(self):
+        with open("bridge.py", encoding="utf-8") as fh:
+            text = fh.read()
+        body = text[
+            text.index("def _respec_walk_rows") : text.index("def _guild_train_rows")
+        ]
+        self.assertIn("status", body)
+        self.assertIn("result", body)
+        self.assertIn("detail", body)
+        self.assertIn("STRANDED_READ_DAYS", body)
+
+    def test_the_pass_hands_the_stranded_map_to_the_plan(self):
+        with open("bridge.py", encoding="utf-8") as fh:
+            text = fh.read()
+        once = text[
+            text.index("async def _guild_respec_once") : text.index(
+                "def _guild_walkers_busy"
+            )
+        ]
+        self.assertIn("healerrespec.stranded(", once)
+        self.assertIn("stranded=", once)
 
 
 class TheLineup(unittest.TestCase):

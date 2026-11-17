@@ -389,15 +389,16 @@ def _result_of(row) -> dict:
     return result if isinstance(result, dict) else {}
 
 
-def stranded(rows) -> dict:
+def stranded(rows, source_prefix: str = SOURCE) -> dict:
     """name -> the map each member's newest class trainer walk was refused on,
     for those whose newest walk was refused for no trainer of their class on
     that map. A later walk of any other kind frees the member. `rows` carry
-    target_name, source, age (minutes) and result."""
+    target_name, source, age (minutes) and result. `source_prefix` names the
+    pass whose rows are read (the healer respec pass writes its own)."""
     newest: dict = {}
     for row in rows or ():
         source = str(row.get("source") or "")
-        if not source.startswith(SOURCE + ":"):
+        if not source.startswith(source_prefix + ":"):
             continue
         name = str(row.get("target_name") or source.split(":", 1)[1])
         age = _int(row.get("age"), 10**9)
