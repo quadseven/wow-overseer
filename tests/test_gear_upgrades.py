@@ -173,6 +173,38 @@ class TheSlotsReadAgainstTheLists(unittest.TestCase):
         self.assertIsNone(slot_of(one, "trinket 1")["next"])
         self.assertEqual(slot_of(one, "trinket 2")["next"]["entry"], second)
 
+    def test_a_trinket_scores_its_equip_spell_so_a_worn_one_gets_a_next_piece(self):
+        # Spell 13881 reads "Increases spell power by 29." Trinket value is
+        # almost all equip spell, so a list trinket carrying only that spell
+        # must score above zero and be named over a bare worn trinket (#2905).
+        first, second = gearscore.slot_list("mage-dps", "preraid", "trinket")[:2]
+        spell = {"spellid_1": 13881, "spelltrigger_1": 1}
+        trinkets = {first: row(first), second: row(second, **spell)}
+        out = build([worn("trinket 1", first, 0)], MAGE, trinkets)
+        slot = slot_of(out, "trinket 1")
+        self.assertEqual(slot["next"]["entry"], second)
+        self.assertGreater(slot["next"]["score"], 0.0)
+        self.assertGreater(slot["next"]["gain"], 0.0)
+        listed = {t["entry"]: t["score"] for t in slot["targets"]["preraid"]}
+        self.assertGreater(listed[second], 0.0)
+
+    def test_a_worn_trinket_is_scored_by_its_equip_spell_too(self):
+        # Both sides read the same way, or a worn spell trinket would lose to
+        # any listed one on a one-sided score.
+        first, second = gearscore.slot_list("mage-dps", "preraid", "trinket")[:2]
+        spell = {"spellid_1": 13881, "spelltrigger_1": 1}
+        trinkets = {first: row(first), second: row(second, **spell)}
+        wearing = worn("trinket 1", second, 0)
+        wearing.update(spell)
+        out = build([wearing], MAGE, trinkets)
+        self.assertGreater(slot_of(out, "trinket 1")["worn"]["score"], 0.0)
+
+    def test_an_on_use_spell_is_not_counted_as_a_stat(self):
+        first, second = gearscore.slot_list("mage-dps", "preraid", "trinket")[:2]
+        use = {"spellid_1": 13881, "spelltrigger_1": 0}
+        stats = gearupgrades.item_stats({first: row(first, **use)})
+        self.assertEqual(stats[first].get("spell_power", 0), 0)
+
     def test_a_ring_is_not_told_to_buy_the_other_rings_item(self):
         rings = {22339: row(22339, 30), 942: row(942, 20)}
         out = build([worn("finger 1", 22339, 30)], MAGE, rings)

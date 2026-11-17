@@ -35,6 +35,8 @@ _STAT_COLUMNS = (
     "it.armor, it.block, it.dmg_min1, it.dmg_max1, it.delay, "
     "it.holy_res, it.nature_res, it.frost_res, it.shadow_res, it.arcane_res, "
     + ", ".join(f"it.stat_type{n}, it.stat_value{n}" for n in range(1, 11))
+    + ", "
+    + ", ".join(f"it.spellid_{n}, it.spelltrigger_{n}" for n in range(1, 6))
 )
 
 # The worn read: one row per worn slot with everything gearscore reads, plus

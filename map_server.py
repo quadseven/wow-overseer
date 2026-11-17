@@ -1122,6 +1122,8 @@ def _fetch_upgrade_items(ids: list[int]) -> dict[int, dict]:
                 "it.holy_res, it.fire_res, it.nature_res, it.frost_res, "
                 "it.shadow_res, it.arcane_res, "
                 + ", ".join(f"it.stat_type{n}, it.stat_value{n}" for n in range(1, 11))
+                + ", "
+                + ", ".join(f"it.spellid_{n}, it.spelltrigger_{n}" for n in range(1, 6))
                 + f" FROM acore_world.item_template it WHERE it.entry IN ({holes})",
                 tuple(ids),
             )
