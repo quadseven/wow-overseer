@@ -1,8 +1,19 @@
 """Fail when the checked-out mod-overseer pin is not on origin/main."""
 
 import argparse
+import os
 import subprocess
 import sys
+
+
+def _fetch_failure_reason(fetch):
+    """One line naming why a fetch failed: its last stderr line, or its
+    exit code when it said nothing."""
+    lines = [line.strip() for line in (fetch.stderr or "").splitlines()]
+    lines = [line for line in lines if line]
+    if lines:
+        return " ".join(lines[-1].split())
+    return "git fetch exited %d" % fetch.returncode
 
 
 def main(argv=None):
@@ -23,7 +34,28 @@ def main(argv=None):
     fetch = ["git", "-C", args.submodule, "fetch", "--quiet"]
     if shallow == "true":
         fetch.append("--unshallow")
-    subprocess.run([*fetch, "origin", "main"], check=True)
+    fetched = subprocess.run(
+        [*fetch, "origin", "main"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if fetched.returncode != 0:
+        # A local checkout can have no network, or a sandbox that refuses
+        # the fetch's writes: there the pin cannot be checked, and failing
+        # would hold every local run for a check that never ran. Warn and
+        # go on. In GitHub Actions the fetch is expected to work, so a
+        # failure still fails the check.
+        if os.environ.get("GITHUB_ACTIONS") != "true":
+            print(
+                "WARNING: mod-overseer pin not checked: fetch failed (%s)"
+                % _fetch_failure_reason(fetched),
+                file=sys.stderr,
+            )
+            return 0
+        if fetched.stderr:
+            sys.stderr.write(fetched.stderr)
+        return fetched.returncode
     result = subprocess.run(
         [
             "git",
