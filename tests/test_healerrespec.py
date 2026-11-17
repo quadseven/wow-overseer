@@ -257,7 +257,10 @@ class TheWalkThatReachedNoTrainer(unittest.TestCase):
     def test_a_walk_ended_by_a_restart_does_not_hold_the_cooldown(self):
         rows = [
             log_row(
-                "Gakk", 30, "error", "restart: claim expired: the run holding it is gone"
+                "Gakk",
+                30,
+                "error",
+                "restart: claim expired: the run holding it is gone",
             )
         ]
         self.assertEqual(set(), healerrespec.recent_walkers(rows))
@@ -284,13 +287,21 @@ class TheStrandedHealer(unittest.TestCase):
         self.assertEqual({}, healerrespec.stranded(rows))
 
     def test_other_sources_do_not_strand_a_healer(self):
-        rows = [dict(log_row("Bluk", 30, "error", "x", NO_TRAINER), source="guildtrain:Bluk")]
+        rows = [
+            dict(
+                log_row("Bluk", 30, "error", "x", NO_TRAINER), source="guildtrain:Bluk"
+            )
+        ]
         self.assertEqual({}, healerrespec.stranded(rows))
 
     def test_a_member_still_on_the_refused_map_waits_and_says_which(self):
         stuck = guildroute.Walker("Embo", map_id=1, by_row=True)
         walks, notes = healerrespec.plan(
-            self._cand(), {"Embo": stuck}, recent=set(), busy=set(), stranded={"Embo": 1}
+            self._cand(),
+            {"Embo": stuck},
+            recent=set(),
+            busy=set(),
+            stranded={"Embo": 1},
         )
         self.assertEqual([], walks)
         self.assertEqual(1, len(notes))
@@ -300,7 +311,11 @@ class TheStrandedHealer(unittest.TestCase):
     def test_a_member_on_another_map_is_walked(self):
         moved = guildroute.Walker("Embo", map_id=0, by_row=True)
         walks, notes = healerrespec.plan(
-            self._cand(), {"Embo": moved}, recent=set(), busy=set(), stranded={"Embo": 1}
+            self._cand(),
+            {"Embo": moved},
+            recent=set(),
+            busy=set(),
+            stranded={"Embo": 1},
         )
         self.assertEqual(["Embo"], [w.name for w in walks])
         self.assertEqual([], notes)
