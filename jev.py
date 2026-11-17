@@ -23,8 +23,9 @@ installs nothing), so a plain POST keeps both true without a new dependency.
 
 BOUNDED IN THREE WAYS:
 
-  * TIME. Every call has one deadline (`JEV_TIMEOUT_SECONDS`, 3 by default)
-    covering the whole request. Past it the caller gets `timeout`.
+  * TIME. An active call has one deadline (`JEV_TIMEOUT_SECONDS`, 3 by
+    default) covering the whole request. A compare call has its own bounded
+    deadline (`JEV_COMPARE_TIMEOUT_SECONDS`, 30 by default).
   * CONCURRENCY. At most `JEV_CONCURRENCY` requests are in flight. A caller
     that finds them all busy gets `busy` at once rather than queueing, and a
     request abandoned at its deadline keeps its slot until its thread really
@@ -94,7 +95,9 @@ per question to `Client.compare_sink` (the bridge writes it to
 overseer_jev_judgment with mode `compare` and the backend name). It never acts
 and never delays or changes the active answer. A compare backend that cannot be
 built (a URL the client refuses) is logged once at error level and the client
-runs with compare off; it never stops the active backend or the bridge.
+runs with compare off; it never stops the active backend or the bridge. Its
+deadline is `JEV_COMPARE_TIMEOUT_SECONDS` (30 seconds by default), separate
+from the active backend's `JEV_TIMEOUT_SECONDS`.
 
 Where the active backend gives no answer (Jev answering 402 on every call), a
 caller that passes `heuristic` (its own answer per question) has the
@@ -148,6 +151,7 @@ log = logging.getLogger("wow-overseer.jev")
 URL = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-latest"
 TIMEOUT_SECONDS = 3.0
+COMPARE_TIMEOUT_SECONDS = 30.0
 CONCURRENCY = 4
 CACHE_SIZE = 512
 # A cached answer is served for this long (JEV_CACHE_TTL_SECONDS), then asked again.
@@ -1151,8 +1155,13 @@ class Client:
             # cannot be built never takes the active backend down (#1469):
             # say so loudly once and run with compare off.
             try:
+                shadow_env = dict(env)
+                compare_timeout = env.get("JEV_COMPARE_TIMEOUT_SECONDS")
+                if compare_timeout is None or not str(compare_timeout).strip():
+                    compare_timeout = COMPARE_TIMEOUT_SECONDS
+                shadow_env["JEV_TIMEOUT_SECONDS"] = str(compare_timeout)
                 kw["shadow"] = cls.from_env(
-                    env, backend_name=other, transport=kw.get("transport")
+                    shadow_env, backend_name=other, transport=kw.get("transport")
                 )
             except ValueError as exc:
                 log.error(

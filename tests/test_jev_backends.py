@@ -318,6 +318,24 @@ class Compare(unittest.TestCase):
         same = jev.Client.from_env({"JEV_COMPARE_BACKEND": "jev"})
         self.assertIsNone(same.shadow)
 
+    def test_compare_timeout_can_exceed_the_active_deadline(self):
+        client = jev.Client.from_env(
+            {
+                "JEV_TIMEOUT_SECONDS": "3",
+                "JEV_COMPARE_TIMEOUT_SECONDS": "24",
+                "JEV_COMPARE_BACKEND": "strands",
+            }
+        )
+        self.assertEqual(client.timeout, 3)
+        self.assertEqual(client.shadow.timeout, 24)
+
+    def test_compare_timeout_defaults_to_30_seconds(self):
+        client = jev.Client.from_env(
+            {"JEV_TIMEOUT_SECONDS": "3", "JEV_COMPARE_BACKEND": "strands"}
+        )
+        self.assertEqual(client.timeout, 3)
+        self.assertEqual(client.shadow.timeout, 30)
+
 
 class Tally(unittest.TestCase):
     def test_one_line_per_kind_per_hour(self):
