@@ -1727,7 +1727,10 @@ def _recipe_seat_option(w: _World, s: Stack, trade: str | None, rank: int):
 
 def _recipe_exit_options(w: _World, s: Stack, rule: str = "R9") -> list:
     """List a recipe no family or guild crafter can reach within its next
-    skill range; after two failures the holder's item may go to a vendor."""
+    skill range; after two failures the holder's item may go to a vendor. A
+    rare or better recipe stays out of the house and the vendor (#2605)."""
+    if s.quality > 2:
+        return []
     return _listing_options(
         w,
         s,

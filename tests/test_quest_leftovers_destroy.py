@@ -238,11 +238,14 @@ class DarkmoonCardsFollowTheDeckThreshold(unittest.TestCase):
         sales = itemplan_vendor.sales_for(plan, [(target, row)])
         self.assertEqual([sale.candidate.item_guid for sale in sales], [835])
 
-    def test_decks_and_finished_trinkets_remain_kept(self):
-        for name in ("Beasts Deck", "Darkmoon Card: Heroism"):
+    def test_the_plan_never_sells_lists_or_destroys_one(self):
+        # A deck or a finished card trinket: the threshold governs loose cards
+        # only, so these are never sold, listed or destroyed.
+        for name in ("Beasts Deck", "Warlords Deck", "Darkmoon Card: Heroism"):
             item = self.card(name, 840)
             d = one([item], [member()], item, LOG_READ)
             self.assertIn(d.route, (BANK_PERSONAL, KEEP_CARRY), name)
+            self.assertNotIn(d.route, (SELL_VENDOR, AUCTION, DESTROY), name)
 
     def test_the_vendor_pass_refuses_one_even_when_no_quest_names_it(self):
         r = row(1, 800, "Three of Beasts", quality=3, sell=12_500, item_class=12)

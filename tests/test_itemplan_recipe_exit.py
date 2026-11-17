@@ -228,10 +228,10 @@ class EverythingElseIsListed(unittest.TestCase):
         self.assertNotEqual(d.route, AUCTION)
         self.assertNotEqual(d.route, SELL_VENDOR)
 
-    def test_a_tradable_rare_recipe_no_one_can_learn_is_listed(self):
+    def test_a_rare_recipe_stays_out_of_the_house_and_the_vendor(self):
         r = recipe(subclass=10, skill=JEWELCRAFTING, quality=3, sell=9000)
         d = one([r], [UZZA], r, ctx())
-        self.assertEqual(d.route, AUCTION)
+        self.assertNotIn(d.route, (AUCTION, SELL_VENDOR))
 
     def test_a_recipe_is_never_vendored_before_it_has_failed_to_sell(self):
         r = recipe(subclass=10, skill=JEWELCRAFTING)
