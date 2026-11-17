@@ -15,9 +15,11 @@ escape step, whatever the reason, and an unassigned member is offered the
 escape like any other.
 """
 
+import ast
+import logging
+import pathlib
 import unittest
 
-import deathloop
 import guildjobs
 import guildroute
 from test_guildjobs_death_loop import NAME, loop_of, plain_world
@@ -82,7 +84,9 @@ class AMemberOutsideTheLineupIsOfferedTheEscape(unittest.TestCase):
     def test_an_unassigned_looper_in_its_zone_is_issued_the_hearth(self):
         m = member(NAME, role=guildjobs.UNASSIGNED)
         result = plan([], class_candidates=[m])
-        self.assertEqual([(s.holder, s.action) for s in result.steps], [(NAME, "hearth")])
+        self.assertEqual(
+            [(s.holder, s.action) for s in result.steps], [(NAME, "hearth")]
+        )
         self.assertEqual(result.loop_lines, ())
 
     def test_an_unassigned_looper_that_cannot_escape_gets_a_line(self):
@@ -92,16 +96,39 @@ class AMemberOutsideTheLineupIsOfferedTheEscape(unittest.TestCase):
         self.assertIn("in combat", result.loop_lines[0])
 
 
-
 class TheBridgeLogsEveryLoopLine(unittest.TestCase):
-    def test_no_line_is_capped(self):
-        import bridge
+    """The bridge imports discord, which CI does not install, so the helper is
+    lifted out of the source and run against a plain logger."""
 
-        lines = tuple("M%d gets no death-loop escape from X: in combat" % i for i in range(20))
-        with self.assertLogs(bridge.log, level="INFO") as got:
-            bridge._log_loop_lines(lines)
+    def _helper(self):
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        node = next(
+            n
+            for n in ast.parse(src).body
+            if isinstance(n, ast.FunctionDef) and n.name == "_log_loop_lines"
+        )
+        logger = logging.getLogger("test_death_loop_every_looper")
+        space = {"log": logger}
+        exec(compile(ast.Module([node], []), "bridge.py", "exec"), space)
+        return space["_log_loop_lines"], logger
+
+    def test_no_line_is_capped(self):
+        helper, logger = self._helper()
+        lines = tuple(
+            "M%d gets no death-loop escape from X: in combat" % i for i in range(20)
+        )
+        with self.assertLogs(logger, level="INFO") as got:
+            helper(lines)
         self.assertEqual(len(got.records), 20)
         self.assertNotIn("more like it", "\n".join(got.output))
+
+    def test_the_pass_calls_it(self):
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("_log_loop_lines(plan.loop_lines)", src)
 
 
 if __name__ == "__main__":
