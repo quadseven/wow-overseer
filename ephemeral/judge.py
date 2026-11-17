@@ -46,6 +46,11 @@ MAX_CELL_CHARS = 300
 RESULT_CAP_BYTES = 256 * 1024
 # MySQL: 3024 max_execution_time, 1317 interrupted, 2013 lost connection (client read timeout)
 TIMEOUT_CODES = (3024, 1317, 2013)
+# The result write retries for this long (seconds), backing off 2, 4, 8 ... up to the cap.
+WRITE_RETRY_SECONDS = 300
+WRITE_BACKOFF_START = 2
+WRITE_BACKOFF_CAP = 30
+HTTP_TIMEOUT_SECONDS = 15
 SA_DIR = pathlib.Path("/var/run/secrets/kubernetes.io/serviceaccount")
 
 
@@ -640,6 +645,7 @@ def result_configmap(result, namespace):
     }
 
 
+RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 _NAME = re.compile(r"^eph-result-[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
 
 
@@ -649,7 +655,9 @@ def urllib_http(ca_path=None):
     def call(method, url, headers, body):
         req = urllib.request.Request(url, data=body, method=method, headers=headers)  # noqa: S310 - https to the API server only
         try:
-            with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:  # noqa: S310
+            with urllib.request.urlopen(
+                req, context=ctx, timeout=HTTP_TIMEOUT_SECONDS
+            ) as resp:  # noqa: S310
                 return resp.status, resp.read()
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read()
@@ -660,13 +668,23 @@ def urllib_http(ca_path=None):
 class ConfigMapStore:
     """Creates the result ConfigMap, and nothing else, in the world's own namespace."""
 
-    def __init__(self, base_url, token, namespace, http):
+    def __init__(
+        self,
+        base_url,
+        token,
+        namespace,
+        http,
+        sleep=time.sleep,
+        log=print,
+        retry_seconds=WRITE_RETRY_SECONDS,
+    ):
         self.base_url, self.token, self.namespace, self.http = (
             base_url,
             token,
             namespace,
             http,
         )
+        self.sleep, self.log, self.retry_seconds = sleep, log, retry_seconds
 
     @classmethod
     def in_cluster(cls, namespace=None, env=None, sa_dir=SA_DIR):
@@ -696,17 +714,36 @@ class ConfigMapStore:
             )
         if meta.get("namespace") != self.namespace:
             raise JudgeError("the judge writes into its own namespace only")
-        status, body = self.http(
-            "POST",
-            f"{self.base_url}/api/v1/namespaces/{self.namespace}/configmaps",
-            {
-                "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json",
-            },
-            json.dumps(cm).encode("utf-8"),
-        )
-        if status not in (200, 201):
-            raise JudgeError(f"result ConfigMap refused with HTTP {status}")
+        url = f"{self.base_url}/api/v1/namespaces/{self.namespace}/configmaps"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+        }
+        payload = json.dumps(cm).encode("utf-8")
+        spent, delay, attempt = 0.0, WRITE_BACKOFF_START, 0
+        while True:
+            attempt += 1
+            began = time.monotonic()
+            try:
+                status = self.http("POST", url, headers, payload)[0]
+                problem = None if status not in RETRYABLE_STATUS else f"HTTP {status}"
+            except OSError as exc:  # URLError, connect and read timeouts
+                status, problem = None, f"{type(exc).__name__}: {exc}"
+            spent += time.monotonic() - began
+            if problem is None:
+                break
+            self.log(f"result write attempt {attempt} failed: {problem}")
+            if spent + delay > self.retry_seconds:
+                raise JudgeError(
+                    f"result ConfigMap not written after {attempt} attempts: {problem}"
+                )
+            self.sleep(delay)
+            spent += delay
+            delay = min(delay * 2, WRITE_BACKOFF_CAP)
+        # A retry after a lost answer finds the ConfigMap already there: it is written.
+        if status in (200, 201) or (status == 409 and attempt > 1):
+            return
+        raise JudgeError(f"result ConfigMap refused with HTTP {status}")
 
 
 # -- the entry point -------------------------------------------------------------
