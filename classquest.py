@@ -681,8 +681,8 @@ _REWARD_ITEMS = "".join("q.RewardItem%d AS ritem%d, " % (i, i) for i in range(1,
 
 # Every class quest of the classic range, one row each.
 # Built from this module's own integer constants only (S608 does not apply).
-QUESTS_SQL = (  # noqa: S608
-    "SELECT q.ID AS id, q.LogTitle AS title, q.QuestSortID AS sort, "
+QUESTS_SQL = (
+    "SELECT q.ID AS id, q.LogTitle AS title, q.QuestSortID AS sort, "  # noqa: S608
     "q.MinLevel AS min_level, q.AllowableRaces AS races, "
     "COALESCE(a.AllowableClasses, 0) AS classes, "
     "COALESCE(a.PrevQuestID, 0) AS prev, "
@@ -881,8 +881,9 @@ OBJECT_SPAWNS_SQL = (
 # The Undercity Orb of Translocation that carries Blood Elves to map 530.
 ISLE_ORB_ENTRY = 184503
 ISLE_ORB_RACE = 10
+# S608 is a false positive here: the interpolated value is a fixed module constant.
 ISLE_ORB_SQL = (
-    "SELECT g.guid AS guid, g.id AS entry, g.map AS map_id, "
+    "SELECT g.guid AS guid, g.id AS entry, g.map AS map_id, "  # noqa: S608
     "g.position_x AS x, g.position_y AS y, gt.name AS name, "
     "g.position_z AS z "
     "FROM acore_world.gameobject g "
