@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from html.parser import HTMLParser
 from unittest import mock
 
 from _stub_modules import PYMYSQL, stub_modules
@@ -105,26 +106,42 @@ def get(path, headers=None):
     return h
 
 
+class _PageURLs(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.urls = []
+        self.asset_urls = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        for name in ("href", "src"):
+            url = attributes.get(name)
+            if url is not None:
+                self.urls.append(url)
+                rels = set(attributes.get("rel", "").split())
+                if tag == "script" or (
+                    tag == "link" and rels.intersection({"stylesheet", "preconnect"})
+                ):
+                    self.asset_urls.append(url)
+
+
+def page_urls(page):
+    parser = _PageURLs()
+    parser.feed(page)
+    return parser
+
+
 class ThePage(unittest.TestCase):
     def test_every_url_on_the_page_starts_at_the_mount(self):
         # A root-anchored URL on a page served under a prefix reads the realm
-        # at the root (basepath.py). Every same-origin URL here is built on
-        # the placeholder; the only other hosts are the font and icon CDNs.
-        for m in re.finditer(r'(?:href|src)="([^"]+)"', PAGE):
-            url = m.group(1)
-            if url.startswith("https://"):
-                self.assertTrue(
-                    url.startswith(
-                        (
-                            "https://fonts.googleapis.com",
-                            "https://fonts.gstatic.com",
-                            "https://unpkg.com/@phosphor-icons/web@2.1.1/",
-                        )
-                    ),
-                    url,
-                )
-                continue
+        # at the root (basepath.py). Every URL here is built on the placeholder.
+        for url in page_urls(PAGE).urls:
             self.assertTrue(url.startswith(basepath.PLACEHOLDER + "/"), url)
+
+    def test_the_served_page_has_no_third_party_asset_or_preconnect_url(self):
+        page = get("/").body().decode("utf-8")
+        for url in page_urls(page).asset_urls:
+            self.assertFalse(url.startswith(("http://", "https://")), url)
 
     def test_the_page_tells_the_app_where_it_is_mounted(self):
         self.assertIn(
@@ -142,13 +159,9 @@ class ThePage(unittest.TestCase):
             self.assertNotRegex(text, r"""fetch\(\s*["'`]/""", path.name)
             self.assertNotRegex(text, r"""import\(\s*["'`]/""", path.name)
 
-    def test_the_icon_styles_are_pinned_by_integrity(self):
-        links = re.findall(r"<link[^>]+unpkg\.com[^>]+>", PAGE)
-        self.assertEqual(len(links), 2)
-        for link in links:
-            self.assertRegex(link, r'integrity="sha384-[A-Za-z0-9+/=]{64}"')
-            self.assertIn('crossorigin="anonymous"', link)
-        self.assertNotIn('<script src="https://', PAGE)
+    def test_the_font_and_icon_styles_are_local(self):
+        self.assertIn('href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/fonts.css"', PAGE)
+        self.assertNotRegex(PAGE, r"https?://(?:fonts\.|unpkg\.)")
 
     def test_it_opens_full_screen_from_the_home_screen(self):
         for tag in (

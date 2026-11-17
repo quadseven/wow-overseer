@@ -892,7 +892,12 @@ class TheRecordAndTheCard(unittest.TestCase):
             def cursor(self):
                 return Cursor()
 
-        scope = {"_connect": Conn, "jev": jev, "JEV_ACTIVE_BACKEND": "jev"}
+        scope = {
+            "_connect": Conn,
+            "jev": jev,
+            "JEV_ACTIVE_BACKEND": "jev",
+            "_jev_report_tick": lambda: None,
+        }
         exec(insert, scope)  # noqa: S102 - bridge.py's own source
         j = ask(
             facts(withheld=True), FakeJev(picks={"activity": ja.SELL}, confidence=0.8)

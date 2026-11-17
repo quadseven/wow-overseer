@@ -1025,12 +1025,40 @@ def _walk_passed(name, recent, action, reasons) -> bool:
     )
 
 
+# A HEARTH THAT A FIGHT OR A STEP STOPPED LEARNED NOTHING (#2152). The module's
+# answers to a hearth the next moment changes, matched exactly as it words
+# them. Read on the dev realm on 2026-11-17: of 55 hearth rows from 12:00, 19
+# came back with one of these, and each started the same hour of cooldown as a
+# hearth that landed, so the next pass named the member "hearth cooling" and
+# sent it nowhere while it kept dying in the loop's zone.
+PASSING_HEARTH_REASONS = frozenset(
+    {
+        "character is in combat",
+        "character is moving",
+        "character is already casting",
+        "the cast never started and the character never left",
+    }
+)
+
+
+def passing_hearth_row(r) -> bool:
+    """Whether a hearth row ended for a reason the next moment changes."""
+    return (
+        r.action == "hearth"
+        and r.status in TRAIN_FAILED
+        and (r.refusal or r.reason) in PASSING_HEARTH_REASONS
+    )
+
+
 def _step_row_wait(r, minutes: int, passing_wait: int | None = None) -> int:
     """Keep long waits for completed walks and persistent failures.
 
     A temporary level-walk refusal learned nothing about the destination;
-    retry after a short wait once the member becomes available again.
+    retry after a short wait once the member becomes available again. So does
+    a hearth that a fight, a move or a cast in flight stopped.
     """
+    if passing_hearth_row(r):
+        return min(minutes, LEVEL_TRANSIENT_RETRY_MINUTES)
     if (
         r.action == guildlevel.ACTION
         and r.status == "error"
@@ -5088,6 +5116,7 @@ def _plan_counters():
             "classreagents",
             "inn",
             "pet",
+            "escape",
         )
     }
 
@@ -5364,7 +5393,9 @@ def _member_room_offer(member, inputs, state):
 
 def _commit_roster_step(member, step, inputs, state):
     """Apply walk limits, choose a safe crossing fallback, and record a step."""
-    started, allowance = _allowance(step, state.counters, inputs.per_guild)
+    started, allowance = _allowance(
+        step, state.counters, inputs.per_guild, inputs.loops
+    )
     why = _step_refusal(member, state.busy, started, allowance, step) or job_walk_held(
         member, step, inputs.recent
     )
@@ -5862,6 +5893,17 @@ def _release_slots(name, far, hunts) -> None:
 # (crossing_cooling), so a level crossing has an allowance of its own.
 CROSS_STEPS_PER_GUILD = 2
 
+# A DEATH LOOP'S ESCAPE HAS AN ALLOWANCE OF ITS OWN (#2152). A hearth counted
+# against GEAR_STEPS_PER_GUILD (6) with every gear, weapon and stood-still
+# hearth of the guild, and a level walk against guildlevel.STEPS_PER_GUILD, the
+# allowance kept for far walks. Read on the dev realm on 2026-11-17: the 14:41
+# and 14:48 passes refused four loopers (23 deaths since 13:24) with "waits: 6
+# guild job steps per guild per pass". The hearth and the level walk of a
+# member listed in a death loop count here instead, so they neither wait behind
+# other members' errands nor use up their allowances. Still a bound: the module
+# paces the walks itself, and a pass starts no more than this many per guild.
+ESCAPE_STEPS_PER_GUILD = 8
+
 
 def _level_crossing(step) -> bool:
     """A level step whose row rides a boat or zeppelin (level_cross_step)."""
@@ -5872,12 +5914,21 @@ def _level_crossing(step) -> bool:
     )
 
 
-def _allowance(step, counters, per_guild):
+def _allowance(step, counters, per_guild, looping=None):
     """(the counter, the cap) a step is started against: STEPS_PER_GUILD for
     every job, GEAR_STEPS_PER_GUILD for gear and hearth steps,
     TRAIN_STEPS_PER_GUILD for trainer walks, PVP_STEPS_PER_GUILD for PvP queues and honor buys,
     CROSS_STEPS_PER_GUILD for a level step's boat or zeppelin, and
-    guildlevel.STEPS_PER_GUILD for walks out of an outgrown zone."""
+    guildlevel.STEPS_PER_GUILD for walks out of an outgrown zone. A hearth or
+    a level walk (not a crossing) of a member in `looping` (the pass's death
+    loops, name -> deathloop.Loop) is ESCAPE_STEPS_PER_GUILD's."""
+    if (
+        looping
+        and step.holder in looping
+        and step.action in ("hearth", guildlevel.ACTION)
+        and not _level_crossing(step)
+    ):
+        return counters["escape"], ESCAPE_STEPS_PER_GUILD
     if step.action == ROOM_ACTION:
         return counters["room"], ROOM_STEPS_PER_GUILD
     if step.action == restsupply.ACTION:
@@ -6159,6 +6210,7 @@ def _upkeep_first(
     levelling=False,
     class_reagents=None,
     spell_reagents=None,
+    loop=None,
 ):
     """(the member's step as _member_step returns it, or None; the supply
     note; the gear note): food for a member with nothing to eat or drink, then
@@ -6177,7 +6229,7 @@ def _upkeep_first(
             return (step, doing, quest_note, ""), supply_note, ""
     step = (
         _full_bags_first(m, kept, recent, cap)
-        or _inn_first(m, leveling, recent, cap)[0]
+        or _inn_first(m, leveling, recent, cap, loop)[0]
     )
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
@@ -6503,6 +6555,7 @@ def _member_step(
         levelling,
         class_reagents=class_reagents,
         spell_reagents=spell_reagents,
+        loop=loop,
     )
     if found is not None:
         return found
@@ -6592,7 +6645,7 @@ def _level_blocked(m, world, campaign, loop) -> bool:
     # nobody, and Cave's level 14-15 priests stayed in their starting zones.
     if world is None or not m.online or m.in_combat:
         return True
-    if m.level >= guildlevel.LEVEL_CAP:
+    if m.level >= guildlevel.LEVEL_CAP and not _in_loop_zone(m, loop):
         return True
     return bool(m.name in world.roster and (campaign or not _in_loop_zone(m, loop)))
 
@@ -6639,7 +6692,12 @@ def level_step(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
     bands = world.bands.get(guildlevel.side_of(m.race), {})
     # A ZONE IS LEFT WHEN ITS QUESTS RUN OUT (2026-10-10): its open quests for
     # this member (guildlevel.open_quests), once its rewarded quests are read.
-    opens = guildlevel.member_opens(world, m.race, m.level, m.rewarded)
+    # A member at the cap has no quests to count (its walk out of a death loop
+    # is to any hub whose band reaches its level, #2152).
+    at_cap = m.level >= guildlevel.LEVEL_CAP
+    opens = (
+        None if at_cap else guildlevel.member_opens(world, m.race, m.level, m.rewarded)
+    )
     why = guildlevel.outgrown(
         m.level, m.race, m.map_id, m.zone_id, bands, opens
     ) or _loop_why(m, loop)
@@ -7136,14 +7194,26 @@ def death_loop_first(
     return None, held, _join(note, held, line, help_line), ""
 
 
-def inn_step(m, world, recent, cap):
+def inn_step(m, world, recent, cap, loop=None):
     """(step or None): a member that has reached a zone whose band fits its
     level, with its hearthstone bound somewhere it has outgrown, walks to that
     zone's innkeeper and sets its hearth there (guildlevel.bind_inn): the spawn
-    walk ending within guildlevel.INN_NEAR_YARDS, then `kind='bind'` `here`."""
+    walk ending within guildlevel.INN_NEAR_YARDS, then `kind='bind'` `here`.
+
+    A HEARTH BOUND IN THE LOOP'S ZONE IS MOVED OUT OF IT (#2152). With `loop`
+    (the member's deathloop.Loop), a member standing out of the loop's zone
+    whose hearthstone is bound in it binds at the inn of the zone it stands
+    in, at any level: the hearth skips such a home (death_loop_hearth), so
+    leaving it bound there leaves the member's every later hearth, and the
+    town errand that ends in one, a way back into the loop."""
     if world is None or not (m.online and m.alive and not m.in_combat):
         return None
-    if int(m.level) >= guildlevel.LEVEL_CAP or m.name in getattr(world, "roster", ()):
+    leaves = (
+        loop is not None and not _in_loop_zone(m, loop) and home_in_loop_zone(m, loop)
+    )
+    if m.name in getattr(world, "roster", ()):
+        return None
+    if int(m.level) >= guildlevel.LEVEL_CAP and not leaves:
         return None
     if _cooling(m, guildlevel.INN_ACTION, recent):
         return None
@@ -7169,6 +7239,7 @@ def inn_step(m, world, recent, cap):
         home,
         world.bands,
         getattr(world, "inns", {}),
+        leaves=leaves,
     )
     if inn is None:
         return None
@@ -7190,9 +7261,9 @@ def inn_step(m, world, recent, cap):
     )
 
 
-def _inn_first(m, world, recent, cap):
+def _inn_first(m, world, recent, cap, loop=None):
     """The inn walk (inn_step) as a _member_step rung."""
-    step = inn_step(m, world, recent, cap)
+    step = inn_step(m, world, recent, cap, loop)
     if step is None:
         return None, "", ""
     return step, step.said, ""
@@ -10018,6 +10089,13 @@ def _member_job(m, trades, fields, doors, pending, crafters, master, kept, recen
 RECALL_ATTEMPTS = 10
 RECALL_ASK_SECONDS = 12.0
 RECALL_AGAIN_WORDS = ("in combat", "never started", "is moving", "already casting")
+
+
+def hearth_asks_again(command) -> bool:
+    """Whether a hearth row is asked again inside its step: the stranded
+    knight's recall, and the hearth of a guild member (a death loop's way out
+    among them), which a fight stops as often (#2152)."""
+    return str(command or "").strip() in ("recall", "use")
 
 
 def is_recall_row(command) -> bool:

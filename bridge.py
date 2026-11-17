@@ -156,6 +156,7 @@ import equipscore
 import errandgate
 import item_plan
 import jev
+import jev_openai
 import jev_items
 import jev_choices
 import jev_recovery
@@ -335,6 +336,13 @@ JEV_RETENTION_DAYS = int(os.environ.get("JEV_RETENTION_DAYS", "30"))
 # The decision backend in use (#820): jev, clef or openai, from JEV_BACKEND.
 # Recorded on every judgment so backends can be compared row for row.
 JEV_ACTIVE_BACKEND = jev.backend_name()
+# The OpenAI backend's bar (#2899): a kind set to act runs as compare until the
+# hourly report says it clears jev_openai.BAR. Nothing clears before the first
+# report, so a restart starts every kind in compare.
+_JEV_GATE = jev_openai.ActGate()
+_JEV_REPORTER = jev_openai.Reporter(_JEV_GATE)
+if JEV_ACTIVE_BACKEND == "openai":
+    jev.set_act_gate(_JEV_GATE)
 # How long a pass with a kind in act mode waits for Jev before the heuristic
 # acts without it: the client's own deadline, so a slow Jev costs a pass at
 # most that and never more. The answers still arrive and are recorded.
@@ -9006,6 +9014,11 @@ class Bridge(discord.Client):
         # slow or down.
         self._jev = jev.Client.from_env()
         self._jev.compare_sink = _jev_compare_sink
+        # The OpenAI spend ledger lives in the database, so a restart does not
+        # reset the month (#2899). The comparison client shares the one table.
+        for _client in (self._jev, self._jev.shadow):
+            if _client is not None and _client.spend is not None:
+                _client.spend.store = jev_openai.SqlStore(_connect)
         # THE GUILD COORDINATOR (guildrun). The names of every member in a
         # guild run in flight, so the guild's own job passes leave them alone
         # while they are in a dungeon, and when the last group was formed.
@@ -21329,9 +21342,11 @@ class Bridge(discord.Client):
         # A stranded knight's recall is asked again within the step. A recall
         # step carries exactly one row (guildjobs.stranded_recall_step), so the
         # asks cannot stack across rows.
-        if row.kind == "hearth" and guildjobs.is_recall_row(row.command):
+        # So is every other hearth row of a guild step (#2152): a death loop's
+        # hearth came back "in combat" or "moving" for 19 of 55 rows in a day.
+        if row.kind == "hearth" and guildjobs.hearth_asks_again(row.command):
             went = await self._recall_row(step, row)
-            if went:
+            if went and guildjobs.is_recall_row(row.command):
                 self._note_follow_up()
             return went
         # A quest use row (classuse.py) is followed by what it answers.
@@ -21359,8 +21374,8 @@ class Bridge(discord.Client):
         return True
 
     async def _recall_row(self, step, row) -> bool:
-        """Write a stranded knight's `hearth recall` and ask again every
-        guildjobs.RECALL_ASK_SECONDS while the answer says the next moment may
+        """Write a hearth row (a stranded knight's `recall`, a member's `use`)
+        and ask again every guildjobs.RECALL_ASK_SECONDS while the answer says the next moment may
         change it (a fight, a move, a cast that never started); True when it
         went home."""
         for attempt in range(1, guildjobs.RECALL_ATTEMPTS + 1):
@@ -21370,8 +21385,8 @@ class Bridge(discord.Client):
             answer = await self._await_corps_answer(row_id, CORPS_ROW_FOLLOW_SECONDS) or {}
             status = str(answer.get("status") or "")
             detail = str(answer.get("detail") or "")
-            log.info("guild jobs: recall row %d for %s (ask %d of %d): %s %s", row_id,
-                     step.holder, attempt, guildjobs.RECALL_ATTEMPTS, status or "unanswered",
+            log.info("guild jobs: hearth row %d for %s (%s, ask %d of %d): %s %s", row_id,
+                     step.holder, row.command, attempt, guildjobs.RECALL_ATTEMPTS, status or "unanswered",
                      detail)
             if status in ("applied", "delivered"):
                 return True
@@ -31260,6 +31275,10 @@ def _create_jev_store() -> None:
             "WHERE created_at < NOW() - INTERVAL %s DAY",
             (JEV_RETENTION_DAYS,),
         )
+        # What each OpenAI call cost (jev_openai, #2899): the monthly cap
+        # reads it, so it is kept for the month and the bar's window.
+        cur.execute(jev_openai.TABLE_SQL)
+        cur.execute(jev_openai.PRUNE_SQL, (jev_openai.PRUNE_DAYS,))
 
 
 def _jev_outcome_history(kind: str, subject: str, score, wait_minutes: int) -> list:
@@ -31363,6 +31382,7 @@ def _insert_jev_judgment(judgment) -> None:
     backend = str(getattr(judgment, "backend", "") or JEV_ACTIVE_BACKEND)
     jev.TALLY.agreement(judgment.kind, agree)
     jev.TALLY.maybe_log()
+    _jev_report_tick()
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO overseer_jev_judgment (kind, subject, holder, "
@@ -31381,6 +31401,25 @@ def _insert_jev_judgment(judgment) -> None:
                 judgment.mode[:8], facts[:1000], acted[:10], backend[:12],
             ),
         )
+
+
+def _jev_report_tick() -> None:
+    """Once an hour: the OpenAI backend's per-kind report, logged and handed to
+    the act gate (jev_openai.Reporter). Runs on the thread that just wrote a
+    judgment; a database failure is logged and the gate keeps its last verdict."""
+    if JEV_ACTIVE_BACKEND != "openai" and jev.backend_name(
+        os.environ, "JEV_COMPARE_BACKEND"
+    ) != "openai":
+        return
+    if not _JEV_REPORTER.due():
+        return
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            report = jev_openai.fetch_report(cur, os.environ)
+    except pymysql.err.MySQLError:
+        log.exception("jev: the OpenAI report could not be read")
+        return
+    _JEV_REPORTER.publish(report)
 
 
 def _compare_why(row: dict) -> str:
@@ -31422,6 +31461,7 @@ def _insert_jev_comparisons(rows: list) -> None:
             outcome = jev_outcomes.compare_record_args(row)
             if outcome is not None:
                 cur.execute(jev_outcomes.INSERT_SQL, outcome)
+    _jev_report_tick()
 
 
 async def _jev_compare_sink(rows: list) -> None:
@@ -41518,6 +41558,23 @@ _FARM_ITEM_CREATURE_SQL = (
     "ORDER BY POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2) "
     "LIMIT " + str(FARM_CREATURE_ROWS)
 )
+# THE SKIN SURVEY (#2502): leather is a skinning drop. A skinnable beast is a
+# normal-rank creature whose `skinloot` table holds the item and which is not
+# skinned with herbalism or mining (type flags 0x100, 0x200), as in
+# _JOB_BEAST_SQL. Same columns and bounds as the creature survey above.
+_FARM_ITEM_SKIN_SQL = (
+    "SELECT DISTINCT c.guid AS guid, c.map AS map_id, c.zoneId AS zone_id, "
+    "c.position_x AS x, c.position_y AS y, c.position_z AS z, "
+    "ct.name AS name, ct.maxlevel AS level, sl.Chance AS chance "
+    "FROM acore_world.skinning_loot_template sl "
+    "JOIN acore_world.creature_template ct ON ct.skinloot = sl.Entry "
+    "JOIN acore_world.creature c ON c.id = ct.entry "
+    "WHERE sl.Item = %s AND sl.Reference = 0 AND sl.Chance >= %s "
+    "AND ct.maxlevel BETWEEN %s AND %s AND ct.`rank` = 0 "
+    "AND (ct.type_flags & 768) = 0 AND c.map = %s "
+    "ORDER BY POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2) "
+    "LIMIT " + str(FARM_CREATURE_ROWS)
+)
 _FARM_DEATHS_SQL = (
     "SELECT zone, map FROM overseer_death WHERE character_name IN ({marks}) "
     "AND created_at >= FROM_UNIXTIME(%s)"
@@ -41617,11 +41674,17 @@ def _farm_item_creatures(item: int, leader_at, levels) -> list:
     if not high or not leader_at or leader_at.get("map_id") is None:
         return []
     here = int(leader_at["map_id"])
+    where = (float(leader_at.get("pos_x") or 0.0),
+             float(leader_at.get("pos_y") or 0.0))
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(_FARM_ITEM_CREATURE_SQL,
-                    (int(item), int(item), farmjob.KILL_MIN_CHANCE, low, high, here,
-                     float(leader_at.get("pos_x") or 0.0),
-                     float(leader_at.get("pos_y") or 0.0)))
+        if int(item) in farmjob.SKIN_DROPS:
+            cur.execute(_FARM_ITEM_SKIN_SQL,
+                        (int(item), farmjob.KILL_MIN_CHANCE, low, high, here,
+                         *where))
+        else:
+            cur.execute(_FARM_ITEM_CREATURE_SQL,
+                        (int(item), int(item), farmjob.KILL_MIN_CHANCE, low, high,
+                         here, *where))
         rows = cur.fetchall()
     out = []
     for row in rows:

@@ -1,0 +1,365 @@
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400 500;
+  src: url("./fonts/inter-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+@font-face {
+  font-family: "Phosphor";
+  font-style: normal;
+  font-weight: normal;
+  font-display: swap;
+  src: url("./fonts/phosphor-regular-subset.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Phosphor Fill";
+  font-style: normal;
+  font-weight: normal;
+  font-display: swap;
+  src: url("./fonts/phosphor-fill-subset.woff2") format("woff2");
+}
+
+.ph,
+.ph-fill {
+  font-style: normal;
+  font-weight: normal;
+  font-variant: normal;
+  line-height: 1;
+  speak: never;
+  text-transform: none;
+}
+
+.ph {
+  font-family: "Phosphor" !important;
+}
+
+.ph-fill {
+  font-family: "Phosphor Fill" !important;
+}
+.ph.ph-arrow-circle-right:before {
+  content: "\e02e";
+}
+
+.ph.ph-arrow-clockwise:before {
+  content: "\e036";
+}
+
+.ph.ph-arrow-down:before {
+  content: "\e03e";
+}
+
+.ph.ph-arrow-left:before {
+  content: "\e058";
+}
+
+.ph.ph-arrow-square-out:before {
+  content: "\e5de";
+}
+
+.ph.ph-arrow-up:before {
+  content: "\e08e";
+}
+
+.ph.ph-arrows-clockwise:before {
+  content: "\e094";
+}
+
+.ph.ph-arrows-in:before {
+  content: "\e09a";
+}
+
+.ph.ph-caret-down:before {
+  content: "\e136";
+}
+
+.ph.ph-caret-left:before {
+  content: "\e138";
+}
+
+.ph.ph-caret-right:before {
+  content: "\e13a";
+}
+
+.ph.ph-caret-up:before {
+  content: "\e13c";
+}
+
+.ph.ph-chat-circle:before {
+  content: "\e168";
+}
+
+.ph.ph-check-circle:before {
+  content: "\e184";
+}
+
+.ph.ph-circle:before {
+  content: "\e18a";
+}
+
+.ph.ph-circle-dashed:before {
+  content: "\e602";
+}
+
+.ph.ph-circle-half:before {
+  content: "\e18c";
+}
+
+.ph.ph-clock-countdown:before {
+  content: "\ed2c";
+}
+
+.ph.ph-clock-counter-clockwise:before {
+  content: "\e1a0";
+}
+
+.ph.ph-coins:before {
+  content: "\e78e";
+}
+
+.ph.ph-columns:before {
+  content: "\e546";
+}
+
+.ph.ph-corners-in:before {
+  content: "\e1ce";
+}
+
+.ph.ph-corners-out:before {
+  content: "\e1d0";
+}
+
+.ph.ph-door-open:before {
+  content: "\e7e6";
+}
+
+.ph.ph-funnel:before {
+  content: "\e266";
+}
+
+.ph.ph-gauge:before {
+  content: "\e628";
+}
+
+.ph.ph-hand-arrow-up:before {
+  content: "\ee5a";
+}
+
+.ph.ph-hand-palm:before {
+  content: "\e57e";
+}
+
+.ph.ph-lock-simple:before {
+  content: "\e308";
+}
+
+.ph.ph-lock-simple-open:before {
+  content: "\e30a";
+}
+
+.ph.ph-magnifying-glass:before {
+  content: "\e30c";
+}
+
+.ph.ph-map-trifold:before {
+  content: "\e31a";
+}
+
+.ph.ph-minus:before {
+  content: "\e32a";
+}
+
+.ph.ph-minus-circle:before {
+  content: "\e32c";
+}
+
+.ph.ph-moon:before {
+  content: "\e330";
+}
+
+.ph.ph-paper-plane-tilt:before {
+  content: "\e398";
+}
+
+.ph.ph-person-simple:before {
+  content: "\e72e";
+}
+
+.ph.ph-plus:before {
+  content: "\e3d4";
+}
+
+.ph.ph-question:before {
+  content: "\e3e8";
+}
+
+.ph.ph-scales:before {
+  content: "\e750";
+}
+
+.ph.ph-skull:before {
+  content: "\e916";
+}
+
+.ph.ph-sort-descending:before {
+  content: "\e446";
+}
+
+.ph.ph-sparkle:before {
+  content: "\e6a2";
+}
+
+.ph.ph-speaker-slash:before {
+  content: "\e45a";
+}
+
+.ph.ph-spinner-gap:before {
+  content: "\e66c";
+}
+
+.ph.ph-stop:before {
+  content: "\e46c";
+}
+
+.ph.ph-sun:before {
+  content: "\e472";
+}
+
+.ph.ph-video-camera:before {
+  content: "\e4da";
+}
+
+.ph.ph-video-camera-slash:before {
+  content: "\e4dc";
+}
+
+.ph.ph-warning:before {
+  content: "\e4e0";
+}
+
+.ph.ph-warning-circle:before {
+  content: "\e4e2";
+}
+
+.ph.ph-warning-octagon:before {
+  content: "\e4e4";
+}
+
+.ph.ph-x:before {
+  content: "\e4f6";
+}
+
+.ph-fill.ph-arrow-circle-up:before {
+  content: "\e030";
+}
+
+.ph-fill.ph-arrow-fat-up:before {
+  content: "\e52e";
+}
+
+.ph-fill.ph-broadcast:before {
+  content: "\e0f2";
+}
+
+.ph-fill.ph-chat-circle-text:before {
+  content: "\e16e";
+}
+
+.ph-fill.ph-check-circle:before {
+  content: "\e184";
+}
+
+.ph-fill.ph-circle:before {
+  content: "\e18a";
+}
+
+.ph-fill.ph-crown-simple:before {
+  content: "\e616";
+}
+
+.ph-fill.ph-dice-five:before {
+  content: "\e1ee";
+}
+
+.ph-fill.ph-door-open:before {
+  content: "\e7e6";
+}
+
+.ph-fill.ph-fire:before {
+  content: "\e242";
+}
+
+.ph-fill.ph-first-aid:before {
+  content: "\e56e";
+}
+
+.ph-fill.ph-ghost:before {
+  content: "\e62a";
+}
+
+.ph-fill.ph-hand-palm:before {
+  content: "\e57e";
+}
+
+.ph-fill.ph-medal:before {
+  content: "\e320";
+}
+
+.ph-fill.ph-medal-military:before {
+  content: "\ecfc";
+}
+
+.ph-fill.ph-pause-circle:before {
+  content: "\e3a0";
+}
+
+.ph-fill.ph-play:before {
+  content: "\e3d0";
+}
+
+.ph-fill.ph-play-circle:before {
+  content: "\e3d2";
+}
+
+.ph-fill.ph-shield:before {
+  content: "\e40a";
+}
+
+.ph-fill.ph-smiley-melting:before {
+  content: "\ee56";
+}
+
+.ph-fill.ph-sparkle:before {
+  content: "\e6a2";
+}
+
+.ph-fill.ph-speaker-high:before {
+  content: "\e44a";
+}
+
+.ph-fill.ph-sword:before {
+  content: "\e5ba";
+}
+
+.ph-fill.ph-t-shirt:before {
+  content: "\e670";
+}
+
+.ph-fill.ph-trophy:before {
+  content: "\e67e";
+}
+
+.ph-fill.ph-video-camera:before {
+  content: "\e4da";
+}
+
+.ph-fill.ph-warning:before {
+  content: "\e4e0";
+}
+
+.ph-fill.ph-x-circle:before {
+  content: "\e4f8";
+}

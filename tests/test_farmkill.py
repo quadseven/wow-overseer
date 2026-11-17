@@ -111,6 +111,63 @@ class ACreatureDropIsAField(unittest.TestCase):
             self.assertTrue(refused)
 
 
+class LeatherIsASkinningDropNotACreatureLootRow(unittest.TestCase):
+    """Light Leather and Ruined Leather Scraps come off a skinned beast (#2502).
+
+    Read on the dev realm 2026-11-17: Bork held 0 Light Leather against 3 per
+    cast and Zork 0 Ruined Leather Scraps, and the loop sent the family to
+    mine. Both drop only from `skinning_loot_template` (31 and 13 rows, 93 and
+    100 percent) off beasts of level 2 to 20.
+    """
+
+    LIGHT, SCRAPS, MEDIUM, HEAVY = 2318, 2934, 2319, 4234
+
+    def test_leather_entries_are_skinning_drops(self):
+        self.assertEqual(
+            {self.LIGHT, self.SCRAPS, self.MEDIUM, self.HEAVY}, farmjob.SKIN_DROPS
+        )
+        self.assertFalse(farmjob.SKIN_DROPS & {SILK, 4338, 2589, 2592})
+
+    def test_the_low_leathers_lower_the_floor_like_linen_and_wool(self):
+        levels = {"Grug": 60}
+        for item in (self.LIGHT, self.SCRAPS):
+            self.assertEqual((1, 63), farmjob.kill_band(levels, item))
+        for item in (self.MEDIUM, self.HEAVY):
+            self.assertEqual((30, 63), farmjob.kill_band(levels, item))
+
+    def test_a_low_beast_is_a_field_for_light_leather_not_for_medium(self):
+        levels = {"Grug": 60}
+        for item, want in ((self.LIGHT, 1), (self.MEDIUM, 0)):
+            ok, _why = farmjob.usable_kills(
+                farmjob.Order(job="farm:%d" % item, item=item, name="leather"),
+                (creature(1000, 0, level=8),),
+                levels,
+            )
+            self.assertEqual(want, len(ok))
+
+    def test_the_skin_survey_reads_skinning_loot_not_creature_loot(self):
+        sql = re.search(r"_FARM_ITEM_SKIN_SQL = \((.*?)\n\)", BRIDGE, re.S)
+        self.assertIsNotNone(sql)
+        text = sql.group(1)
+        self.assertIn("skinning_loot_template", text)
+        self.assertNotIn("creature_loot_template", text)
+        self.assertIn("ct.skinloot", text)
+        # not a beast skinned with herbalism or mining (flags 0x100, 0x200)
+        self.assertIn("type_flags & 768", text)
+        self.assertIn("LIMIT", text)
+        self.assertIn("ORDER BY", text)
+
+    def test_the_creature_read_picks_the_skin_survey_for_a_leather_entry(self):
+        body = BRIDGE.split("def _farm_item_creatures(", 1)[1][:3000]
+        self.assertIn("farmjob.SKIN_DROPS", body)
+        self.assertIn("_FARM_ITEM_SKIN_SQL", body)
+
+    def test_the_loop_farms_leather_it_is_short_of(self):
+        import profloop
+
+        self.assertTrue(farmjob.SKIN_DROPS <= profloop.KILL_DROP_ENTRIES)
+
+
 class TheLevelBandIsTheWeakestMembers(unittest.TestCase):
     def test_a_creature_above_the_ceiling_is_never_chosen(self):
         step = farmjob.decide(order(), reads(creatures=(creature(1000, 0, level=70),)))

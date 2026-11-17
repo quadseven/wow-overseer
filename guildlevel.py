@@ -1021,26 +1021,37 @@ def home_zone_of(home_map, home_x, home_y, home_zone) -> int | None:
     return int(home_zone) if home_zone else None
 
 
-def bind_inn(level, race, map_id, zone_id, x, y, home_map, home_zone, bands, inns):
+def bind_inn(
+    level, race, map_id, zone_id, x, y, home_map, home_zone, bands, inns, leaves=False
+):
     """(inn, hub) a member sets its hearth at, or (None, None).
 
     Only a member whose home is read and lies where it has outgrown
     (`outgrown`), standing in a zone of its side's hub whose band fits its level
     (`fits`), where that hub has an inn on the member's map (`hub_inns`). Of
-    several such hubs in the zone, the nearest inn."""
+    several such hubs in the zone, the nearest inn.
+
+    With `leaves` (the home is bound in the zone of the member's death loop,
+    #2152) the home need not be outgrown: it is bound where the member dies."""
     team = side_of(race)
-    if not _bind_due(team, level, race, map_id, zone_id, home_map, home_zone, bands):
+    if not _bind_due(
+        team, level, race, map_id, zone_id, home_map, home_zone, bands, leaves
+    ):
         return None, None
     return _zone_inn(team, map_id, zone_id, x, y, inns)
 
 
-def _bind_due(team, level, race, map_id, zone_id, home_map, home_zone, bands) -> bool:
+def _bind_due(
+    team, level, race, map_id, zone_id, home_map, home_zone, bands, leaves=False
+) -> bool:
     """Whether a member of `team` is bound where it has outgrown and stands in
     a zone whose band fits its level; False when anything is unread."""
     if not team or map_id is None or not zone_id or home_map is None:
         return False
     side_bands = (bands or {}).get(team, {})
-    if not home_zone or not outgrown(level, race, home_map, home_zone, side_bands):
+    if not home_zone:
+        return False
+    if not leaves and not outgrown(level, race, home_map, home_zone, side_bands):
         return False
     return fits(side_bands.get(int(zone_id)), level)
 

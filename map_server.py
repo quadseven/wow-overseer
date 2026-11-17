@@ -66,6 +66,7 @@ import gearrouting
 import gearroutingexec
 import gearroutingread
 import seatmeter
+import jev_openai
 import jevview
 import levelroute
 import llmmode
@@ -2306,12 +2307,23 @@ def _fetch_jev_view() -> dict:
                         raise
                     break
                 rows = list(cur.fetchall())
+                openai = _fetch_jev_openai(cur)
         finally:
             conn.close()
     except Exception:
         log.exception("jev record unreadable; the Decree shows none")
         return jevview.view([])
-    return jevview.view(rows)
+    return jevview.view(rows, openai=openai)
+
+
+def _fetch_jev_openai(cur) -> list:
+    """The OpenAI backend's per-kind report as lines, or none where it has never
+    run (no spend table yet); the card is one card and never fails for it."""
+    try:
+        report = jev_openai.fetch_report(cur, os.environ)
+    except Exception:
+        return []
+    return [jev_openai.summary_line(k, v) for k, v in report.items()]
 
 
 # --- the Council and the Eye (infra#2597) -----------------------------------
@@ -5033,7 +5045,7 @@ _APP_SEGMENT = re.compile(r"[a-z0-9_-]{1,64}")
 
 
 def _app_file_kind(rel: str) -> str:
-    """'js' or 'css' for a plain app path such as "views/now.js", else "".
+    """A served app file kind for a plain path, else "".
 
     Checked segment by segment (lower-case letters, digits, '-' and '_', no
     dots but the one before the extension), so no dot segment, hidden file or
@@ -5048,7 +5060,11 @@ def _app_file_kind(rel: str) -> str:
         return ""
     return ext
 
-_APP_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8"}
+_APP_TYPES = {
+    "js": "text/javascript; charset=utf-8",
+    "css": "text/css; charset=utf-8",
+    "woff2": "font/woff2",
+}
 
 # A file of the current build never changes under its name (see _app_file).
 APP_IMMUTABLE = "public, max-age=31536000, immutable"
@@ -5823,9 +5839,9 @@ class Handler(BaseHTTPRequestHandler):
                             basepath.apply(body, BASE_PATH), appbuild.fingerprint(HERE)))
 
     def _app_file(self, rel: str) -> None:
-        """GET /app/[<build>/]<path>.js|.css - one file of the operations app.
+        """GET /app/[<build>/]<path> - one served file of the operations app.
 
-        Only plain lower-case paths ending in .js or .css, inside app/, are
+        Only plain lower-case paths ending in .js, .css or .woff2, inside app/, are
         served: no dot segments, no other kinds of file, nothing outside the
         directory. Anything else is a 404, never a read.
 
