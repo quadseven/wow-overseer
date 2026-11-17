@@ -206,6 +206,7 @@ MARK = "class quest"
 # ConditionTypeOrReference 47, a bit mask of QuestStatus-like states).
 QUEST_STATE_REWARDED = 64
 TAKE, HUNT, TURN_IN, USE, BLOCKED = "take", "hunt", "turnin", "use", "blocked"
+ISLE_ORB = "isle_orb"
 # A quest dropped to be taken again, so the core hands the member the StartItem
 # it lost (a quest item cannot be bought). Only a StartItem comes back so: the
 # take gives nothing else, so an item the take never handed over is no reason to
@@ -733,6 +734,16 @@ GIVERS_SQL = (
     "WHERE e.quest IN ({quests})"
 )
 
+GAMEOBJECT_GIVERS_SQL = (
+    "SELECT s.quest AS quest, 'start' AS role, g.guid AS guid, g.id AS entry, "
+    "g.map AS map_id, g.position_x AS x, g.position_y AS y, gt.name AS name, "
+    "g.position_z AS z, 0 AS faction_group, 0 AS enemy_group, 0 AS creature "
+    "FROM acore_world.gameobject_queststarter s "
+    "JOIN acore_world.gameobject g ON g.id = s.id "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE s.quest IN ({quests})"
+)
+
 # The other ways a quest starts: a gameobject offers it, or an item starts it
 # when used. Neither has a verb, but the blocker names which one it is.
 STARTERS_SQL = (
@@ -867,6 +878,18 @@ OBJECT_SPAWNS_SQL = (
     "WHERE o.id IN ({entries})"
 )
 
+# The Undercity Orb of Translocation that carries Blood Elves to map 530.
+ISLE_ORB_ENTRY = 184503
+ISLE_ORB_RACE = 10
+ISLE_ORB_SQL = (
+    "SELECT g.guid AS guid, g.id AS entry, g.map AS map_id, "
+    "g.position_x AS x, g.position_y AS y, gt.name AS name, "
+    "g.position_z AS z "
+    "FROM acore_world.gameobject g "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE g.id = %d AND g.map = 0" % ISLE_ORB_ENTRY
+)
+
 # Every spawn of the creatures an objective names.
 SPAWNS_SQL = (
     "SELECT c.guid AS guid, c.id AS entry, c.map AS map_id, c.position_x AS x, "
@@ -914,6 +937,7 @@ class Spawn:
     # Scripted ground (SCRIPTED_KILLS, SCRIPTED_FOCI): the walk ends this near
     # the spawn (0: the place radius), and a focus's ground is a creature spawn.
     near: int = 0
+    # True for a creature giver, or scripted creature ground; false for objects.
     creature: bool = False
 
 
@@ -1021,6 +1045,8 @@ class Book:
     groups: dict = field(default_factory=dict)
     # Reward spells a trainer teaches: those groups are the trainer's, not a quest's.
     trained: frozenset = frozenset()
+    # Spawns of the Undercity orb used to reach class quests on map 530.
+    isle_orbs: tuple = ()
 
     def quest_ids(self) -> list:
         return sorted(self.quests)
@@ -1039,7 +1065,7 @@ class Book:
             i: replace(q, uses=(), provided=()) if q.uses else q
             for i, q in self.quests.items()
         }
-        return Book(quests, self.groups, self.trained)
+        return Book(quests, self.groups, self.trained, self.isle_orbs)
 
     def watch_items(self) -> list:
         """The item entries to read from a member's bags: every use item, the
@@ -1126,15 +1152,18 @@ def _spawn(r) -> Spawn:
         _int(r.get("level")),
         _int(r.get("respawn")),
         None if r.get("z") is None else float(r.get("z")),
+        0,
+        bool(_int(r.get("creature"))),
     )
 
 
 def _givers(giver_rows) -> tuple:
-    """(quest -> start spawns, quest -> end spawns) from GIVERS_SQL's rows."""
+    """Quest start and end spawns from GIVERS_SQL, including object starts."""
     starts, ends = {}, {}
     for r in giver_rows or ():
         side = starts if r.get("role") == "start" else ends
-        side.setdefault(_int(r.get("quest")), []).append(_spawn(r))
+        spawn = replace(_spawn(r), creature=bool(_int(r.get("creature"), 1)))
+        side.setdefault(_int(r.get("quest")), []).append(spawn)
     return starts, ends
 
 
@@ -1449,6 +1478,7 @@ def build(
     summon_rows=(),
     held_rows=(),
     condition_rows=(),
+    isle_orb_rows=(),
 ) -> Book:
     """The Book from the world's rows.
 
@@ -1462,6 +1492,8 @@ def build(
     objective creatures, and `held_rows` HELD_SQL's over the items the takes
     hand over. `condition_rows` are CONDITIONS_SQL's: what each quest needs
     rewarded before it is offered (Quest.needs).
+    isle_orb_rows are spawns of the Undercity Orb that brings Blood Elves to
+    map 530.
     """
     starts, ends = _givers(giver_rows)
     others = _other_starts(start_rows)
@@ -1495,7 +1527,17 @@ def build(
         if q.rewards:
             groups.setdefault((q.klass, tuple(sorted(q.spells))), []).append(q.id)
     trained = frozenset(_int(r.get("spell")) for r in trained_rows or ())
-    return Book(quests, {k: sorted(v) for k, v in groups.items()}, trained)
+    isle_orbs = tuple(
+        _spawn(r)
+        for r in isle_orb_rows or ()
+        if _int(r.get("entry")) == ISLE_ORB_ENTRY and _int(r.get("map_id")) == 0
+    )
+    return Book(
+        quests,
+        {k: sorted(v) for k, v in groups.items()},
+        trained,
+        isle_orbs,
+    )
 
 
 def _with_openers(quests, quest_rows) -> dict:
@@ -2694,15 +2736,76 @@ def next_move(book: Book, member, avoid=None, held_off=frozenset()):
     held = None
     for move in moves(book, member, avoid, held_off):
         if move.kind == BLOCKED:
+            move = _isle_orb_route(book, member, move)
+        if move.kind == BLOCKED:
             blocked.append(blocked_sentence(member, move))
             if held is None and _held_here(book, member, move):
                 held = move
             continue
-        if move.kind == CROSS and held is not None:
+        if move.kind in (CROSS, ISLE_ORB) and held is not None:
             blocked.append(_waits_sentence(member, move, held))
             continue
         return move, blocked
     return None, blocked
+
+
+def _isle_orb_route(book: Book, member, blocked: Move) -> Move:
+    """Reach a gameobject-started map 530 class quest through the Horde orb."""
+    if (
+        blocked.blocker != MAP
+        or int(getattr(member, "race", 0) or 0) != ISLE_ORB_RACE
+    ):
+        return blocked
+    quest = book.quests.get(int(blocked.quest))
+    if quest is None or not _isle_only(member, quest.starters) or not book.isle_orbs:
+        return blocked
+    if _status(member, quest.id) or not any(not s.creature for s in quest.starters):
+        return blocked
+    here = int(member.map_id)
+    if here == 0:
+        orb = _nearest(
+            member,
+            tuple(s for s in book.isle_orbs if int(s.map_id) == 0),
+        )
+        if orb is None:
+            return blocked
+        said = "%s walks to %s and uses it to reach map 530 for %s" % (
+            member.name,
+            orb.name or "the Orb of Translocation",
+            blocked.title or quest.title,
+        )
+        return Move(
+            ISLE_ORB,
+            quest.id,
+            quest.klass,
+            orb,
+            said,
+            "",
+            blocked.why,
+            0,
+            quest.title,
+            None,
+            ISLE_MAP,
+        )
+    if here == 1 and not _walled(member, 0):
+        said = (
+            "%s crosses to Eastern Kingdoms to reach the Orb of Translocation for %s"
+            % (member.name, blocked.title or quest.title)
+        )
+        return Move(
+            CROSS,
+            quest.id,
+            quest.klass,
+            None,
+            said,
+            "",
+            blocked.why,
+            0,
+            quest.title,
+            None,
+            0,
+        )
+    return blocked
 
 
 # NO BOAT BACK (wow-overseer#2032, 2026-11-07). An Alliance warlock's Voidwalker

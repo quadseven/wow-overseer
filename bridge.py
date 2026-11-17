@@ -36964,6 +36964,12 @@ def _class_book_reads(cur) -> tuple:
         return None
     givers = _job_read(cur, "class quest givers", classquest.GIVERS_SQL.format(
         quests=ids(r["id"] for r in quests)))
+    givers.extend(_job_read(
+        cur,
+        "class quest gameobject givers",
+        classquest.GAMEOBJECT_GIVERS_SQL.format(
+            quests=ids(r["id"] for r in quests)),
+    ))
     items = {int(r[f"item{i}"]) for r in quests for i in range(1, 7) if r.get(f"item{i}")}
     loot = _class_rows(cur, "class quest loot", classquest.LOOT_SQL, "items", items)
     entries = {int(r[f"npc{i}"]) for r in quests for i in range(1, 5)
@@ -36982,7 +36988,23 @@ def _class_book_reads(cur) -> tuple:
         quests=ids(r["id"] for r in quests)))
     conditions = _job_read(cur, "class quest conditions", classquest.CONDITIONS_SQL.format(
         quests=ids(r["id"] for r in quests)))
-    return quests, givers, spawns, loot, trained, use_rows, chest_rows, object_rows, focus_rows, started, summon_rows, held_rows, conditions
+    isle_orbs = _job_read(cur, "class quest Undercity orb", classquest.ISLE_ORB_SQL)
+    return (
+        quests,
+        givers,
+        spawns,
+        loot,
+        trained,
+        use_rows,
+        chest_rows,
+        object_rows,
+        focus_rows,
+        started,
+        summon_rows,
+        held_rows,
+        conditions,
+        isle_orbs,
+    )
 
 
 def _class_use_reads(cur, quests, items, objectives=()) -> tuple:
@@ -37041,8 +37063,14 @@ def _class_book():
         reads = _class_book_reads(cur)
     if reads is None:
         return None
-    *world, summon_rows, held_rows, condition_rows = reads
-    _CLASS_BOOK = classquest.build(*world, summon_rows=summon_rows, held_rows=held_rows, condition_rows=condition_rows)
+    *world, summon_rows, held_rows, condition_rows, isle_orb_rows = reads
+    _CLASS_BOOK = classquest.build(
+        *world,
+        summon_rows=summon_rows,
+        held_rows=held_rows,
+        condition_rows=condition_rows,
+        isle_orb_rows=isle_orb_rows,
+    )
     _CLASS_BOOK_NO_CONDITIONS = not condition_rows
     if _CLASS_BOOK_NO_CONDITIONS:
         log.error("class quests: the quest conditions read returned no rows; the book "
