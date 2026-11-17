@@ -11084,12 +11084,10 @@ class Bridge(discord.Client):
     async def _dark_iron_pass(self, names: list, cohort=None) -> int:
         """Read the world for `fireplan.iron_member` and write its answers.
 
-        The same halves as `_buy_fishing_poles`: a row for whoever stands at
-        Lokhtos with the bag slot, the money and something spare, and a
-        `craft_supply.Need` on his stock for whoever does not, which
-        `_walk_for_reagents` turns into one walk. Rows already pending, or
-        refused inside `fireplan.REFUSED_RETRY_MINUTES`, are not written again,
-        and when that cannot be read nothing is written at all.
+        Burninate quests are queued only within reach of him; the town slot
+        walks the family there first. Lokhtos rows still require reachable stock,
+        bag room, funds and spare material. Pending or recently refused rows
+        are not written again, and an unreadable queue withholds every row.
         """
         smiths = [
             n for n in sorted(names)
@@ -11104,37 +11102,55 @@ class Bridge(discord.Client):
         made = await asyncio.to_thread(
             _fetch_crafted, smiths, [p.piece for p in fireplan.PLANS]
         )
-        quests = [q for q, _needs in fireplan.TURNINS]
+        quests = sorted(fireplan.DARK_IRON_QUESTS)
         in_log = await asyncio.to_thread(_fetch_quest_log, smiths, quests)
+        rewarded = await asyncio.to_thread(_fetch_quest_rewarded, smiths, quests)
         items = sorted(fireplan.ITEM_NAMES)
         held_by = await asyncio.to_thread(
             _fetch_item_counts, [(n, i) for n in smiths for i in items]
         )
         purses = await asyncio.to_thread(_fetch_purses, smiths)
         free_slots = await asyncio.to_thread(_fetch_free_slots, smiths)
+        positions = await asyncio.to_thread(_fetch_positions, smiths)
+        burninate_spawns = await asyncio.to_thread(
+            _fetch_recipehunt_npc_spawns, [fireplan.BURNINATE]
+        )
         blocked = await asyncio.to_thread(
             _iron_rows_blocked, fireplan.REFUSED_RETRY_MINUTES
         )
         queued = 0
         needs: list = []
+        npc_walk = (0, "")
         for name in smiths:
             town = await asyncio.to_thread(_fetch_town, name)
+            near = _nearby_npc_spawns(
+                positions.get(name), burninate_spawns, attunestep.REACH_YARDS
+            )
             smith = fireplan.Smith(
                 name=name,
                 learned=frozenset(r["spell"] for r in known if r["name"] == name),
                 standing=standing.get(name, 0),
+                level=int(purses.get(name, (0, 0))[0]),
                 held=tuple((i, held_by.get((name, i), 0)) for i in items),
                 in_log=frozenset(q for n, q in in_log if n == name),
+                rewarded=(
+                    None if rewarded is None
+                    else frozenset(q for n, q in rewarded if n == name)
+                ),
                 money=purses.get(name, (0, 0))[1],
                 free_slots=free_slots.get(name, 0),
                 stocks=frozenset(town.stocks),
             )
-            turn = fireplan.iron_member(smith, made, blocked or frozenset())
+            turn = fireplan.iron_member(
+                smith, made, blocked or frozenset(), nearby_npcs=near
+            )
             log.info("%s", fireplan.iron_log(name, turn.pipe))
             if turn.note:
                 log.info("dark iron: %s", turn.note)
             if turn.walk_to:
                 needs.append(craft_supply.Need(name, turn.walk_to, fireplan.VENDOR))
+            if turn.walk_npc and not npc_walk[0]:
+                npc_walk = (turn.walk_npc, name)
             if turn.errand is None:
                 continue
             if blocked is None:
@@ -11145,6 +11161,13 @@ class Bridge(discord.Client):
                 queued += 1
         if needs:
             await self._walk_for_reagents(needs, cohort)
+        elif npc_walk[0] and npc_walk[1]:
+            await self._claim_town_slot(
+                fireplan.TOWN_CLAIMANT,
+                npc_walk[1],
+                str(npc_walk[0]),
+                cohort=getattr(cohort, "key", None),
+            )
         return queued
 
     async def _recipe_hunt_once(self, names: list, cohort=None) -> int:
@@ -44192,6 +44215,28 @@ def _fetch_quest_log(names: list, quests: list) -> set:
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146, 1265):
                 return set()
+            raise
+        return {(row["name"], int(row["quest"])) for row in cur.fetchall()}
+
+
+def _fetch_quest_rewarded(names: list, quests: list) -> set | None:
+    """(name, quest) rewards needed to prove a Dark Iron quest prerequisite."""
+    if not names or not quests:
+        return set()
+    holes = ",".join(["%s"] * len(names))
+    quest_ids = ",".join(str(int(q)) for q in quests)
+    sql = (
+        "SELECT c.name, qr.quest FROM characters c "
+        "JOIN character_queststatus_rewarded qr ON qr.guid = c.guid "
+        f"WHERE c.name IN ({holes}) AND qr.quest IN ({quest_ids})"
+    )  # noqa: S608 - names are bound and quest ids come from fireplan
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, tuple(names))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                log.warning("dark iron: rewarded quest history cannot be read")
+                return None
             raise
         return {(row["name"], int(row["quest"])) for row in cur.fetchall()}
 
