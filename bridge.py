@@ -12212,7 +12212,8 @@ class Bridge(discord.Client):
             targets = None
             if step.state.phase == profloop.GATHER:
                 targets = individual.gather_targets(
-                    on_job, skills, key, step.job, exempt=_standin_out())
+                    on_job, skills, key, step.job, exempt=_standin_out(),
+                    member_orders=facts.member_orders)
             await self._prof_loop_write(key, running, step.job, targets)
         await asyncio.to_thread(_record_production, names, skills)
 
@@ -12253,6 +12254,8 @@ class Bridge(discord.Client):
             queue_owns=await asyncio.to_thread(_queue_owns_job, key),
             gather_job=gather,
             gather_why=gather_why,
+            member_orders={n: job for n, (job, _why)
+                           in profloop.member_kill_drops(plans).items()},
         )
 
     async def _prof_loop_say(self, key: str, step, on_job: dict,
