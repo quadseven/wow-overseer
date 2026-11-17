@@ -146,6 +146,17 @@ class DarkmoonCardsFollowTheDeckThreshold(unittest.TestCase):
                     self.assertEqual(d.route, AUCTION)
                     self.assertNotEqual(d.route, DESTROY)
 
+    def test_copies_of_the_same_card_are_not_other_cards(self):
+        target = self.card("Two of Beasts", 840, count=5)
+        d = one([target], [member()], target, LOG_READ)
+        self.assertEqual(d.route, AUCTION)
+
+    def test_a_second_stack_of_the_same_card_is_not_another_card(self):
+        target = self.card("Two of Beasts", 841, count=3)
+        twin = self.card("Two of Beasts", 842, count=3)
+        d = one([target, twin], [member()], target, LOG_READ)
+        self.assertEqual(d.route, AUCTION)
+
     def test_cards_from_a_different_deck_do_not_count(self):
         target = self.card("Two of Beasts", 809)
         others = [

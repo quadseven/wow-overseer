@@ -743,7 +743,7 @@ class _World:
             if card:
                 rank, suit = card
                 key = (s.holder, suit)
-                darkmoon_counts[key] = darkmoon_counts.get(key, 0) + s.count
+                darkmoon_counts.setdefault(key, set()).add(rank)
                 if rank == "Ace" and s.count > 0:
                     darkmoon_aces.add(key)
         self.held = held
@@ -797,10 +797,10 @@ class _World:
             key = (member.name, suit)
             if key in self.darkmoon_aces:
                 return True
-            count = self.darkmoon_counts.get(key, 0)
-            if member.name == stack.holder:
-                count -= 1
-            if count >= 4:
+            # Distinct ranks only: a copy of the card itself, or a second
+            # stack of it, is not another card of the deck.
+            others = self.darkmoon_counts.get(key, set()) - {rank}
+            if len(others) >= 4:
                 return True
         return False
 
