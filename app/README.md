@@ -14,6 +14,7 @@ empty list means no zone met the routing threshold on the sampled member's map.
 | `tokens.css` | Design tokens: colours (dark and light), type scale, status, quality and class colours, radii, shadows. |
 | `app.css` | Base styles, components (buttons, cards, tags, tables), the shell, and the shared primitives. |
 | `main.js` | Boot: theme, shell, router, polling, search, tooltip, gestures, nav badges. |
+| `startup.js` | First-route realm readiness and work started after the first draw. |
 | `router.js` | Hash routes, legacy redirects, and route-to-view resolution. Pure functions, tested under node. |
 | `api.js` | Reads (`load`, `peek`, `watch`), the mount helper `u()`, the data age (`health`), and `post()`, the operator view's one write. |
 | `ui.js` | The `html` builder (escapes every value) and the primitives: `status`, `member`, `item`, `state`, `pendingRead`, `pageHead`, `sectionHead`, `tabs`, `kpi`, `sparkline`, `histogram`, `notMeasured`, `value`, `ago`, `gold`, and `readState` (a read is loading, failed, refused or ready). |

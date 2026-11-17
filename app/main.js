@@ -24,6 +24,7 @@ import { savedTheme, saveTheme, lastPage, saveLastPage, stampVisit, previousVisi
 import { html, ago, plural } from "./ui.js";
 import { stripPlaces, placeStrips } from "./tabstrip.js";
 import badgeProviders from "./badges.js";
+import { afterFirstDraw, waitForRouteRealm } from "./startup.js";
 
 const root = document.getElementById("app");
 shell.mount(root);
@@ -231,6 +232,8 @@ async function route() {
     history.replaceState(null, "", to);
     hash = to;
   }
+  await waitForRouteRealm(hash, hasRealmLists(), realmReady);
+  if (location.hash !== hash) return;
   const old = legacy(hash);
   if (old) { history.replaceState(null, "", old); hash = old; }
   const parsed = parse(hash);
@@ -259,6 +262,7 @@ async function route() {
     easeIn();
   }
   api.watch(current.reads, module.every || 15000, module.quick);
+  startBadges();
 }
 
 api.onChange((path, changed) => {
@@ -314,7 +318,8 @@ window.setInterval(() => {
 }, shell.AGE_TICK_MS);
 
 // ---- realm tag and operator flag (read once) ------------------------------------
-api.load("/api/realm").then((e) => {
+const realmReady = api.load("/api/realm");
+realmReady.then((e) => {
   if (e.data && e.data.realm) { shell.setRealmTag(e.data.realm); drawShell(); }
 });
 api.load("/api/v2/operator").then((e) => {
@@ -346,8 +351,7 @@ function refreshBadges() {
     });
   });
 }
-refreshBadges();
-window.setInterval(refreshBadges, 60000);
+const startBadges = afterFirstDraw(refreshBadges, 60000, (fn, ms) => window.setInterval(fn, ms));
 
 // ---- easing in -------------------------------------------------------------------
 // A new page, and a page's first data replacing its skeletons, ease in
@@ -367,10 +371,10 @@ function easeIn() {
 // that listens for touches.
 document.addEventListener("touchstart", () => {}, { passive: true });
 
-// ---- the realm's families and guilds (families.js), before the first route --
-// The routes and the nav name them, so the first route waits for them: from
-// this tab's saved copy at once when it has them, else from the realm read
-// above. Every later answer is learned too.
+// ---- the realm's families and guilds (families.js) ------------------------------
+// Family and guild routes wait until the lists are known; other routes load
+// immediately. A saved copy can supply the lists at once, and later answers
+// are learned too.
 api.onChange((path) => {
   if (path === "/api/realm") {
     const d = api.peek(path).data;
@@ -378,4 +382,9 @@ api.onChange((path) => {
     if (learnRealm(d) || (d && d.deploy)) drawShell();
   }
 });
-(learnRealm(api.peek("/api/realm").data) ? Promise.resolve() : api.load("/api/realm")).then(() => route());
+function hasRealmLists() {
+  const data = api.peek("/api/realm").data;
+  return !!data && Array.isArray(data.families) && Array.isArray(data.guilds);
+}
+learnRealm(api.peek("/api/realm").data);
+route();
