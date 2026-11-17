@@ -31,12 +31,16 @@ leaves first" is one fixed order, not a mood.
 
   R1  fail closed. A row with a binding or quality this module cannot read is
       kept. (`disposition`: every unknown resolves to KEEP.)
-  R2  worn bags, keys and the hearthstone stay. Extends `bag_upgrade`.
+  R2  worn bags, keys and the hearthstone stay. Extends `bag_upgrade`. A
+      carried bag bigger than a worn one stays to be swapped in; one no bigger
+      than every worn bag is a spare. With no worn bag known (`Context.
+      worn_bags` unread and none among the stacks) the bag is kept (#2274).
   R3  quest items. An open quest names the item: KEEP_CARRY. A quest log that
       was not read keeps every quest-class stack and never sells or destroys
       one. Extends `bag_pressure.QUEST_NEEDED_SQL`.
   R4  the holder's equipped or about-to-wear gear (gear pass verdict).
   R5  a trade tool for a member who works the trade (`disposition.TOOL_TRADES`).
+      A fishing pole is one in a family that fishes (`_rule_fishing_pole`).
   R6  Molten Core: raid supplies, their reagents, fire resistance gear go to
       the Raid Supplies tab, or stay banked with the member who crafts them.
       Extends `bankpolicy` rule 3 and `raidsupply.SUPPLIES`.
@@ -238,6 +242,16 @@ CARRIED_BAGS = 4
 
 TRADE_OF_SKILL = {v: k for k, v in guildshare.SKILL_LINES.items()}
 FISHING = 356
+# item_template: a fishing pole is a weapon (class 2) of subclass 20. It is not
+# in `disposition.TOOL_TRADES`, which names tools by entry (#2274).
+FISHING_POLE_SUBCLASS = 20
+# The reasons of the two keeps #2274 added, so the shadow can count them
+# (`kept_for_use`): a carried bag that beats a worn one, and a fishing pole in
+# a family that fishes.
+BIGGER_BAG_REASON = "bigger than a worn bag: bag_upgrade swaps it in"
+NO_WORN_BAG_REASON = "no bag is worn: bag_upgrade equips it"
+UNREAD_BAGS_REASON = "worn bags were not read; keep the bag"
+FISHING_POLE_PREFIX = "fishing pole: "
 
 # Recipe item subclass -> trade (class 9).
 RECIPE_TRADE = {
@@ -445,6 +459,15 @@ class Context:
     known_spells: Mapping[str, frozenset] | None = None
     # None means per-item fire resistance was not read.
     fire_gear: frozenset | None = None
+    # holder -> the slot counts of the bags it wears (#2274). The carried and
+    # banked rows the plan is built from hold no worn bag, so the seam that
+    # builds the plan reads them. None, or a holder it does not name, means
+    # unread: with no worn bag among the stacks either, a carried bag is kept.
+    worn_bags: Mapping[str, tuple] | None = None
+    # Family members with the Fishing skill, besides what `Member.skills`
+    # says (the seam's skills leave fishing out, as a trade with no recipes
+    # to plan for). None means unread.
+    fishers: frozenset | None = None
     # entries an attunement or a key quest needs besides the open quests
     attunement_items: frozenset = frozenset()
     # The trades a raid seat is assigned (#2605): a recipe for one is kept for it.
@@ -875,18 +898,24 @@ def _rule_bag(w: _World, s: Stack, me: Member):
         for b in w.stacks
         if b.holder == s.holder and b.loc == WORN and b.item_class == C_CONTAINER
     ]
+    read = (w.ctx.worn_bags or {}).get(s.holder)
+    if read is not None:
+        worn += [max(0, int(n or 0)) for n in read]
+    elif not worn:
+        # Nothing says what the holder wears (#2274): "no bigger than a worn
+        # bag" would hold for every carried bag, so the bag is kept, as
+        # `bag_pressure.bag_candidates` keeps a holder it has no sizes for.
+        return [_opt(KEEP_CARRY, BAG_ROOM, UNREAD_BAGS_REASON, "R2", carry_forced=True)]
     out = []
+    # The four largest are the carried bags (`capacities`); a carried bag that
+    # beats the smallest of them is an upgrade, never a spare.
     smallest_carried = sorted(worn, reverse=True)[:CARRIED_BAGS]
-    if (
-        smallest_carried
-        and len(smallest_carried) >= CARRIED_BAGS
-        and slots > min(smallest_carried)
-    ):
+    if not smallest_carried or slots > min(smallest_carried):
         out.append(
             _opt(
                 KEEP_CARRY,
                 BAG_ROOM,
-                "bigger than a worn bag: bag_upgrade swaps it in",
+                BIGGER_BAG_REASON if smallest_carried else NO_WORN_BAG_REASON,
                 "R2",
                 carry_forced=True,
             )
@@ -937,10 +966,73 @@ def _rule_gear_now(w: _World, s: Stack, me: Member):
     return None
 
 
+def fishing_pole(s: Stack) -> bool:
+    """True for a fishing pole, by item class and subclass, never by name."""
+    return s.item_class == C_WEAPON and s.subclass == FISHING_POLE_SUBCLASS
+
+
+def _fishes(w: _World, m: Member) -> bool:
+    return m.skill("fishing") > 0 or m.name in (w.ctx.fishers or ())
+
+
+def _rule_fishing_pole(w: _World, s: Stack, me: Member):
+    """A fishing pole in a family that fishes is a tool, never gear to sell
+    (#2274). It is not in `disposition.TOOL_TRADES`, so `_rule_tool` never saw
+    it and the gear rule sold it as a weapon nobody will wear. In a family
+    where nobody fishes it is still that weapon, and the gear rule has it."""
+    if not fishing_pole(s):
+        return None
+    if _fishes(w, me):
+        return [
+            _opt(
+                KEEP_CARRY,
+                TOOLS,
+                FISHING_POLE_PREFIX + "tool for fishing",
+                "R5",
+                carry_forced=True,
+            )
+        ]
+    fisher = next((sib for sib in w.siblings(s.holder) if _fishes(w, sib)), None)
+    if fisher is None:
+        return None
+    bank = _opt(
+        BANK_PERSONAL, TOOLS, FISHING_POLE_PREFIX + "%s fishes" % fisher.name, "R5"
+    )
+    if not s.tradable:
+        return [bank]
+    return [
+        _opt(
+            GIVE,
+            TOOLS,
+            FISHING_POLE_PREFIX + "%s fishes" % fisher.name,
+            "R5",
+            target=fisher.name,
+        ),
+        bank,
+    ]
+
+
+def kept_for_use(plan_: "Plan") -> tuple:
+    """(carried bags kept as bigger than a worn one, fishing poles kept for a
+    fisher) among the plan's decisions (#2274): what the two rules held back
+    from the vendor, for the shadow's tick line."""
+    bags = sum(
+        1
+        for d in plan_.decisions
+        if d.route == KEEP_CARRY and d.reason in (BIGGER_BAG_REASON, NO_WORN_BAG_REASON)
+    )
+    poles = sum(
+        1
+        for d in plan_.decisions
+        if d.route != SELL_VENDOR and d.reason.startswith(FISHING_POLE_PREFIX)
+    )
+    return bags, poles
+
+
 def _rule_tool(w: _World, s: Stack, me: Member):
     trades = disposition.TOOL_TRADES.get(s.entry)
     if not trades:
-        return None
+        return _rule_fishing_pole(w, s, me)
     if any(me.skill(t) > 0 for t in trades):
         return [
             _opt(
