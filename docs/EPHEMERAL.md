@@ -221,8 +221,12 @@ the `act` steps (by time, or when a named observation first holds), samples the
   read, a guard refusal, a missing seed handoff and a decree that does not lint.
   INVALID beats FAIL, never counts as a pass and never closes an issue.
 
-Observations are `when: start` (once, before any order; a failing precondition
-ends the run early), `continuous` (every ten seconds) or `end` (after the
+Observations are `when: start` (the world's port opens before the family has
+logged in, so the judge first polls the start preconditions every ten seconds
+for up to ten minutes, `EPH_START_WAIT_SECONDS`; no order is given meanwhile, and
+the act clock and `@t0` start when the wait ends. Then they are sampled once,
+before any order; a precondition that still fails ends the run INVALID, naming
+it), `continuous` (every ten seconds) or `end` (after the
 window). Log assertions count regex matches in the worldserver log and are
 checked at the end. A log assertion's `expect` is a bound on that count:
 

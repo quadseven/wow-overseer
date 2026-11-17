@@ -23,7 +23,8 @@ from .kube import KubeError
 from .miniyaml import YamlError, loads
 
 REALM_RANGE = range(100, 200)
-BASE_DEADLINE_PAD = 15 * 60
+# Boot (15 min) plus the judge's bounded wait for the family to log in (10 min).
+BASE_DEADLINE_PAD = 25 * 60
 BRIDGE = "bridge"  # the sidecar's container name in the template
 BRIDGE_PULL_NAME = "ghcr"  # the bridge image is a private package
 BRIDGE_DEPLOYMENT = (
