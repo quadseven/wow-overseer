@@ -40,6 +40,7 @@ QUERIES = {
     "maxhealth": "SELECT maxhealth FROM acore_characters.character_stats WHERE guid = %s",
     "character": "SELECT money, playerFlags FROM acore_characters.characters WHERE guid = %s",
     "used_slots": "SELECT slot FROM acore_characters.character_inventory WHERE guid = %s AND bag = 0",
+    "backpack_items": "SELECT slot, item FROM acore_characters.character_inventory WHERE guid = %s AND bag = 0 AND slot BETWEEN 23 AND 38 ORDER BY slot",
     "max_item_guid": "SELECT COALESCE(MAX(guid), 0) FROM acore_characters.item_instance",
     "max_instance_id": "SELECT COALESCE(MAX(id), 0) FROM acore_characters.instance",
     "max_group_guid": "SELECT COALESCE(MAX(guid), 0) FROM acore_characters.`groups`",
@@ -96,6 +97,10 @@ class Resolver:
         raise NotImplementedError
 
     def used_backpack_slots(self, guid):
+        raise NotImplementedError
+
+    def backpack_items(self, guid):
+        """[(slot, item guid)] in the sixteen backpack slots, lowest slot first."""
         raise NotImplementedError
 
     def max_item_guid(self):
@@ -171,6 +176,9 @@ class SqlResolver(Resolver):
 
     def used_backpack_slots(self, guid):
         return {r[0] for r in self._q("used_slots", guid)}
+
+    def backpack_items(self, guid):
+        return [(r[0], r[1]) for r in self._q("backpack_items", guid)]
 
     def max_item_guid(self):
         return self._q("max_item_guid")[0][0]

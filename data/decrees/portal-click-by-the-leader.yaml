@@ -17,7 +17,7 @@ runs: {control: 3, treatment: 3}
 duration: 20m
 cast:
   - who: family:zug
-    set: {alive: true, items: [{name: "Rune of Portals", count: 5}], at: {creature: "Gazlowe"}}
+    set: {alive: true, free_backpack_slots: 1, items: [{name: "Rune of Portals", count: 5}], at: {creature: "Gazlowe"}}
     ceiling: "position, and the five Runes of Portals the mage needs to cast the portal, are the only grants"
 arrange:
   - group: {members: family:zug, leader: Zug}
