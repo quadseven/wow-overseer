@@ -304,6 +304,56 @@ class GatherTarget(unittest.TestCase):
         self.assertEqual("farm:2318", job)
         self.assertIn("Light Leather", why)
 
+    def test_a_thin_kill_drop_reagent_chooses_farm_item(self):
+        # Og: 11 Silk Cloth against 4 per cast is two casts, under SHORT_CASTS.
+        have = reagentplan.Stock(bags=11)
+        thin = reagentplan.Short(
+            reagentplan.Reagent(4306, "Silk Cloth", 12),
+            have,
+            reagentplan.GATHER,
+            "Og",
+            "roams",
+        )
+        plan = reagentplan.Plan("Og", 3839, True, 2, (), (thin,))
+        job, why = profloop.gather_job(self.SKILLS, {"Og": plan})
+        self.assertEqual("farm:4306", job)
+        self.assertIn("Silk Cloth", why)
+        self.assertIn("need 12, bags 11", why)
+
+    def test_a_thin_reagent_the_bank_covers_does_not_farm(self):
+        thin = reagentplan.Short(
+            reagentplan.Reagent(4306, "Silk Cloth", 12),
+            reagentplan.Stock(bags=11, bank=5),
+            reagentplan.BANK,
+            "Og",
+            "bank",
+        )
+        plan = reagentplan.Plan("Og", 3839, True, 2, (), (thin,))
+        self.assertEqual(
+            "farm:mining", profloop.gather_job(self.SKILLS, {"Og": plan})[0]
+        )
+
+    def test_the_bigger_gap_is_farmed_first_across_short_and_thin(self):
+        thin = reagentplan.Short(
+            reagentplan.Reagent(4306, "Silk Cloth", 12),
+            reagentplan.Stock(bags=11),
+            reagentplan.GATHER,
+            "Og",
+            "roams",
+        )
+        short = reagentplan.Short(
+            reagentplan.Reagent(4338, "Mageweave Cloth", 8),
+            reagentplan.Stock(),
+            reagentplan.AUCTION,
+            "Oz",
+            "short",
+        )
+        plans = {
+            "Og": reagentplan.Plan("Og", 3839, True, 2, (), (thin,)),
+            "Oz": reagentplan.Plan("Oz", 12053, True, 0, (short,)),
+        }
+        self.assertEqual("farm:4338", profloop.gather_job(self.SKILLS, plans)[0])
+
     def test_sandworm_meat_entry_comes_from_gathered(self):
         self.assertIn(20424, profloop.KILL_DROP_ENTRIES)
         self.assertNotIn(20401, profloop.KILL_DROP_ENTRIES)

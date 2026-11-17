@@ -3215,12 +3215,34 @@ class Ranked:
     fills_weakest: bool  # the item goes in the receiver's weakest slot
     sure: bool  # False when item level cannot price the item (an effect)
     reason: str
+    # The piece is the receiver's own armor material (or has none to judge).
+    native: bool = True
+
+
+def is_own_material(holding: Holding, character: CharacterState) -> bool:
+    """Is `holding` the armor material `character` wears at their level?
+
+    A mail chest is a shaman's own and a plate warrior's step down, though
+    both may wear it (wow-overseer#2133). A piece with no material to judge
+    (a weapon, jewelry, a cloak, a subclass the row did not state) is nobody's
+    step down, so it is True."""
+    subclass = int(holding.item_subclass)
+    if (
+        int(holding.item_class) != ITEM_CLASS_ARMOR
+        or int(holding.inventory_type) not in ARMOR_MATERIAL_INVTYPES
+        or subclass not in ARMOR_MATERIAL_SUBCLASSES
+    ):
+        return True
+    own = preferred_armor_subclass(character.class_id, character.level)
+    return not own or subclass >= own
 
 
 def rank_receivers(holding: Holding, candidates) -> tuple:
     """Every candidate this item is a real upgrade for, best first.
 
-    Ordered by gain, then family before guildmate, then the receiver whose
+    Ordered by own armor material first (a piece goes to the member it is made
+    for, not to one it would be a step down for), then gain, then family before
+    guildmate, then the receiver whose
     weakest slot it fills, then by name, so two passes over unchanged facts
     rank identically. The holder is never a candidate and a soulbound item
     ranks nobody. Pure, and the seam a second scorer sits beside.
@@ -3246,9 +3268,12 @@ def rank_receivers(holding: Holding, candidates) -> tuple:
                 fills_weakest=weakest is not None and weakest.slot == bucket,
                 sure=sure,
                 reason=reason,
+                native=is_own_material(holding, character),
             )
         )
-    out.sort(key=lambda r: (-r.gain, not r.family, not r.fills_weakest, r.name))
+    out.sort(
+        key=lambda r: (not r.native, -r.gain, not r.family, not r.fills_weakest, r.name)
+    )
     return tuple(out)
 
 
