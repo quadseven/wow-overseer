@@ -179,6 +179,24 @@ class GrugsSeal(unittest.TestCase):
         verdict, _why = equipscore.drive_verdict(SEAL, grug(), both, BOOK)
         self.assertEqual(verdict, equipscore.DRIVE_UNDECIDED)
 
+    def test_a_clearly_better_piece_beats_a_worn_floor(self):
+        # The module credits a worn floor with half again for what is unread
+        # (mod-overseer#221, abe76676), so a piece that clears that is worn.
+        lone = dict(NAGLERING, equipment_slot=10)
+        both = [lone, dict(NAGLERING, equipment_slot=11, entry=1, item_flags=0)]
+        big = ring("Big Band", 99001, 1, level=60, req=55, stats=((STA, 100),),
+                   item_flags=0)
+        verdict, why = equipscore.drive_verdict(big, grug(), both, BOOK)
+        self.assertEqual(verdict, equipscore.DRIVE_WEAR, why)
+
+    def test_a_piece_under_the_credited_floor_stays_undecided(self):
+        lone = dict(NAGLERING, equipment_slot=10)
+        both = [lone, dict(NAGLERING, equipment_slot=11, entry=1, item_flags=0)]
+        small = ring("Small Band", 99002, 2, level=60, req=55, stats=((STA, 40),),
+                     item_flags=0)
+        verdict, why = equipscore.drive_verdict(small, grug(), both, BOOK)
+        self.assertEqual(verdict, equipscore.DRIVE_UNDECIDED, why)
+
     def test_drive_verdicts_reads_the_pass_rows(self):
         rows = [ARCHAEDIC, NAGLERING, SEAL, SECOND_NAGLERING]
         verdicts = equipscore.drive_verdicts([GRUG], rows, ["Grug"], BOOK)
