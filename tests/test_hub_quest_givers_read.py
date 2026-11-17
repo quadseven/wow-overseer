@@ -7,15 +7,14 @@ guild town stops. The read is now one set-based pass, and a timeout on it
 leaves the level step without its quest book while every other step runs.
 """
 
-import re
-import sys
 import unittest
 
 import guildlevel
 from test_guildsocial_bridge import bridge
 
 TIMEOUT = bridge.pymysql.err.OperationalError(
-    2013, "Lost connection to MySQL server during query (timed out)")
+    2013, "Lost connection to MySQL server during query (timed out)"
+)
 
 
 class _Cursor:
@@ -30,8 +29,16 @@ class _Cursor:
             self.hub_reads += 1
             if self.fail_hub:
                 raise TIMEOUT
-            self._rows = [{"quest": 1, "prev": 0, "info": 0, "group_size": 0,
-                           "special": 0, "given": 1}]
+            self._rows = [
+                {
+                    "quest": 1,
+                    "prev": 0,
+                    "info": 0,
+                    "group_size": 0,
+                    "special": 0,
+                    "given": 1,
+                }
+            ]
         else:
             self._rows = [{"entry": 1}]
 
@@ -45,14 +52,23 @@ class TheSql(unittest.TestCase):
     def test_no_subquery_is_correlated_to_the_quest_row(self):
         # `s.quest = t.ID` inside an EXISTS ran once per quest, scanning the
         # whole gameobject table each time (23.6 s on the dev world).
-        self.assertNotIn("EXISTS (SELECT 1 FROM acore_world.creature_queststarter", self.sql)
-        self.assertNotIn("EXISTS (SELECT 1 FROM acore_world.gameobject_queststarter", self.sql)
+        self.assertNotIn(
+            "EXISTS (SELECT 1 FROM acore_world.creature_queststarter", self.sql
+        )
+        self.assertNotIn(
+            "EXISTS (SELECT 1 FROM acore_world.gameobject_queststarter", self.sql
+        )
         self.assertNotRegex(self.sql, r"WHERE s\.quest = t\.ID")
 
     def test_the_givers_are_still_read_outside_a_seasonal_event(self):
-        for word in ("creature_queststarter", "gameobject_queststarter",
-                     "game_event_creature", "game_event_gameobject",
-                     "e.eventEntry > 0", "AS given"):
+        for word in (
+            "creature_queststarter",
+            "gameobject_queststarter",
+            "game_event_creature",
+            "game_event_gameobject",
+            "e.eventEntry > 0",
+            "AS given",
+        ):
             self.assertIn(word, self.sql)
         for m in guildlevel.GIVER_MAPS:
             self.assertRegex(self.sql, r"\b%d\b" % m)
@@ -60,9 +76,16 @@ class TheSql(unittest.TestCase):
 
 class TheDegrade(unittest.TestCase):
     def setUp(self):
-        self._saved = {n: list(getattr(bridge, n)) for n in
-                       ("_JOB_STONES", "_JOB_HUB_MASTERS", "_JOB_ORBS", "_JOB_INNS",
-                        "_JOB_QUEST_FACTS")}
+        self._saved = {
+            n: list(getattr(bridge, n))
+            for n in (
+                "_JOB_STONES",
+                "_JOB_HUB_MASTERS",
+                "_JOB_ORBS",
+                "_JOB_INNS",
+                "_JOB_QUEST_FACTS",
+            )
+        }
         for n in self._saved:
             getattr(bridge, n).clear()
         bridge._QUEST_FACTS_RETRY_AT[0] = 0.0
@@ -107,6 +130,7 @@ class TheDegrade(unittest.TestCase):
                 if sql == guildlevel.QUEST_FACTS_SQL:
                     raise bridge.pymysql.err.OperationalError(2006, "gone away")
                 super().execute(sql, params)
+
         with self.assertRaises(bridge.pymysql.err.OperationalError):
             bridge._read_job_spawns_once(Boom())
 
