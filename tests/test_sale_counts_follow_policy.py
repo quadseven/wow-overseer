@@ -111,9 +111,7 @@ def _policy_ns(facts, verdicts, fail=False):
             "lootpolicy": lootpolicy,
             "_fetch_epic_facts": fetch,
             "_guild_classes": lambda: frozenset({1}),
-            "_policy_verdict": lambda holder, row, classes: verdicts[
-                row["item_guid"]
-            ],
+            "_policy_verdict": lambda holder, row, classes: verdicts[row["item_guid"]],
         },
     )
     return ns, log
@@ -142,9 +140,7 @@ class RefusedPairsAreTheWritersAnswer(unittest.TestCase):
         _load(["_count_sales"], ns)["_count_sales"](counts, sales, refused)
         self.assertEqual({"Oz": 0}, counts)
         # Nothing a vendor would buy, so no trip lifts the member at one slot.
-        self.assertFalse(
-            bag_pressure.vendor_trip_makes_room({"Oz": 1}, counts)
-        )
+        self.assertFalse(bag_pressure.vendor_trip_makes_room({"Oz": 1}, counts))
 
     def test_a_vendor_verdict_is_not_refused(self):
         verdicts = {1: V(lootpolicy.VENDOR, "gray or junk")}
