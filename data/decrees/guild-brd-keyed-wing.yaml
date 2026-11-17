@@ -1,19 +1,14 @@
 # A Blackrock Depths guild run whose five seats all have the attunement quest done goes on past
-# Gerstahn (wow-overseer issue 783), and a guild member takes the Dark Iron Legacy quest from Franclorn
-# Forgewright and carries the Shadowforge Key (issue 811). Five Cave guild members stand at the Blackrock
-# Mountain stone with the attunement state set; the quest is the issue's quest 3801.
-# Scope: five seats now carry the attunement state (one guild member per crafting role, five distinct guids
+# Gerstahn (wow-overseer issue 783). Five Cave guild members stand beside Franclorn Forgewright with the
+# attunement state set.
+# Scope: five seats carry the attunement state (one guild member per crafting role, five distinct guids
 # required by the first precondition, so a role that resolves to the same member twice ends INVALID). The
 # seated count of the run row and the log lines naming the member are not asserted: the first is not a column
-# a decree can read as a number and the second is text a decree can only forbid. Issue 811 is shown on a SIXTH
-# member who has neither quest, is a ghost beside Franclorn and is ordered to take 3801: the quest must be on
-# that member afterwards, no cast member held the key at the start, and one holds it at the end.
-# The taker must hold neither an ACTIVE nor a rewarded 3801 or 3802 at the start, be level 48 or more, and be a
-# ghost (a corpse row), so an ineligible fixture is INVALID and not a treatment failure; the take row must be
-# applied, so a rejected command cannot pass on a pre-existing row. The naming line: wow-overseer#2767.
-# Issue 811 (the bridge itself chooses and emits the take) is dropped from proves: this decree orders the take by
-# hand, which shows an applied take, not the bridge's own selection. The take rows stay as supporting evidence only.
-# Fixes: wow-overseer pulls 1966 and 1625; the commit is 1966.
+# a decree can read as a number and the second is text a decree can only forbid. Issue 811 (a guild member
+# takes the Dark Iron Legacy quest and carries the Shadowforge Key) is not arranged here: it needs the bridge
+# itself to choose the take, which a decree cannot show, so no ghost, take command or key check is in this
+# decree. The naming line: wow-overseer#2767.
+# Fix: wow-overseer pull 1966.
 decree: v1
 id: guild-brd-keyed-wing
 proves:
@@ -38,14 +33,9 @@ cast:
   - who: guild:Cave:cook
     set: {alive: true, quests: {3801: rewarded, 3802: rewarded}, at: {creature: "Franclorn Forgewright"}}
     ceiling: "only the attunement quest states the run asks for; no level, item or gold"
-  - who: guild:Cave:enchanter
-    set: {alive: false, corpse_at: {creature: "Franclorn Forgewright"}, at: {graveyard: 1469}}
-    ceiling: "nothing granted; the ghost beside Franclorn is the scenario"
 act:
   - at: 0s
     command: {who: "cast[0]", kind: guild, text: "run blackrock-depths"}
-  - at: 0s
-    command: {who: "cast[5]", kind: quest, text: "take 3801"}
 observe:
   - name: five-distinct-seats-carry-the-attunement-state
     role: precondition
@@ -53,60 +43,9 @@ observe:
     sql: |
       SELECT COUNT(DISTINCT guid) FROM character_queststatus_rewarded WHERE guid IN (@cast) AND quest = 3802
     expect: {scalar: ">= 5"}
-  - name: the-taker-has-neither-quest
-    role: precondition
-    when: start
-    sql: |
-      SELECT COUNT(*) FROM character_queststatus_rewarded WHERE guid = @cast5 AND quest IN (3801, 3802)
-    expect: {scalar: "= 0"}
-  - name: the-taker-has-no-active-quest-either
-    role: precondition
-    when: start
-    sql: |
-      SELECT COUNT(*) FROM character_queststatus WHERE guid = @cast5 AND quest IN (3801, 3802)
-    expect: {scalar: "= 0"}
-  - name: the-taker-is-eligible-level-48-and-a-ghost
-    role: precondition
-    when: start
-    sql: |
-      SELECT COUNT(*) FROM characters ch JOIN corpse co ON co.guid = ch.guid WHERE ch.guid = @cast5 AND ch.level >= 48
-    expect: {scalar: "= 1"}
-  - name: the-ghosts-corpse-lies-within-40-yards-of-franclorn
-    role: precondition
-    when: start
-    sql: |
-      SELECT COUNT(*) FROM corpse co JOIN acore_world.creature c ON c.map = co.mapId
-      JOIN acore_world.creature_template t ON t.entry = c.id
-      WHERE co.guid = @cast5 AND t.name = 'Franclorn Forgewright'
-        AND POW(co.posX - c.position_x, 2) + POW(co.posY - c.position_y, 2) <= 1600
-    expect: {scalar: ">= 1"}
-  - name: no-cast-member-held-the-key-at-the-start
-    role: precondition
-    when: start
-    sql: |
-      SELECT COUNT(*) FROM item_instance WHERE itemEntry = 11000 AND owner_guid IN (@cast)
-    expect: {scalar: "= 0"}
   - name: a-brd-guild-run-went-past-the-first-boss
     role: check
     when: end
     sql: |
       SELECT id, bosses_done FROM overseer_guild_run WHERE keyword = 'blackrock-depths' AND created_at >= @t0 AND bosses_done > 1
     expect: {rows: ">= 1"}
-  - name: the-take-command-was-applied
-    role: check
-    when: end
-    sql: |
-      SELECT COUNT(*) FROM overseer_command WHERE target_name = (SELECT name FROM characters WHERE guid = @cast5) AND kind = 'quest' AND command LIKE 'take 3801%' AND created_at >= @t0 AND status = 'applied'
-    expect: {scalar: ">= 1"}
-  - name: the-ghost-took-3801-from-franclorn
-    role: check
-    when: end
-    sql: |
-      SELECT COUNT(*) FROM character_queststatus WHERE guid = @cast5 AND quest = 3801
-    expect: {scalar: "= 1"}
-  - name: a-cast-member-carries-the-shadowforge-key
-    role: check
-    when: end
-    sql: |
-      SELECT COUNT(*) FROM item_instance WHERE itemEntry = 11000 AND owner_guid IN (@cast)
-    expect: {scalar: ">= 1"}
