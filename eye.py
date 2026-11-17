@@ -65,13 +65,20 @@ FRESH = "fresh"
 STALE = "stale"
 NO_FRAME = "no_frame"
 
-# Which clock an age came from. A recorder report is weaker than a frame.
+# Which clock an age came from. A recorder report is weaker than a frame, and
+# a segment (the newest piece the view's recorder wrote) stands between them:
+# it is the capture side's word for when the picture last moved.
 FRAME = "frame"
+SEGMENT = "segment"
 RECORDER_REPORT = "recorder_report"
 
 
 def build_tiles(
-    tiles: list[dict], frame_at: dict, recorder_at: dict, now: float
+    tiles: list[dict],
+    frame_at: dict,
+    recorder_at: dict,
+    now: float,
+    segment_at: dict | None = None,
 ) -> list[dict]:
     """One entry per watched tile: its name, whether it is presented as live,
     and the age of the newest frame behind it.
@@ -81,14 +88,26 @@ def build_tiles(
     side reported that view's recorder running, by name, both epoch seconds;
     `now` is the same clock. The newer of the two wins, and `frame_source`
     says which. A `recorder_report` age proves the recorder for that view was
-    running, not that its picture was moving: it is not a frame time. A tile
-    with neither clock is `no_frame` with a null age, never left out and never
-    given an invented age.
+    running, not that its picture was moving: it is not a frame time.
+
+    `segment_at` is when the newest segment of that view's recording was
+    written, by name, for the views whose last report carried one. A view that
+    has it uses it in place of the recorder report, which is always newer and
+    says less: a recorder that runs while its newest segment is minutes old
+    reads `stale` with the segment's age, under the source `segment`.
+
+    A tile with no clock is `no_frame` with a null age, never left out and
+    never given an invented age.
     """
+    segment_at = segment_at or {}
     out = []
     for tile in tiles:
         name = tile["name"]
-        clocks = [(frame_at.get(name), FRAME), (recorder_at.get(name), RECORDER_REPORT)]
+        if segment_at.get(name) is not None:
+            weaker = (segment_at[name], SEGMENT)
+        else:
+            weaker = (recorder_at.get(name), RECORDER_REPORT)
+        clocks = [(frame_at.get(name), FRAME), weaker]
         known = [(at, source) for at, source in clocks if at is not None]
         if known:
             at, source = max(known, key=lambda pair: pair[0])

@@ -34,6 +34,13 @@ _SLOTS = threading.BoundedSemaphore(MAX_UPLOADS)
 NO_DIR = "The clip folder is not set up on this site, so the cutter API is off."
 
 _PATH = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+# The oldest newest-segment age a poll may report, in seconds. A recorder whose
+# last segment is older than a week is reported as a week old or not at all.
+MAX_SEGMENT_AGE = 7 * 24 * 3600
+_BAD_AGE = (
+    "A segment age is path:seconds for a path this poll names, once each, "
+    "as ages=a:3,b:41, with whole seconds from 0 to %d." % MAX_SEGMENT_AGE
+)
 _KIND = re.compile(r"[a-z0-9_]{1,16}")
 _COLUMNS = "id, kind, stream_path, event_at, window_start, window_end, state, file_name"
 # S608 below: each statement joins module constants only; values are bound.
@@ -121,6 +128,30 @@ def _public(row, *names):
 def paths_of(raw_paths: str) -> list[str]:
     """The distinct paths a poll names, in order, from its paths=a,b value."""
     return list(dict.fromkeys(p for p in (raw_paths or "").split(",") if p))
+
+
+def ages_of(raw_ages: str, paths: list[str]):
+    """(ages, None) or (None, refusal) for a poll's ages=path:seconds,... value.
+
+    Each item gives the age in whole seconds of the newest segment the recorder
+    for one of the poll's own paths has written. A path may be left out: the
+    view then carries no segment clock. A path the poll does not name, a path
+    named twice, or an age that is not a whole number of seconds from 0 to
+    MAX_SEGMENT_AGE refuses the whole poll, so a bad age is never half applied.
+    """
+    ages: dict[str, int] = {}
+    if not raw_ages:
+        return ages, None
+    for item in raw_ages.split(","):
+        path, colon, seconds = item.partition(":")
+        if not colon or path not in paths or path in ages:
+            return None, _err(400, _BAD_AGE)
+        if not (seconds.isascii() and seconds.isdigit()) or len(seconds) > 9:
+            return None, _err(400, _BAD_AGE)
+        if int(seconds) > MAX_SEGMENT_AGE:
+            return None, _err(400, _BAD_AGE)
+        ages[path] = int(seconds)
+    return ages, None
 
 
 def pending(rd, raw_paths: str):
