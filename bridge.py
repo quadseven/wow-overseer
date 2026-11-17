@@ -22513,13 +22513,28 @@ class Bridge(discord.Client):
         if not at:
             return
         teams = await asyncio.to_thread(_fetch_teams, [leader])
+        spells = {n.spell for n in needs}
+        masters = await asyncio.to_thread(
+            _fetch_weapon_masters, at, sorted(spells), weaponskill.far_maps(at["map_id"])
+        )
         master = weaponskill.choose_master(
-            await asyncio.to_thread(_fetch_weapon_masters, at,
-                                    sorted({n.spell for n in needs})),
-            {n.spell for n in needs}, teams.get(leader, ""), int(at["map_id"]), at)
+            masters, spells, teams.get(leader, ""), int(at["map_id"]), at)
         said = "; ".join("%s carries %s (%s) and has no skill %d for it" % (
             n.name, n.item, n.why, n.skill) for n in needs)
         if not master:
+            far = weaponskill.choose_far_master(
+                masters, spells, teams.get(leader, ""), int(at["map_id"]))
+            if far:
+                need = next(n for n in needs if n.spell in far["spells"])
+                step, note = guildjobs.weapon_cross_step(
+                    SimpleNamespace(name=leader, map_id=int(at["map_id"])),
+                    weaponskill.offer(need, far),
+                    await asyncio.to_thread(_fetch_weapon_crossings, names))
+                if note:
+                    log.info("weapon skill: %s%s", note, label)
+                if step:
+                    await self._class_cross_row(step, step.rows[0])
+                return
             log.info("weapon skill: %s; no weapon master of the family's side "
                      "on this map teaches it, so nobody walks%s", said, label)
             return
@@ -42982,6 +42997,18 @@ def _fetch_weapon_masters(at: dict, spells: list, also_maps=()) -> list:
                 return []
             raise
         return [dict(r) for r in cur.fetchall()]
+
+
+def _fetch_weapon_crossings(names: list) -> tuple:
+    if not names:
+        return ()
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        rows = _job_read(
+            cur, "weapon crossings",
+            _JOB_RECENT_SQL + " AND target_name IN (" + marks + ")",
+            (guildjobs.SOURCE + ":%-cross:%", *names))
+    return guildjobs.recent_from_rows(rows)
 
 
 def _weapon_train_asked(need) -> bool:
