@@ -105,7 +105,9 @@ class WorldRows(unittest.TestCase):
         self.assertIn("provided when this quest is accepted", text)
         self.assertNotIn("no source in the world rows", text)
 
-    def test_kill_objective_lists_spawn_counts_in_quest_zone_and_total(self):
+    def test_kill_objective_counts_spawns_on_the_quest_map_not_by_zone_id(self):
+        # creature.zoneId is unset on almost every dev row (zone 0), so a
+        # zone filter reads 0 for creatures that stand on the right map.
         row = quest_row(objective1=124, objective_count1=8)
         catalogue = self.catalogue(
             row,
@@ -114,14 +116,20 @@ class WorldRows(unittest.TestCase):
                     {"entry": 124, "name": "Young Thistle Boar"}
                 ],
                 qc.SPAWN_COUNTS_SQL.format(ids="124"): [
-                    {"entry": 124, "zone": 12, "n": 3},
-                    {"entry": 124, "zone": 14, "n": 2},
+                    {"entry": 124, "map": 0, "n": 3},
+                    {"entry": 124, "map": 1, "n": 2},
                 ],
             },
         )
         text = qt.body(116, catalogue[0], [], [], "")
         self.assertIn("Required creature/object 124 x8 (Young Thistle Boar)", text)
-        self.assertIn("3 spawn(s) in zone, 5 total", text)
+        self.assertIn("3 spawn(s) on the quest's map, 5 total", text)
+        self.assertNotIn("in zone", text)
+
+    def test_spawn_sql_groups_by_map_and_never_reads_zone_id(self):
+        for sql in (qc.SPAWN_COUNTS_SQL, qc.OBJECT_COUNTS_SQL):
+            self.assertNotIn("zoneId", sql)
+            self.assertIn("map", sql)
 
     def test_previous_quest_and_levels_are_in_world_rows(self):
         info = types.SimpleNamespace(
