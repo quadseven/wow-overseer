@@ -16,7 +16,9 @@ the same on both (the infra manifest tests hold that).
 
 import posixpath
 
-VARS_FILE = "/tmp/eph-vars.json"
+# The pod's own emptyDir `tmp` volume, mounted in the seed and the judge only; it is
+# not a host or shared /tmp, so the predictable name is not an attack surface.
+VARS_FILE = "/tmp/eph-vars.json"  # noqa: S108
 LOG_NAME = (
     "Module.log"  # the file appender submit adds to every world (submit.BASELINE)
 )
