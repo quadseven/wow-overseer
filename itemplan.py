@@ -879,6 +879,42 @@ def _rule_basics(w: _World, s: Stack, me: Member):
     return None
 
 
+def _carried_bag_sizes(w: _World, holder: str) -> list | None:
+    """The slot counts of the bags `holder` carries its things in, at most
+    CARRIED_BAGS of them (the four largest, as `capacities` reads a dump), or
+    None when nothing says what it wears (#2274): no worn bag among the
+    stacks, and `Context.worn_bags` unread or silent about the holder."""
+    worn = [
+        max(0, int(b.container_slots or 0))
+        for b in w.stacks
+        if b.holder == holder and b.loc == WORN and b.item_class == C_CONTAINER
+    ]
+    read = (w.ctx.worn_bags or {}).get(holder)
+    if read is None and not worn:
+        return None
+    worn += [max(0, int(n or 0)) for n in read or ()]
+    return sorted(worn, reverse=True)[:CARRIED_BAGS]
+
+
+def _bag_worth_wearing(w: _World, s: Stack, slots: int) -> Option | None:
+    """The keep for a carried bag the holder should wear, or None for a spare.
+
+    Unread worn bags keep the bag: "no bigger than a worn bag" would hold for
+    every carried bag, and `bag_pressure.bag_candidates` keeps a holder it has
+    no sizes for the same way. A bag that beats the smallest carried one is
+    an upgrade, and so is any bag for a holder that wears none."""
+    sizes = _carried_bag_sizes(w, s.holder)
+    if sizes is None:
+        reason = UNREAD_BAGS_REASON
+    elif not sizes:
+        reason = NO_WORN_BAG_REASON
+    elif slots > min(sizes):
+        reason = BIGGER_BAG_REASON
+    else:
+        return None
+    return _opt(KEEP_CARRY, BAG_ROOM, reason, "R2", carry_forced=True)
+
+
 def _rule_bag(w: _World, s: Stack, me: Member):
     if s.item_class != C_CONTAINER:
         return None
@@ -893,33 +929,10 @@ def _rule_bag(w: _World, s: Stack, me: Member):
                 carry_forced=True,
             )
         ]
-    worn = [
-        max(0, int(b.container_slots or 0))
-        for b in w.stacks
-        if b.holder == s.holder and b.loc == WORN and b.item_class == C_CONTAINER
-    ]
-    read = (w.ctx.worn_bags or {}).get(s.holder)
-    if read is not None:
-        worn += [max(0, int(n or 0)) for n in read]
-    elif not worn:
-        # Nothing says what the holder wears (#2274): "no bigger than a worn
-        # bag" would hold for every carried bag, so the bag is kept, as
-        # `bag_pressure.bag_candidates` keeps a holder it has no sizes for.
-        return [_opt(KEEP_CARRY, BAG_ROOM, UNREAD_BAGS_REASON, "R2", carry_forced=True)]
-    out = []
-    # The four largest are the carried bags (`capacities`); a carried bag that
-    # beats the smallest of them is an upgrade, never a spare.
-    smallest_carried = sorted(worn, reverse=True)[:CARRIED_BAGS]
-    if not smallest_carried or slots > min(smallest_carried):
-        out.append(
-            _opt(
-                KEEP_CARRY,
-                BAG_ROOM,
-                BIGGER_BAG_REASON if smallest_carried else NO_WORN_BAG_REASON,
-                "R2",
-                carry_forced=True,
-            )
-        )
+    kept = _bag_worth_wearing(w, s, slots)
+    if kept is not None and kept.reason == UNREAD_BAGS_REASON:
+        return [kept]
+    out = [kept] if kept is not None else []
     if me.empty_bank_positions > 0:
         out.append(
             _opt(
