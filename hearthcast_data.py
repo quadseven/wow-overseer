@@ -125,21 +125,26 @@ def alive_from_rows(rows) -> dict:
 _SAID_FAILED: set = set()
 
 
+def _say_failed(what: str, exc: Exception, log) -> None:
+    """Log a failed read of `what`, the first time since it last worked."""
+    if what in _SAID_FAILED:
+        return
+    _SAID_FAILED.add(what)
+    if log is not None:
+        log.warning(
+            "hearth cast: %s could not be read (%s); no hearthstone hub is kept on it",
+            what,
+            type(exc).__name__,
+        )
+
+
 def _rows(cur, what: str, sql: str, args: tuple, log):
     """The statement's rows as dicts, or None when the read failed."""
     try:
         cur.execute(sql, args)
         rows = [dict(r) for r in cur.fetchall()]
     except Exception as exc:  # a failed read must not reach the errand
-        if what not in _SAID_FAILED:
-            _SAID_FAILED.add(what)
-            if log is not None:
-                log.warning(
-                    "hearth cast: %s could not be read (%s); no hearthstone "
-                    "hub is kept on it",
-                    what,
-                    type(exc).__name__,
-                )
+        _say_failed(what, exc, log)
         return None
     _SAID_FAILED.discard(what)
     return rows
@@ -171,3 +176,23 @@ def read(cur, names, log=None) -> Facts:
         cooldowns=None if cooldowns is None else cooldowns_from_rows(cooldowns),
         alive=None if pulse is None else alive_from_rows(pulse),
     )
+
+
+# What a connection that could not be opened is called in the log.
+_REALM = "the realm"
+
+
+def read_from(connect, names, log=None) -> Facts:
+    """`read` on a connection `connect()` opens, closed again here.
+
+    A connection that cannot be opened is a failed read of all three facts:
+    every field stays None, it is logged once, and nothing raises.
+    """
+    try:
+        with connect() as conn, conn.cursor() as cur:
+            facts = read(cur, names, log)
+    except Exception as exc:  # a realm that is away must not reach the errand
+        _say_failed(_REALM, exc, log)
+        return Facts()
+    _SAID_FAILED.discard(_REALM)
+    return facts

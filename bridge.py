@@ -6752,12 +6752,12 @@ def _hearth_hub_kept(hub: dict, leader: str, names: list, positions: dict,
     """Do the family's hearthstones carry it to `hub` (wow-overseer#2333)?
 
     hearthcast decides, per member, from what hearthcast_data reads here: the
-    carried stone, its saved cooldown and the live pulse. A read that fails
-    is logged once there and reads as "cannot cast", so the hub is not kept.
+    carried stone, its saved cooldown and the live pulse. A read that fails,
+    or a connection that does not open, is logged once there and reads as
+    "cannot cast", so the hub is not kept and nothing raises into the errand.
     Reads only.
     """
-    with _connect() as conn, conn.cursor() as cur:
-        facts = hearthcast_data.read(cur, names, log)
+    facts = hearthcast_data.read_from(_connect, names, log)
     verdict = hearthcast.keeps_hub(hub, leader, hearthcast.members(
         names, positions, reads.get("binds"), reads.get("hearthed"), facts))
     if verdict.said:
@@ -22799,8 +22799,8 @@ class Bridge(discord.Client):
             # that is off cooldown and is alive, and no member is left with
             # the long walk. Looked up like the stops above; without the
             # reader no hub is kept, as before #2329.
-            kept_of = globals().get("_hearth_hub_kept")
-            hearth_reaches = bool(kept_of) and await asyncio.to_thread(
+            kept_of = globals().get("_hearth_hub_kept", lambda *a: False)
+            hearth_reaches = await asyncio.to_thread(
                 kept_of, hub, leader, list(names), positions, reads)
             stops = townerrand.vendor_stops(
                 await asyncio.to_thread(stops_of, leader, standing),

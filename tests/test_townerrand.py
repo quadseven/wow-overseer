@@ -767,6 +767,8 @@ class TheAdapter(unittest.TestCase):
                 return False
 
             def cursor(self):
+                if "connect" in broken:
+                    raise RuntimeError("cannot connect")
                 return Cursor()
 
             def execute(self, sql, args):
@@ -862,6 +864,12 @@ class TheAdapter(unittest.TestCase):
                 self.assertEqual(
                     1, len([s for s in said if "could not be read" in s]), said
                 )
+
+    def test_a_realm_that_cannot_be_reached_keeps_no_hub_and_does_not_raise(self):
+        state, said = self.far_bind_start(broken=("connect",))
+        self.assertEqual(self.FAR_VENDOR_X, state.hub["x"])
+        self.assertEqual(te.GO, state.phase)
+        self.assertEqual(1, len([s for s in said if "could not be read" in s]), said)
 
     def test_without_the_reader_no_hub_is_kept(self):
         state, said = self.far_bind_start(reader=False)

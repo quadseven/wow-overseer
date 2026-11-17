@@ -207,5 +207,76 @@ class TheRead(unittest.TestCase):
         self.assertEqual(hd.Facts(), hd.read(broken, ["Grug"]))
 
 
+class Conn:
+    """A connection whose cursor is `cur`, both usable as context managers."""
+
+    def __init__(self, cur):
+        self.cur = cur
+        self.closed = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.closed += 1
+        return False
+
+    def cursor(self):
+        return self
+
+    def execute(self, sql, args):
+        return self.cur.execute(sql, args)
+
+    def fetchall(self):
+        return self.cur.fetchall()
+
+
+class TheConnection(unittest.TestCase):
+    def setUp(self):
+        hd._SAID_FAILED.clear()
+        self.addCleanup(hd._SAID_FAILED.clear)
+
+    def test_the_facts_are_read_on_a_connection_it_opens_and_closes(self):
+        conn = Conn(Cursor(ALL))
+        facts = hd.read_from(lambda: conn, ["Grug", "Bork"])
+        self.assertEqual(frozenset({"Grug"}), facts.stones)
+        self.assertEqual({"Grug": True, "Bork": False}, facts.alive)
+        self.assertGreaterEqual(conn.closed, 1)
+
+    def test_a_realm_that_cannot_be_reached_is_every_fact_unread(self):
+        log = Log()
+
+        def away():
+            raise ConnectionError("cannot connect")
+
+        self.assertEqual(hd.Facts(), hd.read_from(away, ["Grug"], log))
+        self.assertEqual(hd.Facts(), hd.read_from(away, ["Grug"], log))
+        self.assertEqual(
+            [
+                "hearth cast: the realm could not be read (ConnectionError); "
+                "no hearthstone hub is kept on it"
+            ],
+            log.lines,
+        )
+
+    def test_it_is_said_again_after_the_realm_came_back(self):
+        log = Log()
+
+        def away():
+            raise ConnectionError("cannot connect")
+
+        hd.read_from(away, ["Grug"], log)
+        hd.read_from(lambda: Conn(Cursor(ALL)), ["Grug"], log)
+        hd.read_from(away, ["Grug"], log)
+        self.assertEqual(2, len(log.lines))
+
+    def test_a_cursor_that_fails_to_close_does_not_raise(self):
+        class Sour(Conn):
+            def __exit__(self, *exc):
+                raise RuntimeError("close failed")
+
+        self.assertEqual(hd.Facts(), hd.read_from(lambda: Sour(Cursor(ALL)), ["Grug"]))
+
+
 if __name__ == "__main__":
     unittest.main()
