@@ -19,7 +19,7 @@ CHECKED = GUZZLER.replace("issue: TODO", "issue: 12").replace(
     "commit: TODO", f"commit: {FIX}"
 )
 CONTROL = {
-    "control_worldserver": OLD_WS, "control_dbimport": OLD_DB, "control_pin": OLD,
+    "control_worldserver": OLD_WS, "control_pin": OLD,
 }  # fmt: skip
 BRIDGE_ON = GUZZLER.replace("bridge: off", 'bridge: "on"')
 WITH_BRIDGE = {**CONTROL, "control_bridge": OLD_BRIDGE}
@@ -78,7 +78,8 @@ class SubmitTest(Base):
         rec = self.submit(**CONTROL)
         by = {r["arm"]: r["images"] for r in rec["runs"]}
         self.assertEqual(by["treatment"], {"worldserver": WS, "dbimport": DB})
-        self.assertEqual(by["control"], {"worldserver": OLD_WS, "dbimport": OLD_DB})
+        # the schema step is the same for both arms: only the worldserver differs
+        self.assertEqual(by["control"], {"worldserver": OLD_WS, "dbimport": DB})
         text = json.dumps(self.cluster.of("jobs")[0])
         self.assertIn("client-data-a", text)
         self.assertNotIn("{{", text)
@@ -123,6 +124,23 @@ class SubmitTest(Base):
     def test_control_arm_without_images_is_refused_and_creates_nothing(self):
         with self.assertRaisesRegex(submit.SubmitError, "control"):
             self.submit()
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_the_control_db_upgrade_is_the_live_one_so_a_changed_update_file_cannot_break_it(
+        self,
+    ):
+        self.submit(**CONTROL)
+        for job in self.cluster.of("jobs"):
+            spec = job["spec"]["template"]["spec"]
+            images = [c["image"] for c in spec["initContainers"]]
+            self.assertIn(DB, images, job["metadata"]["name"])
+            self.assertNotIn(OLD_DB, json.dumps(job))
+
+    def test_a_control_dbimport_is_refused_with_the_reason(self):
+        with self.assertRaisesRegex(
+            submit.SubmitError, "db-import.*same for both arms"
+        ):
+            self.submit(control_dbimport=OLD_DB, **CONTROL)
         self.assertEqual(self.cluster.of("jobs"), [])
 
     def test_control_image_must_be_a_digest(self):

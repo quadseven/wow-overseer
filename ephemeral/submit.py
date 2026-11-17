@@ -178,13 +178,18 @@ def _images_for(arm, live_images, args, live_bridge=None):
         if live_bridge is not None:
             img["bridge"] = args.get("treatment_bridge") or live_bridge
     else:
-        if not (args.get("control_worldserver") and args.get("control_dbimport")):
+        if args.get("control_dbimport"):
             raise SubmitError(
-                "a control arm needs --control-worldserver and --control-dbimport (by digest)"
+                "--control-dbimport is no longer taken: the db-import schema step is the same "
+                "for both arms (only the worldserver binary under test differs), and a control "
+                "db-import older than a changed module SQL update file re-applies that file to "
+                "the template and cannot boot. Drop the flag; both arms run the live db-import."
             )
+        if not args.get("control_worldserver"):
+            raise SubmitError("a control arm needs --control-worldserver (by digest)")
         img = {
             "worldserver": args["control_worldserver"],
-            "dbimport": args["control_dbimport"],
+            "dbimport": live_images["dbimport"],
         }
         if live_bridge is not None:
             if not args.get("control_bridge"):

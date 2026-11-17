@@ -194,7 +194,8 @@ def main(argv=None):
         "--control-worldserver", help="control worldserver image, name@sha256:..."
     )
     s.add_argument(
-        "--control-dbimport", help="control db-import image, name@sha256:..."
+        "--control-dbimport",
+        help="refused: both arms run the live db-import (see docs/EPHEMERAL.md)",
     )
     s.add_argument(
         "--control-bridge",
