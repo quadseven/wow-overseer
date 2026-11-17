@@ -315,7 +315,7 @@ class CraftSupplyBuysForTheFilteredMembersAndWalksNobody(
         )
         with mock.patch.dict(os.environ, {individual.ENV: "Grug"}):
             await ns["_craft_supply_once"](owner, None)
-        owner._buy_gather_tools.assert_awaited_once_with(["Og"])
+        owner._buy_gather_tools.assert_awaited_once_with(["Og"], {})
         owner._walk_for_hammers.assert_not_awaited()
         owner._walk_for_reagents.assert_not_awaited()
 

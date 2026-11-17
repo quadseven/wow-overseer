@@ -13,12 +13,14 @@ DB = "registry.example.com/db@sha256:" + "2" * 64
 OLD_WS = "registry.example.com/ws@sha256:" + "3" * 64
 OLD_DB = "registry.example.com/db@sha256:" + "4" * 64
 TOOLS = "registry.example.com/tools@sha256:" + "5" * 64
+BRIDGE = "registry.example.com/bridge@sha256:" + "6" * 64
+OLD_BRIDGE = "registry.example.com/bridge@sha256:" + "7" * 64
 
 TOKENS = (
     "RUN_ID DECREE_ID ARM CLASS BATCH REALM_ID DEADLINE_SECONDS WORLDSERVER_IMAGE "
     "DBIMPORT_IMAGE TOOLS_IMAGE TEMPLATE_IMAGE CLIENT_DATA_CLAIM WS_CPU_REQUEST "
     "WS_CPU_LIMIT WS_MEMORY MYSQL_MEMORY BUFFER_POOL DATADIR_LIMIT EPHEMERAL_REQUEST "
-    "EPHEMERAL_LIMIT"
+    "EPHEMERAL_LIMIT BRIDGE_IMAGE"
 ).split()
 
 # JSON is valid YAML, and the fake's dry-run reads JSON: the shape of the real
@@ -42,6 +44,7 @@ TEMPLATE = json.dumps(
             "activeDeadlineSeconds": "{{DEADLINE_SECONDS}}",
             "template": {
                 "spec": {
+                    "imagePullSecrets": [{"name": "registry-pull"}, {"name": "ghcr"}],
                     "initContainers": [
                         {
                             "name": "worldserver",
@@ -63,6 +66,14 @@ TEMPLATE = json.dumps(
                                     "cpu": "250m",
                                     "memory": "{{MYSQL_MEMORY}}",
                                 }
+                            },
+                        },
+                        {
+                            "name": "bridge",
+                            "image": "{{BRIDGE_IMAGE}}",
+                            "restartPolicy": "Always",
+                            "resources": {
+                                "requests": {"cpu": "50m", "memory": "192Mi"},
                             },
                         },
                         {
@@ -161,6 +172,9 @@ class FakeCluster:
                 "tokens.txt": "# tokens\n" + "\n".join(f"{t}: x" for t in TOKENS) + "\n",
             }
         })  # fmt: skip
+        self.put("deployments", "base-realm", "wow-overseer", {"spec": {"template": {"spec": {
+            "containers": [{"name": "overseer", "image": BRIDGE}],
+        }}}})  # fmt: skip
         for g, text in (
             ("playerbots", PLAYERBOTS),
             ("overseer", OVERSEER),

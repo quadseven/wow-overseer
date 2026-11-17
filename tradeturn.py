@@ -31,6 +31,9 @@ DEFAULT_TOWN_SECONDS = 2400
 ON_TRADE = "trade"
 TOWN = "town"
 OTHER = "other"
+# A `town run` the town errand wrote and no errand is under way any more: the
+# errand finished (or the bridge forgot it) and left the job behind (#2379).
+ERRAND_DONE = "errand_done"
 
 START = "start"
 HOLD = "hold"
@@ -161,6 +164,36 @@ def decide(
     )
 
 
+def job_kind(
+    job: str,
+    trade_jobs,
+    errand_active: bool,
+    last_source: str,
+    errand_source: str,
+    town_run: str,
+    errand_locked: bool = False,
+) -> str:
+    """The leader's job as the turn's clock reads it.
+
+    A `town run` the errand wrote while no errand is active is ERRAND_DONE, not
+    TOWN: the errand released the family ("the campaign takes the family
+    back") but a live turn makes the queue yield, so nothing would write the
+    dungeon job until the allowance ran out. Wow-dev 2026-11-13: an hour idle
+    after a bag-room errand finished at 16:59 (#2379).
+    """
+    if job in trade_jobs:
+        return ON_TRADE
+    if errand_active:
+        return TOWN
+    if job == town_run:
+        # The errand lock is held by other loops too, so it only keeps a
+        # `town run` from reading as finished; it never makes another job TOWN.
+        if errand_locked or last_source != errand_source:
+            return TOWN
+        return ERRAND_DONE
+    return OTHER
+
+
 def _live(
     turn: Turn, setting: int, kind: str, elapsed: float, town_setting: int
 ) -> Decision:
@@ -171,6 +204,12 @@ def _live(
             turn=replace(turn, over=True),
         )
     elapsed = max(0.0, float(elapsed))
+    if kind == ERRAND_DONE:
+        return Decision(
+            END,
+            "the town errand that held the family is over",
+            turn=replace(turn, over=True),
+        )
     if kind == ON_TRADE:
         counted, off = turn.counted + elapsed, turn.off
     else:

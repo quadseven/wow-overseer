@@ -20,6 +20,12 @@ class EphemeralDocsTest(unittest.TestCase):
             self.assertIn(word, PAGE)
         self.assertNotRegex(PAGE, r"no judge")
 
+    def test_documents_every_log_bound_the_lint_accepts(self):
+        from ephemeral import lint
+
+        for key in lint.LOG_EXACT_KEYS + lint.LOG_RANGE_KEYS:
+            self.assertIn("`{%s: N" % key, PAGE, key)
+
     def test_says_what_a_run_can_and_cannot_prove(self):
         self.assertIn("## What a run can and cannot prove", PAGE)
         self.assertIn("It cannot prove", PAGE)

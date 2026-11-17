@@ -210,6 +210,38 @@ class FallbackLadderTest(unittest.TestCase):
         self.assertEqual(judgment.chosen, "restage_nearer")
 
 
+class FailureOutcomeQuestionTest(unittest.TestCase):
+    def test_recovery_question_exposes_the_outcome_used_by_the_heuristic(self):
+        cases = (
+            (
+                "reset_failed",
+                "restage_nearer,one_copy,reset_instance",
+                "reset_instance",
+            ),
+            (
+                "split_failed",
+                "restage_nearer,one_copy,reset_instance",
+                "one_copy",
+            ),
+        )
+        for outcome, options, heuristic in cases:
+            with self.subTest(outcome=outcome):
+                row = recovery_row(
+                    failure=f"{outcome}: the attempt did not get inside",
+                    options=options,
+                    heuristic=heuristic,
+                )
+                request = jev_recovery.request_from_row(row)
+                state, questions = jev_recovery.question(request, context())
+
+                self.assertEqual(state["failure_outcome"], outcome)
+                self.assertIn("failure_outcome", questions["recovery"]["instructions"])
+                self.assertIn(
+                    outcome,
+                    questions["recovery"]["criteria"][heuristic],
+                )
+
+
 class StateTest(unittest.TestCase):
     def test_each_recovery_kind_sends_the_heuristic_row_inputs(self):
         for row, count_key in (

@@ -744,6 +744,10 @@ class Plan:
     # to move, and why - so a person reading the log can tell "nothing to
     # move" from "moved nothing on purpose".
     notes: tuple = ()
+    # (holder, item guid, taker) for each withheld guild route a taker beside
+    # the holder had no free bag slot for (#2245): the wait's reason as a
+    # fact, so a caller does not read it back out of a note's wording.
+    crowded: tuple = ()
 
 
 def _slot_for(holding: Holding) -> str:
@@ -3263,6 +3267,9 @@ class Route:
     reason: str
     verb: str = ""
     alternates: tuple = ()
+    # The make-room step `route_deliverable` attached when the receiver was
+    # full: the `Free` to write ahead of this hand-over (#2245).
+    frees: tuple = ()
 
     @property
     def command(self) -> str:
@@ -3353,20 +3360,29 @@ def route_plan(holdings, candidates, clear_gain: int = CLEAR_GAIN) -> Plan:
 
 
 def route_deliverable(
-    routes, position_rows, at_mailbox, free_slots, per_pass=PER_PASS
+    routes, position_rows, at_mailbox, free_slots, per_pass=PER_PASS, freeables=None
 ) -> Plan:
     """The routes that can happen in the world now, each with its verb.
 
     TRADE when the holder and a ranked receiver are within trade range and
     the receiver has a free slot. MAIL when the holder is at a mailbox and the
-    receiver is family. Never GIVE. Otherwise the item waits, with one note
-    naming what it waits on. A receiver takes at most one item per pass, and
-    at most `per_pass` routes come back.
+    receiver is family. The item itself never goes by GIVE. Otherwise the item
+    waits, with one note naming what it waits on. A receiver takes at most one
+    item per pass, and at most `per_pass` routes come back.
+
+    A FULL RECEIVER BESIDE THE HOLDER MAKES THE ROOM FIRST (#2245), the step
+    `deliverable` already takes (#550). `freeables` is name -> the junk stacks
+    a full receiver may give away (bag_pressure.freeable_greys); when the
+    holder has a slot for one, the route comes back as a TRADE carrying that
+    `Free` in `frees`, to be written ahead of it. `None` means nobody asked,
+    and the route waits as it did. A route withheld with a full receiver is
+    named in `Plan.crowded`, and its note says why no slot could be freed.
     """
     spots = spots_from_rows(position_rows)
     room = {str(k): int(v or 0) for k, v in dict(free_slots or {}).items()}
     posting = {str(n) for n in (at_mailbox or ())}
-    out, notes, taken = [], [], set()
+    giveable = {str(k): tuple(v) for k, v in dict(freeables or {}).items()}
+    out, notes, taken, crowded = [], [], set(), []
     for route in routes:
         if len(out) >= int(per_pass):
             notes.append(
@@ -3383,20 +3399,37 @@ def route_deliverable(
             continue
         chosen = None
         walls = {"taken": [], "absent": [], "full": [], "apart": []}
+        unfreed = []
         for option in (route,) + tuple(route.alternates):
             verb, wall = _verb_for(option, here, spots, room, posting, taken)
+            frees = ()
+            if wall == "full" and freeables is not None:
+                stack, why = _free_step(option, here, spots, room, giveable)
+                if stack is None:
+                    unfreed.append((option.taker, why))
+                else:
+                    frees, verb = (stack,), TRADE
             if verb:
-                chosen = replace(option, verb=verb, alternates=())
+                chosen = replace(option, verb=verb, alternates=(), frees=frees)
                 break
             walls[wall].append(option.taker)
         if chosen is None:
-            notes.append(_route_withheld(route, posting, walls))
+            notes.append(_route_withheld(route, posting, walls, unfreed))
+            crowded.extend(
+                (route.holder, int(route.guid), taker) for taker in walls["full"]
+            )
             continue
+        if chosen.frees:
+            # The junk stack takes one of the holder's slots and leaves one
+            # of the receiver's, which the hand-over below then fills.
+            giveable[chosen.taker] = giveable[chosen.taker][1:]
+            room[chosen.taker] = room.get(chosen.taker, 0) + 1
+            room[chosen.holder] = room.get(chosen.holder, 0) - 1
         if chosen.verb == TRADE:
             room[chosen.taker] = room.get(chosen.taker, 0) - 1
         taken.add(chosen.taker)
         out.append(chosen)
-    return Plan(grants=tuple(out), notes=tuple(notes))
+    return Plan(grants=tuple(out), notes=tuple(notes), crowded=tuple(crowded))
 
 
 def _few(names: list) -> str:
@@ -3428,8 +3461,12 @@ def _verb_for(option, here, spots, room, posting, taken) -> tuple:
     return "", "apart"
 
 
-def _route_withheld(route, posting, walls: dict) -> str:
-    """The one note for a route no ranked receiver could take this pass."""
+def _route_withheld(route, posting, walls: dict, unfreed=()) -> str:
+    """The one note for a route no ranked receiver could take this pass.
+
+    `unfreed` is (taker, why) for each full receiver whose make-room step
+    could not be made (#2245), said after the wall it explains.
+    """
     taken_by, absent = walls["taken"], walls["absent"]
     full, apart = walls["full"], walls["apart"]
     said = []
@@ -3445,6 +3482,10 @@ def _route_withheld(route, posting, walls: dict) -> str:
     if full:
         said.append(
             "%s ha%s no free bag slot" % (_few(full), "ve" if len(full) > 1 else "s")
+        )
+        said.extend(
+            "no slot could be freed for %s (%s)" % (taker, why)
+            for taker, why in unfreed
         )
     if absent:
         said.append(

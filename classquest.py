@@ -46,7 +46,10 @@ WHAT IT REFUSES, WITH A NAMED BLOCKER (a member never waits in silence):
            `cross-to-map map:<id>` row) instead; the blocker stands only when
            the module has refused the crossing for good (Member.no_crossing:
            the verb is off, or no transport serves the faction), or when the
-           spawns are on a map no boat or zeppelin reaches.
+           spawns are on a map no boat or zeppelin reaches. Spawns that are
+           all on map 530 are a CROSS too, from the continent the member's
+           side's boat there sails from (cross_map, #2052); from anywhere
+           else the blocker names the way back that is missing.
   level    every spawn of the objective is more than OVERLEVEL_MAX levels over
            the member: no pack is chosen that would kill it.
 
@@ -1676,6 +1679,74 @@ def far_map(member, spawns) -> int:
     return min(other)
 
 
+# THE WAY BACK TO MAP 530 (#2052). A Draenei's class quests are set on the
+# isles it started on, map 530, and since an outgrown islander takes its level
+# crossing with one still open, a member can stand on Kalimdor with every
+# spawn of its class quest behind it. far_map knows only the two classic
+# continents, so that quest read as the plain MAP blocker and no row was ever
+# asked. The boat that carried the member off sails both ways.
+ISLE_MAP = 530
+MAP_WORDS = {**CONTINENTS, ISLE_MAP: "the starting isles on map 530"}
+# race id -> the classic continent its side's boat to map 530 sails from:
+# Elune's Blessing, between Auberdine in Darkshore and Valaar's Berth on
+# Azuremyst Isle, carries the Alliance (human, dwarf, night elf, gnome,
+# draenei). No boat or zeppelin carries the Horde there: its way is an orb,
+# which is a click and not a crossing row. This says only where a row is
+# worth asking from; the module still prices the ride from its own transport
+# catalogue, and its refusal is the wall (Member.no_crossing). guildlevel
+# names the same boat from the isle's side (BOAT_EXITS), and a test holds the
+# two together, since this module imports nothing of the bridge's.
+ISLE_BOAT_FROM = {1: 1, 3: 1, 4: 1, 7: 1, 11: 1}
+
+
+def _isle_boat(member):
+    """The classic continent the member's own boat to map 530 sails from, or
+    None when no boat carries its race there (or its race is unread)."""
+    race = getattr(member, "race", None)
+    return None if race is None else ISLE_BOAT_FROM.get(int(race))
+
+
+def _isle_only(member, spawns) -> bool:
+    """True when the member stands on a classic continent and the spawns are
+    on map 530 with none on either classic continent."""
+    here = member.map_id
+    if here is None or int(here) not in CONTINENTS:
+        return False
+    maps = {int(s.map_id) for s in spawns}
+    return ISLE_MAP in maps and not maps & set(CONTINENTS)
+
+
+def cross_map(member, spawns) -> int:
+    """The map a class quest's crossing reaches, else -1: far_map's classic
+    continent, or map 530 for spawns that are all there when the member stands
+    on the continent its side's boat to map 530 sails from. A member on map
+    530 is never crossed by this: its spawns there are walked to, and its way
+    off is the level crossing's (guildlevel)."""
+    there = far_map(member, spawns)
+    if there >= 0 or not _isle_only(member, spawns):
+        return there
+    return ISLE_MAP if _isle_boat(member) == int(member.map_id) else -1
+
+
+def _no_way_back(member, spawns) -> str:
+    """The sentence ending a MAP blocker for spawns on map 530 that no
+    crossing row reaches from where the member stands, "" for any other
+    spawns: it names the way back that is missing."""
+    if not _isle_only(member, spawns):
+        return ""
+    boat = _isle_boat(member)
+    if boat is None:
+        return (
+            "; it is on %s, and no boat or zeppelin of the member's side sails "
+            "back there" % MAP_WORDS[ISLE_MAP]
+        )
+    return "; it is on %s, and the only boat back sails from %s, not from %s" % (
+        MAP_WORDS[ISLE_MAP],
+        CONTINENTS[boat],
+        CONTINENTS[int(member.map_id)],
+    )
+
+
 def _walled(member, there) -> str:
     """The module's reason it will not cross the member to map `there`, "" when
     no refusal stands (Member.no_crossing, map id -> reason)."""
@@ -1684,16 +1755,17 @@ def _walled(member, there) -> str:
 
 def _across(member, spawns) -> str:
     """The sentence ending a MAP blocker: where the quest is and why the member
-    does not cross, or "" when the spawns are not on the other continent."""
-    there = far_map(member, spawns)
+    does not cross, or "" when the spawns are not a crossing away (map 530
+    with no boat back from here names that instead, _no_way_back)."""
+    there = cross_map(member, spawns)
     if there < 0:
-        return ""
+        return _no_way_back(member, spawns)
     wall = _walled(member, there)
     return (
         "; it is on %s, a boat or zeppelin away, and the module will not cross "
         "the member (%s)"
         % (
-            CONTINENTS[there],
+            MAP_WORDS[there],
             wall or "no crossing asked yet",
         )
     )
@@ -1730,18 +1802,18 @@ def _block_spawns(quest: Quest, member) -> list:
 
 def _crossing(member, quest: Quest, why: str, blocked: Move, spawns=None) -> Move:
     """A CROSS move in place of `blocked` when it is a MAP blocker whose spawns
-    (`spawns`, else the hunt's own: _block_spawns) are all on the other
-    continent and the module has not refused the crossing; else `blocked`."""
+    (`spawns`, else the hunt's own: _block_spawns) are all a crossing away
+    (cross_map) and the module has not refused the crossing; else `blocked`."""
     if blocked.blocker != MAP:
         return blocked
     if spawns is None:
         spawns = _block_spawns(quest, member)
-    there = far_map(member, spawns)
+    there = cross_map(member, spawns)
     if there < 0 or _walled(member, there):
         return blocked
     said = "%s crosses to %s by its faction's boat or zeppelin for %s" % (
         member.name,
-        CONTINENTS[there],
+        MAP_WORDS[there],
         why,
     )
     return Move(
@@ -2179,7 +2251,7 @@ def owed(book: Book, member, avoid=None, held_off=frozenset(), yielded=frozenset
         title = live.title or (quest.title if quest else "")
         there = live.to_map if live.kind == CROSS else -1
         if live.blocker == MAP and quest is not None:
-            there = far_map(
+            there = cross_map(
                 member, list(quest.starters) + list(quest.enders) + list(quest.fields)
             )
         return Owed(live.quest, title, live.klass, live.blocker, live.said, there)
@@ -2664,7 +2736,7 @@ def _held_here(book: Book, member, move: Move) -> bool:
 def _waits_sentence(member, move: Move, held: Move) -> str:
     return "%s does not cross to %s for %s: %s waits here first (%s)" % (
         member.name,
-        CONTINENTS.get(int(move.to_map), "map %d" % int(move.to_map)),
+        MAP_WORDS.get(int(move.to_map), "map %d" % int(move.to_map)),
         move.title or move.why,
         held.title or held.why,
         held.blocker,

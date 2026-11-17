@@ -113,6 +113,7 @@ def _submit(args):
         "arm": args.arm, "node": args.node, "anchors": args.anchors,
         "control_worldserver": args.control_worldserver, "control_dbimport": args.control_dbimport,
         "control_pin": args.control_pin, "treatment_pin": args.treatment_pin,
+        "control_bridge": args.control_bridge, "treatment_bridge": args.treatment_bridge,
         "decree_pr": args.decree_pr, "dry_run": args.dry_run,
     }  # fmt: skip
     submit.submit(cfg, k, gh, args.decree, opts)
@@ -194,6 +195,14 @@ def main(argv=None):
     )
     s.add_argument(
         "--control-dbimport", help="control db-import image, name@sha256:..."
+    )
+    s.add_argument(
+        "--control-bridge",
+        help="control bridge image, name@sha256:... (bridge: on decrees; the image before the fix)",
+    )
+    s.add_argument(
+        "--treatment-bridge",
+        help="treatment bridge image (default: the base realm's running bridge image)",
     )
     s.add_argument(
         "--control-pin", help="commit the control image was built from (fix presence)"

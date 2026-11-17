@@ -173,6 +173,200 @@ class TheTick(unittest.TestCase):
         sweep.assert_called_once()
 
 
+class PartialUploads(unittest.TestCase):
+    """#2251: a pod killed during an upload leaves its .upload-*.part behind."""
+
+    CLOCK = 2_000_000.0
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = pathlib.Path(tmp.name)
+
+    def aged(self, name, seconds):
+        path = self.dir / name
+        path.write_bytes(b"x")
+        os.utime(path, (self.CLOCK - seconds, self.CLOCK - seconds))
+        return path
+
+    def sweep(self):
+        return clipcutter.sweep_partials(str(self.dir), now=self.CLOCK)
+
+    def test_a_partial_upload_past_the_bound_is_removed(self):
+        old = self.aged(".upload-abc123.part", clipcutter.PART_MAX_AGE + 1)
+        self.assertEqual(self.sweep(), 1)
+        self.assertFalse(old.exists())
+
+    def test_a_partial_upload_at_the_bound_or_younger_is_kept(self):
+        edge = self.aged(".upload-edge.part", clipcutter.PART_MAX_AGE)
+        young = self.aged(".upload-young.part", 5)
+        self.assertEqual(self.sweep(), 0)
+        self.assertTrue(edge.exists())
+        self.assertTrue(young.exists())
+
+    def test_the_bound_outlasts_the_longest_upload(self):
+        self.assertGreater(clipcutter.PART_MAX_AGE, clipcutter.UPLOAD_SECONDS)
+
+    def test_a_finished_clip_is_never_removed_however_old(self):
+        year = 365 * 24 * 3600
+        kept = [
+            self.aged("clip-1-loot.mp4", year),
+            self.aged("clip-2-boss_kill.mp4.part", year),
+            self.aged(".upload-not-a-part.mp4", year),
+            self.aged("upload-abc.part", year),
+            self.aged(".hidden", year),
+        ]
+        self.assertEqual(self.sweep(), 0)
+        for path in kept:
+            self.assertTrue(path.exists(), path.name)
+
+    def test_a_folder_or_a_link_with_the_partial_name_is_left_alone(self):
+        folder = self.dir / ".upload-dir.part"
+        folder.mkdir()
+        target = self.aged("clip-9-loot.mp4", 10)
+        link = self.dir / ".upload-link.part"
+        link.symlink_to(target)
+        old = clipcutter.PART_MAX_AGE + 100
+        os.utime(folder, (self.CLOCK - old, self.CLOCK - old))
+        self.assertEqual(self.sweep(), 0)
+        self.assertTrue(folder.is_dir())
+        self.assertTrue(link.is_symlink())
+        self.assertTrue(target.exists())
+
+    def test_the_upload_writes_the_name_the_sweep_looks_for(self):
+        made = []
+        real = tempfile.mkstemp
+
+        def spy(**kw):
+            made.append(kw)
+            return real(**kw)
+
+        body = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 64
+        ledger = CutterLedger([clip_row(state="cutting", file_name=None)])
+        with mock.patch.object(clipcutter.tempfile, "mkstemp", spy):
+            code, _p = clipcutter.upload(
+                lambda: ledger, "1", io.BytesIO(body), len(body), str(self.dir), ""
+            )
+        self.assertEqual(code, 200)
+        self.assertEqual(made[0]["prefix"], clipcutter.PART_PREFIX)
+        self.assertEqual(made[0]["suffix"], clipcutter.PART_SUFFIX)
+
+    def test_a_missing_folder_removes_nothing_and_does_not_raise(self):
+        self.assertEqual(clipcutter.sweep_partials(str(self.dir / "gone")), 0)
+
+    def test_the_tick_sweep_removes_partials_and_counts_them(self):
+        old = self.dir / ".upload-dead.part"
+        old.write_bytes(b"x")
+        long_ago = clipcutter.PART_MAX_AGE + 60
+        os.utime(old, (old.stat().st_mtime - long_ago,) * 2)
+        ledger = CutterLedger([])
+        with (
+            mock.patch.object(map_server, "_connect", ledger.connect),
+            mock.patch.object(map_server, "CLIPS_DIR", str(self.dir)),
+        ):
+            result = map_server.sweep_clips()
+        self.assertFalse(old.exists())
+        self.assertEqual(result["partial"], 1)
+
+    def test_partials_are_swept_even_when_the_database_is_down(self):
+        old = self.dir / ".upload-dead.part"
+        old.write_bytes(b"x")
+        long_ago = clipcutter.PART_MAX_AGE + 60
+        os.utime(old, (old.stat().st_mtime - long_ago,) * 2)
+
+        def down():
+            raise OSError("database is down")
+
+        with (
+            mock.patch.object(map_server, "_connect", down),
+            mock.patch.object(map_server, "CLIPS_DIR", str(self.dir)),
+        ):
+            with self.assertRaises(OSError):
+                map_server.sweep_clips()
+        self.assertFalse(old.exists())
+
+
+class TheTickLine(unittest.TestCase):
+    """#2251: a tick that did something logs one line; a quiet one logs none."""
+
+    QUIET_SCAN = {"written": 0, "expired": 0, "timed_out": 0}
+    QUIET_SWEEP = {"timed_out": 0, "deleted": 0, "partial": 0}
+
+    def tick(self, scan, swept):
+        with (
+            mock.patch.object(map_server, "scan_clips", return_value=scan),
+            mock.patch.object(map_server, "sweep_clips", return_value=swept),
+        ):
+            return map_server.clip_tick()
+
+    def test_the_line_carries_every_count(self):
+        self.assertEqual(
+            clipledger.tick_line(
+                {"written": 2, "expired": 1, "timed_out": 1},
+                {"timed_out": 2, "deleted": 4, "partial": 5},
+            ),
+            "clip scan: planned 2, expired 1, timed out 3, files deleted 4, "
+            "partial uploads removed 5",
+        )
+
+    def test_a_tick_that_planned_logs_the_line_once(self):
+        scan = {"written": 1, "expired": 0, "timed_out": 0}
+        with self.assertLogs(map_server.log, level="INFO") as seen:
+            self.assertEqual(self.tick(scan, self.QUIET_SWEEP), scan)
+        self.assertEqual(
+            [r.getMessage() for r in seen.records],
+            [
+                "clip scan: planned 1, expired 0, timed out 0, files deleted 0, "
+                "partial uploads removed 0"
+            ],
+        )
+
+    def test_each_count_alone_is_enough_for_a_line(self):
+        for scan, swept in (
+            ({"written": 0, "expired": 1, "timed_out": 0}, self.QUIET_SWEEP),
+            ({"written": 0, "expired": 0, "timed_out": 1}, self.QUIET_SWEEP),
+            (self.QUIET_SCAN, {"timed_out": 1, "deleted": 0, "partial": 0}),
+            (self.QUIET_SCAN, {"timed_out": 0, "deleted": 1, "partial": 0}),
+            (self.QUIET_SCAN, {"timed_out": 0, "deleted": 0, "partial": 1}),
+        ):
+            self.assertTrue(clipledger.tick_line(scan, swept), (scan, swept))
+
+    def test_a_quiet_tick_logs_nothing(self):
+        self.assertEqual(clipledger.tick_line(self.QUIET_SCAN, self.QUIET_SWEEP), "")
+        # The scan with no roster answers without a timed_out count.
+        self.assertEqual(
+            clipledger.tick_line({"written": 0, "expired": 0}, self.QUIET_SWEEP), ""
+        )
+        with self.assertNoLogs(map_server.log, level="INFO"):
+            self.tick(self.QUIET_SCAN, self.QUIET_SWEEP)
+
+    def test_a_failed_scan_still_reports_what_the_sweep_did(self):
+        self.assertEqual(
+            clipledger.tick_line(None, {"timed_out": 1, "deleted": 0, "partial": 2}),
+            "clip sweep after a failed scan: timed out 1, files deleted 0, "
+            "partial uploads removed 2",
+        )
+        self.assertEqual(clipledger.tick_line(None, self.QUIET_SWEEP), "")
+        with (
+            mock.patch.object(map_server, "scan_clips", side_effect=RuntimeError("x")),
+            mock.patch.object(
+                map_server,
+                "sweep_clips",
+                return_value={"timed_out": 0, "deleted": 3, "partial": 0},
+            ),
+            self.assertLogs(map_server.log, level="INFO") as seen,
+            self.assertRaises(RuntimeError),
+        ):
+            map_server.clip_tick()
+        self.assertEqual(
+            [r.getMessage() for r in seen.records],
+            [
+                "clip sweep after a failed scan: timed out 0, files deleted 3, "
+                "partial uploads removed 0"
+            ],
+        )
+
+
 class Upload(unittest.TestCase):
     def test_the_stream_is_read_in_bounded_chunks(self):
         tmp = tempfile.TemporaryDirectory()

@@ -182,6 +182,35 @@ class StandingTests(unittest.TestCase):
             gs.next_target("mage-dps", "head", {"spell_power": 500}, self.stats)
         )
 
+    def test_an_empty_slot_aims_at_the_guides_first_piece_when_none_scores(self):
+        # A trinket's worth is its equip effect, which the template stats do
+        # not carry, so every listed trinket scores 0.0. An empty slot is
+        # still beaten by any of them: the guide's own order names the piece
+        # (#2208), where `0 > 0` used to leave the slot with no target.
+        trinkets = gs.slot_list("mage-dps", "preraid", "trinket")
+        stats = {i: {} for i in trinkets}
+        self.assertEqual(
+            gs.next_target("mage-dps", "trinket", None, stats),
+            ("preraid", trinkets[0], 0.0),
+        )
+        # Only the pieces the world knows are named.
+        self.assertEqual(
+            gs.next_target("mage-dps", "trinket", None, {trinkets[1]: {}}),
+            ("preraid", trinkets[1], 0.0),
+        )
+        self.assertIsNone(gs.next_target("mage-dps", "trinket", None, {}))
+
+    def test_a_worn_piece_that_scores_nothing_is_not_an_empty_slot(self):
+        # A worn trinket also scores 0.0 (its stats read as {}), and nothing
+        # on the list is known to beat it: no target, as before.
+        trinkets = gs.slot_list("mage-dps", "preraid", "trinket")
+        stats = {i: {} for i in trinkets}
+        self.assertIsNone(gs.next_target("mage-dps", "trinket", {}, stats))
+
+    def test_an_empty_slot_still_takes_the_best_scoring_piece(self):
+        tgt = gs.next_target("mage-dps", "head", None, self.stats)
+        self.assertEqual(tgt[:2], ("preraid", self.best))
+
 
 class DataTests(unittest.TestCase):
     def test_all_twenty_one_specs_load_with_weights_and_both_lists(self):

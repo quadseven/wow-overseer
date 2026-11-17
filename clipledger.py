@@ -553,6 +553,34 @@ def delete_expired(cur, root: str) -> int:
     return done
 
 
+def tick_line(scan, swept) -> str:
+    """The one log line for a clip tick, or "" for a tick that did nothing.
+
+    `scan` is what the scan answered (None when it failed) and `swept` what
+    the sweeps answered. A count either side left out reads as zero, so the
+    scan with no roster and a sweep with no clip folder need no special case.
+    """
+    scan_counts = scan if isinstance(scan, dict) else {}
+    swept = swept if isinstance(swept, dict) else {}
+    planned = int(scan_counts.get("written") or 0)
+    expired = int(scan_counts.get("expired") or 0)
+    timed_out = int(scan_counts.get("timed_out") or 0) + int(
+        swept.get("timed_out") or 0
+    )
+    deleted = int(swept.get("deleted") or 0)
+    partial = int(swept.get("partial") or 0)
+    if not (planned or expired or timed_out or deleted or partial):
+        return ""
+    tail = "timed out %d, files deleted %d, partial uploads removed %d" % (
+        timed_out,
+        deleted,
+        partial,
+    )
+    if not isinstance(scan, dict):
+        return "clip sweep after a failed scan: " + tail
+    return "clip scan: planned %d, expired %d, %s" % (planned, expired, tail)
+
+
 # --- reading the ledger back out: the shelf and the story links ----------
 
 CLIPS_PATH = "/clips/"
