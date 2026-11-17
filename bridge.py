@@ -22423,18 +22423,32 @@ class Bridge(discord.Client):
             townerrand.in_range(hub, positions.get(n), townerrand.GATHER_YARDS)
             for n in names)
         step_done = False
+        aim_lost = False
         if state.phase == townerrand.STEPS:
             step_done = await self._town_errand_step(
                 state, names, leader, positions, cohort, now)
         elif townerrand.aim_now(state, now):
-            await self._town_errand_aim(leader, _hub_aim(hub), cohort)
+            # A WALK THAT KEEPS ENDING IS COUNTED (#2151). The aim this pass
+            # wrote last time is gone from the leader's column: the module
+            # ended the walk (a refusal, a stuck leader, a quest drive that
+            # took over) and the write below starts it again. Only an EMPTY
+            # column counts; another writer's aim is the lease's business
+            # (infra#3703). advance releases the errand at the bound.
+            # Looked up: the adapter tests load this method in isolation.
+            column = globals().get("_current_travel_npc")
+            if (state.phase == townerrand.GO and state.go_aimed
+                    and column is not None):
+                aim_lost = not await asyncio.to_thread(column, leader)
+            if await self._town_errand_aim(leader, _hub_aim(hub), cohort):
+                state = townerrand.aimed(state)
         new, line = townerrand.advance(
             state, now, in_run=in_run, leader_at_hub=leader_at_hub,
             gathered=gathered, step_done=step_done,
             bag_pressure_needed=bag_pressure_needed,
             bag_room_made=bag_room_made,
             stalled=_queue_stall_floor(names),
-            hub_yards=townerrand.yards_to(hub, positions.get(leader)))
+            hub_yards=townerrand.yards_to(hub, positions.get(leader)),
+            aim_lost=aim_lost)
         failed = townerrand.unlanded_aim(state, new)
         if failed:
             memory = globals().get("_TOWN_ERRAND_RELEASED")
