@@ -244,7 +244,11 @@ def _kill_drop_short(plans):
     for p in items:
         if not getattr(p, "judged", False):
             continue
-        for s in getattr(p, "shorts", ()) or ():
+        # A THIN reagent (#2502) is one the bags hold for under SHORT_CASTS
+        # casts: the craft rhythm already calls the crafter short of it.
+        for s in tuple(getattr(p, "shorts", ()) or ()) + tuple(
+            getattr(p, "thin", ()) or ()
+        ):
             if s.reagent.vendor:
                 continue
             if s.source not in (reagentplan.GATHER, reagentplan.AUCTION):
