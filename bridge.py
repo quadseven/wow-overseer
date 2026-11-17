@@ -32452,7 +32452,10 @@ def _write_guild_social(social) -> int:
             cur.execute(guildsocial.INSERT_ANSWER_SQL, (
                 reply.ask_id, reply.member[:12], reply.role, reply.stance,
                 reply.said[:255]))
-            lines.append((reply.member, reply.said))
+            # A member with every wording said this sitting joins without a
+            # line (guildsaid, #1636).
+            if reply.said:
+                lines.append((reply.member, reply.said))
     run_id = 0
     if social.form:
         fighting = _wait_out_of_combat(social.form.composition.names)
