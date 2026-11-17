@@ -71,6 +71,8 @@ class AnOrphanSaleTripIsNotCutDownAtOnce(unittest.TestCase):
         )
         self.assertEqual(townslot.SLOT_WAIT, d.verdict, d.reason)
 
+    # Pins the orphan bound only: a trip that cannot finish is released by the lease.
+    # How sellers held far away rejoin the leader is covered by the vendor wait tests.
     def test_a_trip_that_cannot_finish_is_released_within_the_orphan_bound(self):
         slot = self.slot()
         ask(slot, "mail", "at:0:1,2,3", "vendor", 100.0, urgent=True)
