@@ -500,8 +500,10 @@ class TheBridgeReadsTheFarMaster(unittest.TestCase):
             "\n    async def _weapon_skill_train", 1
         )[0]
         expected = (
-            "weaponskill.far_maps(", "weaponskill.choose_far_master(",
-            "guildjobs.weapon_cross_step(", "_fetch_weapon_crossings, names",
+            "weaponskill.far_maps(",
+            "weaponskill.choose_far_master(",
+            "guildjobs.weapon_cross_step(",
+            "_fetch_weapon_crossings, names",
             "self._class_cross_row(",
         )
         self.assertTrue(all(part in body for part in expected))
