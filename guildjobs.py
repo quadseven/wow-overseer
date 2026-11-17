@@ -2602,6 +2602,7 @@ def vendor_judge(member, protected=frozenset()) -> vendorsale.Judge:
             if member.skills_read
             else None
         ),
+        tight=member.free_slots is not None and int(member.free_slots) <= 1,
     )
 
 
@@ -2610,6 +2611,7 @@ def vendor_stacks(member, kept, protected=frozenset()) -> list:
     MAX_SALES: every one vendorsale lets go that overseer_keep does not hold."""
     judge = vendor_judge(member, protected)
     second_best = vendorsale.redundant_upgrades(member.carried, judge)
+    second_best |= vendorsale.cloth_overflow(member.carried, judge)
     own = [
         c
         for c in (member.carried or ())
@@ -4723,7 +4725,7 @@ def plan(
     (death_loop_first), None or {} for none; `risks` name -> deathloop.Risk
     for a member heading into a loop (death_risk_first, #2591), None or {}
     for none; `avoided` name -> the zones a formed loop leaves avoided for
-    that member until a level gain (deathloop.avoided_zones), None or {} for
+    that member until a level gain or deathloop.AVOID_SECONDS (deathloop.avoided_zones), None or {} for
     none; `campaign` the family's
     campaign door (the bridge's _guild_campaign_door), "" for none, which
     keeps a roster member's death loop escape off the level walk (level_step);

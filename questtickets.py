@@ -242,6 +242,10 @@ def _world_rows(info) -> list[str]:
             source.append("creature entries " + ", ".join(map(str, item["droppers"])))
         if item["rewards"]:
             source.append("rewarded by quests " + ", ".join(map(str, item["rewards"])))
+        if item.get("objects"):
+            source.append(
+                "gameobject loot entries " + ", ".join(map(str, item["objects"]))
+            )
         if item["vendors"]:
             source.append(
                 "sold by vendor entries " + ", ".join(map(str, item["vendors"]))
@@ -258,12 +262,12 @@ def _world_rows(info) -> list[str]:
     for objective in getattr(info, "objectives", ()):
         label = objective["name"] or "objective"
         lines.append(
-            "- Required creature/object %d x%d (%s): %d spawn(s) in zone, %d total"
+            "- Required creature/object %d x%d (%s): %d spawn(s) on the quest's map, %d total"
             % (
                 objective["entry"],
                 objective["count"],
                 label,
-                objective["zone_count"],
+                objective["map_count"],
                 objective["total_count"],
             )
         )

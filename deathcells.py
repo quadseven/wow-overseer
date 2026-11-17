@@ -61,6 +61,11 @@ FALL_CLEARANCE_YARDS = MIN_FALL_YARDS
 # two ends both stand at least this far above the liquid's surface (the highest
 # death z in the disc) is on a bridge, a ledge or a city floor over it.
 LIQUID_CLEARANCE_YARDS = 10.0
+# A fall disc whose every drop began at least this far BELOW both ends of a
+# walk condemns nothing the walk stands on: that is a fall through the world,
+# and the void under the ground is not the ground (wow-dev 2026-11-16, drops
+# beginning near z -391 refused every banker walk from z 286 for ever).
+VOID_CLEARANCE_YARDS = 100.0
 # How far back the rows are read, in days.
 DEATH_DAYS = 7
 # A detour may run at most this many times the direct walk: past it the
@@ -123,6 +128,8 @@ class Disc:
     # The highest z a liquid death in a lava or slime disc was recorded at,
     # i.e. the surface at least; None for a fall disc or a row with no z.
     surface_z: float | None = None
+    # The HIGHEST ledge any fall in a pure-fall disc began from; None as top_z.
+    launch_z: float | None = None
 
     def said(self) -> str:
         return "%d %s death%s within %d yards of (%d, %d) on map %d" % (
@@ -211,6 +218,7 @@ def discs(rows) -> list:
         )
         out.append(
             Disc(
+                launch_z=max(tops) if all(t is not None for t in tops) else None,
                 map_id=members[0][0],
                 x=cx,
                 y=cy,
@@ -244,6 +252,16 @@ def _on_the_floor(disc, start) -> bool:
         and z is not None
         and z <= disc.top_z - FALL_CLEARANCE_YARDS
     )
+
+
+def _above_the_void(disc, start, goal) -> bool:
+    """Whether every drop of a fall disc began well below BOTH ends of the walk.
+    Needs both z and the disc's launch heights; with any missing the disc
+    stands and refuses, as it always did."""
+    if disc.launch_z is None or disc.kind != "fall":
+        return False
+    zs = (_num(start, "z"), _num(goal, "z"))
+    return all(z is not None and z >= disc.launch_z + VOID_CLEARANCE_YARDS for z in zs)
 
 
 def _over_the_liquid(disc, start, goal) -> bool:
@@ -288,7 +306,11 @@ def crossings(all_discs, start, goal) -> list:
     for disc in all_discs or ():
         if disc.map_id != a[0]:
             continue
-        if _on_the_floor(disc, start) or _over_the_liquid(disc, start, goal):
+        if (
+            _on_the_floor(disc, start)
+            or _over_the_liquid(disc, start, goal)
+            or _above_the_void(disc, start, goal)
+        ):
             continue
         if math.hypot(disc.x - a[1], disc.y - a[2]) <= disc.radius:
             continue

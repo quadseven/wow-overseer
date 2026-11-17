@@ -70,13 +70,13 @@ GROUPS = {
             Seat("Bonk", "Goraraa", 2, "Holy", "healer", "Draenei", True),
             Seat("Bunga", "Barem", 5, "Holy", "healer", "Draenei", False),
             Seat("Brakk", "Auren", 7, "Enhancement", "dps", "Draenei", False),
-            Seat("Bluk", "Aurehun", 7, "Enhancement", "dps", "Draenei", False),
+            Seat("Bluk", "Aurehun", 7, "Restoration", "healer", "Draenei", False),
         ),
         (  # group 3
             Seat("Crag", "Annian", 1, "Protection", "tank", "Night Elf", False),
             Seat("Clobba", "Asvil", 2, "Holy", "healer", "Draenei", True),
             Seat("Clunk", "Asparano", 5, "Holy", "healer", "Human", False),
-            Seat("Cronk", "Ganras", 7, "Enhancement", "dps", "Draenei", False),
+            Seat("Cronk", "Ganras", 7, "Restoration", "healer", "Draenei", False),
             Seat("Chukk", "Achevar", 3, "Survival", "dps", "Draenei", False),
         ),
         (  # group 4
@@ -102,7 +102,7 @@ GROUPS = {
         ),
         (  # group 7
             Seat("Gronk", "Nangri", 1, "Protection", "tank", "Dwarf", False),
-            Seat("Gakk", "Aeshontu", 2, "Retribution", "dps", "Dwarf", True),
+            Seat("Gakk", "Aeshontu", 2, "Holy", "healer", "Dwarf", True),
             Seat("Gugga", "Aylysae", 5, "Holy", "healer", "Night Elf", False),
             Seat("Glob", "", 11, "Restoration", "healer", "Night Elf", False),
             Seat("Gorrk", "", 9, "Affliction", "dps", "Human", False),
@@ -184,11 +184,20 @@ GROUPS = {
 # from the five off-roster level 60 paladins on the continent with a trainer:
 # the weakest worn gear and Strength, so the least Retribution damage is lost.
 # Every other seat keeps the rule above. The owner can overrule on the plan issue.
-RESPEC_HEALERS = {"Cave": ("Bonk", "Clobba", "Embo")}
+#
+# THE SECOND TRANCHE (2026-11-17). The three paladins above read Holy on the
+# realm, which left Cave at five healers at level 50 or more. Three more seats
+# change trees the same way: Bluk and Cronk, level 52 and 50 Enhancement
+# shamans, take Restoration, and Gakk, the level 60 paladin with the weakest
+# worn gear of the three paladins still seated Retribution, takes Holy. Each is
+# the least damage lost: the two shamans are the lowest level and the lowest
+# worn gear on the damage seats, and no seated Retribution paladin is lighter
+# than Gakk. With Ugga (priest) and Glob (druid) that is eight.
+RESPEC_HEALERS = {"Cave": ("Bonk", "Clobba", "Embo", "Gakk", "Bluk", "Cronk")}
 
 
 def respec_to_heal(name: str) -> bool:
-    """Is this approved name one of the three paladins changing to Holy."""
+    """Is this approved name one of the six seats changing tree to heal."""
     return any(name in names for names in RESPEC_HEALERS.values())
 
 

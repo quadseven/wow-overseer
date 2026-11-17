@@ -18,6 +18,8 @@ import bag_pressure
 import gearup
 import guildbank
 import guildwork
+import hearthcast
+import hearthcast_data
 import mailrun
 import professions
 import situation
@@ -709,6 +711,170 @@ class TheAdapter(unittest.TestCase):
         state, said = self.far_bag_room_start([])
         self.assertEqual(-5800.0, state.hub["x"])
         self.assertFalse([s for s in said if "passes over" in s])
+
+    # The mailbox by the head's hearthstone point, 9,000 yards south of where
+    # the family stands (#2329), and the one vendor beside the head.
+    FAR_BIND = {
+        "map_id": 0,
+        "x": -6673.9,
+        "y": -2174.3,
+        "z": 244.2,
+        "bind": True,
+        "place": "the head's hearthstone point",
+    }
+    FAR_VENDOR_X = 2100.0
+
+    def far_bind_start(
+        self,
+        stones=("Bork", "Grug"),
+        cooling=(),
+        health=None,
+        binds=None,
+        broken=(),
+        reader=True,
+    ):
+        """Drive a bag-room errand start with the head far from his bind hub.
+
+        `stones`, `cooling` and `health` are what the realm's tables hold;
+        `broken` names tables whose read raises. The reader is bridge.py's own
+        `_hearth_hub_kept` over the real hearthcast modules, on a fake cursor,
+        or absent with `reader=False`. Returns (state, lines said).
+        """
+        said = []
+        self.ns["log"] = types.SimpleNamespace(
+            info=lambda fmt, *a: said.append(fmt % a if a else fmt),
+            warning=lambda fmt, *a: said.append(fmt % a if a else fmt),
+        )
+        health = {"Bork": (900, 0), "Grug": (900, 0), **(health or {})}
+        tables = {
+            "character_inventory": [{"name": n, "stones": 1} for n in stones],
+            "character_spell_cooldown": [
+                {"name": n, "ends_at": 1900, "read_at": 100} for n in cooling
+            ],
+            "overseer_snapshot": [
+                {"name": n, "health": h, "has_corpse": c}
+                for n, (h, c) in health.items()
+            ],
+        }
+
+        class Cursor:
+            rows = ()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def cursor(self):
+                if "connect" in broken:
+                    raise RuntimeError("cannot connect")
+                return Cursor()
+
+            def execute(self, sql, args):
+                table = next(t for t in tables if t in sql)
+                if table in broken:
+                    raise RuntimeError("lost connection")
+                self.rows = tables[table]
+
+            def fetchall(self):
+                return self.rows
+
+        if reader:
+            hearthcast_data._SAID_FAILED.clear()
+            self.addCleanup(hearthcast_data._SAID_FAILED.clear)
+            self.ns.update(
+                hearthcast=hearthcast,
+                hearthcast_data=hearthcast_data,
+                _connect=Cursor,
+            )
+            module = ast.Module(body=_functions("_hearth_hub_kept"), type_ignores=[])
+            exec(compile(module, "bridge.py", "exec"), self.ns)  # noqa: S102 - bridge.py's own source
+        self.ns["situation"] = situation
+        self.ns["_fetch_errand_vendor_stops"] = lambda leader, standing: [
+            {"map_id": 0, "x": self.FAR_VENDOR_X, "y": -5200.0, "name": "Far Vendor"}
+        ]
+        self.home = dict(self.FAR_BIND)
+        at_hub = situation.Point(0, self.FAR_BIND["x"], self.FAR_BIND["y"], 244.2)
+        self.binds = binds or {"Bork": at_hub, "Grug": at_hub}
+        self.positions = {
+            "Grug": _at(2151.7, -5264.5),
+            "Bork": _at(2150.0, -5260.0),
+        }
+        self.ns["_mail_gear_holders"] = lambda names: {}
+        self.ns["_campaign_waiting"] = lambda names: True
+        self.ns["_fetch_free_slots"] = lambda names: {"Bork": 0, "Grug": 0}
+        self.ns["_bag_hold_stuck"] = lambda names, free_slots: False
+        state = asyncio.run(
+            self.fam._town_errand_start(
+                te.State(), ["Bork", "Grug"], "Grug", False, self.now, ""
+            )
+        )
+        self.assertEqual(te.BAG_PRESSURE_WHY, state.why)
+        return state, said
+
+    NOT_KEPT = "town errand: the hearthstone hub is not kept as the aim: "
+
+    def test_a_family_with_ready_stones_keeps_the_far_hub_and_casts(self):
+        # The #2329 behaviour, now driven: the start reads the stones and
+        # keeps the hub, and the hearth rows go to both members.
+        state, said = self.far_bind_start()
+        self.assertEqual(self.FAR_BIND, state.hub)
+        self.assertEqual(["Bork", "Grug"], self.hearths)
+        self.assertFalse([s for s in said if "not kept" in s])
+
+    def test_a_head_without_a_stone_does_not_keep_the_hub(self):
+        state, said = self.far_bind_start(stones=("Bork",))
+        self.assertEqual(self.FAR_VENDOR_X, state.hub["x"])
+        self.assertEqual([], self.hearths)
+        self.assertIn(self.NOT_KEPT + "Grug carries no hearthstone", said)
+
+    def test_a_head_with_the_stone_on_cooldown_does_not_keep_the_hub(self):
+        # A cast the bridge did not write: only the cooldown table knows.
+        state, said = self.far_bind_start(cooling=("Grug",))
+        self.assertEqual(self.FAR_VENDOR_X, state.hub["x"])
+        self.assertIn(self.NOT_KEPT + "Grug has its hearthstone on cooldown", said)
+
+    def test_a_dead_head_and_a_ghost_head_do_not_keep_the_hub(self):
+        for health in ((0, 1), (1, 1)):
+            with self.subTest(health):
+                state, said = self.far_bind_start(health={"Grug": health})
+                self.assertEqual(self.FAR_VENDOR_X, state.hub["x"])
+                self.assertIn(self.NOT_KEPT + "Grug is dead", said)
+
+    def test_a_member_bound_elsewhere_on_the_map_does_not_keep_the_hub(self):
+        # Bork's stone lands beside where it already stands, so the cast
+        # would leave it 9,000 yards from the hub to walk.
+        at_hub = situation.Point(0, self.FAR_BIND["x"], self.FAR_BIND["y"], 244.2)
+        binds = {"Grug": at_hub, "Bork": situation.Point(0, 2150.0, -5260.0, 80.0)}
+        state, said = self.far_bind_start(binds=binds)
+        self.assertEqual(self.FAR_VENDOR_X, state.hub["x"])
+        self.assertEqual([], self.hearths)
+        self.assertIn(self.NOT_KEPT + "Bork is bound somewhere else", said)
+
+    def test_a_read_that_fails_keeps_no_hub_and_says_so_once(self):
+        for table in (
+            "character_inventory",
+            "character_spell_cooldown",
+            "overseer_snapshot",
+        ):
+            with self.subTest(table):
+                state, said = self.far_bind_start(broken=(table,))
+                self.assertEqual(self.FAR_VENDOR_X, state.hub["x"])
+                self.assertEqual(
+                    1, len([s for s in said if "could not be read" in s]), said
+                )
+
+    def test_a_realm_that_cannot_be_reached_keeps_no_hub_and_does_not_raise(self):
+        state, said = self.far_bind_start(broken=("connect",))
+        self.assertEqual(self.FAR_VENDOR_X, state.hub["x"])
+        self.assertEqual(te.GO, state.phase)
+        self.assertEqual(1, len([s for s in said if "could not be read" in s]), said)
+
+    def test_without_the_reader_no_hub_is_kept(self):
+        state, said = self.far_bind_start(reader=False)
+        self.assertEqual(self.FAR_VENDOR_X, state.hub["x"])
+        self.assertEqual([], self.hearths)
 
     def test_a_failed_death_read_warns_and_returns_nothing(self):
         # A stand-in, not the real package: other tests replace pymysql in

@@ -2240,7 +2240,9 @@ async def decide(client, plan: Plan, environ=None) -> Decision:
             door_keyword,
             door_answer.choice,
             door_answer.confidence,
-            can_act=door_answer.choice in fits,
+            # An agreement with the heuristic's own door is recorded as such
+            # even when no door fits (#2134): the heuristic door stands then.
+            can_act=door_answer.choice in fits or door_answer.choice == door_keyword,
         ),
     )
     return Decision(plan, comp, door)

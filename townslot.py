@@ -1366,7 +1366,13 @@ def holder_rank(holder) -> int:
 
 def urgency_cuts(claimant: str, holder, reserved: bool) -> bool:
     """Whether an urgent ask by `claimant` may preempt `holder` (#1375)."""
-    if holder is None or reserved or holder.claimant == claimant:
+    if holder is None or holder.claimant == claimant:
+        return True
+    if reserved and not (not holder.claimant and holder.aim in BAG_ROOM_AIMS):
+        # A RESERVATION KEEPS ITS URGENCY AGAINST ANYBODY EXCEPT AN UNRECORDED
+        # SALE TRIP (#1261): wow-dev 2026-11-16 22:44, the town errand held the
+        # reservation and cut an orphan `vendor` aim at 0s, past the grace #2771
+        # gave it, because this returned True before the rank was read.
         return True
     return walk_rank(claimant) < holder_rank(holder)
 
