@@ -7400,7 +7400,7 @@ STALLED_WALK_REASON = "stopped getting nearer the spawn"
 
 def _class_spot(move) -> Spot:
     s = move.spot
-    chest = move.kind == classquest.USE and move.use.verb in (
+    object_use = move.kind == classquest.USE and move.use.verb in (
         classquest.USE_OBJECT,
         classquest.USE_HERE,
         classquest.CAST_MAINHAND,
@@ -7409,7 +7409,13 @@ def _class_spot(move) -> Spot:
     # (classquest.SCRIPTED_FOCI), and its walk ends near it.
     creature = bool(getattr(s, "creature", False))
     return Spot(
-        kind="gameobject" if chest and not creature else "creature",
+        kind=(
+            "gameobject"
+            if move.kind == classquest.ISLE_ORB
+            or (move.kind in (classquest.TAKE, classquest.TURN_IN) and not creature)
+            or (object_use and not creature)
+            else "creature"
+        ),
         spawn=int(s.guid),
         map_id=int(s.map_id),
         x=float(s.x),
@@ -9020,6 +9026,40 @@ def _class_move_step(
     m, move, note, book, recent, cap, hunts, now, far, kept, crafters, master
 ):
     """(step or None, what it does, note) for the move class_step chose."""
+    if move.kind == classquest.ISLE_ORB:
+        if not m.alive:
+            return None, move.said, _held_note(m, 0)
+        if class_crossing_cooling(m.name, recent):
+            return None, move.said, ""
+        spot = _class_spot(move)
+        held = _class_held(m, move, spot, cap, recent, hunts, now, far, book)
+        if held is not None:
+            return None, move.said, _join(note, held)
+        walk = None
+        if not _near(m, spot, classquest.USE_NEAR):
+            walk = guildcorps.Row(
+                "job",
+                spot.command + _cap_word(cap),
+                "",
+                source_for(classquest.CROSS_ACTION + "-walk", m.name),
+            )
+        step = guildcorps.Step(
+            m.name,
+            classquest.ACTION,
+            int(move.quest),
+            move.said,
+            rows=(
+                guildcorps.Row(
+                    "quest",
+                    "%s %d" % (classquest.USE_OBJECT, int(move.spot.entry)),
+                    "",
+                    source_for(classquest.CROSS_ACTION, m.name),
+                ),
+            ),
+            walk=walk,
+            goal=spot.name,
+        )
+        return step, move.said, note
     first = _no_walk_step(m, move, book, recent, cap, kept, crafters, master)
     if first is not None:
         step, doing, why = first

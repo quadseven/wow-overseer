@@ -916,7 +916,11 @@ class TheBridgeFollowsTheAnswer(unittest.TestCase):
             "book.watch_items()",
         ):
             self.assertIn(needle, BRIDGE)
-        self.assertIn("return quests, givers, spawns, loot, trained, use_rows,", BRIDGE)
+        self.assertIn(
+            "return (\n        quests,\n        givers,\n        spawns,",
+            BRIDGE,
+        )
+        self.assertIn("        conditions,\n        isle_orbs,", BRIDGE)
 
     def test_the_chest_read_covers_the_items_the_take_does_not_hand_over(self):
         body = BRIDGE[BRIDGE.index("def _class_use_reads") :]
