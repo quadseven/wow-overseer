@@ -327,6 +327,63 @@ class ObserveSqlTest(unittest.TestCase):
         self.assertIn("schema", rules(d))
 
 
+class LogBoundTest(unittest.TestCase):
+    """#2767: a log check takes a bound, so it can require a line too."""
+
+    def with_expect(self, expect):
+        d = doc()
+        d["observe"].append(
+            {
+                "name": "log-rule",
+                "role": "check",
+                "log": {"pattern": "x", "expect": expect},
+            }
+        )
+        return d
+
+    def test_each_bound_is_accepted(self):
+        for expect in (
+            {"count": 0},
+            {"exactly": 0},
+            {"exactly": 3},
+            {"at_least": 1},
+            {"at_most": 0},
+            {"at_least": 1, "at_most": 4},
+            {"at_least": 2, "at_most": 2},
+        ):
+            self.assertEqual(errors(self.with_expect(expect)), [], expect)
+
+    def test_a_negative_bound_is_rejected(self):
+        for key in ("count", "exactly", "at_least", "at_most"):
+            self.assertIn("schema", rules(self.with_expect({key: -1})), key)
+
+    def test_a_missing_bound_is_rejected(self):
+        for expect in ({}, None, {"at_least": None}, {"exactly": None}, 3, "1"):
+            self.assertIn("schema", rules(self.with_expect(expect)), expect)
+
+    def test_a_bound_that_is_not_a_whole_number_is_rejected(self):
+        for value in ("1", 1.5, True, [1]):
+            self.assertIn("schema", rules(self.with_expect({"at_least": value})), value)
+
+    def test_an_unknown_bound_is_rejected(self):
+        self.assertIn("schema", rules(self.with_expect({"about": 1})))
+        self.assertIn("schema", rules(self.with_expect({"at_least": 1, "about": 1})))
+
+    def test_an_exact_bound_stands_alone(self):
+        for expect in (
+            {"count": 1, "exactly": 1},
+            {"count": 1, "at_least": 1},
+            {"exactly": 1, "at_most": 2},
+        ):
+            self.assertIn("schema", rules(self.with_expect(expect)), expect)
+
+    def test_a_range_that_can_never_hold_is_rejected(self):
+        self.assertIn("schema", rules(self.with_expect({"at_least": 3, "at_most": 2})))
+
+    def test_at_least_zero_is_rejected_because_it_always_holds(self):
+        self.assertIn("schema", rules(self.with_expect({"at_least": 0})))
+
+
 class TodoTest(unittest.TestCase):
     def test_todo_placeholders_warn_and_do_not_fail(self):
         d = doc()
