@@ -3439,6 +3439,46 @@ class _PersistentOwing(classquest.Owing):
             _memo_delete("class_owed", name)
 
 
+# A refused class road (classparty.Board.refuse_road) holds until the member's
+# level or map changes, which can take days, so its memo is kept for a week and
+# Board.road_refused deletes it the moment the road is no longer the one refused.
+ROAD_MEMO_SECONDS = 7 * 24 * 3600
+
+
+class _PersistentRoads(dict):
+    """The class board's refused roads, kept across a bridge restart (#2071).
+
+    member name -> (quest, level, map). The memo is JSON, which reads the tuple
+    back as a list; `restore` makes it a tuple again, because a list never
+    equals the tuple Board.road_refused compares it with. Written through the
+    memo writer so the event loop never waits on the database."""
+
+    kind = "class_road"
+
+    def __setitem__(self, member, road) -> None:
+        unchanged = member in self and dict.__getitem__(self, member) == road
+        super().__setitem__(member, road)
+        if not unchanged:
+            now = time.time()
+            _MEMO_WRITER.submit(_memo_job, _memo_upsert, self.kind, member, list(road), now,
+                                now + ROAD_MEMO_SECONDS)
+
+    def __delitem__(self, member) -> None:
+        super().__delitem__(member)
+        _MEMO_WRITER.submit(_memo_job, _memo_delete, self.kind, member)
+
+    def restore(self) -> None:
+        for member, (value, _since) in _memo_read(self.kind).items():
+            if member in self:
+                continue
+            try:
+                quest, level, map_id = (int(v) for v in value)
+            except (TypeError, ValueError):
+                log.exception("bridge memo: invalid %s memo for %s", self.kind, member)
+                continue
+            dict.__setitem__(self, member, (quest, level, map_id))
+
+
 # One writer thread for the clock memos below, so a write and the delete after
 # it reach the store in the order they were made, and the event loop never
 # waits on the database for one.
@@ -9070,7 +9110,8 @@ class Bridge(discord.Client):
         # quest parties up (classparty.py): their members are held out of the
         # dungeon passes and the guild jobs while they stand.
         self._class_book = None
-        self._class_board = classparty.Board()
+        self._class_roads = _PersistentRoads()
+        self._class_board = classparty.Board(roads=self._class_roads)
         self._class_party_tasks: set = set()
         # Until when (monotonic) this worldserver is known not to carry the
         # quest use verbs (quadseven/mod-overseer#865): the class quest plan
@@ -9281,7 +9322,8 @@ class Bridge(discord.Client):
         # The stall and borrow clocks a deploy must not restart (#817).
         for name in ("_vendor_movement", "_vendor_family_movement",
                      "_bank_family_movement", "_family_lead_since",
-                     "_material_requests", "_tool_requests", "_bag_room_since"):
+                     "_material_requests", "_tool_requests", "_bag_room_since",
+                     "_class_roads"):
             # A _ClockMemo; anything else (a test's plain dict) has nothing
             # to restore.
             restore = getattr(self.__dict__.get(name), "restore", None)
