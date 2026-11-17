@@ -120,6 +120,9 @@ SQL are checked against a snapshot of the game databases
 - `kind: gm` is rejected: bot sessions are SEC_PLAYER, so it silently does nothing.
 - Auction rows and the auction house bot are refused unless the decree sets
   `family: auction-house`.
+- `free_backpack_slots: N` (1 to 16) deletes items from the highest used backpack slots of the
+  world's own copy until N are free, so an `items` grant has a slot (the family carries full
+  backpacks). It grants nothing and needs no ceiling by itself.
 - A grant (level, money, skills, spells, items) needs a `ceiling`, and a grant
   above what the ceiling text allows is rejected.
 - At least one precondition and one check. This only stops a decree with no
