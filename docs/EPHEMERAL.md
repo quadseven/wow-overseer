@@ -280,7 +280,7 @@ All three read one settings file, never the repository: copy
 client-data claim and a world cap), the nodes that are never used, and the
 digest-pinned tools image. A missing or malformed file is an error.
 
-    python3 -m ephemeral submit [--arm both] [--node N] --control-worldserver REF --control-pin SHA
+    python3 -m ephemeral submit [--arm both] [--node N] --control-worldserver REF --control-dbimport REF --control-pin SHA
         [--control-playerbots-prefix NAME] [--control-drop-keys A,B,C] data/decrees/<name>.yaml
     python3 -m ephemeral dispatch [--once]
     python3 -m ephemeral collect [--dry-run]
@@ -326,17 +326,25 @@ nothing to the issue. A decree not yet merged posts to its own pull request when
 configured App, and `collect` refuses to write unless `GH_TOKEN` and
 `GH_CONFIG_DIR` are set.
 
-Both arms run the live db-import. The template is forged from the live realm's
-database, so its `updates` table already holds every module SQL file at its
-current hash. A control db-import built before an edit to such a file sees a
-different hash, re-applies the file, and fails (for example "Duplicate column
-name" on a column that file adds), so the pod never boots and the decree could
-never produce its control FAIL. The schema step is the same for both arms (only
-the worldserver binary under test differs), so the control arm takes the live
-db-import and `--control-dbimport` is refused with that reason. Rejected
-alternatives: a template forged per control era (a forge run and a template per
-image, so a nightly refresh would multiply), and seeding the `updates` table so
-changed files are skipped (it would hide a real schema difference).
+The template is forged from the live realm: its characters and auth databases and its
+world database are at the live schema, and its `updates` table holds each module SQL file
+at its current hash. A control image is older, which breaks two ways, so the arms differ in
+db-upgrade (the template's `db-upgrade.sh`, tokens `RESET_WORLD` and `UPDATES_MASK`):
+
+- The control db-import, run on the characters database, re-applies a module SQL file edited
+  since its build and fails ("Duplicate column name" for 2026_08_22_00_overseer_chat.sql), so
+  the pod never booted (#2845). The control arm therefore updates the world database only
+  (`UPDATES_MASK` 4); characters and auth stay at the live schema, which an older worldserver
+  tolerates as long as the schema is additive.
+- An older worldserver needs the world tables of its own era (the 2026-10-19 one died on a
+  missing `acore_world.emotetextsound_dbc`, a table the live schema dropped). The control arm
+  drops `acore_world` and its own db-import rebuilds it from the base files in the image
+  (`RESET_WORLD` 1), a couple of minutes at boot.
+
+The treatment arm runs the live db-import on all three databases as before (mask 7, no
+reset). `--control-dbimport` is therefore required with `--control-worldserver`. Rejected:
+a template per control era (a forge run and an image per control build) and seeding the
+`updates` table so changed files are skipped (it hides a real schema difference).
 
 The override files come from the live realm, so they carry its key names. A
 control image built before the module renamed `AiPlayerbot.*` to `Playerbots.*`

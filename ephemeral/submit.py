@@ -181,11 +181,13 @@ def _images_for(arm, live_images, args, live_bridge=None):
         if live_bridge is not None:
             img["bridge"] = args.get("treatment_bridge") or live_bridge
     else:
-        if not args.get("control_worldserver"):
-            raise SubmitError("a control arm needs --control-worldserver (by digest)")
+        if not (args.get("control_worldserver") and args.get("control_dbimport")):
+            raise SubmitError(
+                "a control arm needs --control-worldserver and --control-dbimport (by digest)"
+            )
         img = {
             "worldserver": args["control_worldserver"],
-            "dbimport": live_images["dbimport"],
+            "dbimport": args["control_dbimport"],
         }
         if live_bridge is not None:
             if not args.get("control_bridge"):
@@ -291,13 +293,6 @@ def submit(
     """Create the suspended Jobs. Returns the submission record (also saved)."""
     args = dict(args or {})
     arm_arg = args.get("arm", "both")
-    if args.get("control_dbimport"):
-        raise SubmitError(
-            "--control-dbimport is no longer taken: the db-import schema step is the same "
-            "for both arms (only the worldserver binary under test differs), and a control "
-            "db-import older than a changed module SQL update file re-applies that file to "
-            "the template and cannot boot. Drop the flag; both arms run the live db-import."
-        )
     if arm_arg not in ("control", "treatment", "both"):
         raise SubmitError("--arm must be control, treatment or both")
     raw, decree = _load_decree(decree_path, args)
@@ -378,6 +373,10 @@ def submit(
             "BATCH": batch, "REALM_ID": realm,
             "DEADLINE_SECONDS": duration + BASE_DEADLINE_PAD,
             "WORLDSERVER_IMAGE": img["worldserver"], "DBIMPORT_IMAGE": img["dbimport"],
+            # A control arm rebuilds acore_world with its own db-import and updates only that
+            # database (characters and auth keep the live schema); see docs/EPHEMERAL.md.
+            "RESET_WORLD": "1" if arm == "control" else "0",
+            "UPDATES_MASK": "4" if arm == "control" else "7",
             "TOOLS_IMAGE": cfg.tools_image, "TEMPLATE_IMAGE": cfg.template_images[klass],
             "CLIENT_DATA_CLAIM": nodecfg.claim, **classes[klass],
             "BRIDGE_IMAGE": img.get("bridge", BRIDGE_OFF_IMAGE),
