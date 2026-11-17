@@ -279,8 +279,9 @@ class ADueRankReachesTheTrainer(unittest.TestCase):
         plan = self._errand(self.ALCHEMY, 70, 75, (self.ALCHEMY, self.HERBALISM))
         self.assertEqual(("Ugga", self.ALCHEMY), plan.learn)
 
-    def test_a_trade_below_the_margin_is_not(self):
-        plan = self._errand(self.ALCHEMY, 60, 75, (self.ALCHEMY, self.HERBALISM))
+    def test_a_trade_below_the_rank_ask_is_not(self):
+        # Journeyman asks skill 50 (#2500: the family buys at the ask).
+        plan = self._errand(self.ALCHEMY, 40, 75, (self.ALCHEMY, self.HERBALISM))
         self.assertEqual((), plan.learn)
 
 

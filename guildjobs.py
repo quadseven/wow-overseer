@@ -1419,12 +1419,13 @@ def cloth_trades(trades, tailors, alchemists=frozenset(), cooks=frozenset()) -> 
     }
 
 
-def next_rank(skill: int, value: int, cap: int, level: int):
+def next_rank(skill: int, value: int, cap: int, level: int, early: bool = False):
     """The rank this member should buy next, or None.
 
     An unlearned trade (cap 0) wants its first rank. A learned one wants the
     rank above its ceiling once its value is within RANK_UP_MARGIN of the
-    ceiling and its level and value meet the rank's asks.
+    ceiling and its level and value meet the rank's asks. `early` drops the
+    margin: the rank is wanted as soon as those asks hold (#2500).
     """
     ranks = RANKS.get(int(skill), ())
     if not ranks:
@@ -1432,7 +1433,7 @@ def next_rank(skill: int, value: int, cap: int, level: int):
     if cap <= 0:
         first = ranks[0]
         return first if level >= first.level else None
-    if value < cap - RANK_UP_MARGIN:
+    if not early and value < cap - RANK_UP_MARGIN:
         return None
     for rank in ranks:
         if rank.cap > cap:
@@ -1453,6 +1454,12 @@ def ranks_due(level: int, money: int, skills, wanted=()) -> tuple:
     so this never starts a trade; a primary only when `wanted` (the roster's
     `professions` column, the permission TrainOnArrival reads) names it, and
     First Aid always, since it takes no primary slot.
+
+    A FAMILY MEMBER BUYS AT THE RANK'S ASK, NOT AT THE CEILING'S MARGIN (#2500).
+    The crew waits to be within RANK_UP_MARGIN of the ceiling, which a family
+    trade rarely reached (Uzza held Herbalism 125 of 150, a rank Expert sells
+    at 125, and no purchase was ever recorded). A rank is three small purchases
+    per trade, so the family asks as soon as level, skill and purse allow.
     """
     due = []
     for skill, (value, ceiling) in sorted((skills or {}).items()):
@@ -1461,7 +1468,7 @@ def ranks_due(level: int, money: int, skills, wanted=()) -> tuple:
             continue
         if skill != FIRST_AID and skill not in tuple(wanted or ()):
             continue
-        rank = next_rank(skill, value, ceiling, int(level or 0))
+        rank = next_rank(skill, value, ceiling, int(level or 0), early=True)
         if rank is not None and int(money or 0) >= rank.cost:
             due.append((rank.cost, skill))
     return tuple(skill for _cost, skill in sorted(due))

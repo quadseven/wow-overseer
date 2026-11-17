@@ -222,7 +222,7 @@ def nothing_to_train(members: Sequence) -> str:
             "%s already hold the trade the roster asked them to learn - that "
             "is a CAP, not a learn, so this mode writes nothing for it: the "
             "next rank is bought by the rank errand (guildjobs.ranks_due) "
-            "once the trade is within its margin of the cap." % ", ".join(capped)
+            "as soon as the rank's own asks are met." % ", ".join(capped)
         )
     if not held:
         said.append(

@@ -202,8 +202,8 @@ FISHING_REFUSAL = (
 PRIMARY_RANK_REFUSAL = (
     "This is a CAP, not a learn, and a goal does not lift it. The rank is "
     "bought at a trainer: guildjobs.ranks_due writes a rank learn errand for "
-    "the member once the trade is within RANK_UP_MARGIN of its cap and the "
-    "level, skill and purse the rank asks are met, and TrainOnArrival pays "
+    "the member as soon as the level, skill and purse the rank asks are met, "
+    "which is before the trade reaches its cap, and TrainOnArrival pays "
     "the trainer when the member arrives. job='train' stays out of it "
     "(trainjob.outstanding refuses a held skill), so this goal parks at the "
     "cap until that learn errand has been bought, and moves on its own after."
