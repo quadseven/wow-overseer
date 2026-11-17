@@ -2602,6 +2602,7 @@ def vendor_judge(member, protected=frozenset()) -> vendorsale.Judge:
             if member.skills_read
             else None
         ),
+        tight=member.free_slots is not None and int(member.free_slots) <= 1,
     )
 
 
@@ -2610,6 +2611,7 @@ def vendor_stacks(member, kept, protected=frozenset()) -> list:
     MAX_SALES: every one vendorsale lets go that overseer_keep does not hold."""
     judge = vendor_judge(member, protected)
     second_best = vendorsale.redundant_upgrades(member.carried, judge)
+    second_best |= vendorsale.cloth_overflow(member.carried, judge)
     own = [
         c
         for c in (member.carried or ())
