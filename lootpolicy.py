@@ -84,6 +84,11 @@ class Verdict:
     route: str
     why: str
     wanted_by: tuple = ()
+    # A HOLD that only says the piece is bound and stays with its holder: it
+    # may go into the holder's own bank, but into nobody else's hands or the
+    # guild's vault. Every other HOLD (an unread fact, a quest that names it)
+    # moves nowhere.
+    stays: bool = False
 
 
 def _int(value):
@@ -275,10 +280,16 @@ def _shelve(
             )
         return Verdict(BANK_OR_AUCTION, why + "; the guild bank or the auction house")
     if usable:
-        return Verdict(HOLD, why + "; it is bound and stays with its holder")
+        return Verdict(
+            HOLD, why + "; it is bound and stays with its holder", stays=True
+        )
     if _can_disenchant(row):
         return Verdict(DISENCHANT, why + "; it is bound, so it is disenchanted")
     return Verdict(HOLD, why + "; it is bound and cannot be disenchanted")
+
+
+BANK_DEPOSIT = "bank deposit"
+GUILD_DEPOSIT = "guild bank deposit"
 
 
 def allowed(verdict: Verdict, kind: str) -> bool:
@@ -287,7 +298,21 @@ def allowed(verdict: Verdict, kind: str) -> bool:
     A `sell` or `destroy` is allowed only for VENDOR. A `disenchant` is
     allowed only for DISENCHANT, so an upgrade or something the guild bank
     could take is never broken down.
+
+    A deposit moves nothing out of the guild's hands, so it is the one kind
+    that is not about trash. The guild bank takes only what the policy files
+    under BANK_OR_AUCTION (an upgrade goes to the guildmate it upgrades, a
+    bound piece cannot be banked for the guild). The holder's own bank takes
+    that too, and a bound piece that stays with its holder. An unread fact, a
+    quest in the log that names the item, an upgrade for a guildmate and trash
+    are never deposited.
     """
+    if kind == GUILD_DEPOSIT:
+        return verdict.route == BANK_OR_AUCTION
+    if kind == BANK_DEPOSIT:
+        return verdict.route == BANK_OR_AUCTION or (
+            verdict.route == HOLD and verdict.stays
+        )
     if kind == "disenchant":
         return verdict.route == DISENCHANT
     return verdict.route == VENDOR

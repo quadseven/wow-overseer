@@ -51,20 +51,23 @@ def _acts(args):
 
 
 def _seed(args):
-    from . import seedrun
+    from . import podpaths, seedrun
 
     return seedrun.run(
-        args.decree, os.environ, dry_run=args.dry_run, anchors_path=args.anchors
+        args.decree,
+        podpaths.with_vars_file(os.environ),
+        dry_run=args.dry_run,
+        anchors_path=args.anchors,
     )
 
 
 def _judge(args):
-    from . import judge
+    from . import judge, podpaths
 
     return judge.run(
         args.decree,
-        os.environ,
-        log_path=args.log,
+        podpaths.with_vars_file(os.environ),
+        log_path=podpaths.log_path(args.log, os.environ),
         anchors_path=args.anchors,
     )
 
@@ -109,7 +112,9 @@ def _submit(args):
     opts = {
         "arm": args.arm, "node": args.node, "anchors": args.anchors,
         "control_worldserver": args.control_worldserver, "control_dbimport": args.control_dbimport,
+        "control_playerbots_prefix": args.control_playerbots_prefix,
         "control_pin": args.control_pin, "treatment_pin": args.treatment_pin,
+        "control_bridge": args.control_bridge, "treatment_bridge": args.treatment_bridge,
         "decree_pr": args.decree_pr, "dry_run": args.dry_run,
     }  # fmt: skip
     submit.submit(cfg, k, gh, args.decree, opts)
@@ -167,7 +172,10 @@ def main(argv=None):
     )
     j.add_argument("decree")
     j.add_argument("--anchors", help="anchors.yaml (default: decrees/anchors.yaml)")
-    j.add_argument("--log", help="the worldserver log file log assertions read")
+    j.add_argument(
+        "--log",
+        help="the worldserver log file log assertions read (default: $EPH_LOG_FILE, else $EPH_LOGS_DIR/Module.log)",
+    )
     j.set_defaults(func=_judge)
     cfg_help = "runner settings JSON (default: $EPH_CONFIG; see ephemeral/eph.config.example.json)"
     s = sub.add_parser(
@@ -187,7 +195,21 @@ def main(argv=None):
         "--control-worldserver", help="control worldserver image, name@sha256:..."
     )
     s.add_argument(
-        "--control-dbimport", help="control db-import image, name@sha256:..."
+        "--control-dbimport",
+        help="refused: both arms run the live db-import (see docs/EPHEMERAL.md)",
+    )
+    s.add_argument(
+        "--control-playerbots-prefix",
+        help="key prefix of the control image's playerbots.conf.dist when it predates the "
+        "rename to Playerbots.* (for example AiPlayerbot); the control arm's keys are written with it",
+    )
+    s.add_argument(
+        "--control-bridge",
+        help="control bridge image, name@sha256:... (bridge: on decrees; the image before the fix)",
+    )
+    s.add_argument(
+        "--treatment-bridge",
+        help="treatment bridge image (default: the base realm's running bridge image)",
     )
     s.add_argument(
         "--control-pin", help="commit the control image was built from (fix presence)"

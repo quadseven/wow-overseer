@@ -360,12 +360,13 @@ def range_backoff(
     )
 
 
-def sale_reading(holder, position, offsets, refused_age) -> str:
+def sale_reading(holder, position, offsets, refused_age, vendor_entry=None) -> str:
     """One line for the sale pass: where the seller stands and the nearest counter.
 
     `offsets` is the nearest vendor's (dx, dy, dz) from the seller. It names the
     straight-line distance beside the per-axis box the bridge gates on, so the
     next burst shows whether that box is wider than the core's 5 yards.
+    `vendor_entry`, when present, identifies that vendor's creature template.
     """
     where = (
         "map=%s at %.1f,%.1f,%.1f"
@@ -375,7 +376,9 @@ def sale_reading(holder, position, offsets, refused_age) -> str:
     )
     if offsets:
         dx, dy, dz = (abs(float(v)) for v in offsets)
-        counter = "nearest vendor euclid=%.1f 2d=%.1f per-axis=%.1f/%.1f/%.1f" % (
+        entry = " entry=%s" % vendor_entry if vendor_entry is not None else ""
+        counter = "nearest vendor%s euclid=%.1f 2d=%.1f per-axis=%.1f/%.1f/%.1f" % (
+            entry,
             math.sqrt(dx * dx + dy * dy + dz * dz),
             math.hypot(dx, dy),
             dx,

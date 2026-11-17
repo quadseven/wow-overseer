@@ -78,3 +78,12 @@ anchors:
     z: -251.213
     o: 0.0
     provenance: {source: acore_characters.overseer_death, ref: "id 248011 (fall_start_x/y/z)", observed: "2026-11-15", note: "where a real fall began inside Blackrock Depths; the death row records no orientation"}
+  # Copied from a game-written row on 2026-11-16; provenance on the entry.
+  undercity-floor-by-the-mailbox:
+    map: 0
+    zone: 1497
+    x: 1306.78
+    y: 356.366
+    z: -67.2965
+    o: 0.0
+    provenance: {source: overseer_snapshot, ref: "row for Zug, 2026-11-16", observed: "2026-11-16", note: "the lower Undercity floor where the family's town errand was held; orientation not recorded"}

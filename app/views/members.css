@@ -237,3 +237,4 @@
 .qs-q { display: flex; flex-direction: column; gap: 1px; padding: 9px 14px; box-shadow: 0 -1px 0 var(--color-neutral-900); }
 .mb-kick.ok { color: var(--ok); }
 .mb-kick.warn { color: var(--warn); }
+.ro-link { display: grid; gap: 3px; }

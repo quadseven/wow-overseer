@@ -74,6 +74,40 @@ def active(job_by_name: dict, family, environ=None) -> bool:
     return bool(job_by_name) and enabled(family, environ) and not linked(job_by_name)
 
 
+def resolve_member(job_by_name: dict, member) -> str:
+    """The roster name `member` matches without regard to case, or ''."""
+    wanted = str(member or "").strip().casefold()
+    for name in job_by_name or {}:
+        if str(name).casefold() == wanted and wanted:
+            return str(name)
+    return ""
+
+
+def member_order_refusal(job_by_name: dict, member, mode) -> str:
+    """Why a job order naming one member cannot be written, or '' (#2407).
+
+    Accepted only for a member on the roster, while the family is not linked,
+    and for a mode that is not a dungeon or raid job: those belong to the
+    whole family. Pure: the jobs read and the order in, a sentence out.
+    """
+    name = resolve_member(job_by_name, member)
+    if not name:
+        return "%s is not on the roster, so there is no job to give." % (
+            str(member or "").strip() or "Nobody"
+        )
+    if links(mode):
+        return (
+            "%s is a job for the whole family, so it cannot be given to %s alone."
+            % (mode, name)
+        )
+    if linked(job_by_name):
+        return (
+            "The family is linked (a member is on a dungeon or raid job), so "
+            "%s cannot be given a job of its own now." % name
+        )
+    return ""
+
+
 def members_on(job_by_name: dict, modes, family, environ=None, exempt=()) -> tuple:
     """The members a drive for `modes` acts for, sorted by name.
 
@@ -198,3 +232,47 @@ def gather_targets(
     return {
         n: farmjob.target_for((skills_by_name or {}).get(n)) or loop_job for n in names
     }
+
+
+# --- what a page may say of a family (#2408) ---------------------------------
+
+LINKED = "linked"
+INDIVIDUAL = "individual"
+UNREAD = "unread"
+
+
+def standing(job_by_name: dict, family, environ=None) -> dict:
+    """Whether a family reads as linked or individual by its jobs, and why.
+
+    For a surface that only reports. `state` is LINKED, INDIVIDUAL, UNREAD or
+    '' (nobody on the roster), and `reason` names the fact that decided it:
+
+      'job'      a member's dungeon or raid job links the family; `by` names
+                 every such member, sorted.
+      'unnamed'  no job links it, and the setting does not name the family.
+      'named'    no job links it, and the setting names the family.
+      'setting'  no job links it, and this process was never handed the
+                 setting, so it cannot tell 'unnamed' from 'named'.
+
+    UNSET IS NOT EMPTY HERE. The bridge treats an unset `FAMILY_INDIVIDUAL` as
+    "no family is individual", which is right for the process that acts on it.
+    A page served by another process is not handed the bridge's environment
+    unless the deployment passes it, and a page that read "unset" as "linked"
+    would call a family linked while the bridge walks its members apart. So a
+    missing key answers UNREAD, and an empty value answers 'unnamed'.
+
+    The run, the campaign queue and a summon re-link a family too; this module
+    cannot see them, and a caller that reports this answer says so.
+    """
+    rows = dict(job_by_name or {})
+    if not rows:
+        return {"state": "", "reason": "", "by": ()}
+    by = tuple(sorted(str(name) for name, job in rows.items() if links(job)))
+    if by:
+        return {"state": LINKED, "reason": "job", "by": by}
+    env = os.environ if environ is None else environ
+    if ENV not in env:
+        return {"state": UNREAD, "reason": "setting", "by": ()}
+    if enabled(family, env):
+        return {"state": INDIVIDUAL, "reason": "named", "by": ()}
+    return {"state": LINKED, "reason": "unnamed", "by": ()}

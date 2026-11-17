@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, Mock
 
 import craft_rhythm
 import craft_supply
+import familytools
 import individual
 import guildcorps
 import guildjobs
@@ -158,6 +159,7 @@ class BridgeBuyer(unittest.TestCase):
         ns = dict(
             asyncio=asyncio,
             craft_supply=craft_supply,
+            familytools=familytools,
             guildjobs=guildjobs,
             log=log,
             _fetch_gather_trades=lambda names: trades,
@@ -331,7 +333,7 @@ class SupplyPassWiring(unittest.IsolatedAsyncioTestCase):
         run = load("_craft_supply_once", self.namespace())
         owner = self.owner([])
         await run(owner, None)
-        owner._buy_gather_tools.assert_awaited_once_with(["Og"])
+        owner._buy_gather_tools.assert_awaited_once_with(["Og"], {})
 
     async def test_the_tool_needs_reach_the_walk(self):
         need = craft_supply.Need("Og", PICK, "Mining Pick")

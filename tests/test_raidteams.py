@@ -88,12 +88,15 @@ class TheFirstKillLineupChange(unittest.TestCase):
 
 
 class TheTeams(unittest.TestCase):
-    def test_each_raid_is_8_tanks_11_healers_21_damage(self):
+    def test_each_raid_is_8_tanks_11_healers_21_damage_plus_the_respecs(self):
+        # The three Cave paladins sent to Holy (RESPEC_HEALERS) move from the
+        # damage seats to healer seats; every other seat count is the plan's.
         for team in raidteams.GROUPS:
+            moved = len(raidteams.RESPEC_HEALERS.get(team, ()))
             seats = [s.seat for s in raidteams.seats(team)]
             self.assertEqual(seats.count(raidroles.SEAT_TANK), 8, team)
-            self.assertEqual(seats.count(raidroles.SEAT_HEALER), 11, team)
-            self.assertEqual(seats.count(raidroles.SEAT_DAMAGE), 21, team)
+            self.assertEqual(seats.count(raidroles.SEAT_HEALER), 11 + moved, team)
+            self.assertEqual(seats.count(raidroles.SEAT_DAMAGE), 21 - moved, team)
 
     def test_every_group_has_a_fire_resistance_source(self):
         for team, groups in raidteams.GROUPS.items():
@@ -162,9 +165,19 @@ class TheLineupSeatsTheApprovedTeams(unittest.TestCase):
             sorted(raidteams.LEAVING["Cave"]),
         )
 
-    def test_nobody_respecs(self):
+    def test_nobody_respecs_but_the_six_named_seats(self):
         lineup = raidlineup.build_lineup(_guild("Cave", recruits_joined=True))
-        self.assertEqual(lineup["counts"]["respec"], 0)
+        marked = {
+            m["approved_name"]
+            for g in lineup["groups"]
+            for m in g["members"]
+            if m.get("respec")
+        }
+        # This read carries no talents, so only the named seats are unproven.
+        self.assertEqual(marked, set(raidteams.RESPEC_HEALERS["Cave"]))
+        self.assertEqual(lineup["counts"]["respec"], 6)
+        bonkers = raidlineup.build_lineup(_guild("Bonkers", recruits_joined=True))
+        self.assertEqual(bonkers["counts"]["respec"], 0)
 
     def test_the_family_is_group_one(self):
         lineup = raidlineup.build_lineup(_guild("Cave"))

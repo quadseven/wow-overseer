@@ -1,10 +1,10 @@
 # Blackrock Depths: a between-pulls hold of waivable (DPS) low mana plus a
 # lagging member reaching the ceiling does not end the run; the run goes on.
-# One follower is held at the door as the lagging member.
+# One follower (Og) is parked at an outdoor graveyard as the lagging member; he is outside the instance, not at the door.
 # Scope: only the lagging half of the mixed hold is arranged. A decree cannot set a member's mana (the cast
 # fields are level, health, money, skills, spells, items, quests, homebind and position), so the waivable-mana
 # half of issue 147 is NOT seeded and NOT asserted: a pass here does not show the mixed hold ended well, and
-# issue 147 stays a live check. The lagging member (Og, held outside) must not end the run at the ceiling.
+# issue 147 stays a live check. The lagging member (Og, held at an outdoor graveyard, outside the instance) must not end the run at the ceiling.
 # Fix: mod-dungeon-clear pull 148.
 decree: v1
 id: brd-hold-waivable-mana-and-lag

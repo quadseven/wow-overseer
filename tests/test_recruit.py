@@ -574,6 +574,7 @@ class TheInterviewIntegration(unittest.TestCase):
             self.bridge,
             _online_guild_members=mock.DEFAULT,
             _recruit_prefer=mock.DEFAULT,
+            _recruit_missing_roles=mock.DEFAULT,
             _latest_guild_shortlist=mock.DEFAULT,
             _minutes_since_shortlist_asked=mock.DEFAULT,
             _guild_invites_asked=mock.DEFAULT,
@@ -592,6 +593,7 @@ class TheInterviewIntegration(unittest.TestCase):
         # Default mock returns
         self.mocks["_online_guild_members"].return_value = ["ActingMember"]
         self.mocks["_recruit_prefer"].return_value = ()
+        self.mocks["_recruit_missing_roles"].return_value = set()
         self.mocks["_latest_guild_shortlist"].return_value = (
             {"shortlist": [{"name": "Candidate1", "class": 1}]},
             5.0,
@@ -778,12 +780,10 @@ class TheInterviewIntegration(unittest.TestCase):
 
 
 class GuildRecruitingPolicy(unittest.TestCase):
-    def test_ad_names_missing_roles_and_raid_nights_and_is_hourly(self):
-        line = recruit.recruiting_ad(
-            "<Lost Armada>", ["healers", "tanks"], ["Tue", "Thu"]
-        )
-        self.assertIn("healers, tanks", line)
-        self.assertIn("Tue, Thu", line)
+    def test_ad_names_missing_roles_and_no_raid_nights_and_is_hourly(self):
+        line = recruit.recruiting_ad("<Lost Armada>", ["healer", "tank"])
+        self.assertEqual(line, "<Lost Armada> LF healer, tank")
+        self.assertNotIn("night", line.lower())
         self.assertTrue(recruit.may_post_ad(None))
         for minutes_since_first_post in (0.0, 0.5, 30.0, 59, 59.9):
             with self.subTest(second_post_after=minutes_since_first_post):
@@ -817,6 +817,258 @@ class GuildRecruitingPolicy(unittest.TestCase):
             ],
             ["Stale"],
         )
+
+
+class RoleFromClassAndSpec(unittest.TestCase):
+    """The shortlist reports a class and a level, so the role is derived."""
+
+    def test_a_known_spec_names_one_role(self):
+        self.assertEqual(
+            recruit.candidate_roles({"class": 5, "spec": "Holy"}), {"healer"}
+        )
+        self.assertEqual(
+            recruit.candidate_roles({"class": 1, "spec": "Protection"}), {"tank"}
+        )
+        self.assertEqual(recruit.candidate_roles({"class": 1, "spec": "Fury"}), {"dps"})
+
+    def test_no_spec_falls_back_to_every_role_the_class_plays(self):
+        self.assertEqual(recruit.candidate_roles({"class": 1}), {"tank", "dps"})
+        self.assertEqual(recruit.candidate_roles({"class": 5}), {"healer", "dps"})
+        self.assertEqual(recruit.candidate_roles({"class": 3}), {"dps"})
+
+    def test_an_unreadable_class_has_no_role(self):
+        self.assertEqual(recruit.candidate_roles({"name": "Nobody"}), set())
+
+    def test_an_explicit_role_wins(self):
+        self.assertEqual(
+            recruit.candidate_roles({"class": 1, "role": "healer"}), {"healer"}
+        )
+
+    def test_missing_template_roles_are_the_unfilled_seats(self):
+        seat = types.SimpleNamespace
+        seats = [
+            seat(name="A", seat="tank"),
+            seat(name="B", seat="healer"),
+            seat(name="C", seat="dps"),
+            seat(name="D", seat="dps"),
+        ]
+        self.assertEqual(
+            recruit.missing_template_roles(seats, {"A", "C"}), ["healer", "dps"]
+        )
+        self.assertEqual(
+            recruit.missing_template_roles(seats, {"A", "B", "C", "D"}), []
+        )
+
+
+class TheAdPoster(unittest.TestCase):
+    def test_the_leader_posts_and_an_online_officer_stands_in(self):
+        rows = [
+            {"name": "Lead", "rank": 0, "online": 1},
+            {"name": "Off", "rank": 1, "online": 1},
+            {"name": "Mem", "rank": 3, "online": 1},
+        ]
+        self.assertEqual(recruit.ad_poster(rows), "Lead")
+        rows[0]["online"] = 0
+        self.assertEqual(recruit.ad_poster(rows), "Off")
+        rows[1]["online"] = 0
+        self.assertEqual(recruit.ad_poster(rows), "")
+
+
+class TheShortlistIsRankedByTheGuildsHoles(unittest.TestCase):
+    def test_a_healer_class_goes_ahead_of_a_better_level_damage_class(self):
+        result = {
+            "shortlist": [
+                {"name": "Hunter", "class": 3, "level": 60},
+                {"name": "Priest", "class": 5, "level": 55},
+                {"name": "Low", "class": 5, "level": 20},
+            ]
+        }
+        ranked = recruit.order_shortlist(result, {"healer"})
+        self.assertEqual(
+            recruit.names_from_shortlist(ranked), ["Priest", "Low", "Hunter"]
+        )
+
+    def test_nothing_missing_leaves_the_modules_order(self):
+        result = {"shortlist": [{"name": "A", "class": 3}, {"name": "B", "class": 5}]}
+        self.assertIs(recruit.order_shortlist(result, set()), result)
+
+    def test_rank_can_keep_below_level_candidates_after_the_eligible(self):
+        picks = recruit.rank_raid_candidates(
+            [
+                {"name": "Low", "role": "healer", "level": 20},
+                {"name": "Fit", "role": "healer", "level": 56},
+            ],
+            {"healer"},
+            drop_below_level=False,
+        )
+        self.assertEqual([p["name"] for p in picks], ["Fit", "Low"])
+
+
+class _BridgeCase(unittest.TestCase):
+    def _import_bridge(self):
+        stub = types.ModuleType("discord")
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        stub.Client = Client
+        return fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
+
+    def _make_client(self):
+        client = object.__new__(self.bridge.Bridge)
+        client.wait_until_ready = lambda: None
+        client.is_closed = lambda: True
+        return client
+
+
+class TheRecruitPassRanksByTheGuildsHoles(_BridgeCase):
+    def test_a_guild_missing_a_healer_invites_the_level_55_healer_not_the_better_damage(
+        self,
+    ):
+        self.bridge = self._import_bridge()
+        patches = mock.patch.multiple(
+            self.bridge,
+            _online_guild_members=mock.DEFAULT,
+            _recruit_prefer=mock.DEFAULT,
+            _recruit_missing_roles=mock.DEFAULT,
+            _latest_guild_shortlist=mock.DEFAULT,
+            _minutes_since_shortlist_asked=mock.DEFAULT,
+            _guild_invites_asked=mock.DEFAULT,
+            _minutes_since_last_guild_invite=mock.DEFAULT,
+            _insert_guild=mock.DEFAULT,
+            _interview_candidate=mock.DEFAULT,
+        )
+        mocks = patches.start()
+        self.addCleanup(patches.stop)
+        log_patch = mock.patch.object(self.bridge.log, "info")
+        log_patch.start()
+        self.addCleanup(log_patch.stop)
+        mocks["_online_guild_members"].return_value = ["Actor"]
+        mocks["_recruit_prefer"].return_value = ()
+        mocks["_recruit_missing_roles"].return_value = {"healer"}
+        # The module's order puts the better damage dealer first.
+        mocks["_latest_guild_shortlist"].return_value = (
+            {
+                "members": 5,
+                "target_size": 40,
+                "shortlist": [
+                    {"name": "Hunter", "class": 3, "level": 60},
+                    {"name": "Priest", "class": 5, "level": 55},
+                ],
+            },
+            5.0,
+        )
+        mocks["_minutes_since_shortlist_asked"].return_value = 20.0
+        mocks["_guild_invites_asked"].return_value = set()
+        mocks["_minutes_since_last_guild_invite"].return_value = 10.0
+        mocks["_insert_guild"].return_value = 1
+        mocks["_interview_candidate"].return_value = types.SimpleNamespace(
+            candidate="Priest", question="q", reply="r"
+        )
+
+        asyncio.run(self._make_client()._recruit_once())
+
+        mocks["_recruit_missing_roles"].assert_called_once_with("Actor")
+        args = mocks["_insert_guild"].call_args.args
+        self.assertEqual(args[1], "invite Priest")
+
+
+class TheHourlyAd(_BridgeCase):
+    GUILD = "Cave"
+
+    def setUp(self):
+        self.bridge = self._import_bridge()
+        seats = [
+            types.SimpleNamespace(name="Tank", seat="tank"),
+            types.SimpleNamespace(name="Heal", seat="healer"),
+        ]
+        patches = mock.patch.multiple(
+            self.bridge,
+            _recruit_guild_members=mock.DEFAULT,
+            _minutes_since_recruit_ad=mock.DEFAULT,
+            _insert_speak=mock.DEFAULT,
+        )
+        self.mocks = patches.start()
+        self.addCleanup(patches.stop)
+        groups = mock.patch.object(
+            self.bridge.raidteams, "GROUPS", {self.GUILD: (tuple(seats),)}
+        )
+        groups.start()
+        self.addCleanup(groups.stop)
+        info = mock.patch.object(self.bridge.log, "info")
+        self.info = info.start()
+        self.addCleanup(info.stop)
+        self.now = datetime(2026, 11, 17)
+        self.mocks["_recruit_guild_members"].return_value = [
+            {
+                "name": "Tank",
+                "rank": 0,
+                "online": 1,
+                "last_seen": self.now,
+                "db_now": self.now,
+            },
+        ]
+        self.mocks["_minutes_since_recruit_ad"].return_value = None
+
+    def _run(self):
+        asyncio.run(self._make_client()._recruit_ads_once())
+
+    def test_a_guild_whose_last_post_is_under_60_minutes_old_writes_no_chat_row(self):
+        self.mocks["_minutes_since_recruit_ad"].return_value = 59.0
+        self._run()
+        self.mocks["_insert_speak"].assert_not_called()
+
+    def test_at_60_minutes_exactly_one_lfg_row_with_the_ad_line_is_written(self):
+        self.mocks["_minutes_since_recruit_ad"].return_value = 60.0
+        self._run()
+        self.mocks["_insert_speak"].assert_called_once()
+        cmd = self.mocks["_insert_speak"].call_args.args[0]
+        self.assertEqual(cmd.target_name, "Tank")
+        self.assertEqual(cmd.channel, self.bridge.guildpug.CHANNEL)
+        self.assertEqual(cmd.text, recruit.recruiting_ad(self.GUILD, ["healer"]))
+        self.assertEqual(cmd.source, recruit.AD_SOURCE)
+
+    def test_a_guild_that_never_posted_posts(self):
+        self._run()
+        self.mocks["_insert_speak"].assert_called_once()
+
+    def test_a_guild_missing_nothing_posts_nothing(self):
+        self.mocks["_recruit_guild_members"].return_value.append(
+            {
+                "name": "Heal",
+                "rank": 3,
+                "online": 1,
+                "last_seen": self.now,
+                "db_now": self.now,
+            }
+        )
+        self._run()
+        self.mocks["_insert_speak"].assert_not_called()
+
+    def test_a_surplus_member_offline_8_days_is_logged_and_never_removed(self):
+        self.mocks["_minutes_since_recruit_ad"].return_value = 5.0
+        self.mocks["_recruit_guild_members"].return_value.append(
+            {
+                "name": "Gone",
+                "rank": 3,
+                "online": 0,
+                "last_seen": self.now - timedelta(days=8),
+                "db_now": self.now,
+            }
+        )
+        self._run()
+        lines = [call.args[0] % call.args[1:] for call in self.info.call_args_list]
+        self.assertTrue(any("prune candidate Gone" in line for line in lines), lines)
+        self.mocks["_insert_speak"].assert_not_called()
+
+    def test_the_ad_pass_writes_no_guild_remove_row(self):
+        text = BRIDGE.read_text(encoding="utf-8")
+        start = text.index("    async def _recruit_ads_once(")
+        body = text[start : text.index("\n    async def ", start + 10)]
+        self.assertNotIn("_insert_guild", body)
+        self.assertNotIn('"remove', body)
+        self.assertNotIn("guild-remove", body)
 
 
 if __name__ == "__main__":
