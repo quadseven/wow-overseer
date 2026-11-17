@@ -107,7 +107,7 @@ class Step:
     @property
     def said(self) -> str:
         """Who gave, who received, what piece - the audit line."""
-        if self.row is not None and not self.why:
+        if self.row is not None:
             return "; then ".join([f.said for f in self.frees] + [self.row.said])
         r = self.route
         return "%s -> %s, %s (item %d): %s" % (

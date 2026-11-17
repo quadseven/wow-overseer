@@ -14083,6 +14083,9 @@ class Bridge(discord.Client):
             report, bank_rows, wearers)
         if not report.routes:
             log.info("gear routing: no routes this pass")
+            # No move waits on room this pass, so no wait keeps its clock.
+            self._gear_room_waits, _ = gearroomwait.observe(
+                waits, gearroutingexec.Result(), time.time(), 0)
             return
         who = gearroutingexec.members_to_read(
             report, [str(r.get("name") or "") for r in wearers])

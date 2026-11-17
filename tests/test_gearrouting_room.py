@@ -73,6 +73,17 @@ class MakeRoomAheadOfTheMove(unittest.TestCase):
         self.assertEqual(step.blocked, gx.BLOCKED_ROOM)
         self.assertIn("make-room", step.why)
 
+    def test_a_declined_move_still_reads_as_its_row(self):
+        """The decision line of a declined row is the row's own, with the
+        make-room step that was written ahead of it."""
+        tape = Tape()
+        report = gr.Report(routes=(route(),))
+        result = gx.execute(report, full(), lambda _row: 0, insert_free=tape.free)
+        step = result.steps[0]
+        self.assertEqual(step.status, gx.DECLINED)
+        self.assertIn("Cracked Bone", step.said)
+        self.assertIn("by trade", step.said)
+
     def test_no_writer_for_the_step_means_no_step_and_no_move(self):
         """A caller that cannot write the give is not handed a trade that
         needs it: the move waits for room as it did."""
