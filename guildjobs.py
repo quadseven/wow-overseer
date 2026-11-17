@@ -1025,12 +1025,40 @@ def _walk_passed(name, recent, action, reasons) -> bool:
     )
 
 
+# A HEARTH THAT A FIGHT OR A STEP STOPPED LEARNED NOTHING (#2152). The module's
+# answers to a hearth the next moment changes, matched exactly as it words
+# them. Read on the dev realm on 2026-11-17: of 55 hearth rows from 12:00, 19
+# came back with one of these, and each started the same hour of cooldown as a
+# hearth that landed, so the next pass named the member "hearth cooling" and
+# sent it nowhere while it kept dying in the loop's zone.
+PASSING_HEARTH_REASONS = frozenset(
+    {
+        "character is in combat",
+        "character is moving",
+        "character is already casting",
+        "the cast never started and the character never left",
+    }
+)
+
+
+def passing_hearth_row(r) -> bool:
+    """Whether a hearth row ended for a reason the next moment changes."""
+    return (
+        r.action == "hearth"
+        and r.status in TRAIN_FAILED
+        and (r.refusal or r.reason) in PASSING_HEARTH_REASONS
+    )
+
+
 def _step_row_wait(r, minutes: int, passing_wait: int | None = None) -> int:
     """Keep long waits for completed walks and persistent failures.
 
     A temporary level-walk refusal learned nothing about the destination;
-    retry after a short wait once the member becomes available again.
+    retry after a short wait once the member becomes available again. So does
+    a hearth that a fight, a move or a cast in flight stopped.
     """
+    if passing_hearth_row(r):
+        return min(minutes, LEVEL_TRANSIENT_RETRY_MINUTES)
     if (
         r.action == guildlevel.ACTION
         and r.status == "error"
@@ -10018,6 +10046,13 @@ def _member_job(m, trades, fields, doors, pending, crafters, master, kept, recen
 RECALL_ATTEMPTS = 10
 RECALL_ASK_SECONDS = 12.0
 RECALL_AGAIN_WORDS = ("in combat", "never started", "is moving", "already casting")
+
+
+def hearth_asks_again(command) -> bool:
+    """Whether a hearth row is asked again inside its step: the stranded
+    knight's recall, and the hearth of a guild member (a death loop's way out
+    among them), which a fight stops as often (#2152)."""
+    return str(command or "").strip() in ("recall", "use")
 
 
 def is_recall_row(command) -> bool:
