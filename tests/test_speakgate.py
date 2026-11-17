@@ -1,11 +1,42 @@
 """The send seam does not speak the same line twice (#2247)."""
 
+import sys
+import types
 import unittest
 from unittest import mock
 
-import bridge
 import relay
 import speakgate
+
+
+def _load_bridge():
+    """bridge imports discord, which CI does not install: stub the few names
+    it touches at import, as the other bridge tests do."""
+    for key in list(sys.modules):
+        if key == "bridge" or key.startswith("discord"):
+            sys.modules.pop(key, None)
+    discord = types.ModuleType("discord")
+    discord.Intents = type(
+        "Intents",
+        (),
+        {"default": staticmethod(lambda: types.SimpleNamespace(message_content=False))},
+    )
+    discord.Client = object
+    discord.app_commands = types.SimpleNamespace(
+        CommandTree=lambda *_a, **_kw: object(),
+        describe=lambda **_kw: lambda fn: fn,
+    )
+    discord.ext = types.ModuleType("discord.ext")
+    discord.ext.commands = types.ModuleType("discord.ext.commands")
+    sys.modules["discord"] = discord
+    sys.modules["discord.ext"] = discord.ext
+    sys.modules["discord.ext.commands"] = discord.ext.commands
+    import bridge
+
+    return bridge
+
+
+bridge = _load_bridge()
 
 
 def gate():
