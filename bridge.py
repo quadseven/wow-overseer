@@ -12320,7 +12320,7 @@ class Bridge(discord.Client):
         """The loop's job on every member not sitting out; `jobs.why_not`
         first, as every job writer asks. `targets` (#2498) is name -> job for
         an individual family's gather phase; a member it does not name gets
-        `mode`."""
+        `mode`, and one it names "" gets no job written."""
         refusal = jobs.why_not(mode)
         if refusal:
             log.warning("profession loop: %s: job %s not written - %s", key,
@@ -12328,6 +12328,8 @@ class Bridge(discord.Client):
             return 0
         written = 0
         for name in names:
+            if targets and name in targets and not targets[name]:
+                continue  # no farm need of its own (#2498): write it nothing
             job = (targets or {}).get(name) or mode
             if job != mode and jobs.why_not(job):
                 job = mode
