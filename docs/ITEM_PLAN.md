@@ -49,6 +49,8 @@ For a trade the tables do not cover (enchanting, jewelcrafting), a documented ba
 
 Each member protects 8 free carried slots (the town-first guard and dungeon admission) plus a margin of 2. Eviction starts when free carried slots fall under 10 and stops at 12. The gap is the hysteresis: a stack evicted at 9 free is not pulled back at 10. Evictions walk the stack's own destination list (bank, guild tab, vendor), so a needed reagent goes to the bank before it goes anywhere else.
 
+A crafter's own fetch makes room first (#2502). `Context.inbound` is holder -> the slots its craft's reagents need from its bank, mailbox or the guild bank (`reagentplan.inbound_slots`, one per short reagent, at most `INBOUND_CAP`). Eviction then starts under `TRIGGER_FREE` plus that many and stops at `TARGET_FREE` plus that many, so the lowest-tier stacks (food, surplus, gear for later) leave before the trade stock and the reagents have a slot when they land. A reagent stack a crafter does not use still goes to the crafter who does (a give or a mail), ahead of any bank. In the bank pass the item plan's personal deposits are planned first, count as room for that crafter's own withdrawals only, and are sent ahead of every withdrawal (`itemplan_route.merge`).
+
 The plan also keeps last pass's routes (`Context.previous`). A stack planned for a bank is not pulled back by a discretionary goal. A planned sale changes only when a real need appears. An auction listing needs 4x the vendor price to start and holds down to 3x. Nothing depends on random order: stacks sort by (tier, value, key).
 
 ### Guild bank tabs

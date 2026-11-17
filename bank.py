@@ -1317,6 +1317,15 @@ def _room_by_tab(storage):
     return room
 
 
+def _planned_room(member, storage, planned_deposits) -> int:
+    """Slots the item plan's deposits will free for this crafter's own fetch."""
+    if not planned_deposits or storage is None:
+        return 0
+    if not storage.craft_wants.get(member.name):
+        return 0
+    return max(0, int(planned_deposits.get(member.name, 0)))
+
+
 def plan(
     members,
     family,
@@ -1325,6 +1334,7 @@ def plan(
     storage=None,
     room_floor=0,
     room_gain=None,
+    planned_deposits=None,
 ):
     """Every bank move worth making, in the order it should be sent.
 
@@ -1354,6 +1364,11 @@ def plan(
 
     `room_gain` is name -> bank slots a bag placed on this visit adds
     (`bankbags.room_gain`); a deposit is judged against the grown room.
+
+    `planned_deposits` is name -> personal bank deposits the item plan makes
+    for that member this pass (`itemplan_route.personal_room`). A crafter's
+    fetch of its own reagent counts them as room, because they are sent ahead
+    of it (`itemplan_route.merge`); nobody else's withdrawal does (#2502).
     """
     totals = reagent_totals(members)
     moves, notes, guild, kept_full = [], [], [], []
@@ -1385,7 +1400,10 @@ def plan(
             family,
             totals,
             storage,
-            member.bag_free + len(deposits) - max(0, room_floor),
+            member.bag_free
+            + len(deposits)
+            + _planned_room(member, storage, planned_deposits)
+            - max(0, room_floor),
             visit_limit - len(deposits),
             notes,
         )

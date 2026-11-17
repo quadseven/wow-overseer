@@ -196,6 +196,9 @@ BAG_FLOOR = 8  # free carried slots the town-first guard and dungeon admission n
 BAG_MARGIN = 2
 TRIGGER_FREE = BAG_FLOOR + BAG_MARGIN  # evict when free carried slots fall under this
 TARGET_FREE = TRIGGER_FREE + 2  # ...and stop here (the hysteresis gap)
+# The most extra free slots a crafter's incoming reagents can ask for (#2502);
+# the same figure as reagentplan.INBOUND_CAP, kept here so this module stays pure.
+INBOUND_CAP = 6
 BANK_RESERVE = 2  # personal bank slots kept free for the next deposit
 BANK_JUNK_FLOOR = 6  # junk with no price banks only while this many slots stay free
 GIVE_FLOOR = 3  # a recipient keeps this many free carried slots after a gift
@@ -478,6 +481,11 @@ class Context:
     assigned_trades: frozenset = SEAT_TRADES
     # (holder, entry) -> listings of that stack that expired and came back (#2605).
     failed_listings: Mapping[tuple, int] = field(default_factory=dict)
+    # holder -> bag slots to leave free for reagents its own craft will fetch
+    # from the mailbox, the bank or the guild bank (#2502). The carry budget
+    # asks for that many more free slots before the fetch lands, so the
+    # lowest-priority stacks leave first and the reagents have somewhere to go.
+    inbound: Mapping[str, int] = field(default_factory=dict)
     # (holder, entry) -> route chosen on the previous pass
     previous: Mapping[tuple, str] = field(default_factory=dict)
     raid_night: bool = False
@@ -2059,9 +2067,13 @@ def _allocate(w: _World, todo: list, opts: dict, pinned: set):
         o = opts[s.key][0]
         if s.carried and (o.route == KEEP_CARRY and (o.carry_forced or s.loc == WORN)):
             forced[s.holder] += 1
+    reserve = {
+        m: max(0, min(INBOUND_CAP, int(w.ctx.inbound.get(m, 0) or 0))) for m in members
+    }
     limit = {
         m: members[m].carried_slots
-        - (TARGET_FREE if free_now[m] < TRIGGER_FREE else TRIGGER_FREE)
+        - reserve[m]
+        - (TARGET_FREE if free_now[m] < TRIGGER_FREE + reserve[m] else TRIGGER_FREE)
         for m in members
     }
     carry_used = {m: 0 for m in members}
