@@ -4726,21 +4726,32 @@ def _clip_cursor():
 def sweep_clips() -> dict:
     """The sweeps that hold whether or not any stream is live: a cutting row
     whose cutter went silent fails, and an expired row loses its file. Without
-    a clip folder nothing is deleted and no row is marked."""
+    a clip folder nothing is deleted and no row is marked. The partial uploads
+    a dead process left are removed first: they need no database, so a
+    database that is down does not keep them."""
+    root = _clips_root()
+    partial = clipcutter.sweep_partials(root) if root else 0
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT NOW() AS now")
         timed_out = clipledger.time_out(cur, now=cur.fetchone()["now"])
-        root = _clips_root()
         return {"timed_out": timed_out,
-                "deleted": clipledger.delete_expired(cur, root) if root else 0}
+                "deleted": clipledger.delete_expired(cur, root) if root else 0,
+                "partial": partial}
 
 
 def clip_tick() -> dict:
-    """One timer pass: the scan, then the sweeps, even when the scan fails."""
+    """One timer pass: the scan, then the sweeps, even when the scan fails.
+
+    A pass that planned, expired, timed out or removed anything logs one line
+    with its counts; a pass that did nothing logs nothing."""
+    scan = None
     try:
-        return scan_clips()
+        scan = scan_clips()
+        return scan
     finally:
-        sweep_clips()
+        line = clipledger.tick_line(scan, sweep_clips())
+        if line:
+            log.info(line)
 
 
 def start_clip_scanner(every: float = CLIP_SCAN_SECONDS, scan=None,
