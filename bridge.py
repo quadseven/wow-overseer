@@ -32362,10 +32362,11 @@ def _follow_guild_runs() -> int:
                 "r.bosses_done, r.bosses_total, "
                 "TIMESTAMPDIFF(SECOND, r.last_boss_at, NOW()) AS seconds_since_boss, "
                 "r.created_at < NOW() - INTERVAL %s MINUTE AS stale, "
+                "r.created_at < NOW() - INTERVAL %s MINUTE AS stuck, "
                 "r.carry_start, c.status, c.detail, c.result FROM overseer_guild_run r "
                 "LEFT JOIN overseer_command c ON c.id = r.command_id "
                 "WHERE r.state IN ('queued', 'inside')",
-                (guildrun.LOST_AFTER_MINUTES,),
+                (guildrun.LOST_AFTER_MINUTES, guildrun.INSIDE_LOST_MINUTES),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] == 1146:
@@ -32378,12 +32379,7 @@ def _follow_guild_runs() -> int:
                 if room:
                     row["last_room"] = room
             seen = guildrun.outcome_from_row(row) if row.get("status") else None
-            if seen is None and row.get("stale"):
-                seen = {"state": guildrun.ENDED, "outcome": "lost",
-                        "why": "no outcome from the worldserver within %d minutes"
-                        % guildrun.LOST_AFTER_MINUTES,
-                        "bosses_done": row["bosses_done"],
-                        "bosses_total": row["bosses_total"]}
+            seen = guildrun.lost_verdict(row, seen) or seen
             if seen is None:
                 continue
             if seen["state"] == guildrun.INSIDE:
