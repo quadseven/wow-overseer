@@ -104,6 +104,32 @@ class TheOrderUsesItsRaidLineupRules(unittest.TestCase):
         self.assertNotIn("NOT BUILT YET", said)
 
 
+class TheRunLineSaysHowToOrder(unittest.TestCase):
+    """#2571: the Raid tab names every order that works today, in one line."""
+
+    def test_it_names_the_first_kill_order_and_its_quorum(self):
+        line = raidrun.run_line()
+        self.assertIn("queue <family>: moltencore first kill 1", line)
+        seats, tanks, healers = raidrun.first_kill_quorum()
+        self.assertIn(
+            "%d seats, %d tanks and %d healers" % (seats, tanks, healers), line
+        )
+
+    def test_it_says_when_the_plain_order_is_refused(self):
+        self.assertIn("all 40 approved seats", raidrun.run_line())
+
+    def test_it_names_the_ten_seat_spire_rehearsal(self):
+        self.assertIn("queue <family>: upper spire 1", raidrun.run_line())
+
+    def test_every_sentence_it_names_is_an_order_the_queue_reads(self):
+        import campaignqueue
+
+        for text in ("moltencore 1", "moltencore first kill 1", "upper spire 1"):
+            entries, error = campaignqueue.parse_entries(text)
+            self.assertTrue(entries, text)
+            self.assertEqual("", error, text)
+
+
 class TheRunLineSaysWhatShipped(unittest.TestCase):
     """The Raid tab's run line and the job's reader sentence, unpatched: the
     shipped answer is that an order clears, and that a raider away from the
