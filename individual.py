@@ -74,6 +74,40 @@ def active(job_by_name: dict, family, environ=None) -> bool:
     return bool(job_by_name) and enabled(family, environ) and not linked(job_by_name)
 
 
+def resolve_member(job_by_name: dict, member) -> str:
+    """The roster name `member` matches without regard to case, or ''."""
+    wanted = str(member or "").strip().casefold()
+    for name in job_by_name or {}:
+        if str(name).casefold() == wanted and wanted:
+            return str(name)
+    return ""
+
+
+def member_order_refusal(job_by_name: dict, member, mode) -> str:
+    """Why a job order naming one member cannot be written, or '' (#2407).
+
+    Accepted only for a member on the roster, while the family is not linked,
+    and for a mode that is not a dungeon or raid job: those belong to the
+    whole family. Pure: the jobs read and the order in, a sentence out.
+    """
+    name = resolve_member(job_by_name, member)
+    if not name:
+        return "%s is not on the roster, so there is no job to give." % (
+            str(member or "").strip() or "Nobody"
+        )
+    if links(mode):
+        return (
+            "%s is a job for the whole family, so it cannot be given to %s alone."
+            % (mode, name)
+        )
+    if linked(job_by_name):
+        return (
+            "The family is linked (a member is on a dungeon or raid job), so "
+            "%s cannot be given a job of its own now." % name
+        )
+    return ""
+
+
 def members_on(job_by_name: dict, modes, family, environ=None, exempt=()) -> tuple:
     """The members a drive for `modes` acts for, sorted by name.
 
