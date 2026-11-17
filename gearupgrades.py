@@ -332,7 +332,7 @@ def _slot(
     worn_stats = None
     bonus = None
     if worn_row is not None:
-        worn_stats = gearscore.stats_from_row(worn_row)
+        worn_stats = _with_equip_spells(worn_row, book)
         if book is not None:
             extra, names = armory.instance_stats(worn_row, book)
             if extra or names:
@@ -400,7 +400,7 @@ def build(
         }
     data = gearscore.load_spec(spec)
     if stats_by_id is None:
-        stats_by_id = item_stats(list_rows)
+        stats_by_id = item_stats(list_rows, book)
     worn_by_slot = {}
     for r in equipment_rows:
         idx = r.get("slot")
@@ -445,6 +445,19 @@ def build(
     }
 
 
-def item_stats(list_rows: dict) -> dict:
+def _with_equip_spells(row: dict, book=None) -> dict:
+    """The row's template stats plus its equip spells' stats (#2905).
+
+    A trinket's value is almost all an equip spell, which stats_from_row never
+    reads; equipscore.equip_spell_stats does. Imported here because equipscore
+    imports this module."""
+    import equipscore
+
+    return gearscore.add_stats(
+        gearscore.stats_from_row(row), equipscore.equip_spell_stats(row, book)
+    )
+
+
+def item_stats(list_rows: dict, book=None) -> dict:
     """item id -> normalized stats, for every row build() is handed."""
-    return {int(i): gearscore.stats_from_row(r) for i, r in list_rows.items()}
+    return {int(i): _with_equip_spells(r, book) for i, r in list_rows.items()}
