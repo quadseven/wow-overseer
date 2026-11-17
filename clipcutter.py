@@ -11,12 +11,16 @@ derived from the row, the state is one of two words, and every value is bound.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+import stat
 import tempfile
 import threading
 import time
 from datetime import datetime
+
+log = logging.getLogger(__name__)
 
 MAX_UPLOAD = 128 * 1024 * 1024
 CHUNK = 64 * 1024
@@ -33,6 +37,11 @@ _SLOTS = threading.BoundedSemaphore(MAX_UPLOADS)
 
 NO_DIR = "The clip folder is not set up on this site, so the cutter API is off."
 
+# The name a body is written under until its row takes it, and how long one
+# may sit unwritten before the sweep removes it. A live upload is cut off at
+# UPLOAD_SECONDS, so a file twice that old belongs to a process that died.
+PART_PREFIX, PART_SUFFIX = ".upload-", ".part"
+PART_MAX_AGE = 2 * UPLOAD_SECONDS
 _PATH = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 _KIND = re.compile(r"[a-z0-9_]{1,16}")
 _COLUMNS = "id, kind, stream_path, event_at, window_start, window_end, state, file_name"
@@ -199,6 +208,40 @@ def result(cur, raw_id, state, reason):
     return 200, _public(_lookup(cur, row["id"]), *_COLUMNS.split(", "))
 
 
+def sweep_partials(root: str, now: float | None = None) -> int:
+    """Remove the partial uploads in `root` a dead process left behind.
+
+    A partial upload is a regular file directly in `root` named
+    PART_PREFIX...PART_SUFFIX, which is the only name `_receive` writes a body
+    under; a finished clip is renamed out of that shape, so no rule here can
+    reach one. One is removed only when it was last written more than
+    PART_MAX_AGE seconds before `now` (the wall clock when left out). A folder
+    or a link with the name is left alone. A file that cannot be read or
+    removed logs one warning and the pass goes on. Returns how many it removed.
+    """
+    now = time.time() if now is None else now
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return 0
+    removed = 0
+    for name in names:
+        if not (name.startswith(PART_PREFIX) and name.endswith(PART_SUFFIX)):
+            continue
+        path = os.path.join(root, name)
+        try:
+            info = os.lstat(path)
+            if not stat.S_ISREG(info.st_mode) or now - info.st_mtime <= PART_MAX_AGE:
+                continue
+            os.unlink(path)
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            log.warning("partial upload %s not removed: %s", name, exc.strerror or exc)
+    return removed
+
+
 def _discard(path):
     if path is None:
         return
@@ -259,7 +302,7 @@ def stage(rfile, length, root, clock=time.monotonic, bound=_no_bound):
             return None, _err(
                 400, "The body is not an MP4 file (no ftyp box at the start)."
             )
-        fd, tmp = tempfile.mkstemp(prefix=".upload-", suffix=".part", dir=root)
+        fd, tmp = tempfile.mkstemp(prefix=PART_PREFIX, suffix=PART_SUFFIX, dir=root)
         with os.fdopen(fd, "wb") as out:
             out.write(head)
             left = length - len(head)
