@@ -1246,6 +1246,51 @@ class ScriptedCursor:
         pass
 
 
+class SnapshotConn(ScriptedConn):
+    """MySQL's default REPEATABLE READ: the first read freezes what later reads see
+    until the transaction ends (commit or rollback)."""
+
+    def __init__(self):
+        super().__init__()
+        self.live = 0
+        self.frozen = None
+
+    def cursor(self):
+        return SnapshotCursor(self)
+
+    def commit(self):
+        self.frozen = None
+
+    rollback = commit
+
+
+class SnapshotCursor(ScriptedCursor):
+    def execute(self, sql, params=None):
+        if sql.startswith("SELECT COUNT") and "FROM characters" in sql:
+            if self.conn.frozen is None:
+                self.conn.frozen = self.conn.live
+            self.rows = [(self.conn.frozen,)]
+        else:
+            super().execute(sql, params)
+
+
+class ReadSnapshotTest(unittest.TestCase):
+    """A judge that polls for the family to log in must see rows written after its first read."""
+
+    def test_a_later_read_sees_rows_written_after_the_first(self):
+        conn = SnapshotConn()
+        g = guard.open_guarded(
+            guard.GuardInputs("127.0.0.1", "ephemeral", "grants: enabled"),
+            lambda **kw: conn,
+            SCHEMA,
+        )
+        db = judge.GuardedWorldDb(g, SCHEMA)
+        sql = "SELECT COUNT(*) FROM characters"
+        self.assertEqual(db.select(sql), [(0,)])
+        conn.live = 1  # the family logs in
+        self.assertEqual(db.select(sql), [(1,)])
+
+
 class RunEntryTest(unittest.TestCase):
     ENV = {
         "EPH_MYSQL_HOST": "127.0.0.1",
