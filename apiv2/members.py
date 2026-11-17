@@ -690,17 +690,23 @@ def stall_entry(
 
 def _stalled_leaders(
     families, members, found, moved: dict, now_at: int, credits: dict | None = None
-) -> None:
+) -> list:
     """A stalled family's leader is stuck on the stall, unless a record of
     its own already holds it (a class quest ask or a long hold).
 
     `credits` is leader -> its newest boss credit ({"at", "detail"}); a boss
-    falling is movement, as a quest, level or gear change is (#1314)."""
+    falling is movement, as a quest, level or gear change is (#1314).
+
+    Returns every stalled family, whether or not its leader has a record of
+    its own: {leader, members, since, blocker} (#2246). The stuck list names a
+    stalled family only through a leader that has nothing else to say, so the
+    family itself had to be read from here."""
     credits = credits or {}
     by_name = {m["name"]: m for m in members}
+    stalls = []
     for names in (families or {}).values():
         leader = by_name.get(names[0]) if names else None
-        if leader is None or found.get(leader["name"]) is not None:
+        if leader is None:
             continue
         moved_at = max((moved.get(n) or 0 for n in names), default=0)
         boss = max(
@@ -712,7 +718,19 @@ def _stalled_leaders(
         if boss and int(boss["at"]) >= moved_at:
             moved_at = int(boss["at"])
             words = agenda.boss_credit_words(boss.get("detail"))
-        found[leader["name"]] = stall_entry(leader, moved_at or None, now_at, words)
+        entry = stall_entry(leader, moved_at or None, now_at, words)
+        if entry is not None:
+            stalls.append(
+                {
+                    "leader": leader["name"],
+                    "members": list(names),
+                    "since": entry["since"],
+                    "blocker": entry["blocker"],
+                }
+            )
+        if found.get(leader["name"]) is None:
+            found[leader["name"]] = entry
+    return stalls
 
 
 def _order(families: dict, guild_of: dict) -> list:
@@ -789,7 +807,7 @@ def build(
         if followed and not _asking(found[name]):
             follows[name] = followed
         members.append(m)
-    _stalled_leaders(
+    stalls = _stalled_leaders(
         families, members, found, moved or {}, rows["now_at"], credits or {}
     )
     # Leaders first: a follower's reading is its leader's (follower_blocker).
@@ -798,6 +816,7 @@ def build(
     return {
         "members": members,
         "families": {k: list(v) for k, v in families.items()},
+        "stalled_families": stalls,
         "checked_at": rows["now_at"] or None,
         "basis": BASIS,
     }
@@ -897,6 +916,7 @@ def stuck_view(roster: dict) -> dict:
     return {
         "members": rows,
         "digest": stuck_digest(rows, roster["checked_at"]),
+        "stalled_families": roster.get("stalled_families", []),
         "checked_at": roster["checked_at"],
         "basis": roster["basis"],
     }
