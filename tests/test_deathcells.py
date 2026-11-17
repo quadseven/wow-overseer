@@ -152,6 +152,188 @@ class RefusingAnAim(unittest.TestCase):
         self.assertEqual(dc.aim_refusal([], STORMWIND, "at:0:-6800.0,-2450.0,60.0"), "")
 
 
+# Two fall deaths on the floor of a city, landed at z -41 after dropping about
+# 85 yards from the entrance ledge (so the ledge stood near z 44). The rows are
+# shaped like the recorded Undercity pair that held a family's town errand.
+LEDGE = [
+    row(1595.0, 188.0, z=-41.4, liquid="none", fell=87.9),
+    row(1551.0, 244.0, z=-41.4, liquid="none", fell=84.5),
+]
+CITY_FLOOR = {"map_id": 0, "x": 1306.0, "y": 356.0, "z": -67.0}
+ON_THE_LEDGE = {"map_id": 0, "x": 1306.0, "y": 356.0, "z": 44.0}
+VENDOR_PAST = {"map_id": 0, "x": 1800.0, "y": 100.0}
+
+
+class AFallFromALedgeDoesNotCondemnTheFloor(unittest.TestCase):
+    def setUp(self):
+        self.discs = dc.discs(LEDGE)
+
+    def test_the_disc_remembers_where_the_fall_began(self):
+        self.assertEqual(len(self.discs), 1)
+        self.assertAlmostEqual(self.discs[0].top_z, -41.4 + 84.5)
+
+    def test_a_walker_on_the_floor_may_cross_the_ground_under_the_ledge(self):
+        self.assertIsNotNone(dc.crossing(self.discs, ON_THE_LEDGE, VENDOR_PAST))
+        self.assertIsNone(dc.crossing(self.discs, CITY_FLOOR, VENDOR_PAST))
+
+    def test_a_walker_with_no_z_is_still_refused(self):
+        bare = {k: v for k, v in CITY_FLOOR.items() if k != "z"}
+        self.assertIsNotNone(dc.crossing(self.discs, bare, VENDOR_PAST))
+
+    def test_lava_is_lethal_at_any_height(self):
+        lava = dc.discs(LAVA)
+        low = {"map_id": 0, "x": -8800.0, "y": 600.0, "z": -500.0}
+        self.assertIsNotNone(dc.crossing(lava, low, PLAGUELANDS))
+
+    def test_a_fall_row_with_no_landing_height_keeps_the_disc_for_a_low_walker(self):
+        unsampled = []
+        for x, y in ((1595.0, 188.0), (1551.0, 244.0)):
+            r = row(x, y, liquid="none", fell=85.0)
+            del r["z"]
+            unsampled.append(r)
+        discs = dc.discs(unsampled)
+        self.assertEqual(len(discs), 1)
+        self.assertIsNone(discs[0].top_z)
+        self.assertIsNotNone(dc.crossing(discs, CITY_FLOOR, VENDOR_PAST))
+
+    def test_a_standing_keyword_aim_from_the_floor_is_not_refused(self):
+        why = dc.aim_refusal(self.discs, CITY_FLOOR, "vendor", spawn=VENDOR_PAST)
+        self.assertEqual(why, "")
+        why = dc.aim_refusal(self.discs, ON_THE_LEDGE, "vendor", spawn=VENDOR_PAST)
+        self.assertIn("fall death", why)
+
+
+# Six falls through the world on one map, recorded wow-dev 2026-11-16: landed at
+# z -511 after 120 yards, so the drop began at z -391, hundreds of yards BELOW
+# any ground a walker stands on. A town errand to the nearest banker was
+# refused every cycle for them (the straight line to the city passed within
+# the disc), so the bank routes of the item plan never became deposit rows.
+UNDER_THE_WORLD = [
+    row(-8400.0, 0.0, z=-511.5, liquid="none", fell=120.3),
+    row(-8440.0, -85.0, z=-505.0, liquid="none", fell=118.0),
+    row(-8500.0, -140.0, z=-510.0, liquid="none", fell=121.0),
+]
+HIGH_WALKER = {"map_id": 0, "x": -7545.0, "y": -1233.0, "z": 286.0}
+CITY_BANKER = {"map_id": 0, "x": -8935.0, "y": 613.0, "z": 96.0}
+
+
+class AFallIntoTheVoidDoesNotCondemnTheGroundAbove(unittest.TestCase):
+    def setUp(self):
+        self.discs = dc.discs(UNDER_THE_WORLD)
+
+    def test_the_cluster_is_one_fall_disc_launched_below_the_world(self):
+        self.assertEqual([(d.kind, d.deaths) for d in self.discs], [("fall", 3)])
+
+    def test_a_walk_between_two_heights_far_above_the_launch_is_clear(self):
+        self.assertIsNone(dc.crossing(self.discs, HIGH_WALKER, CITY_BANKER))
+        self.assertEqual(
+            dc.aim_refusal(self.discs, HIGH_WALKER, "banker", spawn=CITY_BANKER), ""
+        )
+
+    def test_a_walk_at_the_launch_height_is_still_refused(self):
+        low = {"map_id": 0, "x": -7545.0, "y": -1233.0, "z": -390.0}
+        goal = {"map_id": 0, "x": -8935.0, "y": 613.0, "z": -390.0}
+        self.assertIsNotNone(dc.crossing(self.discs, low, goal))
+
+    def test_one_end_near_the_launch_keeps_the_disc(self):
+        low_goal = dict(CITY_BANKER, z=-380.0)
+        self.assertIsNotNone(dc.crossing(self.discs, HIGH_WALKER, low_goal))
+
+    def test_a_walk_with_no_heights_keeps_the_disc(self):
+        flat = {"map_id": 0, "x": -7545.0, "y": -1233.0}
+        goal = {"map_id": 0, "x": -8935.0, "y": 613.0}
+        self.assertIsNotNone(dc.crossing(self.discs, flat, goal))
+
+
+class AWalkerAtTheCounterIsNotRefused(unittest.TestCase):
+    def test_a_goal_inside_a_disc_a_few_steps_off_is_no_crossing(self):
+        discs = dc.discs(LAVA)
+        near = {"map_id": 0, "x": -7790.0, "y": -915.0}
+        goal = {"map_id": 0, "x": -7795.0, "y": -915.0}
+        self.assertIsNotNone(dc.crossing(discs, STORMWIND, goal))
+        self.assertIsNone(dc.crossing(discs, near, goal))
+
+    def test_a_walker_already_inside_the_disc_is_never_refused_on_it(self):
+        discs = dc.discs(LAVA)
+        inside = {"map_id": 0, "x": -7812.0, "y": -928.0}
+        self.assertIsNone(dc.crossing(discs, inside, PLAGUELANDS))
+
+    def test_the_bridge_hands_the_walkers_height_to_the_check(self):
+        self.assertIn("pos_x, pos_y, pos_z FROM overseer_snapshot", BRIDGE)
+        self.assertGreaterEqual(BRIDGE.count('"z": row.get("pos_z")'), 2)
+
+
+# The Great Forge shape: two lava deaths in one pool at z 373, a void fall 139
+# yards off at z -528 (fell 270), and a city whose bank stands at z 504.
+FORGE = [
+    row(-4858.0, -973.0, z=373.7),
+    row(-4858.0, -973.0, z=372.9),
+]
+VOID_FALL = row(-4739.0, -1058.0, z=-528.0, liquid="none", fell=270.7)
+IF_WALKER = {"map_id": 0, "x": -4960.0, "y": -1100.0, "z": 502.0}
+BANKER = {"map_id": 0, "x": -4896.0, "y": -1005.0, "z": 504.0}
+IF_LAVA_WALKER = {"map_id": 0, "x": -4960.0, "y": -1100.0, "z": 380.0}
+
+
+class LavaCondemnsTheLiquidNotTheCity(unittest.TestCase):
+    def test_a_fall_does_not_join_a_lava_pool(self):
+        discs = dc.discs(FORGE + [VOID_FALL])
+        self.assertEqual([(d.kind, d.deaths) for d in discs], [("lava", 2)])
+        self.assertEqual(discs[0].radius, dc.MIN_RADIUS)
+
+    def test_a_city_walk_over_the_pool_is_clear(self):
+        discs = dc.discs(FORGE + [VOID_FALL])
+        self.assertIsNone(dc.crossing(discs, IF_WALKER, BANKER))
+        self.assertEqual(dc.aim_refusal(discs, IF_WALKER, "banker", spawn=BANKER), "")
+
+    def test_a_walk_down_at_the_liquid_is_still_refused(self):
+        discs = dc.discs(FORGE)
+        low_goal = {"map_id": 0, "x": -4858.0, "y": -973.0, "z": 374.0}
+        self.assertIsNotNone(dc.crossing(discs, IF_WALKER, low_goal))
+        self.assertIsNotNone(dc.crossing(discs, IF_LAVA_WALKER, BANKER))
+
+    def test_an_unread_goal_height_keeps_the_disc(self):
+        discs = dc.discs(FORGE)
+        bare = {k: v for k, v in BANKER.items() if k != "z"}
+        self.assertIsNotNone(dc.crossing(discs, IF_WALKER, bare))
+
+    def test_a_lava_row_with_no_height_has_no_surface(self):
+        bare = [row(-4858.0, -973.0), row(-4858.0, -973.0)]
+        for r in bare:
+            del r["z"]
+        discs = dc.discs(bare)
+        self.assertIsNone(discs[0].surface_z)
+        self.assertIsNotNone(dc.crossing(discs, IF_WALKER, BANKER))
+
+    def test_a_ground_aim_height_is_read_from_the_aim(self):
+        discs = dc.discs(FORGE)
+        self.assertEqual(
+            dc.aim_refusal(discs, IF_WALKER, "at:0:-4896.0,-1005.0,504.0"), ""
+        )
+        self.assertIn("lava", dc.aim_refusal(discs, IF_WALKER, "at:0:-4896.0,-1005.0"))
+
+    def test_the_spawn_lookup_reads_the_holders_height(self):
+        self.assertIn("cr.position_z AS z FROM overseer_snapshot s", BRIDGE)
+
+    def test_a_non_finite_aim_height_keeps_the_disc(self):
+        discs = dc.discs(FORGE)
+        for z in ("inf", "-inf", "nan", "1e999"):
+            aim = "at:0:-4896.0,-1005.0,%s" % z
+            self.assertIsNone(dc._aim_z(aim), z)
+            self.assertIn("lava", dc.aim_refusal(discs, IF_WALKER, aim), z)
+
+    def test_a_fall_beside_slime_keeps_its_own_ledge_rule(self):
+        # The replacement for the old mixed-disc case: kinds no longer share a
+        # disc, so the fall pair still gets #2773's floor exemption and the
+        # slime stays refused at any walker height it is judged by.
+        discs = dc.discs(LEDGE + [row(1570.0, 200.0, liquid="slime")] * 2)
+        by_kind = {d.kind: d for d in discs}
+        self.assertEqual(set(by_kind), {"fall", "slime"})
+        self.assertIsNotNone(by_kind["fall"].top_z)
+        self.assertIsNone(dc.crossing([by_kind["fall"]], CITY_FLOOR, VENDOR_PAST))
+        self.assertIsNotNone(dc.crossing([by_kind["slime"]], CITY_FLOOR, VENDOR_PAST))
+
+
 class PickingAQuest(unittest.TestCase):
     def setUp(self):
         self.discs = dc.discs(LAVA)

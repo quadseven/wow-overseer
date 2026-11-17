@@ -584,7 +584,9 @@ async def _no_sale_reading(holder, standing, refused_age):
     return None
 
 
-def _run_vendor_once(queued, at_vendor=True):
+def _run_vendor_once(queued, at_vendor=True, extra=None):
+    """`extra` adds names to the namespace the pass runs in: the helpers it
+    looks up, for a test that drives one of them (#2323)."""
     log = _Log()
     world = types.SimpleNamespace(sells=[])
     free = {"Zug": 2}
@@ -629,7 +631,7 @@ def _run_vendor_once(queued, at_vendor=True):
             "_fetch_free_slots": lambda names: dict(free),
             "_present_members": lambda names, leader="": list(names),
             "_fetch_vendor_wait_seconds": lambda names: 0,
-            "_vendor_seller_fetch_blocks_trip": lambda *args: False,
+            "_vendor_seller_fetch_blocks_trip": lambda *args, **kw: False,
             "_fetch_vendor_items": lambda names: _vendor_rows(),
             "_fetch_surplus_bags": lambda names: [],
             "_fetch_equipped_bag_slots": lambda names: {},
@@ -646,6 +648,7 @@ def _run_vendor_once(queued, at_vendor=True):
             "_sell_attempts": lambda hours: {},
             "_fetch_town": lambda name: towntrip.Town(vendor=at_vendor),
             "_insert_sell": lambda c: world.sells.append(c) or 1,
+            **(extra or {}),
         },
     )
     me = _FakeEconomySelf(world)

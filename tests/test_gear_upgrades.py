@@ -151,6 +151,28 @@ class TheSlotsReadAgainstTheLists(unittest.TestCase):
         self.assertIsNone(neck["worn"])
         self.assertEqual(neck["next"]["entry"], 22403)
 
+    def test_an_empty_trinket_slot_names_its_next_piece_and_source(self):
+        # No listed trinket carries a template stat the weights score, so all
+        # of them score 0.0; the empty slot still names the guide's first
+        # piece and where it comes from (#2208).
+        first, second = gearscore.slot_list("mage-dps", "preraid", "trinket")[:2]
+        trinkets = {first: row(first), second: row(second)}
+        out = build([], MAGE, trinkets)
+        for name in ("trinket 1", "trinket 2"):
+            slot = slot_of(out, name)
+            self.assertEqual(slot["state"], "empty")
+            self.assertEqual(slot["next"]["entry"], first)
+            self.assertEqual(slot["next"]["phase"], "preraid")
+            self.assertEqual(slot["next"]["score"], 0.0)
+            self.assertEqual(slot["next"]["gain"], 0.0)
+            self.assertEqual(slot["next"]["where"], gearupgrades.where(first))
+        self.assertTrue(gearupgrades.where(first))
+        # A worn trinket that scores nothing keeps no target: nothing listed
+        # is known to beat it, and the other slot is not told to buy it.
+        one = build([worn("trinket 1", first, 0)], MAGE, trinkets)
+        self.assertIsNone(slot_of(one, "trinket 1")["next"])
+        self.assertEqual(slot_of(one, "trinket 2")["next"]["entry"], second)
+
     def test_a_ring_is_not_told_to_buy_the_other_rings_item(self):
         rings = {22339: row(22339, 30), 942: row(942, 20)}
         out = build([worn("finger 1", 22339, 30)], MAGE, rings)

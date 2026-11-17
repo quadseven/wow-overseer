@@ -163,8 +163,8 @@ CLICK = (
     "globalThis.document = { querySelectorAll: () => [messages],"
     " createElement(tag) { return { tag, setAttribute() {}, append() {} }; } };\n"
     "let click;\n"
-    "const button = { disabled: false, getAttribute: () => '285',"
-    " addEventListener(_t, f) { click = f; } };\n"
+    "const button = { disabled: false, getAttribute: () => %s,"
+    " hasAttribute: (n) => n === %s, addEventListener(_t, f) { click = f; } };\n"
     "const main = { querySelectorAll: (q) => (q.startsWith('button') ? [button] : []),"
     " querySelector: () => null };\n"
     "S.bind(main);\n"
@@ -179,7 +179,10 @@ CLICK = (
 @needs_node
 class TheClick(unittest.TestCase):
     def click(self, answer):
-        return run(CLICK % json.dumps(answer))
+        return run(
+            CLICK
+            % (json.dumps("285"), json.dumps("data-spectate-run"), json.dumps(answer))
+        )
 
     def test_a_click_posts_the_run_id_and_only_that_then_rereads_the_camera(self):
         got = self.click(

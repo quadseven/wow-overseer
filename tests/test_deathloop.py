@@ -151,6 +151,107 @@ class TheQuietClockIsTheZones(unittest.TestCase):
         self.assertEqual(entry["step"], "Dying in Feralas")
 
 
+# ---- a slow loop: a dozen deaths in one zone in a day (#2615) --------------------
+
+BARRENS = 17
+
+
+def slow_deaths(n, every=45, start=10, **kw):
+    """`n` deaths `every` minutes apart, never five within one hour."""
+    kw.setdefault("zone", BARRENS)
+    kw.setdefault("killer", "Orgrimmar Grunt")
+    return deaths(n, every=every, start=start, **kw)
+
+
+class ASlowLoop(unittest.TestCase):
+    def test_thirty_two_deaths_in_one_zone_in_a_day_is_a_loop(self):
+        rows = slow_deaths(32)
+        self.assertLessEqual(rows[-1]["age"], deathloop.SLOW_WINDOW_SECONDS)
+        loop = deathloop.loops(rows, {"Clunk": 21}, slow=True)["Clunk"]
+        self.assertEqual((loop.zone, loop.deaths, loop.level), (BARRENS, 32, 21))
+        self.assertTrue(loop.slow)
+        self.assertEqual(loop.killer, "Orgrimmar Grunt")
+        self.assertEqual(loop.first_age, rows[-1]["age"])
+        self.assertEqual(
+            loop.blocker(),
+            "Died 32 times in The Barrens in a day, mostly to Orgrimmar Grunt, "
+            "with no level gained.",
+        )
+
+    def test_the_hourly_rule_alone_does_not_see_it(self):
+        self.assertEqual(deathloop.loops(slow_deaths(32), {"Clunk": 21}), {})
+
+    def test_the_threshold_is_twelve_deaths_inside_the_day(self):
+        at = deathloop.SLOW_MIN_DEATHS
+        found = deathloop.loops(slow_deaths(at, every=100), {"Clunk": 21}, slow=True)
+        self.assertEqual(found["Clunk"].deaths, at)
+        under = deathloop.loops(
+            slow_deaths(at - 1, every=100), {"Clunk": 21}, slow=True
+        )
+        self.assertEqual(under, {})
+        # Twelve deaths, the oldest past the day: eleven count.
+        spread = deathloop.loops(slow_deaths(at, every=131), {"Clunk": 21}, slow=True)
+        self.assertEqual(spread, {})
+
+    def test_deaths_in_other_zones_do_not_add_up(self):
+        rows = slow_deaths(8) + slow_deaths(8, start=30, zone=REDRIDGE)
+        self.assertEqual(deathloop.loops(rows, {"Clunk": 21}, slow=True), {})
+
+    def test_a_level_gained_clears_it(self):
+        self.assertEqual(deathloop.loops(slow_deaths(32), {"Clunk": 22}, slow=True), {})
+        # Deaths at the level before the gain do not count toward the dozen.
+        rows = slow_deaths(6, level=22) + slow_deaths(20, start=300, level=21)
+        self.assertEqual(deathloop.loops(rows, {"Clunk": 22}, slow=True), {})
+
+    def test_it_clears_on_the_quiet_clock(self):
+        quiet = deathloop.QUIET_SECONDS // MINUTE
+        self.assertEqual(
+            deathloop.loops(slow_deaths(20, start=quiet + 1), {"Clunk": 21}, slow=True),
+            {},
+        )
+        self.assertIn(
+            "Clunk",
+            deathloop.loops(slow_deaths(20, start=quiet - 1), {"Clunk": 21}, slow=True),
+        )
+
+    def test_an_hourly_loop_keeps_its_own_sentence_and_window(self):
+        rows = deaths(6) + slow_deaths(20, start=120, zone=REDRIDGE)
+        loop = deathloop.loops(rows, {"Clunk": 21}, slow=True)["Clunk"]
+        self.assertFalse(loop.slow)
+        self.assertEqual(loop.deaths, 6)
+        self.assertIn("within an hour", loop.blocker())
+
+    def test_the_longer_read_does_not_widen_the_hourly_rule(self):
+        # Five deaths in an hour, twenty hours ago, and one death since: the
+        # three-hour read never held that old window, so the day-long read
+        # must not call it an hourly loop either.
+        rows = [death(5)] + deaths(5, start=20 * 60)
+        self.assertEqual(deathloop.loops(rows, {"Clunk": 21}, slow=True), {})
+
+    def test_the_slow_read_covers_the_day_and_the_quiet_clock(self):
+        self.assertEqual(deathloop.SLOW_MIN_DEATHS, 12)
+        self.assertEqual(deathloop.SLOW_WINDOW_SECONDS, 24 * 3600)
+        self.assertEqual(
+            deathloop.SLOW_READ_SECONDS,
+            deathloop.SLOW_WINDOW_SECONDS + deathloop.QUIET_SECONDS,
+        )
+
+    def test_the_stuck_reader_lists_a_slow_loop_with_its_own_sentence(self):
+        view = members.stuck_view(roster(slow_deaths(32)))
+        rows = {r["name"]: r for r in view["members"]}
+        self.assertIn("Clunk", rows)
+        clunk = rows["Clunk"]
+        self.assertEqual(clunk["kind"], "death-loop")
+        self.assertEqual(clunk["step"], "Dying in The Barrens")
+        self.assertIn("Died 32 times in The Barrens in a day", clunk["blocker"])
+        self.assertEqual(clunk["since"], NOW - (10 + 31 * 45) * MINUTE)
+
+    def test_the_stuck_reader_reads_the_day_and_says_so(self):
+        source = (HERE / "apiv2" / "members.py").read_text(encoding="utf-8")
+        self.assertIn("deathloop.SLOW_READ_SECONDS", source)
+        self.assertIn("twelve or more deaths in one zone within a day", members.BASIS)
+
+
 # ---- the stuck reader lists it ---------------------------------------------------
 
 
@@ -512,8 +613,127 @@ class ThePassLeavesTheZone(unittest.TestCase):
 
     def test_the_bridge_reads_the_deaths_and_hands_the_loops_to_the_plan(self):
         bridge = (HERE / "bridge.py").read_text(encoding="utf-8")
-        self.assertIn('facts["death_loops"] = deathloop.loops(', bridge)
-        self.assertIn('loops=facts.get("death_loops"))', bridge)
+        self.assertIn("deathloop.judge(death_rows, levels)", bridge)
+        self.assertIn('facts["death_loops"]', bridge)
+        self.assertIn('loops=facts.get("death_loops"),', bridge)
+
+
+# ---- the pre-loop risk read (#2591) --------------------------------------------
+
+
+class TheRiskRead(unittest.TestCase):
+    def test_two_deaths_to_the_same_killer_within_30_minutes_is_a_risk(self):
+        rows = [death(2, zone=WETLANDS), death(20, zone=ELWYNN)]
+        found = deathloop.risks(rows, {"Clunk": 21})
+        risk = found["Clunk"]
+        self.assertEqual(risk.deaths, 2)
+        self.assertEqual(risk.killer, "Great Goretusk")
+        self.assertIn("same killer", risk.trigger)
+        self.assertIn("no level gained", risk.reason())
+
+    def test_two_deaths_in_the_same_zone_within_30_minutes_is_a_risk(self):
+        rows = [death(2, killer="Redridge Mongrel"), death(25, killer="Tarantula")]
+        found = deathloop.risks(rows, {"Clunk": 21})
+        self.assertEqual(found["Clunk"].zone, REDRIDGE)
+        self.assertIn("same zone", found["Clunk"].trigger)
+
+    def test_three_deaths_across_zones_within_an_hour_is_a_risk(self):
+        rows = [
+            death(2, zone=WETLANDS, killer="Mottled Raptor"),
+            death(25, zone=ELWYNN, killer="Riverpaw Gnoll"),
+            death(50, killer="Tarantula"),
+        ]
+        found = deathloop.risks(rows, {"Clunk": 21})
+        self.assertEqual(found["Clunk"].deaths, 3)
+        self.assertIn("an hour", found["Clunk"].trigger)
+
+    def test_scattered_single_deaths_are_not_a_risk(self):
+        rows = [death(2, zone=WETLANDS, killer="Mottled Raptor"), death(50)]
+        self.assertEqual(deathloop.risks(rows, {"Clunk": 21}), {})
+        apart = [death(2), death(45)]
+        self.assertEqual(deathloop.risks(apart, {"Clunk": 21}), {})
+
+    def test_deaths_followed_by_a_level_gain_are_not_a_risk(self):
+        rows = [death(2), death(20)]
+        self.assertEqual(deathloop.risks(rows, {"Clunk": 22}), {})
+        gained = [death(2, level=22), death(20, level=21)]
+        self.assertEqual(deathloop.risks(gained, {"Clunk": 22}), {})
+
+    def test_a_formed_loop_leaves_its_zone_avoided_until_a_level_gain(self):
+        old = deaths(6, start=150, level=21)
+        self.assertEqual(deathloop.loops(old, {"Clunk": 21}), {})
+        self.assertEqual(
+            deathloop.avoided_zones(old, {"Clunk": 21}), {"Clunk": {REDRIDGE}}
+        )
+        self.assertEqual(deathloop.avoided_zones(old, {"Clunk": 22}), {})
+
+
+class ThePlannerIntervenesAtRisk(unittest.TestCase):
+    def test_an_at_risk_member_in_the_risk_zone_gets_the_intervention_first(self):
+        risk = deathloop.risks(deaths(2, level=17), {"Clunk": 17})
+        result = plan([member()], risks=risk)
+        steps = steps_of(result)
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0].action, "hearth")
+        self.assertIn("town errand", steps[0].said)
+        self.assertIn("prevention", result.lines["Clunk"])
+        self.assertIn("same killer", result.lines["Clunk"])
+
+    def test_a_healthy_member_is_planned_as_before(self):
+        self.assertEqual(steps_of(plan([member()], risks={})), [])
+        self.assertEqual(steps_of(plan([member()])), [])
+
+    def test_a_post_loop_member_is_not_routed_back_into_the_loop_zone(self):
+        here = member(level=21, zone_id=ELWYNN, x=-9000.0, y=100.0)
+        normal = steps_of(plan([here]))
+        self.assertIn("creature:%d " % spawn_of("redridge"), normal[0].rows[0].command)
+        avoided = deathloop.avoided_zones(deaths(6, start=150, level=21), {"Clunk": 21})
+        looped = steps_of(plan([here], avoided=avoided))
+        for step in looped:
+            for row in step.rows:
+                self.assertNotIn("creature:%d " % spawn_of("redridge"), row.command)
+
+
+# ---- a loop in a dungeon or a door area names its place (#1881) ------------------
+
+ZUL_FARRAK_ZONE, ZUL_FARRAK_MAP = 1176, 209
+SCARLET_ENCLAVE_ZONE, EBON_HOLD_MAP = 4298, 609
+
+
+class ALoopOutsideTheDrawnZonesIsNamed(unittest.TestCase):
+    """The health finding read "Dying in somewhere this page cannot place" for
+    members dying in Zul'Farrak, in a dungeon's door area and at the Death Knight
+    start: zones.json draws no rectangles there, so the reader named nothing."""
+
+    def loop_in(self, zone, map_id):
+        rows = [
+            dict(death(a, zone=zone, level=40), map=map_id)
+            for a in (10, 14, 18, 22, 26)
+        ]
+        return deathloop.loops(rows, {"Clunk": 40})["Clunk"]
+
+    def test_a_loop_inside_a_dungeon_names_the_dungeon(self):
+        loop = self.loop_in(ZUL_FARRAK_ZONE, ZUL_FARRAK_MAP)
+        self.assertEqual("Zul'Farrak", loop.place)
+        self.assertEqual("Dying in Zul'Farrak", members.loop_blocker(loop, NOW)["step"])
+
+    def test_a_loop_in_a_door_area_or_the_death_knight_start_is_named(self):
+        self.assertEqual("Uldaman", self.loop_in(1337, EASTERN_KINGDOMS).place)
+        self.assertEqual("Blackrock Mountain", self.loop_in(25, EASTERN_KINGDOMS).place)
+        self.assertEqual(
+            "Plaguelands: The Scarlet Enclave",
+            self.loop_in(SCARLET_ENCLAVE_ZONE, EBON_HOLD_MAP).place,
+        )
+
+    def test_an_id_nothing_names_still_says_so(self):
+        self.assertEqual(
+            "somewhere this page cannot place",
+            self.loop_in(999999, EASTERN_KINGDOMS).place,
+        )
+
+    def test_the_drawn_zones_are_named_as_before(self):
+        self.assertEqual("Redridge Mountains", levelroute.zone_name(REDRIDGE))
+        self.assertEqual("Redridge Mountains", levelroute.zone_name(REDRIDGE, 0))
 
 
 if __name__ == "__main__":

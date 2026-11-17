@@ -9,3 +9,8 @@
 .sp-stage { gap: 8px; min-width: 0; }
 .sp-slot { display: grid; gap: 4px; }
 .sp-video { width: 100%; max-width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: var(--radius-md); }
+.sp-mini { min-height: 32px; font-size: var(--fs-1); padding-inline: 10px; position: relative; z-index: 1; }
+.sp-stop { justify-self: start; }
+.sp-live { display: grid; gap: 8px; }
+.sp-live-group { display: grid; gap: 4px; }
+.sp-live-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }

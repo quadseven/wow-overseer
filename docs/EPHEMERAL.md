@@ -201,7 +201,13 @@ failed precondition makes that run INVALID, never a pass.
 
     python3 -m ephemeral judge data/decrees/<name>.yaml --log <worldserver log>
 
-Meant to run as the world pod's last step, after the seed (no pod runs it yet).
+Meant to run as the world pod's last step, after the seed. In the pod it needs no
+flags: `seed` and `judge` both default `EPH_VARS_FILE` to `/tmp/eph-vars.json` (the
+volume both containers mount), and the judge reads the worldserver log from
+`EPH_LOG_FILE`, else `$EPH_LOGS_DIR/Module.log` (a file appender every submitted
+world adds, which carries the module's and the bots' lines at trace and info
+level); `--log` overrides both. With none of them it reports a log that
+could not be read, which is INVALID.
 It reads the variables and resolved cast the seed left in `EPH_VARS_FILE`, runs
 the `act` steps (by time, or when a named observation first holds), samples the
 `observe` entries and decides one of three verdicts:
@@ -215,10 +221,25 @@ the `act` steps (by time, or when a named observation first holds), samples the
   read, a guard refusal, a missing seed handoff and a decree that does not lint.
   INVALID beats FAIL, never counts as a pass and never closes an issue.
 
-Observations are `when: start` (once, before any order; a failing precondition
-ends the run early), `continuous` (every ten seconds) or `end` (after the
+Observations are `when: start` (the world's port opens before the family has
+logged in, so the judge first polls the start preconditions every ten seconds
+for up to ten minutes, `EPH_START_WAIT_SECONDS`; no order is given meanwhile, and
+the act clock and `@t0` start when the wait ends. Then they are sampled once,
+before any order; a precondition that still fails ends the run INVALID, naming
+it), `continuous` (every ten seconds) or `end` (after the
 window). Log assertions count regex matches in the worldserver log and are
-checked at the end. Across repeated looks the worst one wins and never improves:
+checked at the end. A log assertion's `expect` is a bound on that count:
+
+- `{count: N}` or `{exactly: N}`: exactly N matching lines. `{count: 0}` forbids
+  a line. Either key stands alone.
+- `{at_least: N}`: N or more matching lines, with N at least 1. This requires a
+  line: no match in the run's log is a violated check.
+- `{at_most: N}`: N or fewer matching lines.
+- `{at_least: N, at_most: M}`: a range, with N no greater than M.
+
+Every bound is a whole number, zero or more; lint rejects a negative, missing or
+unknown bound, and a judge handed one anyway reports the check as an error
+(INVALID), never as held. Across repeated looks the worst one wins and never improves:
 a timeout or error is sticky and makes the run INVALID even if a later look
 violates or passes; a violation outranks a later clean look.
 
@@ -256,7 +277,7 @@ All three read one settings file, never the repository: copy
 client-data claim and a world cap), the nodes that are never used, and the
 digest-pinned tools image. A missing or malformed file is an error.
 
-    python3 -m ephemeral submit [--arm both] [--node N] --control-worldserver REF         --control-dbimport REF --control-pin SHA data/decrees/<name>.yaml
+    python3 -m ephemeral submit [--arm both] [--node N] --control-worldserver REF --control-pin SHA data/decrees/<name>.yaml
     python3 -m ephemeral dispatch [--once]
     python3 -m ephemeral collect [--dry-run]
 
@@ -265,8 +286,8 @@ running image digests and override files, merges the decree's config onto them
 (every changed key becomes a fidelity delta), and creates one SUSPENDED Job per
 run plus a ConfigMap of that run's inputs, owned by the Job. It starts nothing.
 It refuses: a decree that does not lint, an image other than `follow-dev`, a
-bridge-on decree (the skeleton has no bridge sidecar yet), a control arm without
-control images, and a fix that is wrongly present or absent in an arm's image
+bridge-on decree whose template has no bridge sidecar, a control arm without
+a control worldserver image (with `bridge: on`, also without `--control-bridge`), and a fix that is wrongly present or absent in an arm's image
 (checked by asking GitHub whether the fix commit is an ancestor of the commit
 each image was built from; a `TODO` commit is recorded as unchecked, and an
 unchecked decree can never close or disprove anything). It saves a submission
@@ -301,5 +322,31 @@ nothing to the issue. A decree not yet merged posts to its own pull request when
 configured App, and `collect` refuses to write unless `GH_TOKEN` and
 `GH_CONFIG_DIR` are set.
 
-Not built: requeueing an INVALID first pair (resubmit instead), PR-built images,
-and the bridge sidecar.
+Both arms run the live db-import. The template is forged from the live realm's
+database, so its `updates` table already holds every module SQL file at its
+current hash. A control db-import built before an edit to such a file sees a
+different hash, re-applies the file, and fails (for example "Duplicate column
+name" on a column that file adds), so the pod never boots and the decree could
+never produce its control FAIL. The schema step is the same for both arms (only
+the worldserver binary under test differs), so the control arm takes the live
+db-import and `--control-dbimport` is refused with that reason. Rejected
+alternatives: a template forged per control era (a forge run and a template per
+image, so a nightly refresh would multiply), and seeding the `updates` table so
+changed files are skipped (it would hide a real schema difference).
+
+With `world.bridge: "on"` the template's bridge sidecar is kept, at the arm's own
+image: the control arm's is `--control-bridge` (the build before the fix), the
+treatment arm's is the base realm's running bridge image unless
+`--treatment-bridge` names one. Both are digests. The sidecar runs headless (no
+Discord token, no external keys), talks only to the pod's loopback database, and
+adds its requests to the world's, so the dispatcher counts it. With `bridge: "off"`
+the sidecar and its pull secret are removed and the Job is the one it was before.
+
+For a fix in this repo's bridge code, each arm's fix presence is read from the
+commit baked into that arm's bridge image (its `OVERSEER_COMMIT`, found through
+the image registry with the namespace's `ghcr` pull secret and checked against
+the image digest), so no pin needs typing. `--control-pin` and `--treatment-pin`
+still win when given; an image whose commit cannot be read is recorded as
+unchecked.
+
+Not built: requeueing an INVALID first pair (resubmit instead) and PR-built images.

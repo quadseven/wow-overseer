@@ -27,7 +27,11 @@ WHERE EACH INPUT COMES FROM.
                        free slots per purchased tab. When no family member's
                        rank may deposit, every tab reads as full.
   guild roster         the guild pass's roster read: guildmates outside the
-                       family, the trades they work, and online presence.
+                       family, the trades they work, and online presence. The
+                       family members with the Fishing skill come from it too
+                       (`Extras.fishers`; `family_skills` leaves fishing out).
+  worn bag sizes       `itemplan_data.WORN_BAGS_SQL`: the bags each member
+                       wears, which the carried rows do not hold (#2274).
 """
 
 from __future__ import annotations
@@ -97,6 +101,11 @@ def _templates(cur, entries) -> dict:
 def _worn(cur, names) -> dict:
     rows = _fetch(cur, itemplan_data.EQUIPPED_SQL % _marks(names), list(names))
     return itemplan_data.equipped(rows)
+
+
+def _worn_bags(cur, names) -> dict:
+    rows = _fetch(cur, itemplan_data.WORN_BAGS_SQL % _marks(names), list(names))
+    return itemplan_data.worn_bags(rows, names)
 
 
 def _instance_soulbound(cur, rows) -> dict:
@@ -218,7 +227,8 @@ def _known_spells(cur, names, spell_ids):
 
 
 def _roster_and_crafters(names, roster) -> tuple | None:
-    """Return outside roster skills, usable crafters, family skills, and guild classes."""
+    """Return outside roster skills, usable crafters, family skills, guild
+    classes, and the family members who fish."""
     members = list(roster(list(names)))
     if not members:
         return None
@@ -226,8 +236,11 @@ def _roster_and_crafters(names, roster) -> tuple | None:
     available = []
     family_skills: dict = {}
     guild_classes = []
+    fishers = set()
     for m in members:
         if m.family or m.name in names:
+            if m.rank_in(itemplan.FISHING) > 0:
+                fishers.add(m.name)
             mine = tuple(
                 sorted(
                     (line, value, value)
@@ -254,6 +267,7 @@ def _roster_and_crafters(names, roster) -> tuple | None:
         tuple(sorted(available)),
         family_skills,
         tuple(sorted(guild_classes)),
+        frozenset(fishers),
     )
 
 
@@ -270,6 +284,7 @@ def _read_cursor_inputs(connect, names, entries, rows):
         shadow.INSTANCE_SOULBOUND,
         shadow.WORN_GEAR,
         shadow.AUCTION_PRICES,
+        shadow.WORN_BAGS,
     )
     try:
         with connect() as conn, conn.cursor() as cur:
@@ -288,6 +303,9 @@ def _read_cursor_inputs(connect, names, entries, rows):
             )
             got[shadow.AUCTION_PRICES] = reads.attempt(
                 shadow.AUCTION_PRICES, lambda: _prices(cur, names, entries)
+            )
+            got[shadow.WORN_BAGS] = reads.attempt(
+                shadow.WORN_BAGS, lambda: _worn_bags(cur, names)
             )
             # Not a named input: without it no stack has failed to sell, which
             # is the safe answer (nothing is vendored on a guess).
@@ -374,8 +392,15 @@ def _side_inputs(names, family, bank_rows, guild_setup, roster, reads):
     if roster_data is None:
         reads.unread.setdefault(shadow.GUILD_ROSTER, "no guild roster rows were read")
         guild_roster = guild_crafters = family_skills = guild_classes = None
+        fishers = None
     else:
-        guild_roster, guild_crafters, family_skills, guild_classes = roster_data
+        (
+            guild_roster,
+            guild_crafters,
+            family_skills,
+            guild_classes,
+            fishers,
+        ) = roster_data
     return (
         bank_free,
         guild_free,
@@ -383,6 +408,7 @@ def _side_inputs(names, family, bank_rows, guild_setup, roster, reads):
         guild_crafters,
         family_skills,
         guild_classes,
+        fishers,
     )
 
 
@@ -422,6 +448,7 @@ def read(
         guild_crafters,
         family_skills,
         guild_classes,
+        fishers,
     ) = _side_inputs(names, family, bank_rows, guild_setup, roster, reads)
     # No banker in the roster is not a failed read: no route is offered.
     banker_free = reads.attempt(
@@ -443,5 +470,7 @@ def read(
         fire_gear=fire_gear,
         failed_listings=got.get("listings"),
         known_spells=got.get("known_spells"),
+        worn_bags=got.get(shadow.WORN_BAGS),
+        fishers=fishers,
         unread=dict(reads.unread),
     )
