@@ -41518,6 +41518,23 @@ _FARM_ITEM_CREATURE_SQL = (
     "ORDER BY POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2) "
     "LIMIT " + str(FARM_CREATURE_ROWS)
 )
+# THE SKIN SURVEY (#2502): leather is a skinning drop. A skinnable beast is a
+# normal-rank creature whose `skinloot` table holds the item and which is not
+# skinned with herbalism or mining (type flags 0x100, 0x200), as in
+# _JOB_BEAST_SQL. Same columns and bounds as the creature survey above.
+_FARM_ITEM_SKIN_SQL = (
+    "SELECT DISTINCT c.guid AS guid, c.map AS map_id, c.zoneId AS zone_id, "
+    "c.position_x AS x, c.position_y AS y, c.position_z AS z, "
+    "ct.name AS name, ct.maxlevel AS level, sl.Chance AS chance "
+    "FROM acore_world.skinning_loot_template sl "
+    "JOIN acore_world.creature_template ct ON ct.skinloot = sl.Entry "
+    "JOIN acore_world.creature c ON c.id = ct.entry "
+    "WHERE sl.Item = %s AND sl.Reference = 0 AND sl.Chance >= %s "
+    "AND ct.maxlevel BETWEEN %s AND %s AND ct.`rank` = 0 "
+    "AND (ct.type_flags & 768) = 0 AND c.map = %s "
+    "ORDER BY POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2) "
+    "LIMIT " + str(FARM_CREATURE_ROWS)
+)
 _FARM_DEATHS_SQL = (
     "SELECT zone, map FROM overseer_death WHERE character_name IN ({marks}) "
     "AND created_at >= FROM_UNIXTIME(%s)"
@@ -41617,11 +41634,17 @@ def _farm_item_creatures(item: int, leader_at, levels) -> list:
     if not high or not leader_at or leader_at.get("map_id") is None:
         return []
     here = int(leader_at["map_id"])
+    where = (float(leader_at.get("pos_x") or 0.0),
+             float(leader_at.get("pos_y") or 0.0))
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(_FARM_ITEM_CREATURE_SQL,
-                    (int(item), int(item), farmjob.KILL_MIN_CHANCE, low, high, here,
-                     float(leader_at.get("pos_x") or 0.0),
-                     float(leader_at.get("pos_y") or 0.0)))
+        if int(item) in farmjob.SKIN_DROPS:
+            cur.execute(_FARM_ITEM_SKIN_SQL,
+                        (int(item), farmjob.KILL_MIN_CHANCE, low, high, here,
+                         *where))
+        else:
+            cur.execute(_FARM_ITEM_CREATURE_SQL,
+                        (int(item), int(item), farmjob.KILL_MIN_CHANCE, low, high,
+                         here, *where))
         rows = cur.fetchall()
     out = []
     for row in rows:
