@@ -103,6 +103,11 @@ MAX_EXTRA_GUILDS = 2
 OPEN_WORLD_MAPS = (0, 1, 530)
 # A run no row has ended by now is lost (a worldserver restart, a sweep).
 LOST_AFTER_MINUTES = 180
+# A run whose command row still says "inside" this long after it was created is
+# lost too (wow-overseer#2654): the row answers every poll, so the bound above
+# never fired and the run held its five seats for hours. Longer than any real
+# run, which is two to three hours at most.
+INSIDE_LOST_MINUTES = 300
 # Nobody is picked until the worldserver has been up this long. The first run
 # after a restart went to five members the old process had just logged out,
 # two seconds after the new one started; random bots log in over minutes.
@@ -2529,6 +2534,29 @@ def _count_kept(row: dict, seen: dict) -> dict:
     reached. `row` carries what the run's row already holds."""
     seen["bosses_done"] = max(_num(row, "bosses_done"), _num(seen, "bosses_done"))
     return seen
+
+
+def lost_verdict(row: dict, seen: dict | None) -> dict | None:
+    """The `lost` ending for a run nothing has ended, or None to leave it.
+
+    `row` carries the read's `stale` (created before LOST_AFTER_MINUTES) and
+    `stuck` (created before INSIDE_LOST_MINUTES) flags, and `seen` is
+    `outcome_from_row`'s answer. A row with no answer is lost once stale; a
+    row that answers "inside" is lost once stuck. An ended answer stands."""
+    if seen is None and row.get("stale"):
+        minutes = LOST_AFTER_MINUTES
+        why = "no outcome from the worldserver within %d minutes" % minutes
+    elif seen is not None and seen.get("state") == INSIDE and row.get("stuck"):
+        why = "still inside %d minutes after it was formed" % INSIDE_LOST_MINUTES
+    else:
+        return None
+    return {
+        "state": ENDED,
+        "outcome": "lost",
+        "why": why,
+        "bosses_done": row.get("bosses_done", 0),
+        "bosses_total": row.get("bosses_total", 0),
+    }
 
 
 # --- the Guild tab ---------------------------------------------------------------
