@@ -74,7 +74,8 @@ Settings are environment variables. These are the ones to set first.
 | `OVERSEER_HEADLESS` | `1` runs the bridge loops with no Discord connection. |
 | `OVERSEER_CHANNEL_ID`, `CHAT_CHANNEL_ID` | Channels the bridge acts in. Empty means every channel. |
 | `PORT` | Port of `map_server.py` (default `8080`). |
-| `LLM_URL`, `LLM_MODEL` | OpenAI-compatible chat endpoint. Set your own: the `LLM_URL` default is private. |
+| `LLM_URL`, `LLM_MODEL` | OpenAI-compatible chat endpoint. The deployment sets the URL; the code fallback is a neutral placeholder. |
+| `WOW_STREAM_BASE` | Base URL for stream links. The map deployment sets the endpoint; the code fallback is a neutral placeholder. |
 | `WOW_STREAM_PREFIX` | Broadcast prefix for this realm. Empty means no videos. |
 
 ### Holding a family for manual control

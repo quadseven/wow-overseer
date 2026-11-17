@@ -209,7 +209,7 @@ def _row_id(raw: str) -> bool:
 # thinking-disabled body and the generous budget below must stay in step
 # with bridge._ask_llm, which is why they are named identically.
 LLM_URL = os.environ.get(
-    "LLM_URL", "http://spark-gateway.spark-gateway.svc.cluster.local:8080/v1/chat/completions"
+    "LLM_URL", "https://llm-service.example.com"
 )
 LLM_MODEL = os.environ.get("LLM_MODEL", "spark:warm-any")
 LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT_SECONDS", "120"))
@@ -4977,9 +4977,9 @@ def _ask_llm(prompt: str) -> str:
         "temperature": 0.7,
         "chat_template_kwargs": {"enable_thinking": False},
     }).encode()
-    # S310 on BOTH call sites: LLM_URL is a hardcoded http:// default or an
-    # operator-set env var on this deployment, never user input, so there is
-    # no file:/custom-scheme path for the rule to protect against here.
+    # S310 on BOTH call sites: LLM_URL is a neutral HTTPS fallback or a
+    # deployment-set URL, never request input, so a request cannot supply a
+    # file:/custom-scheme path for this call.
     req = urllib.request.Request(  # noqa: S310
         LLM_URL, data=body, headers={"Content-Type": "application/json"}
     )
