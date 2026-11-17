@@ -343,7 +343,9 @@ has a `playerbots.conf.dist` that knows only the old names, and `seed-conf`
 refuses the live keys by name. `--control-playerbots-prefix AiPlayerbot` writes
 the control arm's playerbots keys (the baseline, the base file and the decree's
 own `config:`) with that prefix; the treatment arm is untouched, and a fidelity
-delta records it. Any other key the control dist lacks still fails closed.
+delta records it. Any other key the control dist lacks still fails closed; a key a
+module added after the control build (its dist predates it) is removed from the control
+arm's override files with `--control-drop-keys A,B,C`, which records a delta naming them.
 
 With `world.bridge: "on"` the template's bridge sidecar is kept, at the arm's own
 image: the control arm's is `--control-bridge` (the build before the fix), the

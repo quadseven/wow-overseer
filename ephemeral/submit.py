@@ -25,6 +25,7 @@ from .miniyaml import YamlError, loads
 REALM_RANGE = range(100, 200)
 # Boot (15 min) plus the judge's bounded wait for the family to log in (10 min).
 BASE_DEADLINE_PAD = 25 * 60
+_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_.]*$")
 _PREFIX = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 BRIDGE = "bridge"  # the sidecar's container name in the template
 BRIDGE_PULL_NAME = "ghcr"  # the bridge image is a private package
@@ -320,6 +321,20 @@ def submit(
     files, deltas = _config_for(world, base_files, bridge_on)
     prefix = args.get("control_playerbots_prefix")
     control_files = files
+    dropped = args.get("control_drop_keys")
+    if dropped is not None:
+        names = dropped.split(",")
+        if not all(_KEY.match(n) for n in names):
+            raise SubmitError(
+                "--control-drop-keys must be a comma-separated list of config keys such as Overseer.Raid.QuorumSeats"
+            )
+        control_files = {
+            g: confmerge.drop_keys(t, set(names)) for g, t in control_files.items()
+        }
+        deltas.append(
+            "control arm: override keys dropped (the control image's dist predates them): "
+            + ", ".join(names)
+        )
     if prefix is not None:
         if not _PREFIX.match(prefix):
             raise SubmitError(
@@ -329,7 +344,7 @@ def submit(
             g: confmerge.rename_prefix(t, "Playerbots.", prefix + ".")
             if g == "playerbots"
             else t
-            for g, t in files.items()
+            for g, t in control_files.items()
         }
         deltas.append(
             f"control arm: playerbots keys written as {prefix}.* (the control image predates the rename to Playerbots.*)"

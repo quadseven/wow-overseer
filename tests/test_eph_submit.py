@@ -90,6 +90,49 @@ class SubmitTest(Base):
         lines[1] = "AiPlayerbot.Enabled = 1"
         self.assertEqual(out, chr(10).join(lines))
 
+    def _conf(self, suffix, group="overseer"):
+        cm = next(
+            c for c in self.cluster.of("configmaps", "wow-ephemeral")
+            if c["metadata"]["name"].endswith(suffix)
+        )  # fmt: skip
+        return cm["data"][f"{group}.overrides.conf"]
+
+    def test_control_drop_keys_removes_them_from_the_control_arm_only(self):
+        rec = self.submit(
+            control_drop_keys="Overseer.HeadlessRoster,Playerbots.Enabled", **CONTROL
+        )
+        for suffix in ("-c1", "-c2", "-c3"):
+            self.assertNotIn("Overseer.HeadlessRoster", self._conf(suffix))
+            self.assertNotIn("Playerbots.Enabled", self._conf(suffix, "playerbots"))
+            self.assertIn("Playerbots.MaxRandomBots", self._conf(suffix, "playerbots"))
+        for suffix in ("-t1", "-t2", "-t3"):
+            self.assertIn("Overseer.HeadlessRoster", self._conf(suffix))
+            self.assertIn("Playerbots.Enabled", self._conf(suffix, "playerbots"))
+        delta = [
+            d for d in rec["fidelity_deltas"] if "control arm" in d and "dropped" in d
+        ]
+        self.assertTrue(
+            delta
+            and "Overseer.HeadlessRoster" in delta[0]
+            and "Playerbots.Enabled" in delta[0]
+        )
+
+    def test_drop_keys_and_the_prefix_compose(self):
+        self.submit(
+            control_playerbots_prefix="AiPlayerbot",
+            control_drop_keys="Playerbots.Enabled",
+            **CONTROL,
+        )
+        keys = confmerge.parse(self._conf("-c1", "playerbots"))
+        self.assertNotIn("AiPlayerbot.Enabled", keys)
+        self.assertIn("AiPlayerbot.MaxRandomBots", keys)
+
+    def test_a_malformed_drop_key_is_refused_and_creates_nothing(self):
+        for bad in ("Overseer.X;DROP", "", "Overseer.A,,B", "has space"):
+            with self.assertRaisesRegex(submit.SubmitError, "drop-keys"):
+                self.submit(control_drop_keys=bad, **CONTROL)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
     def test_without_the_prefix_nothing_changes(self):
         self.submit(**CONTROL)
         self.assertIn("Playerbots.Enabled", self._run_conf("-c1"))
