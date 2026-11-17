@@ -76,6 +76,7 @@ CREDIT_USD = 100.0
 # flight when the line is reached still land under it.
 MARGIN_USD = 1.0
 UNKNOWN_CALL_USD = 0.25
+HOLD_SECONDS = 60.0
 # How long a read of the month's total from the store may be reused.
 REFRESH_SECONDS = 30.0
 
@@ -241,6 +242,21 @@ class Spend:
         self._base = 0.0
         self._local = 0.0
         self._read_at = -math.inf
+        # Expiry times of calls cleared to go out whose cost is not recorded
+        # yet; each counts UNKNOWN_CALL_USD against the cap so concurrent asks
+        # cannot all pass the same check. An expiry means a leaked hold (a
+        # cancelled ask) cannot shrink the headroom for ever.
+        self._holds: list = []
+
+    def _held_usd(self, now: float) -> float:
+        self._holds = [t for t in self._holds if t > now]
+        return round(len(self._holds) * UNKNOWN_CALL_USD, 6)
+
+    def release(self) -> None:
+        """Give back the hold of a call that was cleared but never sent."""
+        with self._lock:
+            if self._holds:
+                self._holds.pop(0)
 
     def _total(self, now: float) -> tuple:
         """(month, usd). The store's total is re-read at most every
@@ -267,8 +283,13 @@ class Spend:
         tests read the ledger back through)."""
         return self._total(self._clock())[1]
 
-    def refusal(self, model: str) -> Optional[Refusal]:
-        """Why a call must not go out now, or None when it may."""
+    def refusal(self, model: str, hold: bool = False) -> Optional[Refusal]:
+        """Why a call must not go out now, or None when it may.
+
+        With `hold` True a call that may go out is also reserved, checked and
+        counted under one lock: the next ask sees it, so concurrent asks
+        cannot together pass a cap only one of them fits under. `record` (or
+        `release`) gives the hold back."""
         try:
             price_of(model, self._prices)
         except Unpriced as err:
@@ -278,15 +299,20 @@ class Spend:
         except ValueError as err:
             return Refusal("cap_unreadable", "%s; no OpenAI call goes out" % err)
         margin = margin_usd(self.env)
-        month, usd = self._total(self._clock())
-        if round(usd + margin, 6) >= cap:
-            return Refusal(
-                "cap",
-                "OpenAI spend cap reached: $%.2f spent in %s, margin $%.2f, cap "
-                "$%.2f; calls skipped and the heuristic acts until next month"
-                % (usd, month, margin, cap),
-            )
-        return None
+        now = self._clock()
+        month, usd = self._total(now)
+        with self._lock:
+            usd = round(usd + self._held_usd(now), 6)
+            if round(usd + margin, 6) < cap:
+                if hold:
+                    self._holds.append(now + HOLD_SECONDS)
+                return None
+        return Refusal(
+            "cap",
+            "OpenAI spend cap reached: $%.2f spent in %s, margin $%.2f, cap "
+            "$%.2f; calls skipped and the heuristic acts until next month"
+            % (usd, month, margin, cap),
+        )
 
     def record(
         self,
@@ -331,6 +357,8 @@ class Spend:
             row["cost_usd"], row["estimated"] = UNKNOWN_CALL_USD, 1
         with self._lock:
             self._local += row["cost_usd"]
+            if self._holds:
+                self._holds.pop(0)
         if persist:
             self.persist(row)
         return row

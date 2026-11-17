@@ -113,6 +113,36 @@ class Ledger(unittest.TestCase):
         self.assertIn("2026-11", why.text)
         self.assertIn("cap $90.00", why.text)
 
+    def test_concurrent_asks_cannot_all_pass_a_cap_only_some_fit_under(self):
+        s = spend()
+        # $88.50 spent; cap 90 and margin 1 leave room for exactly two holds
+        # of UNKNOWN_CALL_USD (0.25) before usd + holds + margin reaches the cap.
+        s.record("k", "flat-model", "answered", 1, jo.Usage(0, 0, 88_500_000))
+        passed = [s.refusal("flat-model", hold=True) is None for _ in range(10)]
+        self.assertEqual(passed.count(True), 2)
+        self.assertEqual(passed[:2], [True, True])
+
+    def test_recording_or_releasing_a_call_gives_its_hold_back(self):
+        s = spend()
+        s.record("k", "flat-model", "answered", 1, jo.Usage(0, 0, 88_500_000))
+        self.assertIsNone(s.refusal("flat-model", hold=True))
+        self.assertIsNone(s.refusal("flat-model", hold=True))
+        self.assertIsNotNone(s.refusal("flat-model", hold=True))
+        s.release()
+        self.assertIsNone(s.refusal("flat-model", hold=True))
+        s.record("k", "flat-model", "answered", 1, jo.Usage(0, 0, 1))
+        self.assertIsNone(s.refusal("flat-model", hold=True))
+
+    def test_a_leaked_hold_expires(self):
+        clock = Clock()
+        s = spend(clock)
+        s.record("k", "flat-model", "answered", 1, jo.Usage(0, 0, 88_500_000))
+        for _ in range(2):
+            self.assertIsNone(s.refusal("flat-model", hold=True))
+        self.assertIsNotNone(s.refusal("flat-model"))
+        clock.now += jo.HOLD_SECONDS + 1
+        self.assertIsNone(s.refusal("flat-model"))
+
     def test_the_month_rolls_over_and_the_cap_lifts(self):
         clock = Clock()
         s = spend(clock)

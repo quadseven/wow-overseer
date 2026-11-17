@@ -1357,7 +1357,7 @@ class Client:
             self._cache.move_to_end(key)
             return Outcome(CACHED, 0, answers=hit[0], model=hit[1])
         if self.spend is not None:
-            refused = await asyncio.to_thread(self.spend.refusal, model)
+            refused = await asyncio.to_thread(self.spend.refusal, model, True)
             if refused is not None:
                 held = TALLY.first_failure((self.backend.name, CAPPED, refused.code))
                 if held is not None:
@@ -1375,6 +1375,8 @@ class Client:
         # woken waiter cannot overfill the slots.
         if not await self._free_slot(wait):
             log.info("jev: kind=%s status=busy in_flight=%d", kind, self._in_flight)
+            if self.spend is not None:
+                self.spend.release()
             return Outcome(BUSY, elapsed())
         # The deadline starts when the request is sent, not while it queued.
         started = self._clock()
