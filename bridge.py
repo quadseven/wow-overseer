@@ -6032,11 +6032,15 @@ def _door_wedge_evidence(leader: str, head_id: int) -> tuple:
         except pymysql.err.MySQLError as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
                 raise
-    restarts = 0
+    restarts = (0, 0)
     if steps:
         now_at = int(steps[0].get("now_at") or 0) or int(time.time())
         since_at = int(steps[0].get("since_at") or 0)
-        restarts = nowstatus.restart_count(steps, now_at, since_at)
+        restarts = (
+            nowstatus.restart_count(steps, now_at, since_at),
+            nowstatus.restart_count(
+                steps, now_at, since_at, window=dungeonstall.DOOR_RESTART_WINDOW),
+        )
     row = _fetch_family_intents().get(leader, {})
     members = jev_family_intent.parse_members(row.get("members_state"))
     return restarts, members

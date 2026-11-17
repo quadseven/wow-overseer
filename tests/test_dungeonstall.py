@@ -1256,6 +1256,28 @@ class TheWedgeAtTheDoor(unittest.TestCase):
         self.assertIsNotNone(stall.door_unreachable("shadowfang", stall.RESTART_BOUND))
         self.assertIsNone(stall.door_unreachable("shadowfang", stall.RESTART_BOUND - 1))
 
+    def test_a_slow_walk_restarted_four_times_over_an_hour_leaves_the_door(self):
+        """#2151: the walk restarted every few minutes, interleaved with a
+        quest drive and a town errand, so the quarter-hour fold never held
+        ten and the run stayed open for forty minutes."""
+        got = stall.door_unreachable("shadowfang", (1, stall.DOOR_RESTART_BOUND))
+        self.assertIsNotNone(got)
+        self.assertIn("restarted %d times" % stall.DOOR_RESTART_BOUND, got.why)
+
+    def test_three_restarts_over_the_hour_do_not_leave(self):
+        self.assertIsNone(
+            stall.door_unreachable("shadowfang", (1, stall.DOOR_RESTART_BOUND - 1))
+        )
+
+    def test_the_bridge_folds_the_walk_over_the_wider_window_too(self):
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("window=dungeonstall.DOOR_RESTART_WINDOW", src)
+
+    def test_a_bare_count_still_reads_as_the_quarter_hour_fold(self):
+        self.assertIsNone(stall.door_unreachable("shadowfang", 3))
+
     def test_an_unreachable_verdict_needs_a_real_door_and_a_count(self):
         self.assertIsNone(stall.door_unreachable("nowhere", 500))
         self.assertIsNone(stall.door_unreachable("shadowfang", None))
