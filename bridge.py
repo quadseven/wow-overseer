@@ -36682,6 +36682,30 @@ def _route_walks_today() -> int:
         return int((row or {}).get("n") or 0)
 
 
+def _mail_walk_refused_lately(cur, holder: str) -> str:
+    """The reason `holder` is not written another mailbox walk, or "" (#2895).
+
+    Reads the holder's latest refused `walk-to-mailbox` row over the writer's
+    own cursor; guildroute.walk_waits judges whether its refusal still holds.
+    A world without the table, or a read that fails, waits for nobody."""
+    try:
+        cur.execute(
+            "SELECT detail, TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age "
+            "FROM overseer_command WHERE target_name = %s AND kind = 'mail' "
+            "AND command LIKE %s AND status = 'error' "
+            "ORDER BY id DESC LIMIT 1",
+            (holder, guildroute.WALK_VERB + "%"),
+        )
+        row = cur.fetchone()
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return ""
+        raise
+    if not row or not guildroute.walk_waits(row.get("detail"), row.get("age")):
+        return ""
+    return str(row.get("detail") or "")
+
+
 def _insert_mail_walk(run) -> int:
     """One `kind='mail'` walk-to-mailbox row for a bot off the roster (#185).
 
@@ -36692,6 +36716,11 @@ def _insert_mail_walk(run) -> int:
     """
     with _connect() as conn, conn.cursor() as cur:
         if _held_as_follower(cur, run.holder, run.walk_command):
+            return 0
+        refused = _mail_walk_refused_lately(cur, run.holder)
+        if refused:
+            log.info("guild route: %s is not walked again yet: %s",
+                     run.holder, refused)
             return 0
         try:
             cur.execute(
@@ -36882,6 +36911,12 @@ def _insert_dues_row(holder: str, command: str, taker: str, source: str) -> int:
     with _connect() as conn, conn.cursor() as cur:
         if _held_as_follower(cur, holder, command):
             return 0
+        if followhold.is_walk(command):
+            refused = _mail_walk_refused_lately(cur, holder)
+            if refused:
+                log.info("guild dues: %s is not walked again yet: %s",
+                         holder, refused)
+                return 0
         try:
             cur.execute(
                 "INSERT INTO overseer_command "
