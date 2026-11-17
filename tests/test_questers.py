@@ -816,6 +816,22 @@ class Broken(unittest.TestCase):
         self.assertEqual((p.move.kind, p.move.quest), (classquest.ABANDON, 1))
         self.assertIn(questers.STALLED, p.move.said)
 
+    def test_a_stalled_remote_quest_names_its_refused_objective_crossing(self):
+        cat = world()
+        member = mirra(map_id=1, quest_log={1: 3})
+        crossing = crossing_row(NO_TRANSPORT, False, age=5, to_map=0)
+        crossings = guildjobs.recent_from_rows([crossing])
+        clock = questers.Clock()
+        for minute in range(0, 121, 5):
+            p = questers.plan(
+                cat, member, clock, minute * 60, last_quest=1, crossings=crossings
+            )
+
+        self.assertEqual(
+            p.broken[0].reason,
+            "%s; objective route is blocked: %s" % (questers.STALLED, NO_TRANSPORT),
+        )
+
     def test_dusky_crab_cakes_ledger_explains_the_unsupported_cooking_step(self):
         # The world rows name six Dusky Crab Cakes as a required item. The
         # quester can hunt drops, but has no cooking step to make this item.
