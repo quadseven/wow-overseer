@@ -412,17 +412,24 @@ STARTERS_SQL = (
     "WHERE s.quest IN ({quests})"
 )
 
+# A negative spawntimesecs is loaded by the core as "not spawned by default"
+# (GameObject::LoadFromDB, m_spawnedByDefault = false): the object is in the
+# world only after a script respawns it. Bitter Rivals (310) is handed in at
+# such a barrel, which Jarven Thunderbrew's script respawns after quest 308 is
+# finished, so a walk to its spawn arrives at nothing. `spawn_time` carries it.
+#
 # Everything named to hand each quest in to: a creature or a gameobject. A
 # gameobject comes with each of its spawns (guid 0 when it has none), since
 # classquest.GIVERS_SQL reads creature spawns only: a quest whose only ender is
 # a gameobject had nowhere to walk to and sat complete in the log (#1594).
 ENDERS_SQL = (
     "SELECT e.quest AS quest, 'creature' AS kind, e.id AS entry, 0 AS guid, "
-    "0 AS map_id, 0 AS x, 0 AS y, '' AS name "
+    "0 AS map_id, 0 AS x, 0 AS y, '' AS name, 0 AS spawn_time "
     "FROM acore_world.creature_questender e WHERE e.quest IN ({quests}) "
     "UNION ALL "
     "SELECT e.quest, 'gameobject', e.id, COALESCE(o.guid, 0), COALESCE(o.map, 0), "
-    "COALESCE(o.position_x, 0), COALESCE(o.position_y, 0), COALESCE(gt.name, '') "
+    "COALESCE(o.position_x, 0), COALESCE(o.position_y, 0), COALESCE(gt.name, ''), "
+    "COALESCE(o.spawntimesecs, 0) "
     "FROM acore_world.gameobject_questender e "
     "LEFT JOIN acore_world.gameobject o ON o.id = e.id "
     "LEFT JOIN acore_world.gameobject_template gt ON gt.entry = e.id "
@@ -903,6 +910,8 @@ def _object_ender_spots(ender_rows) -> dict:
         guid = _int(r.get("guid"))
         if str(r.get("kind") or "") != "gameobject" or not guid:
             continue
+        if _scripted_spawn(r):
+            continue
         spot = ObjectSpawn(
             guid,
             _int(r.get("entry")),
@@ -917,13 +926,21 @@ def _object_ender_spots(ender_rows) -> dict:
     return {qid: tuple(spots) for qid, spots in out.items()}
 
 
+def _scripted_spawn(row) -> bool:
+    """A gameobject spawn the core does not spawn by default: a negative
+    spawntimesecs, in the world only once a script respawns it."""
+    return _int(row.get("spawn_time")) < 0
+
+
 def _unspawned_object_enders(ender_rows) -> set:
     """The quests a gameobject with no spawn in the world is named to take
-    (ENDERS_SQL's guid 0 rows): one a script or an event summons (#1606)."""
+    (ENDERS_SQL's guid 0 rows), or only a spawn the core does not spawn by
+    default: one a script or an event summons (#1606, #2737)."""
     return {
         _int(r.get("quest"))
         for r in ender_rows or ()
-        if str(r.get("kind") or "") == "gameobject" and not _int(r.get("guid"))
+        if str(r.get("kind") or "") == "gameobject"
+        and (not _int(r.get("guid")) or _scripted_spawn(r))
     }
 
 
