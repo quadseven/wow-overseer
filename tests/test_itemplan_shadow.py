@@ -358,7 +358,7 @@ class AuctionExecutorTest(unittest.IsolatedAsyncioTestCase):
         ench = shadow.itemplan.guildshare.SKILL_LINES["enchanting"]
         extras = shadow.Extras(
             open_quest_items={"Oz": frozenset()},
-            family_skills={"Oz": ((ench, 15, 75),)},
+            family_skills={"Oz": ((ench, 150, 225),)},
             known_spells={},
             templates={
                 16245: {

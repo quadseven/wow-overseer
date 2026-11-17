@@ -5,11 +5,12 @@ stacks held by the two guilds: 172 could be learned by a raid seat today and
 only sat unrouted, 502 were for a profession a seat is assigned but whose
 skill is still short, and 13 were for a profession nobody works. Rule R9 said
 "never vendor" and nothing else took them, so they filled bags, banks and both
-vaults. The rule now: a recipe a guildmate can learn now goes to that guildmate;
-one a seat could learn within its assigned profession is kept for it in the
-vault, to a ceiling; every other tradable recipe is listed on the real auction
-house by the character holding it; an unsold listing that came back twice may
-be vendored. Nothing is created: only what a character already holds.
+vaults. The rule now: family and guild crafters keep or receive recipes they
+can reach within the next skill range; an assigned seat's reachable recipes
+are kept in the vault to a ceiling. Every other tradable recipe is listed on
+the real auction house by the character that holds it, then goes to the vendor
+after two failed listings. Nothing is generated or listed without a real
+character-held item.
 """
 
 from __future__ import annotations
@@ -23,10 +24,13 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import guildtrades  # noqa: E402
+import bag_pressure  # noqa: E402
 import itemplan  # noqa: E402
+import itemplan_vendor  # noqa: E402
 import itemplan_shadow as shadow  # noqa: E402
 from itemplan import (  # noqa: E402
     AUCTION,
+    BANK_PERSONAL,
     GIVE,
     GUILD_BANK,
     SELL_VENDOR,
@@ -82,16 +86,25 @@ class WhoCanLearnItNow(unittest.TestCase):
 class KeptForTheAssignedSeat(unittest.TestCase):
     def test_a_trade_a_seat_is_assigned_is_kept_in_the_vault(self):
         r = recipe(rank=250)
-        d = one([r], [UZZA], r, ctx())
+        d = one(
+            [r],
+            [UZZA],
+            r,
+            ctx(guild_crafters=(("Seatsmith", "alchemy", 150),)),
+        )
         self.assertEqual((d.route, d.tab), (GUILD_BANK, itemplan.GUILD_TAB_MATERIALS))
         self.assertIn("assigned", d.reason)
 
     def test_the_vault_ceiling_keeps_it_from_filling(self):
         recipes = [
-            recipe(entry=9100 + i, rank=100 + i)
+            recipe(entry=9100 + i, rank=226 + i)
             for i in range(itemplan.SEAT_RECIPE_CEILING + 5)
         ]
-        by_key, _ = decide(recipes, [UZZA], ctx())
+        by_key, _ = decide(
+            recipes,
+            [UZZA],
+            ctx(guild_crafters=(("Seatsmith", "alchemy", 150),)),
+        )
         routes = [by_key[r.key].route for r in recipes]
         self.assertEqual(routes.count(GUILD_BANK), itemplan.SEAT_RECIPE_CEILING)
         self.assertEqual(routes.count(AUCTION), 5)
@@ -113,7 +126,15 @@ class KeptForTheAssignedSeat(unittest.TestCase):
 
     def test_a_full_vault_lists_it_instead(self):
         r = recipe(rank=250)
-        d = one([r], [UZZA], r, ctx(guild_free={}))
+        d = one(
+            [r],
+            [UZZA],
+            r,
+            ctx(
+                guild_free={},
+                guild_crafters=(("Seatsmith", "alchemy", 150),),
+            ),
+        )
         self.assertEqual(d.route, AUCTION)
 
     def test_the_assigned_trades_are_the_profession_plans(self):
@@ -126,6 +147,69 @@ class KeptForTheAssignedSeat(unittest.TestCase):
 
 
 class EverythingElseIsListed(unittest.TestCase):
+    def test_the_ordinary_vendor_pass_waits_for_the_r9_fallback(self):
+        row_ = row(104, 9004, "Design: Ring", sell=300)
+        row_.update(quality=1, quest_item=False, reagent=False, profession_needed=False)
+        self.assertEqual(bag_pressure.vendor_candidates([row_]), ())
+        self.assertIn("recipe", bag_pressure.vendor_refusal(row_))
+
+    def test_the_itemplan_vendor_route_sells_a_recipe_after_two_failures(self):
+        r = recipe(quality=1, sell=300)
+        twice = ctx(failed_listings={("Uzza", r.entry): 2})
+        plan = itemplan.plan([r], [UZZA], twice)
+        row_ = row(105, r.entry, r.name, sell=300)
+        row_.update(holder="Uzza", quality=1)
+        sales = itemplan_vendor.sales_for(plan, [(r, row_)])
+        self.assertEqual([sale.candidate.item_guid for sale in sales], [105])
+
+    def test_a_family_trade_keeps_a_recipe_only_through_the_next_skill_range(self):
+        near = recipe(rank=150, skill=ALCHEMY)
+        far = recipe(rank=200, entry=9002, skill=ALCHEMY)
+        alchemist = member("Uzza", skills=[(ALCHEMY, 50, 75)])
+        by_key, _ = decide([near, far], [alchemist], ctx())
+        self.assertEqual(by_key[near.key].route, BANK_PERSONAL)
+        self.assertEqual(by_key[far.key].route, AUCTION)
+
+    def test_a_sibling_only_gets_a_recipe_within_their_next_skill_range(self):
+        near = recipe(rank=150)
+        far = recipe(rank=200, entry=9003)
+        alchemist = member("Sibling", skills=[(ALCHEMY, 50, 75)])
+        by_key, _ = decide([near, far], [UZZA, alchemist], ctx())
+        self.assertEqual(
+            (by_key[near.key].route, by_key[near.key].target), (GIVE, "Sibling")
+        )
+        self.assertEqual(by_key[far.key].route, AUCTION)
+
+    def test_a_guild_crafter_in_the_next_range_can_take_the_recipe(self):
+        r = recipe(rank=150)
+        d = one(
+            [r],
+            [UZZA],
+            r,
+            ctx(
+                assigned_trades=frozenset(),
+                guild_crafters=(("Seatsmith", "alchemy", 50),),
+            ),
+        )
+        self.assertEqual((d.route, d.target), (GIVE, "Seatsmith"))
+        self.assertIn("next skill range", d.reason)
+
+    def test_a_crafter_who_can_learn_now_beats_one_in_the_next_range(self):
+        r = recipe(rank=150)
+        d = one(
+            [r],
+            [UZZA],
+            r,
+            ctx(
+                assigned_trades=frozenset(),
+                guild_crafters=(
+                    ("AbleNow", "alchemy", 150),
+                    ("AbleSoon", "alchemy", 50),
+                ),
+            ),
+        )
+        self.assertEqual((d.route, d.target), (GIVE, "AbleNow"))
+
     def test_a_trade_no_seat_is_assigned_is_listed_at_the_vendor_quote(self):
         r = recipe(subclass=10, skill=JEWELCRAFTING, rank=200)
         d = one([r], [UZZA], r, ctx())
@@ -144,10 +228,10 @@ class EverythingElseIsListed(unittest.TestCase):
         self.assertNotEqual(d.route, AUCTION)
         self.assertNotEqual(d.route, SELL_VENDOR)
 
-    def test_a_rare_recipe_stays_out_of_the_house_and_the_vendor(self):
+    def test_a_tradable_rare_recipe_no_one_can_learn_is_listed(self):
         r = recipe(subclass=10, skill=JEWELCRAFTING, quality=3, sell=9000)
         d = one([r], [UZZA], r, ctx())
-        self.assertNotIn(d.route, (AUCTION, SELL_VENDOR))
+        self.assertEqual(d.route, AUCTION)
 
     def test_a_recipe_is_never_vendored_before_it_has_failed_to_sell(self):
         r = recipe(subclass=10, skill=JEWELCRAFTING)
@@ -156,31 +240,32 @@ class EverythingElseIsListed(unittest.TestCase):
         once = ctx(failed_listings={("Uzza", r.entry): 1})
         self.assertEqual(one([r], [UZZA], r, once).route, AUCTION)
 
-    def test_two_failed_listings_let_the_vendor_have_it(self):
+    def test_two_failed_listings_fall_back_to_the_vendor(self):
         r = recipe(subclass=10, skill=JEWELCRAFTING, sell=300)
         twice = ctx(
             failed_listings={("Uzza", r.entry): itemplan.FAILED_LISTINGS_BEFORE_VENDOR}
         )
         d = one([r], [UZZA], r, twice)
-        # The guild loot policy: an uncommon recipe is never vendored.
-        self.assertNotEqual(d.route, SELL_VENDOR)
+        self.assertEqual(d.route, SELL_VENDOR)
 
-    def test_two_failed_listings_of_a_common_recipe_go_to_the_guild_bank(self):
+    def test_two_failed_listings_of_a_common_recipe_go_to_the_vendor(self):
         r = recipe(subclass=10, skill=JEWELCRAFTING, quality=1, sell=300)
         twice = ctx(
             failed_listings={("Uzza", r.entry): itemplan.FAILED_LISTINGS_BEFORE_VENDOR}
         )
         d = one([r], [UZZA], r, twice)
-        self.assertNotEqual(d.route, SELL_VENDOR)
-        self.assertIn(d.route, (itemplan.GUILD_BANK, itemplan.BANK_PERSONAL))
+        self.assertEqual(d.route, SELL_VENDOR)
 
-    def test_two_failed_listings_of_a_dear_recipe_still_wait_for_a_release(self):
+    def test_a_dear_recipe_uses_the_vendor_after_two_failures_but_waits_for_release(
+        self,
+    ):
         r = recipe(subclass=10, skill=JEWELCRAFTING, sell=40_000)
         twice = ctx(
             failed_listings={("Uzza", r.entry): itemplan.FAILED_LISTINGS_BEFORE_VENDOR}
         )
         d = one([r], [UZZA], r, twice)
-        self.assertNotEqual(d.route, SELL_VENDOR)
+        self.assertEqual(d.route, SELL_VENDOR)
+        self.assertTrue(d.confirm)
 
 
 def row(guid, entry, name, sell=2000, quality=2):
@@ -255,6 +340,63 @@ class TheExecutorListsThem(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(queued), 1)
         self.assertEqual(queued[0][1], "list guid:101 bid:6400 buyout:8000 hours:12")
 
+    async def test_an_unneeded_darkmoon_card_uses_the_itemplan_auction_route(self):
+        from test_itemplan_shadow import import_bridge
+
+        card = row(102, 2002, "Two of Beasts", sell=12_500)
+        card.update(item_class=12, quality=2)
+        extras = shadow.Extras(
+            open_quest_items={"Ana": frozenset()},
+            market={},
+            templates={
+                2002: {
+                    "item_class": 12,
+                    "subclass": 0,
+                    "bonding": 0,
+                    "inventory_type": 0,
+                    "item_level": 1,
+                    "req_level": 0,
+                    "required_skill_rank": 0,
+                    "required_skill": 0,
+                    "container_slots": 0,
+                    "fire_res": 0,
+                    "stats": {},
+                }
+            },
+            instance_soulbound={102: False},
+            fire_gear=frozenset(),
+            guild_free={},
+            guild_crafters=(),
+        )
+        queued = []
+        executor = SimpleNamespace(
+            _auction_holder_houses=mock.AsyncMock(return_value={"Ana": 2}),
+            _keep_at_auctioneer=mock.AsyncMock(),
+            _itemplan_auction_walk=mock.AsyncMock(),
+        )
+        bridge = import_bridge()
+        shadow.reset()
+
+        def insert(holder, command):
+            queued.append((holder, command))
+            return 1
+
+        with (
+            mock.patch.object(
+                bridge.itemplan_shadow, "auction_enabled", return_value=True
+            ),
+            mock.patch.object(bridge, "_itemplan_reads", return_value=extras),
+            mock.patch.object(bridge, "_recent_auction_keys", return_value=set()),
+            mock.patch.object(bridge, "_insert_auction", side_effect=insert),
+        ):
+            await bridge.Bridge._itemplan_auction(
+                executor, ["Ana"], "Fam", [card], {"Ana": 10}
+            )
+        self.assertEqual(
+            queued,
+            [("Ana", "list guid:102 bid:40000 buyout:50000 hours:12")],
+        )
+
 
 class FakeCursor:
     def __init__(self, rows):
@@ -317,7 +459,7 @@ class TheListingHistory(unittest.TestCase):
             fire_gear=frozenset(),
         )
         report = shadow.shadow(["Ana"], "Fam", rows, {"Ana": 10}, extras=extras)
-        self.assertNotEqual(report.plan.decisions[0].route, SELL_VENDOR)
+        self.assertEqual(report.plan.decisions[0].route, SELL_VENDOR)
 
 
 if __name__ == "__main__":

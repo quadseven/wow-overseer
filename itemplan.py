@@ -37,7 +37,9 @@ leaves first" is one fixed order, not a mood.
       worn_bags` unread and none among the stacks) the bag is kept (#2274).
   R3  quest items. An open quest names the item: KEEP_CARRY. A quest log that
       was not read keeps every quest-class stack and never sells or destroys
-      one. Extends `bag_pressure.QUEST_NEEDED_SQL`.
+      one. Darkmoon cards keep only an Ace or a card that meets the family's
+      same-deck threshold; the rest list and fall back to vendor after two
+      failures. Extends `bag_pressure.QUEST_NEEDED_SQL`.
   R4  the holder's equipped or about-to-wear gear (gear pass verdict).
   R5  a trade tool for a member who works the trade (`disposition.TOOL_TRADES`).
       A fishing pole is one in a family that fishes (`_rule_fishing_pole`).
@@ -53,8 +55,9 @@ leaves first" is one fixed order, not a mood.
       holder only; bind-on-equip gear goes to the sibling who will wear it.
       Rare and better for a later level goes to the Gear for Later tab.
       Extends `bankpolicy` rule 4 and `disposition.decide`.
-  R9  recipes: learnable by a family member within a range, kept or given;
-      raid recipes never sold; the rest to the guild or the vendor.
+  R9  recipes: reachable by a family member or guild crafter within the next
+      skill range, kept or given; unreachable items list by their holder and
+      fall back to vendor after two failures. Raid recipes stay in the guild.
       Extends `clearance`.
   R10 surplus materials: guild Materials tab, then vendor. Extends
       `clearance` and `guildshare.FEEDS`.
@@ -214,7 +217,8 @@ CONFIRM_VALUE = 10_000  # copper (1 gold): a sale this large waits for a release
 # A recipe nobody can learn yet (#2605). The trades the raid seats' profession
 # plan hands out that carry recipes (guildtrades.PRIMARIES less the three
 # gathering trades; tests/test_itemplan_recipe_exit.py holds the two equal): a
-# recipe for one is kept for the seat assigned it, not sold or listed.
+# recipe for one is kept for the seat assigned it only while a family or guild
+# crafter can reach it within the next skill range.
 SEAT_TRADES = frozenset(
     {
         "alchemy",
@@ -731,9 +735,20 @@ class _World:
         self.needs = {m.name: trade_needs(m) for m in members}
         self.stacks = stacks
         held: dict = {}
+        darkmoon_counts: dict = {}
+        darkmoon_aces: set = set()
         for s in stacks:
             held[(s.holder, s.entry)] = held.get((s.holder, s.entry), 0) + s.count
+            card = bag_pressure.darkmoon_card(s.name)
+            if card:
+                rank, suit = card
+                key = (s.holder, suit)
+                darkmoon_counts[key] = darkmoon_counts.get(key, 0) + s.count
+                if rank == "Ace" and s.count > 0:
+                    darkmoon_aces.add(key)
         self.held = held
+        self.darkmoon_counts = darkmoon_counts
+        self.darkmoon_aces = darkmoon_aces
         self.enchanters = self._enchanters()
 
     def siblings(self, holder: str) -> list:
@@ -770,6 +785,25 @@ class _World:
                 return name
         return None
 
+    def keeps_darkmoon_card(self, stack: Stack) -> bool:
+        card = bag_pressure.darkmoon_card(stack.name)
+        if card is None:
+            return False
+        rank, suit = card
+        if rank == "Ace":
+            return True
+        family = self.members[stack.holder].family
+        for member in self.by_family.get(family, ()):
+            key = (member.name, suit)
+            if key in self.darkmoon_aces:
+                return True
+            count = self.darkmoon_counts.get(key, 0)
+            if member.name == stack.holder:
+                count -= 1
+            if count >= 4:
+                return True
+        return False
+
 
 def _certainly_useless(s: Stack) -> bool:
     """A quest-class stack the quest test read as needed by no quest the holder
@@ -778,23 +812,68 @@ def _certainly_useless(s: Stack) -> bool:
     return s.quest_needed is False and s.sell <= 0 and s.quality <= 1
 
 
-def _rule_quest(w: _World, s: Stack, me: Member):
-    if s.item_class != C_QUEST:
-        if s.entry in w.ctx.attunement_items:
+def _listing_options(w: _World, s: Stack, rule: str, why: str, goal: str) -> list:
+    """List a real carried item, then use its vendor only after two failures."""
+    if not s.tradable:
+        return []
+    failed = w.ctx.failed_listings.get((s.holder, s.entry), 0)
+    if failed >= FAILED_LISTINGS_BEFORE_VENDOR:
+        if s.sell > 0:
             return [
-                _opt(KEEP_CARRY, ATTUNEMENT, "attunement item", "R3", carry_forced=True)
+                _opt(
+                    SELL_VENDOR,
+                    goal,
+                    "unsold after %d auction listings: vendor fallback" % failed,
+                    rule,
+                )
             ]
-        return None
+        return []
+    out = []
+    quote = w.ctx.market.get(s.entry)
+    if quote and int(quote[0]) > 0 and s.sell <= 0:
+        out.append(_opt(AUCTION, goal, why, rule))
+    elif s.sell > 0:
+        out += _market_options(w, s, rule)
+        out.append(_opt(AUCTION, goal, why, rule, target=LIST_AT_VENDOR_QUOTE))
+    return out
+
+
+def _rule_quest(w: _World, s: Stack, me: Member):
+    card = bag_pressure.darkmoon_card(s.name)
+    if card:
+        if w.keeps_darkmoon_card(s):
+            return [
+                _opt(
+                    BANK_PERSONAL,
+                    QUEST,
+                    "Darkmoon card retained for its deck set",
+                    "R3",
+                ),
+                _opt(
+                    KEEP_CARRY, QUEST, "Darkmoon card retained for its deck set", "R3"
+                ),
+            ]
+        return _listing_options(
+            w,
+            s,
+            "R3",
+            "Darkmoon card outside the set threshold: listed by its holder",
+            SURPLUS,
+        ) or [
+            _opt(BANK_PERSONAL, QUEST, "untradable Darkmoon card kept safely", "R3"),
+            _opt(KEEP_CARRY, QUEST, "untradable Darkmoon card kept safely", "R3"),
+        ]
     if bag_pressure.is_darkmoon(s.name):
         return [
-            _opt(
-                BANK_PERSONAL,
-                QUEST,
-                "a Darkmoon deck card: kept for the deck, never sold or destroyed",
-                "R3",
-            ),
-            _opt(KEEP_CARRY, QUEST, "a Darkmoon deck card: kept for the deck", "R3"),
+            _opt(BANK_PERSONAL, QUEST, "Darkmoon deck or trinket kept", "R3"),
+            _opt(KEEP_CARRY, QUEST, "Darkmoon deck or trinket kept", "R3"),
         ]
+    if s.entry in w.ctx.attunement_items:
+        return [
+            _opt(KEEP_CARRY, ATTUNEMENT, "attunement item", "R3", carry_forced=True)
+        ]
+    if s.item_class != C_QUEST:
+        return None
     known = w.ctx.open_quest_items
     if known is not None and s.entry in known.get(s.holder, frozenset()):
         return [
@@ -1537,6 +1616,10 @@ def _member_knows(w: _World, name: str, s: Stack) -> bool:
     return spells is not None and s.spell_id in spells
 
 
+def _within_next_skill_range(skill: int, rank: int) -> bool:
+    return skill > 0 and rank <= range_top(skill) + RANGE
+
+
 def _matches_class(class_id: int, allowable_class: int) -> bool:
     return class_id > 0 and (allowable_class & (1 << (class_id - 1))) != 0
 
@@ -1544,9 +1627,11 @@ def _matches_class(class_id: int, allowable_class: int) -> bool:
 def _recipe_member_option(
     w: _World, s: Stack, me: Member, trade: str | None, rank: int
 ):
-    if not trade or me.skill(trade) <= 0 or _member_knows(w, me.name, s):
+    if not trade or _member_knows(w, me.name, s):
         return None
     skill = me.skill(trade)
+    if not _within_next_skill_range(skill, rank):
+        return None
     goal = TRADE_NOW if rank <= skill else TRADE_NEXT
     return _opt(
         KEEP_CARRY if goal == TRADE_NOW else BANK_PERSONAL,
@@ -1560,11 +1645,14 @@ def _recipe_sibling_option(w: _World, s: Stack, trade: str | None, rank: int):
     if not trade or not s.tradable:
         return None
     for sib in w.siblings(s.holder):
-        if sib.skill(trade) > 0 and not _member_knows(w, sib.name, s):
+        if _within_next_skill_range(sib.skill(trade), rank) and not _member_knows(
+            w, sib.name, s
+        ):
             return _opt(
                 GIVE,
                 RECIPE,
-                "%s works %s" % (sib.name, trade),
+                "%s works %s and can reach it within the next skill range"
+                % (sib.name, trade),
                 "R9",
                 target=sib.name,
             )
@@ -1572,39 +1660,57 @@ def _recipe_sibling_option(w: _World, s: Stack, trade: str | None, rank: int):
 
 
 def _recipe_guild_option(w: _World, s: Stack, trade: str | None, rank: int):
-    """A guildmate who can learn it now. One short of the skill does not take
-    a bag slot for it: the recipe waits in the vault or the house (#2605)."""
+    """A guildmate who can learn it now or within the next skill range."""
     if not trade or not s.tradable:
         return None
-    for name, gtrade, skill in sorted(w.ctx.guild_crafters):
-        if gtrade == trade and skill >= rank and not _member_knows(w, name, s):
-            return _opt(
-                GIVE,
-                RECIPE,
-                "guildmate %s works %s at %d and can learn it now (needs %d)"
-                % (name, trade, skill, rank),
-                "R9",
-                target=name,
-            )
-    return None
+    reachable = sorted(
+        (-skill, name)
+        for name, gtrade, skill in w.ctx.guild_crafters
+        if gtrade == trade
+        and _within_next_skill_range(skill, rank)
+        and not _member_knows(w, name, s)
+    )
+    if not reachable:
+        return None
+    skill, name = -reachable[0][0], reachable[0][1]
+    if skill < rank and trade in w.ctx.assigned_trades:
+        return None
+    when = (
+        "can learn it now"
+        if skill >= rank
+        else "can reach it within the next skill range"
+    )
+    return _opt(
+        GIVE,
+        RECIPE,
+        "guildmate %s works %s at %d and %s (needs %d)"
+        % (name, trade, skill, when, rank),
+        "R9",
+        target=name,
+    )
 
 
 def _skill_gap(w: _World, trade: str, rank: int) -> int:
     """Points the best worker of the trade is short of this rank."""
-    best = max(
+    best = _best_trade_skill(w, trade)
+    return max(0, rank - best)
+
+
+def _best_trade_skill(w: _World, trade: str) -> int:
+    return max(
         [sk for _n, t, sk in w.ctx.guild_crafters if t == trade]
         + [m.skill(trade) for m in w.members.values()],
         default=0,
     )
-    return max(0, rank - best)
 
 
 def _recipe_seat_option(w: _World, s: Stack, trade: str | None, rank: int):
-    """A recipe for a trade a seat is assigned, kept for it in the vault, to a
-    ceiling, the stacks nearest learnable first (#2605)."""
+    """Keep a reachable assigned-trade recipe in the vault, nearest first."""
     if not trade or trade not in w.ctx.assigned_trades or not s.tradable:
         return None
     family = w.members[s.holder].family
+    if not _within_next_skill_range(_best_trade_skill(w, trade), rank):
+        return None
     gap = _skill_gap(w, trade, rank)
     return _opt(
         GUILD_BANK,
@@ -1620,40 +1726,15 @@ def _recipe_seat_option(w: _World, s: Stack, trade: str | None, rank: int):
 
 
 def _recipe_exit_options(w: _World, s: Stack, rule: str = "R9") -> list:
-    """Where a recipe goes when nobody can learn it and no seat keeps it: the
-    real auction house, listed by the character holding it (#2605). A recipe
-    that has failed to sell FAILED_LISTINGS_BEFORE_VENDOR times may go to a
-    vendor. Never a bound, rare or priceless one: the house plan lists neither."""
-    if not s.tradable or s.sell <= 0:
-        return []
-    failed = w.ctx.failed_listings.get((s.holder, s.entry), 0)
-    if failed >= FAILED_LISTINGS_BEFORE_VENDOR:
-        # THE GUILD LOOT POLICY: a recipe is never vendored (lootpolicy files
-        # it as bank-or-auction), so one that fails to list goes to the guild
-        # bank for a member who may yet learn it.
-        return [
-            _opt(
-                GUILD_BANK,
-                RECIPE,
-                "unsold after %d listings: kept in the guild bank" % failed,
-                rule,
-                target="Materials",
-                tab=GUILD_TAB_MATERIALS,
-            )
-        ]
-    if s.quality > 2:
-        return []
-    out = _market_options(w, s, "R11")
-    out.append(
-        _opt(
-            AUCTION,
-            SURPLUS,
-            "no seat can learn it: listed on the house by its holder",
-            rule,
-            target=LIST_AT_VENDOR_QUOTE,
-        )
+    """List a recipe no family or guild crafter can reach within its next
+    skill range; after two failures the holder's item may go to a vendor."""
+    return _listing_options(
+        w,
+        s,
+        rule,
+        "no family member or guild crafter can reach it: listed by its holder",
+        RECIPE,
     )
-    return out
 
 
 def _recipe_raid_options():
@@ -1756,11 +1837,11 @@ def _rule_recipe(w: _World, s: Stack, me: Member):
             return _class_book_options(w, s, me)
     trade = RECIPE_TRADE.get(s.subclass)
     drop = s.entry in raidsupply.DROP_RECIPES
-    # Group 1: trade recipes the holder works stay with the holder until learned.
+    # Group 1: the holder's trade keeps recipes within its next skill range.
     member_option = _recipe_member_option(w, s, me, trade, rank)
     if member_option:
         return [member_option]
-    # Group 2: trade recipes the holder does not work -> crafter, else auction, never vendor.
+    # Group 2: reachable crafter, else auction, then vendor after two failures.
     out = []
     sibling_option = _recipe_sibling_option(w, s, trade, rank)
     if sibling_option:
