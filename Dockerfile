@@ -26,7 +26,7 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      kin.py keep.py cast.py bonds.py council.py family_value.py persona.py \
      bonkers.py retire.py retrygate.py strayfollow.py memberloop.py guildgather.py lowrung.py\
      quests.py overhear.py questbook.py questuntaken.py seatquests.py questcatalogue.py questledger.py questtickets.py corpstickets.py \
-     questshare.py questers.py travel.py stream.py frames.py \
+     questshare.py bankerloop.py questers.py travel.py stream.py frames.py \
      professions.py craft.py craft_supply.py auction.py gearup.py weaponskill.py jobs.py trainjob.py \
      craft_rhythm.py \
      skillgoal.py gatheraim.py gatherband.py farmassign.py farmjob.py \

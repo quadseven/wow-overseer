@@ -133,6 +133,7 @@ import itemplan
 import itemplan_disenchant
 import itemplan_route
 import itemplan_vendor
+import bankerloop
 import seatbags
 import seatquests
 import itemsource
@@ -20569,6 +20570,9 @@ class Bridge(discord.Client):
             else classhunt.Slots(classhunt.free_slots(
                 facts.get("hunt_open"), HUNTS_AT_ONCE)))
         self._class_hunts.items = now >= self._class_hunt_itemless_until
+        # A BANKER STAYS BESIDE ITS VAULT (#2660): the vault spawn it walks back
+        # to is read and put on it before the plan.
+        members = await asyncio.to_thread(_banker_vaults, members)
         # A RAID SEAT RUNS THE FAMILY'S BAG LOOP (#2609): the item plan over
         # the seat's whole bags, handed to the plan as what to sell and bank.
         members, seat_lines = await asyncio.to_thread(
@@ -33660,6 +33664,40 @@ def _seat_bag_relief(members, cap):
         return list(members), ()
 
 
+_BANKER_VAULTS_SQL = (
+    "SELECT g.guid AS spawn, g.map AS map_id, g.position_x AS x, "
+    "g.position_y AS y, gt.name AS name "
+    "FROM acore_world.gameobject g "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE gt.type = %s AND g.zoneId IN ({zones})"
+)
+# GAMEOBJECT_TYPE_GUILD_BANK.
+_GUILD_BANK_GO_TYPE = 34
+
+
+def _banker_vaults(members):
+    """The members, each guild banker carrying the guild vault spawn in its
+    vault city; blocking. A failed read leaves them as they were: a banker
+    with no vault known is walked home by the hearth."""
+    if not any(bankerloop.is_banker(m) for m in members):
+        return list(members)
+    zones = sorted(set(bankerloop.VAULT_CITY_ZONE.values()))
+    sql = _BANKER_VAULTS_SQL.format(zones=",".join(["%s"] * len(zones)))
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, (_GUILD_BANK_GO_TYPE, *zones))
+            found = cur.fetchall()
+    except (OSError, pymysql.err.MySQLError) as exc:
+        log.warning("bankers: could not read the guild vaults: %s", exc)
+        return list(members)
+    spots = tuple(
+        guildjobs.Spot(
+            kind="gameobject", spawn=int(r["spawn"]), map_id=int(r["map_id"]),
+            x=float(r["x"]), y=float(r["y"]), name=str(r["name"] or ""))
+        for r in found)
+    return bankerloop.attach_vaults(members, spots)
+
+
 _SEAT_QUEST_MEMO = seatquests.Memo()
 _SEAT_QUEST_ITEMS_SQL = (
     "SELECT c.name AS name, ii.itemEntry AS entry "
@@ -38050,6 +38088,12 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
     family = set(family_names)
     guild_members, masters = guildwork.members_from_rows(rows, family_names)
     role_of = {m.name: m.role for m in guild_members}
+    # THE GUILD BANKERS (#2660) sit in no lineup group; they are given their
+    # own role by name, so no class step is ever planned for them.
+    banker_names = raidteams.banker_names()
+    role_of.update({
+        str(r["name"]): guildjobs.BANKER for r in rows
+        if str(r["name"]) in banker_names and str(r["name"]) not in family})
     skills, known = _guild_skills_and_spells(skill_rows, spell_rows)
     carried = guildjobs.carried_from_rows(item_rows)
     quest_state = _class_quest_state(log_rows, done_rows)
