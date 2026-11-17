@@ -157,6 +157,21 @@ class TheTownErrandDoesNotRetryAStoneOnCooldownEveryPass(unittest.TestCase):
         ask, _ = self.helper([newest("Zork", detail="character is moving", age=5)])
         self.assertEqual(ask(["Zork"], TOWN_ERRAND), set())
 
+    def test_the_regroup_holds_a_member_refused_as_moving_for_a_few_minutes(self):
+        moving = "character is moving"
+        rows = [newest("Zork", detail=moving, age=60)]
+        ask, _ = self.helper(rows)
+        seconds = guildrun.REGROUP_MOVING_BACKOFF_SECONDS
+        self.assertEqual(ask(["Zork"], TOWN_ERRAND, seconds), {"Zork"})
+        late = [newest("Zork", detail=moving, age=seconds)]
+        ask, _ = self.helper(late)
+        self.assertEqual(ask(["Zork"], TOWN_ERRAND, seconds), set())
+
+    def test_the_regroup_passes_the_moving_back_off(self):
+        regroup = BRIDGE[BRIDGE.index("async def _town_errand_regroup") :]
+        regroup = regroup[: regroup.index("async def _town_errand_aim")]
+        self.assertIn("guildrun.REGROUP_MOVING_BACKOFF_SECONDS", regroup)
+
     def test_nobody_asked_for_reads_nothing(self):
         ask, calls = self.helper([])
         self.assertEqual(ask([], TOWN_ERRAND), set())

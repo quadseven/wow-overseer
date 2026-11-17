@@ -23228,7 +23228,10 @@ class Bridge(discord.Client):
         far = townerrand.to_hearth(state.hub, positions, names, reads["hearthed"],
                                    reads["binds"])
         backed = globals().get("_hearth_backed_off_names")
-        held = (await asyncio.to_thread(backed, far, TOWN_ERRAND_SOURCE)
+        # A member the module just refused as moving is walking with the family
+        # and is left alone a few minutes rather than asked every pass (#2895).
+        held = (await asyncio.to_thread(backed, far, TOWN_ERRAND_SOURCE,
+                                        guildrun.REGROUP_MOVING_BACKOFF_SECONDS)
                 if backed and far else ())
         far = [n for n in far if n not in held]
         if not far:
@@ -32332,7 +32335,7 @@ _GUILD_CLASS_WALKS = (
     "AND target_name IN (%s) GROUP BY target_name")
 
 
-def _hearth_backed_off_names(names, source: str) -> set:
+def _hearth_backed_off_names(names, source: str, moving_seconds: int = 0) -> set:
     """The members of `names` whose newest hearth row for `source` was refused
     for the stone's cooldown (or left unchanged) inside the back-off window, so
     the pass that wrote it must not write another yet (#2183). The guild run
@@ -32347,7 +32350,7 @@ def _hearth_backed_off_names(names, source: str) -> set:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(_GUILD_HEARTH_NEWEST % ("%s", ",".join(["%s"] * len(names))),
                         (source, *names))
-            return guildrun.hearth_backed_off(list(cur.fetchall()))
+            return guildrun.hearth_backed_off(list(cur.fetchall()), moving_seconds)
     except pymysql.err.MySQLError as exc:
         log.warning("hearth back-off: the newest hearth rows could not be read "
                     "(%s); nobody is held back", exc.args[:1])
