@@ -14,6 +14,9 @@ DEFAULT_FIX_PIN_ENV = {
     "quadseven/mod-overseer": "OVERSEER_PIN_OVERSEER",
     "quadseven/mod-dungeon-clear": "OVERSEER_PIN_DUNGEON_CLEAR",
     "quadseven/mod-playerbots": "OVERSEER_PIN_PLAYERBOTS",
+    # The bridge's own repo: not a worldserver env var but the commit baked into
+    # the bridge image (its Env), read per arm from the image itself.
+    "quadseven/wow-overseer": "OVERSEER_COMMIT",
 }
 
 

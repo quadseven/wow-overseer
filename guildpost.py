@@ -33,6 +33,21 @@ import mailrun
 
 LOG_PREFIX = "guild post:"
 WALK_SOURCE = "guildpostwalk"
+# THE HOLD IS REMEMBERED (#2764). The module refuses a walk "character is held
+# by another verb" while another verb holds the character; the post pass
+# forgot the refusal at once and asked again every pass (37 refusals of one
+# member in a day, no walk served). The hold lapses in about 11.5 minutes
+# (classquest.HELD_BACKOFF_MINUTES is 12), so a held receiver is left alone
+# that long.
+HELD_WORDS = "character is held by another verb"
+HELD_BACKOFF_SECONDS = 12 * 60
+
+
+def is_held(said) -> bool:
+    """Whether the module's answer to a mailbox walk was the hold."""
+    return HELD_WORDS in str(said or "")
+
+
 TAKE_SOURCE = "guildposttake"
 
 WALKS_PER_PASS = 3
@@ -168,6 +183,7 @@ def visits(
     free_slots=None,
     roster=frozenset(),
     sitting_out=frozenset(),
+    held=frozenset(),
 ):
     """(visits, notes): which guild members walk to take out their post.
 
@@ -181,6 +197,9 @@ def visits(
     pass, which collects only when the family stands at a mailbox, never
     reaches them. They are walked like any guildmate. A name here that is not
     on the roster changes nothing.
+
+    `held` holds the names whose last walk was refused as held by another
+    verb, lately enough that the hold has not lapsed (is_held); they wait.
     """
     free_slots = free_slots or {}
     online, busy = set(online or ()), set(busy or ())
@@ -199,6 +218,9 @@ def visits(
     for receiver in order:
         if len(out) >= WALKS_PER_PASS:
             notes.append("%s waits: %d walks this pass" % (receiver, WALKS_PER_PASS))
+            continue
+        if receiver in held and receiver in online:
+            notes.append("%s waits: held by another verb" % receiver)
             continue
         visit, note = _visit_for(
             receiver, by_receiver[receiver], online, busy, free_slots

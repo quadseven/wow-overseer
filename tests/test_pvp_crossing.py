@@ -180,6 +180,93 @@ class TheCrossingMove(unittest.TestCase):
         self.assertIsNone(pvpgear.crossing_move(buyer_aim(), None, True, True, True))
 
 
+def home_gate(home=EASTERN_KINGDOMS, **kw):
+    return pvpgear.Crossing(False, kw.pop("dock", True), True, home_map=home, **kw)
+
+
+def return_plan(gate, recent=(), carried=True):
+    """The guild job plan for a buyer on Kalimdor that holds its purchase."""
+    (s,) = seekers([member_row(KALIMDOR)], [wsg_offer()], {"Auren": gate})
+    aims = pvpgear.plan_aims([s])
+    pvp = {
+        n: (a, pvpgear.next_move(a, KALIMDOR, carried, recent, gate))
+        for n, a in aims.items()
+    }
+    return aims, pvp, guildjobs.plan([job_member(KALIMDOR)], pvp=pvp, recent=recent)
+
+
+class TheReturn(unittest.TestCase):
+    """#1649: after the purchase the buyer crosses back to its family's
+    continent, through the same lone crossing, and never starts a trip the dock
+    cannot serve."""
+
+    def test_a_buyer_that_made_the_purchase_is_sent_back_across(self):
+        aim = buyer_aim()
+        move = pvpgear.next_move(aim, KALIMDOR, True, (), home_gate())
+        self.assertEqual(pvpgear.CROSS, move.kind)
+        self.assertEqual(EASTERN_KINGDOMS, move.to_map)
+        self.assertIn("Eastern Kingdoms", move.said)
+        self.assertTrue(move.keeps)
+
+    def test_the_plan_writes_one_crossing_row_home_and_no_walk(self):
+        _, _, plan = return_plan(home_gate())
+        (step,) = plan.steps
+        self.assertIsNone(step.walk)
+        self.assertEqual("Eastern Kingdoms", step.goal)
+        self.assertEqual(
+            [("job", "cross-to-map map:0", "guildjobs:pvp-cross:Auren")],
+            [(r.kind, r.command, r.source) for r in step.rows],
+        )
+
+    def test_no_return_trip_starts_when_the_crossing_cannot_be_reached(self):
+        for gate in (home_gate(dock=False), home_gate(cooling=True)):
+            with self.subTest(gate=gate):
+                aims, pvp, plan = return_plan(gate)
+                self.assertEqual(pvpgear.CARRIED, pvp["Auren"][1].kind)
+                self.assertEqual((), tuple(r for s in plan.steps for r in s.rows))
+
+    def test_a_return_under_way_is_not_asked_again_and_holds(self):
+        young = cross_row(5, action=pvpgear.CROSS_ACTION)
+        _, pvp, plan = return_plan(home_gate(), recent=(young,))
+        self.assertEqual([], cross_steps(plan))
+        step, _doing, held = guildjobs._pvp_first(
+            job_member(KALIMDOR), pvp["Auren"], (young,), 0.0
+        )
+        self.assertIsNone(step)
+        self.assertTrue(held)
+
+    def test_no_return_without_a_known_other_home_or_a_purchase(self):
+        aim = buyer_aim()
+        for gate in (None, home_gate(home=None), home_gate(home=KALIMDOR)):
+            with self.subTest(gate=gate):
+                move = pvpgear.next_move(aim, KALIMDOR, True, (), gate)
+                self.assertEqual(pvpgear.CARRIED, move.kind)
+        # Nothing bought yet: the buyer buys where it stands, as before.
+        move = pvpgear.next_move(aim, KALIMDOR, False, (), home_gate())
+        self.assertEqual(pvpgear.BUY, move.kind)
+
+    def test_off_the_two_classic_continents_it_does_not_return(self):
+        for where in (OUTLAND, None):
+            move = pvpgear.next_move(buyer_aim(), where, True, (), home_gate())
+            self.assertEqual(pvpgear.CARRIED, move.kind)
+
+    def test_home_is_where_the_rest_of_the_family_stands(self):
+        rows = [
+            {"name": "Auren", "snapshot_map": KALIMDOR},
+            {"name": "Lead", "snapshot_map": EASTERN_KINGDOMS},
+            {"name": "Mend", "snapshot_map": EASTERN_KINGDOMS},
+            {"name": "Zed", "snapshot_map": KALIMDOR},
+            {"name": "Gone", "snapshot_map": None},
+            {"name": "Deep", "snapshot_map": 36},
+        ]
+        self.assertEqual(EASTERN_KINGDOMS, pvpgear.home_continent("Auren", rows))
+        self.assertIsNone(pvpgear.home_continent("Auren", rows[:1]))
+        self.assertIsNone(pvpgear.home_continent("Auren", []))
+        # A tie goes to the lower map id.
+        tie = [rows[1], rows[3]]
+        self.assertEqual(EASTERN_KINGDOMS, pvpgear.home_continent("Auren", tie))
+
+
 class TheGate(unittest.TestCase):
     """The facts the bridge reads into each buyer's Crossing."""
 
@@ -345,6 +432,7 @@ class NaturalOnly(unittest.TestCase):
             source_utils.function_source(f)
             for f in (
                 pvpgear.crossing_move,
+                pvpgear.return_move,
                 pvpgear._buy_move,
                 pvpgear.dock_reachable,
                 pvpgear.crossing_under_way,
@@ -384,6 +472,7 @@ class TheWiring(unittest.TestCase):
             "guildjobs.CROSS_ACTIONS",
             "guildjobs.pvp_walk_cooldown(name, recent) == 0",
             "pvpgear.family_rows_for(",
+            "home_map=pvpgear.home_continent(name, family)",
             "cooling=guildjobs.crossing_cooling(name, recent) and not under_way",
         ):
             with self.subTest(fact=fact):

@@ -71,6 +71,6 @@ observe:
       SELECT id, outcome FROM overseer_dungeon_run
       WHERE map_id = 230 AND started_at >= @t0 AND outcome = 'stalled'
     expect: {rows: 0}
-  - name: no-refused-cast-storm
+  - name: no-log-line-refusing-grog-redemption
     role: check
     log: {pattern: "Grog.*(cannot|refused).*(Redemption|resurrect)", expect: {count: 0}}

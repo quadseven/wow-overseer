@@ -531,6 +531,27 @@ def parse_order(text: str) -> str | None:
     return None
 
 
+_MEMBER_ORDER = re.compile(
+    r"^job\s+(?P<mode>.+?)\s+for\s+(?P<member>[a-z]{2,12})$", re.IGNORECASE
+)
+
+
+def parse_member_order(text: str):
+    """(mode, member) for "job <mode> for <member>", else None (#2407).
+
+    The member is returned as typed (its case kept); the bridge matches it to the roster. An
+    order whose mode is not one this file knows is not an order.
+    """
+    if not text:
+        return None
+    cleaned = " ".join(text.strip().split())
+    found = _MEMBER_ORDER.match(cleaned)
+    if not found:
+        return None
+    mode = resolve(found.group("mode").lower())
+    return (mode, found.group("member")) if mode else None
+
+
 # What each wired mode does, said for a person reading the site (#567).
 # DRIVES above names the code that does it, for the log and for maintainers;
 # these say the same facts in a player's words, with no file, function, column

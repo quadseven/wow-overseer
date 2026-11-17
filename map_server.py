@@ -240,6 +240,11 @@ _CHAT_CALLS = threading.BoundedSemaphore(CHAT_MAX_CALLS)
 # ordered over HTTP at all (the Discord door has its own allow-list of users).
 _DIRECTOR_TOKEN = os.environ.get("OVERSEER_DIRECTOR_TOKEN", "").strip()
 
+# The shared secret the clip cutter sends as a bearer header on the pending read
+# and the three cutter POSTs. Unset, those four routes refuse (503): they fail
+# closed. The value comes from the deployment's secret store, never the repo.
+CUTTER_TOKEN = os.environ.get("CUTTER_TOKEN", "").strip()
+
 # What the inner voice is told the character IS. panel.py has its own copy
 # for the panel's own labels; importing it here would couple the prompt's
 # wording to the panel's rendering choices.
@@ -4273,12 +4278,19 @@ def _fetch_agenda(names=None) -> dict:
             lambda sql, params: rd.rows(sql, params, what="creature names"),
             [r.get("travel_npc") for r in roster_rows],
         )
+        # The campaign queue's pending rows (#2796): the banner reads the
+        # campaign's state off its own family's, so a queued entry waiting to
+        # start is not said as a finished campaign. A realm whose bridge has
+        # not made the table reads [] and the leader's counter decides alone.
+        queue_rows = rd.rows(campaignqueue.SELECT_PENDING_SQL, (),
+                             what=campaignqueue.TABLE)
         db_now = rd.db_now()
     return {"roster_rows": roster_rows, "run_rows": run_rows,
             "instance_rows": instance_rows, "goal_rows": goal_rows,
             "trade_rows": trade_rows, "event_rows": event_rows,
             "quest_titles": quest_titles, "creatures": creatures,
-            "standin_rows": standin_rows, "now": db_now}
+            "standin_rows": standin_rows, "queue_rows": queue_rows,
+            "now": db_now}
 
 
 def _fetch_streams() -> list:
@@ -4498,6 +4510,23 @@ def _clip_path(name: str) -> str:
     return family.broadcast_path(name) if family.is_streamed(name) else ""
 
 
+def _clip_view_read(name: str, path: str = "") -> str:
+    """The liveness read of a tier's stream path for the suppression log line:
+    how long ago the cutter last polled it and how old its newest segment is.
+    A tier with no streamed path is read on the path it would broadcast on."""
+    path = path or family.broadcast_path(name)
+    if not path:
+        return "no broadcast path"
+    now = time.time()
+    with _VIEW_SEEN_LOCK:
+        seen = _VIEW_SEEN.get(path)
+        segment = _VIEW_SEGMENT.get(path)
+    return "poll %s, segment %s" % (
+        "never" if seen is None else "%ds ago" % (now - seen),
+        "unknown" if segment is None else "%ds old" % (now - segment),
+    )
+
+
 def _clip_who() -> tuple:
     """(roster names across the families, family guild names, the families)."""
     families = FAMILIES.families()
@@ -4689,6 +4718,8 @@ def scan_clips() -> dict:
             late_horizon=horizon,
         )
         for row in planned:
+            if row["state"] == "no_view":
+                log.info("%s", clipledger.suppression_line(row, _clip_view_read))
             cur.execute(_CLIP_INSERT, (
                 row["kind"], row["character"], row["stream_path"],
                 row["event_key"], row["event_at"], row["window_start"],
@@ -4719,21 +4750,32 @@ def _clip_cursor():
 def sweep_clips() -> dict:
     """The sweeps that hold whether or not any stream is live: a cutting row
     whose cutter went silent fails, and an expired row loses its file. Without
-    a clip folder nothing is deleted and no row is marked."""
+    a clip folder nothing is deleted and no row is marked. The partial uploads
+    a dead process left are removed first: they need no database, so a
+    database that is down does not keep them."""
+    root = _clips_root()
+    partial = clipcutter.sweep_partials(root) if root else 0
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT NOW() AS now")
         timed_out = clipledger.time_out(cur, now=cur.fetchone()["now"])
-        root = _clips_root()
         return {"timed_out": timed_out,
-                "deleted": clipledger.delete_expired(cur, root) if root else 0}
+                "deleted": clipledger.delete_expired(cur, root) if root else 0,
+                "partial": partial}
 
 
 def clip_tick() -> dict:
-    """One timer pass: the scan, then the sweeps, even when the scan fails."""
+    """One timer pass: the scan, then the sweeps, even when the scan fails.
+
+    A pass that planned, expired, timed out or removed anything logs one line
+    with its counts; a pass that did nothing logs nothing."""
+    scan = None
     try:
-        return scan_clips()
+        scan = scan_clips()
+        return scan
     finally:
-        sweep_clips()
+        line = clipledger.tick_line(scan, sweep_clips())
+        if line:
+            log.info(line)
 
 
 def start_clip_scanner(every: float = CLIP_SCAN_SECONDS, scan=None,
@@ -4972,6 +5014,12 @@ MAX_FRAMES = 4 * stream.MAX_CHANNELS
 # next poll.
 _VIEW_SEEN: dict = {}
 _VIEW_SEEN_LOCK = threading.Lock()
+# When the newest segment of each stream path's recording was written, epoch
+# seconds, for the paths whose last poll carried an age (the poll time minus
+# that age). Guarded by _VIEW_SEEN_LOCK and never holds a path _VIEW_SEEN does
+# not: a poll that names a path with no age removes it, so a view never keeps
+# a segment clock its capture side stopped reporting.
+_VIEW_SEGMENT: dict = {}
 
 
 # Where the page reaches the model-viewer cache. Also the value of the
@@ -6432,11 +6480,15 @@ class Handler(BaseHTTPRequestHandler):
             frame_at = {n: r.get("frame_at") for n, r in _FRAMES.items()}
         with _VIEW_SEEN_LOCK:
             seen = dict(_VIEW_SEEN)
+            segments = dict(_VIEW_SEGMENT)
         recorder_at = {t["name"]: seen[family.broadcast_path(t["name"])]
                      for t in wall["tiles"]
                      if family.broadcast_path(t["name"]) in seen}
+        segment_at = {t["name"]: segments[family.broadcast_path(t["name"])]
+                      for t in wall["tiles"]
+                      if family.broadcast_path(t["name"]) in segments}
         payload["tiles"] = eye.build_tiles(
-            wall["tiles"], frame_at, recorder_at, time.time())
+            wall["tiles"], frame_at, recorder_at, time.time(), segment_at)
         return 200, payload
 
     @_get_route("wealth query failed")
@@ -7277,12 +7329,14 @@ class Handler(BaseHTTPRequestHandler):
         return 200, state
 
     def _spectate_post(self) -> None:
-        """POST /api/spectate {"run": <id>} - point the camera at a live group.
+        """POST /api/spectate - point the camera, or stop it.
 
-        Behind the operator switch (OPERATOR_ROUTES), not a token: no secret
-        reaches a browser. The only thing read from the body is an integer, and
-        director.spectate_spec turns it into `run <id>`, so no text from the
-        request reaches the grammar or SQL. A different group inside the dwell
+        The body carries exactly one of {"run": <id>}, {"character": "<name>"}
+        or {"stop": true}. Behind the operator switch (OPERATOR_ROUTES), not a
+        token: no secret reaches a browser. Each is turned into an order by
+        director (an integer, a name read through parse_watch's grammar, or
+        `off`), so no free text from the request reaches SQL except as that
+        bound, checked value. A different target, or a stop, inside the dwell
         is a 409 with the wait. Read-then-write, not a transaction: two clicks
         in the same instant both pass, and the later write wins, which is the
         same outcome the dwell gives a click one second later.
@@ -7290,27 +7344,74 @@ class Handler(BaseHTTPRequestHandler):
         request = self._read_json_body()
         if request is None:
             return
-        spec = director.spectate_spec(request.get("run"))
+        given = [k for k in ("run", "character", "stop") if k in request]
+        if len(given) != 1:
+            self._send(400, "application/json", json.dumps(
+                {"error": "send exactly one of run, character or stop"}).encode())
+            return
+        if given[0] == "run":
+            spec = director.spectate_spec(request.get("run"))
+        elif given[0] == "character":
+            spec = director.spectate_character(request.get("character"))
+        elif request.get("stop") is True:
+            spec = director.spectate_stop()
+        else:
+            spec = director.SpecError("stop must be true")
         if isinstance(spec, director.SpecError):
             self._send(400, "application/json", json.dumps({"error": spec.why}).encode())
             return
         try:
-            verdict = director.spectate_verdict(_read_watch_order(), spec.text())
+            current = _read_watch_order()
+            verdict = director.spectate_verdict(current, spec.text())
             if not verdict.allowed:
                 self._send(409, "application/json", json.dumps(
                     {"error": verdict.reason, "switch_in": verdict.switch_in}).encode())
                 return
+            if spec.kind == "off":
+                if director.mandate_active(current):
+                    with _connect() as conn, conn.cursor() as cur:
+                        cur.execute(director.CLEAR_SQL)
+                self._send(200, "application/json", json.dumps(
+                    {"ok": True, "stopped": True, "spec": "off"}).encode())
+                return
             with _connect() as conn, conn.cursor() as cur:
                 cur.execute(director.SET_SQL,
                             (spec.text(), "web:spectate", director.MANDATE_TTL))
-            self._send(200, "application/json", json.dumps({
-                "ok": True, "run": int(spec.arg), "spec": spec.text(),
+            answer = {
+                "ok": True, "spec": spec.text(),
                 "expires_in": director.MANDATE_TTL,
                 "stream": family.broadcast_url(director.WATCHER_NAME) or "",
-            }).encode())
+            }
+            if spec.kind == "run":
+                answer["run"] = int(spec.arg)
+            else:
+                answer["character"] = spec.arg
+            self._send(200, "application/json", json.dumps(answer).encode())
         except Exception:
             log.exception("spectate order failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
+
+    @_get_route("live groups query failed", default=str)
+    def _live_now(_query: dict, ctx) -> tuple[int, director.LiveNow]:
+        """GET /api/live - every active dungeon run, raid and battleground.
+
+        Read-only. Dungeons are the guild coordinator's runs that are inside;
+        raids and battlegrounds are groups of two or more in the fresh
+        overseer_snapshot on those maps (the same 60 second freshness the
+        bridge uses). Each group carries the order that jumps the Watcher in,
+        which the page posts to /api/spectate. A world without the tables
+        answers empty lists.
+        """
+        rd = ctx.read
+        spots = [director.spot_from_row(r) for r in rd.rows(
+            "SELECT name, map_id, instance_id, pos_x, pos_y, pos_z, in_combat, "
+            "group_leader FROM overseer_snapshot "
+            "WHERE updated_at > NOW() - INTERVAL 60 SECOND",
+            what="live snapshot")]
+        runs = guildrun.page(guildrun.recent(rd, n=GUILD_RUNS_LIMIT))["active"]
+        seats = [(r["name"], r["role"]) for r in rd.rows(
+            "SELECT name, role FROM overseer_raid_seat", what="live raid seats")]
+        return 200, director.live_now(spots, runs, seats, places.map_name)
 
     def _read_json_body(self) -> dict | None:
         """The POST body as a dict, or None after sending the error itself."""
@@ -7469,21 +7570,47 @@ class Handler(BaseHTTPRequestHandler):
                              what="the clip shelf")
         return 200, clipledger.shelf(rows)
 
+    def _cutter_refused(self) -> bool:
+        """True after answering a cutter call that lacks the cutter token."""
+        refusal = clipcutter.check_token(self.headers.get("Authorization"), CUTTER_TOKEN)
+        if refusal is None:
+            return False
+        self._send(refusal[0], "application/json", json.dumps(refusal[1]).encode())
+        return True
+
+    def _clips_pending(self, query: dict) -> None:
+        if not self._cutter_refused():
+            self._clips_pending_read(query)
+
     @_get_route("pending clips query failed")
-    def _clips_pending(query: dict, ctx) -> tuple[int, dict]:
-        """GET /api/clips/pending?paths=a,b - the pending rows on those stream paths,
-        oldest first, at most 10, with the database clock."""
+    def _clips_pending_read(query: dict, ctx) -> tuple[int, dict]:
+        """GET /api/clips/pending?paths=a,b&ages=a:3 - the pending rows on those stream
+        paths, oldest first, at most 10, with the database clock.
+
+        The optional ages=a:3,b:41 gives, per path, the age in seconds of the
+        newest segment its recorder has written; the eye read's tiles use it as
+        that view's frame clock. A bad age refuses the poll and stamps nothing."""
         if not _clips_root():
             return 503, {"error": clipcutter.NO_DIR}
         raw = query.get("paths", [""])[0]
         code, payload = clipcutter.pending(ctx.read, raw)
         if code == 200:
+            paths = clipcutter.paths_of(raw)
+            ages, refusal = clipcutter.ages_of(query.get("ages", [""])[0], paths)
+            if refusal:
+                return refusal
             now = time.time()
             with _VIEW_SEEN_LOCK:
-                for path in clipcutter.paths_of(raw):
+                for path in paths:
                     _VIEW_SEEN[path] = now
+                    if path in ages:
+                        _VIEW_SEGMENT[path] = now - ages[path]
+                    else:
+                        _VIEW_SEGMENT.pop(path, None)
                 while len(_VIEW_SEEN) > MAX_FRAMES:
-                    del _VIEW_SEEN[min(_VIEW_SEEN, key=_VIEW_SEEN.get)]
+                    oldest = min(_VIEW_SEEN, key=_VIEW_SEEN.get)
+                    del _VIEW_SEEN[oldest]
+                    _VIEW_SEGMENT.pop(oldest, None)
         return code, payload
 
     def _cutter_call(self, call, late: bool = False) -> None:
@@ -7491,6 +7618,8 @@ class Handler(BaseHTTPRequestHandler):
         With `late`, call gets a connect() to open itself instead of a cursor.
         No clip folder is a 503 with a sentence; a failed write is the same 503
         as every other route's."""
+        if self._cutter_refused():
+            return
         query = parse_qs(urlsplit(self.path).query)
         root = _clips_root()
         if not root:
@@ -7523,7 +7652,8 @@ class Handler(BaseHTTPRequestHandler):
             length = -1
         self._cutter_call(lambda connect, q, root: clipcutter.upload(
             connect, q.get("id", [""])[0], self.rfile, length, root,
-            q.get("note", [""])[0], bound=self.connection.settimeout),
+            q.get("note", [""])[0], bound=self.connection.settimeout,
+            stream_path=q.get("path", [""])[0]),
             late=True)
 
     def _clips_result(self) -> None:
@@ -7577,6 +7707,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/watch": _watch_state,
         "/api/director": _director_state,
         "/api/spectate": _spectate_state,
+        "/api/live": _live_now,
         "/": _index,
         "/index.html": _index,
         "/shapes.json": _shapes_file,
@@ -7596,8 +7727,8 @@ class Handler(BaseHTTPRequestHandler):
         "/api/director": _director_post,
         "/api/spectate": _spectate_post,
         "/api/frame": _frame_post,
-        # The cutter routes trust what /api/frame trusts: the capture agent's
-        # network path, with no token and no new credential.
+        # The cutter routes need the shared CUTTER_TOKEN as a bearer header
+        # (_cutter_refused); with it unset they refuse.
         "/api/clips/claim": _clips_claim,
         "/api/clips/file": _clips_file,
         "/api/clips/result": _clips_result,

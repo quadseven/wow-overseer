@@ -206,12 +206,9 @@ class AHubTheHeadsStoneReaches(unittest.TestCase):
         )
         self.assertEqual(2151.7, pick["x"])
 
-    def test_the_bridge_reads_the_stone_before_it_chooses(self):
-        self.assertIn("hearth_reaches=leader in casts", BRIDGE)
-        self.assertLess(
-            BRIDGE.index("casts = townerrand.to_hearth("),
-            BRIDGE.index("hearth_reaches=leader in casts"),
-        )
+    # That the bridge reads the stone before it chooses is driven, not pinned
+    # on source text (#2333): tests/test_townerrand.py, the `far_bind_start`
+    # tests of TheAdapter, run the errand start against the real reader.
 
 
 class TheBridgeUsesIt(unittest.TestCase):

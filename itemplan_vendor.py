@@ -23,10 +23,10 @@ when every one of these holds:
     been released: its decision key is in the caller's `released` set.
     An unreleased confirm sale is shown by the shadow and waits.
 
-NOT A BAG, NOT A TOOL. The plan can route a bag (rule R2, its worn-bag test
-is vacuous in the shadow) or a fishing pole (rule R8, not in
-`disposition.TOOL_TRADES`) to SELL_VENDOR. The route holds both back by
-item class, not by name.
+NOT A BAG, NOT A TOOL. The plan can route a spare bag (rule R2: one no
+bigger than the bags the member wears, #2274) or, in a family where nobody
+fishes, a fishing pole (rule R8, not in `disposition.TOOL_TRADES`) to
+SELL_VENDOR. The route holds both back by item class, not by name.
 
 NOT A FALLBACK. `Decision.options` lists the routes the plan weighed, best
 first. When SELL_VENDOR was chosen only because a better route had no

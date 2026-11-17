@@ -134,7 +134,15 @@ class Reader:
                     gap.code,
                 )
         log.info("%s unavailable; using an empty read", what or "a read")
+        self.unavailable().append(what or "a read")
         return []
+
+    def unavailable(self) -> list:
+        """The `what` of each read that fell back to an empty answer, in the
+        order it happened: a caller that returns a verdict built from many
+        reads says which of them were not read (an empty answer from a table
+        the realm lacks is not an answer that nothing is wrong)."""
+        return self.__dict__.setdefault("_unavailable", [])
 
     def must(self, sql: str, params: Any = None) -> list:
         """The statement's rows. Every error raises: a missing table or column

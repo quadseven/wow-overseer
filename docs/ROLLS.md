@@ -131,16 +131,46 @@ before opening the PR.
 3. **Read both digests from the build run's push lines**, each under its own `The push refers to repository
    [ghcr.io/quadseven/<image>]` line: `ac-playerbots-worldserver` and `ac-playerbots-db-import`. A digest read
    from the wrong repository line is the classic mistake.
-4. **Prove the binary** before pinning: run a throwaway pod on the worldserver digest in `$NAMESPACE` (same pull
-   secret as the worldserver deployment, amd64 node selector) that greps
-   `/azerothcore/env/dist/bin/worldserver` for a string or symbol unique to each change (a function name or log
-   text from the diff). Every string must be found. A build that lacks the symbol is a stale layer: do not pin.
+4. **Prove the binary** before pinning: search `/azerothcore/env/dist/bin/worldserver` in the new worldserver
+   digest for a string or symbol unique to each change (a function name or log text from the diff). Every
+   string must be found. A build that lacks the symbol is a stale layer: do not pin. There are two routes to
+   the binary, and either one is a binary proof:
+   - **Pod route.** Run a throwaway pod on the worldserver digest in `$NAMESPACE` (same pull secret as the
+     worldserver deployment, amd64 node selector) that greps the binary. It needs write access to the cluster.
+   - **Registry stream route.** Use this one when the session has no write access to the cluster (a read-only
+     identity cannot start a pod); it needs no cluster access at all. The image is public, so the script takes
+     an anonymous pull token, streams the layers from the registry newest first, reads the binary out of the
+     stream and counts each needle. Nothing is saved:
+
+     ```
+     python3 .github/scripts/binary_proof.py \
+       ghcr.io/quadseven/ac-playerbots-worldserver@sha256:<worldserver digest> \
+       --needle '<log or query text from change 1>' --needle '<symbol from change 2>'
+     ```
+
+     It prints the hit count per needle and exits 1 when a `--needle` has no hit (2 when the image could not
+     be read, which is no verdict). `--optional '<text>'` counts a needle without failing on it.
+
+   **A carried commit that adds no string or symbol** (data rows only, or a changed constant) leaves nothing to
+   search for on either route. Its proof is both of these together, never the build log alone: the build
+   log's clone line for the module shows the pinned SHA, AND a needle from a commit before it and a needle
+   from a commit after it in the same history are both found in the binary. When it is the newest commit of
+   the module and nothing follows it, say so in the roll body and name the SQL or data read that will prove it
+   after the roll.
 5. **Pin the pair** in a second infra PR: in `$MANIFESTS_DIR/kustomization.yaml` set the worldserver AND db-import
    digests together (the worldserver comment block stays 3 lines), and move the banner
    (`$MANIFESTS_DIR/overseer-pin.yaml`) and `deployed_dev` in the drift entries to the new
    SHAs. Pinning one image without the
    other is a binary asking for a table its schema step never created; the drift check fails on it. Run the
    drift check again, open the PR in Chief format, then merge it as soon as the merge bar holds (section 2).
+   The roll body carries the proof route used, on one line that starts `Binary proof:`, so a reader can tell a
+   binary proof from a build-log proof:
+
+   ```
+   Binary proof: <pod | registry stream | build log only>; found: <needle> (<count>), ...; no needle: <commit and why>
+   ```
+
+   `build log only` is not a binary proof. A roll that carries it says why neither route could be taken.
 6. Watch `kubectl -n "$NAMESPACE" rollout status deploy/worldserver` and confirm the running image equals the new
    worldserver digest. The db-import job runs the module SQL first.
 

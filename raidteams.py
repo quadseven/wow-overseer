@@ -8,7 +8,8 @@ built for Ragnaros instead: per guild, 8 tanks (Garr's 8 adds), 11 healers and
 21 damage, a fire resistance source (a paladin aura or a shaman totem, both
 party-only in 3.3.5) in every group, group 1 the family, groups 2 to 8 named
 from B to H. Missing roles are recruited at level 1 and the surplus leaves;
-nobody respecs. The 21 warlock summoners stay summoners.
+nobody respecs, with one exception (RESPEC_HEALERS below). The 21 warlock
+summoners stay summoners.
 
 NAMES. Every seat names the character as the operator named it and, until the
 rename lands, the name it has now (`was`), so the lineup holds before and
@@ -66,16 +67,16 @@ GROUPS = {
         ),
         (  # group 2
             Seat("Brug", "Aalall", 6, "Blood", "tank", "Draenei", False),
-            Seat("Bonk", "Goraraa", 2, "Retribution", "dps", "Draenei", True),
+            Seat("Bonk", "Goraraa", 2, "Holy", "healer", "Draenei", True),
             Seat("Bunga", "Barem", 5, "Holy", "healer", "Draenei", False),
             Seat("Brakk", "Auren", 7, "Enhancement", "dps", "Draenei", False),
-            Seat("Bluk", "Aurehun", 7, "Enhancement", "dps", "Draenei", False),
+            Seat("Bluk", "Aurehun", 7, "Restoration", "healer", "Draenei", False),
         ),
         (  # group 3
             Seat("Crag", "Annian", 1, "Protection", "tank", "Night Elf", False),
-            Seat("Clobba", "Asvil", 2, "Retribution", "dps", "Draenei", True),
+            Seat("Clobba", "Asvil", 2, "Holy", "healer", "Draenei", True),
             Seat("Clunk", "Asparano", 5, "Holy", "healer", "Human", False),
-            Seat("Cronk", "Ganras", 7, "Enhancement", "dps", "Draenei", False),
+            Seat("Cronk", "Ganras", 7, "Restoration", "healer", "Draenei", False),
             Seat("Chukk", "Achevar", 3, "Survival", "dps", "Draenei", False),
         ),
         (  # group 4
@@ -87,7 +88,7 @@ GROUPS = {
         ),
         (  # group 5
             Seat("Erg", "Eveline", 1, "Protection", "tank", "Human", False),
-            Seat("Embo", "Ahgeathou", 2, "Retribution", "dps", "Dwarf", True),
+            Seat("Embo", "Ahgeathou", 2, "Holy", "healer", "Dwarf", True),
             Seat("Ekka", "Actehuurn", 5, "Holy", "healer", "Draenei", False),
             Seat("Ezzo", "", 7, "Restoration", "healer", "Draenei", False),
             Seat("Rubba", "Baldam", 8, "Fire", "dps", "Human", False),
@@ -101,7 +102,7 @@ GROUPS = {
         ),
         (  # group 7
             Seat("Gronk", "Nangri", 1, "Protection", "tank", "Dwarf", False),
-            Seat("Gakk", "Aeshontu", 2, "Retribution", "dps", "Dwarf", True),
+            Seat("Gakk", "Aeshontu", 2, "Holy", "healer", "Dwarf", True),
             Seat("Gugga", "Aylysae", 5, "Holy", "healer", "Night Elf", False),
             Seat("Glob", "", 11, "Restoration", "healer", "Night Elf", False),
             Seat("Gorrk", "", 9, "Affliction", "dps", "Human", False),
@@ -173,6 +174,32 @@ GROUPS = {
         ),
     ),
 }
+
+# THE ONE RESPEC (owner decision on the Molten Core plan, 2026-11-16). Cave had
+# two healers at level 50 or more against a first-kill quorum of eight, and all
+# six of its level 60 paladins were seated Retribution. These three off-roster
+# paladins take Holy healer seats and change trees by the natural path only: a
+# walk to a class trainer, the reset paid from their own purse (healerrespec.py;
+# the module's `walk-to-trainer talents:` row does the errand). They were picked
+# from the five off-roster level 60 paladins on the continent with a trainer:
+# the weakest worn gear and Strength, so the least Retribution damage is lost.
+# Every other seat keeps the rule above. The owner can overrule on the plan issue.
+#
+# THE SECOND TRANCHE (2026-11-17). The three paladins above read Holy on the
+# realm, which left Cave at five healers at level 50 or more. Three more seats
+# change trees the same way: Bluk and Cronk, level 52 and 50 Enhancement
+# shamans, take Restoration, and Gakk, the level 60 paladin with the weakest
+# worn gear of the three paladins still seated Retribution, takes Holy. Each is
+# the least damage lost: the two shamans are the lowest level and the lowest
+# worn gear on the damage seats, and no seated Retribution paladin is lighter
+# than Gakk. With Ugga (priest) and Glob (druid) that is eight.
+RESPEC_HEALERS = {"Cave": ("Bonk", "Clobba", "Embo", "Gakk", "Bluk", "Cronk")}
+
+
+def respec_to_heal(name: str) -> bool:
+    """Is this approved name one of the six seats changing tree to heal."""
+    return any(name in names for names in RESPEC_HEALERS.values())
+
 
 # SEATS PROMOTED FROM THE GUILD'S UPKEEP (first-kill lineup, 2026-11): they keep
 # the name the operator already gave them, so the letter-per-group naming rule

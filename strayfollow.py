@@ -27,6 +27,10 @@ from dataclasses import dataclass
 STRAY_MINUTES = 30
 RANGE_YARDS = 1000.0
 COOLDOWN_MINUTES = 60
+# A member asked this many times in a day and still grouped is not asked again
+# that day: the leave does not take for it (a battleground or finder group, or
+# a leader the module refuses), and another row would only be refused again.
+MAX_TRIES = 3
 LEAVES_PER_PASS = 3
 
 VERB = "leave-group"
@@ -93,11 +97,15 @@ def track(since: dict, followers, now: float) -> dict:
     return out
 
 
-def plan(followers, since: dict, now: float, recent: dict, guilds) -> tuple:
+def plan(
+    followers, since: dict, now: float, recent: dict, guilds, tries: dict | None = None
+) -> tuple:
     """(rows, lines): a `leave-group` row and one log line for each stray
     member apart for STRAY_MINUTES, out of a fight and off its cooldown
-    (`recent`: name -> minutes since its last leave row), at most
+    (`recent`: name -> minutes since its last leave row) and under MAX_TRIES
+    rows in the last day (`tries`: name -> that count), at most
     LEAVES_PER_PASS, longest apart first."""
+    tries = tries or {}
     due = []
     for f in followers or ():
         why = apart(f)
@@ -109,6 +117,8 @@ def plan(followers, since: dict, now: float, recent: dict, guilds) -> tuple:
         last = recent.get(f.name)
         if last is not None and int(last) < COOLDOWN_MINUTES:
             continue
+        if int(tries.get(f.name, 0)) >= MAX_TRIES:
+            continue
         due.append((first, f, why))
     due.sort(key=lambda d: (d[0], d[1].name))
     rows, lines = [], []
@@ -119,6 +129,27 @@ def plan(followers, since: dict, now: float, recent: dict, guilds) -> tuple:
             % (f.name, f.leader, why, int((now - first) // 60))
         )
     return tuple(rows), tuple(lines)
+
+
+def gave_up(followers, since: dict, now: float, tries: dict, guilds) -> tuple:
+    """One log line for each member plan() has stopped asking: a stray apart
+    for STRAY_MINUTES with MAX_TRIES or more leave rows in the last day, so the
+    cause is read from the log and not guessed from a stream of rows."""
+    lines = []
+    for f in followers or ():
+        why = apart(f)
+        first = since.get(f.name)
+        count = int(tries.get(f.name, 0))
+        if not why or not stranger(f, guilds) or first is None:
+            continue
+        if now - first < STRAY_MINUTES * 60.0 or count < MAX_TRIES:
+            continue
+        lines.append(
+            "%s is still in the group of %s after %d leave-group rows today and is "
+            "not asked again until the count falls: the leave did not take (%s)"
+            % (f.name, f.leader, count, why)
+        )
+    return tuple(lines)
 
 
 def _int(value):

@@ -260,16 +260,86 @@ class RealmDataTests(unittest.TestCase):
 
 
 class TurnInRankTests(unittest.TestCase):
+    def test_neutral_reputation_uses_burninate_when_supplies_are_ready(self):
+        turn = fireplan.iron_member(
+            smith(
+                standing=1750,
+                held={18944: 2, 3575: 4, 3857: 1},
+                rewarded=frozenset({fireplan.WHAT_THE_FLUX}),
+            ),
+            nearby_npcs={fireplan.BURNINATE},
+        )
+        self.assertEqual(turn.pipe.step.kind, fireplan.GRIND)
+        self.assertEqual(turn.errand.kind, "quest")
+        self.assertEqual(turn.errand.command, "take quest:8241")
+
+    def test_an_active_burninate_turnin_is_handed_in(self):
+        turn = fireplan.iron_member(
+            smith(
+                standing=1750,
+                held={18944: 2, 3575: 4, 3857: 1},
+                in_log=frozenset({8241}),
+                rewarded=frozenset({fireplan.WHAT_THE_FLUX}),
+            ),
+            nearby_npcs={fireplan.BURNINATE},
+        )
+        self.assertEqual(turn.errand.command, "turnin quest:8241")
+
+    def test_unreadable_prerequisite_history_withholds_the_errand(self):
+        turn = fireplan.iron_member(
+            smith(
+                standing=1750,
+                held={18944: 2, 3575: 4, 3857: 1},
+                rewarded=None,
+            ),
+            nearby_npcs={fireplan.BURNINATE},
+        )
+        self.assertIsNone(turn.errand)
+        self.assertIn("no readable rewarded-quest history", turn.note)
+
     def test_below_honored_lokhtos_takes_no_turn_in(self):
         # Friendly with the Bracers made: the Helm is Honored, and below Honored
-        # Lokhtos's Favor quests are refused, however much is spare.
+        # Lokhtos's Favor quests are refused; Burninate's ladder owns this step.
         turn = fireplan.iron_member(
-            smith(standing=3000, held={fireplan.BLOOD_OF_THE_MOUNTAIN: 5}),
+            smith(
+                standing=3000,
+                held={fireplan.BLOOD_OF_THE_MOUNTAIN: 5},
+                rewarded=frozenset({fireplan.WHAT_THE_FLUX}),
+            ),
             made={17014},
         )
         self.assertEqual(turn.pipe.step.kind, fireplan.GRIND)
         self.assertIsNone(turn.errand)
-        self.assertIn("below Honored", turn.note)
+        self.assertIn("no complete Burninate turn-in set", turn.note)
+
+    def test_the_flux_quest_is_taken_before_repeatable_turn_ins(self):
+        turn = fireplan.iron_member(
+            smith(standing=1750), nearby_npcs={fireplan.BURNINATE}
+        )
+        self.assertEqual(turn.errand.command, "take quest:7722")
+
+    def test_friendly_to_honored_uses_dark_iron_residue(self):
+        turn = fireplan.iron_member(
+            smith(
+                standing=3000,
+                held={fireplan.DARK_IRON_RESIDUE: 4},
+                rewarded=frozenset({fireplan.WHAT_THE_FLUX}),
+            ),
+            made={17014},
+            nearby_npcs={fireplan.BURNINATE},
+        )
+        self.assertEqual(turn.errand.command, "take quest:7737")
+
+    def test_a_lower_rep_turn_in_walks_to_burninate_before_queueing(self):
+        turn = fireplan.iron_member(
+            smith(
+                standing=1750,
+                held={18944: 2, 3575: 4, 3857: 1},
+                rewarded=frozenset({fireplan.WHAT_THE_FLUX}),
+            )
+        )
+        self.assertIsNone(turn.errand)
+        self.assertEqual(turn.walk_npc, fireplan.BURNINATE)
 
     def test_every_lokhtos_turn_in_needs_honored(self):
         self.assertEqual(fireplan.TURNIN_MIN_STANDING, 9000)
@@ -466,7 +536,9 @@ def _exec(nodes, **ns):
         "pymysql": _PYMYSQL,
         "fireplan": fireplan,
         "log": _Log(),
-        "attunestep": types.SimpleNamespace(LOG_SQL="{holes}{quests}"),
+        "attunestep": types.SimpleNamespace(
+            LOG_SQL="{holes}{quests}", REACH_YARDS=12.0
+        ),
     }
     base.update(ns)
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "bridge.py", "exec"), base)  # noqa: S102
@@ -492,6 +564,7 @@ class BridgeGuardTests(unittest.TestCase):
             "_iron_rows_blocked",
             "_fetch_crafted",
             "_fetch_quest_log",
+            "_fetch_quest_rewarded",
             "_insert_iron_errand",
         ]
         return _exec(
@@ -506,6 +579,7 @@ class BridgeGuardTests(unittest.TestCase):
                 self.assertIsNone(ns["_iron_rows_blocked"](60))
                 self.assertEqual(ns["_fetch_crafted"](["A"], [1]), set())
                 self.assertEqual(ns["_fetch_quest_log"](["A"], [1]), set())
+                self.assertIsNone(ns["_fetch_quest_rewarded"](["A"], [1]))
                 errand = towntrip.Errand("A", "buy", "entry:1 count:1 max:1", "")
                 self.assertEqual(ns["_insert_iron_errand"](errand), 0)
 
@@ -513,6 +587,15 @@ class BridgeGuardTests(unittest.TestCase):
         ns = self._ns(2013)
         with self.assertRaises(_MySQLError):
             ns["_fetch_standing"](["A"], 59)
+        with self.assertRaises(_MySQLError):
+            ns["_fetch_quest_rewarded"](["A"], [1])
+
+    def test_rewarded_quest_read_returns_member_quest_pairs(self):
+        ns = _exec(
+            [_module_fn("_fetch_quest_rewarded")],
+            _connect=lambda: _Conn(_Cursor(rows=[{"name": "A", "quest": 7722}])),
+        )
+        self.assertEqual(ns["_fetch_quest_rewarded"](["A"], [7722]), {("A", 7722)})
 
 
 async def _to_thread(fn, *a, **k):
@@ -526,8 +609,12 @@ def _bridge_pass(
     stocks=LOKHTOS_STOCK,
     boom=False,
     runs=1,
+    rewarded=frozenset(),
+    held=None,
+    nearby=frozenset(),
 ):
     inserted, walks = [], []
+    held = held or {}
 
     def skill_cap(name, skill):
         if boom:
@@ -545,9 +632,17 @@ def _bridge_pass(
         _fetch_standing=lambda names, f: {n: standing for n in names},
         _fetch_crafted=lambda names, entries: set(),
         _fetch_quest_log=lambda names, quests: set(),
-        _fetch_item_counts=lambda pairs: {},
+        _fetch_quest_rewarded=lambda names, quests: {
+            (name, quest) for name in names for quest in rewarded
+        },
+        _fetch_item_counts=lambda pairs: {
+            (name, entry): held[entry] for name, entry in pairs if entry in held
+        },
         _fetch_purses=lambda names: {n: (60, 10**7) for n in names},
         _fetch_free_slots=lambda names: {n: 4 for n in names},
+        _fetch_positions=lambda names: {},
+        _fetch_recipehunt_npc_spawns=lambda entries: {},
+        _nearby_npc_spawns=lambda pos, spawns, reach: nearby,
         _iron_rows_blocked=lambda minutes: blocked,
         _fetch_town=lambda name: towntrip.Town(stocks=stocks),
         _insert_iron_errand=lambda e: inserted.append(e) or 1,
@@ -560,7 +655,11 @@ def _bridge_pass(
     async def walk(needs, cohort=None):
         walks.append(list(needs))
 
+    async def claim(*args, **kwargs):
+        walks.append(("npc", *args[:3]))
+
     me._walk_for_reagents = walk
+    me._claim_town_slot = claim
     old = fireplan.os.environ.get("DARK_IRON_ENABLED")
     fireplan.os.environ["DARK_IRON_ENABLED"] = enabled
     try:
@@ -599,6 +698,39 @@ class BridgePassTests(unittest.TestCase):
         self.assertEqual(queued, 1)
         self.assertEqual(inserted[0].command, "entry:17051 count:1 max:70000")
         self.assertEqual(walks, [])
+
+    def test_burninate_turnin_is_written_only_in_reach(self):
+        materials = {
+            fireplan.INCENDOSAUR_SCALE: 2,
+            fireplan.IRON_BAR: 4,
+            fireplan.COAL: 1,
+        }
+        queued, inserted, walks, _l = _bridge_pass(
+            standing=1750,
+            rewarded={fireplan.WHAT_THE_FLUX},
+            held=materials,
+            nearby={fireplan.BURNINATE},
+        )
+        self.assertEqual(queued, 1)
+        self.assertEqual(inserted[0].command, "take quest:8241")
+        self.assertEqual(walks, [])
+
+    def test_burninate_walk_uses_the_family_town_slot(self):
+        materials = {
+            fireplan.INCENDOSAUR_SCALE: 2,
+            fireplan.IRON_BAR: 4,
+            fireplan.COAL: 1,
+        }
+        queued, inserted, walks, _l = _bridge_pass(
+            standing=1750,
+            rewarded={fireplan.WHAT_THE_FLUX},
+            held=materials,
+        )
+        self.assertEqual((queued, inserted), (0, []))
+        self.assertEqual(
+            walks,
+            [("npc", fireplan.TOWN_CLAIMANT, "Smith", str(fireplan.BURNINATE))],
+        )
 
     def test_a_member_away_from_lokhtos_is_walked(self):
         queued, inserted, walks, _l = _bridge_pass(stocks=frozenset())

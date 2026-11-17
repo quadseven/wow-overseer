@@ -11,10 +11,11 @@ import { html, raw, notMeasured, pendingRead, state, duration, classVar } from "
 import { liveQuery, setQuery, gearRows, stateLabel, memberLink, sectionTabs, head, flipSort, sortHead } from "./_members.js";
 import { stateOf, stuckFor } from "../models/roster.js";
 import { guilds, guildSlugs } from "../families.js";
+import { charButton, notice as watchNotice, bind as bindWatch, CSS as WATCH_CSS, READ as WATCH_READ, OPERATOR as WATCH_OPERATOR } from "./_spectate.js";
 
 // One series read per family guild, as the realm reports them.
 const series = () => guildSlugs().map((g) => "/api/v2/series?guild=" + g);
-const reads = () => ["/api/v2/roster", "/api/guildgear", ...series()];
+const reads = () => ["/api/v2/roster", "/api/guildgear", WATCH_READ, WATCH_OPERATOR, ...series()];
 
 const SORTS = [["stuck", "Stuck longest"], ["level", "Level, high first"], ["ilvl", "Item level"], ["xp", "XP per hour"], ["name", "Name"]];
 // Each sort's first direction. `dir` in the query (asc or desc) reverses it.
@@ -72,25 +73,25 @@ function sorter(sort, dir, ilvl, xp) {
 
 function ilvlText(g) { return g ? String(Math.round(g.avg_item_level)) : notMeasured(); }
 
-function cards(rows, ilvl, xp, at) {
-  return html`<div class="ro-cards">${rows.map((m) => html`<a class="card ro-card" href="${"#/m/" + encodeURIComponent(m.name)}"><span class="row ro-top"><span class="mname" style="color:${classVar(m.class)}">${m.name}</span>${stateLabel(m, at)}</span><span class="dim mb-s">L${m.level} ${m.class} | ${m.guild || "no guild"} | ${m.zone || "zone not measured"} | iLvl ${ilvlText(ilvl.get(m.name))} | XP/h ${xpText(xp.get(m.name))}</span><span>${m.step || notMeasured("step not measured")}</span>${m.blocker ? html`<span class="muted">${m.blocker}</span>` : ""}</a>`)}</div>`;
+function cards(rows, ilvl, xp, at, cam) {
+  return html`<div class="ro-cards">${rows.map((m) => html`<div class="card ro-card stretch-card"><a class="stretch-link ro-link" href="${"#/m/" + encodeURIComponent(m.name)}"><span class="row ro-top"><span class="mname" style="color:${classVar(m.class)}">${m.name}</span>${stateLabel(m, at)}</span><span class="dim mb-s">L${m.level} ${m.class} | ${m.guild || "no guild"} | ${m.zone || "zone not measured"} | iLvl ${ilvlText(ilvl.get(m.name))} | XP/h ${xpText(xp.get(m.name))}</span><span>${m.step || notMeasured("step not measured")}</span>${m.blocker ? html`<span class="muted">${m.blocker}</span>` : ""}</a>${charButton(m.name, cam.sp, cam.op)}</div>`)}</div>`;
 }
 
-const HEADS = [["Name", "name"], ["Lvl", "level"], ["Class"], ["Guild"], ["iLvl", "ilvl"], ["XP/h", "xp"], ["Current step"], ["Blocker"], ["Stuck for", "stuck"]];
+const HEADS = [["Watch"], ["Name", "name"], ["Lvl", "level"], ["Class"], ["Guild"], ["iLvl", "ilvl"], ["XP/h", "xp"], ["Current step"], ["Blocker"], ["Stuck for", "stuck"]];
 
-function table(rows, ilvl, xp, at, f) {
+function table(rows, ilvl, xp, at, f, cam) {
   const cur = { key: f.sort, dir: f.dir };
   const th = HEADS.map(([label, key]) => (key ? sortHead(label, key, cur, "data-sort") : html`<th scope="col">${label}</th>`));
   const tr = rows.map((m) => {
     const d = stuckFor(m, at);
     const k = stateOf(m);
     const tail = m.stuck ? (d ? html`<span class="warn">${d}</span>` : html`<span class="dim">since not measured</span>`) : k === "ghost" ? html`<span class="bad">${m.life === "dead" ? "dead" : "ghost"}</span>` : "";
-    return html`<tr><td>${memberLink(m)}</td><td class="num">${m.level}</td><td>${m.class}</td><td>${m.guild}</td><td class="num">${ilvlText(ilvl.get(m.name))}</td><td class="num">${xpText(xp.get(m.name))}</td><td>${m.step || notMeasured()}</td><td class="muted">${m.blocker}</td><td>${tail}</td></tr>`;
+    return html`<tr><td>${charButton(m.name, cam.sp, cam.op)}</td><td>${memberLink(m)}</td><td class="num">${m.level}</td><td>${m.class}</td><td>${m.guild}</td><td class="num">${ilvlText(ilvl.get(m.name))}</td><td class="num">${xpText(xp.get(m.name))}</td><td>${m.step || notMeasured()}</td><td class="muted">${m.blocker}</td><td>${tail}</td></tr>`;
   });
   return html`<div class="card ro-table"><table class="table"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
 }
 
-function body(roster, gg, xp, q) {
+function body(roster, gg, xp, q, cam) {
   const f = filters(q);
   const ilvl = gearRows(gg);
   const all = roster.members || [];
@@ -98,7 +99,7 @@ function body(roster, gg, xp, q) {
   if (!rows.length) {
     return html`${state("empty", "No members match", "No member fits every filter you have on. Nothing is hidden by the server.")}<div><button type="button" class="btn btn-ghost" data-clear>Clear filters</button></div>`;
   }
-  return html`${cards(rows, ilvl, xp, roster.checked_at)}${table(rows, ilvl, xp, roster.checked_at, f)}`;
+  return html`${cards(rows, ilvl, xp, roster.checked_at, cam)}${table(rows, ilvl, xp, roster.checked_at, f, cam)}`;
 }
 
 // A chip that filters to one guild: its key is the guild's slug.
@@ -141,8 +142,10 @@ function xpNote(roster, xp) {
     measured + " of " + names.length + " members have a level change on record to measure it from; the rest are not measured.";
 }
 
+function camOf(ctx) { return { sp: ctx.get(WATCH_READ), op: ctx.get(WATCH_OPERATOR) }; }
+
 export default {
-  css: ["views/members.css"],
+  css: ["views/members.css", WATCH_CSS],
   reads,
   every: 30000,
   title: () => "Members",
@@ -155,7 +158,7 @@ export default {
     const total = (roster.data.members || []).length;
     const shown = (roster.data.members || []).filter((m) => keep(m, filters(q))).length;
     const xp = xpRates(ctx.get);
-    return html`${head("Members", shown + " of " + total, pageLine(roster.data))}${sectionTabs("roster")}<div class="ro-wrap">${controls(roster.data, q)}<div data-region="roster">${body(roster.data, gg.data, xp, q)}</div></div><p class="dim mb-s">${roster.data.basis || ""} ${xpNote(roster.data, xp)}</p>`;
+    return html`${head("Members", shown + " of " + total, pageLine(roster.data))}${sectionTabs("roster")}${watchNotice()}<div class="ro-wrap">${controls(roster.data, q)}<div data-region="roster">${body(roster.data, gg.data, xp, q, camOf(ctx))}</div></div><p class="dim mb-s">${roster.data.basis || ""} ${xpNote(roster.data, xp)}</p>`;
   },
   after(main, ctx) {
     const roster = ctx.get("/api/v2/roster").data;
@@ -164,7 +167,8 @@ export default {
     const xp = xpRates(ctx.get);
     const region = main.querySelector("[data-region=roster]");
     const redraw = (q) => {
-      region.innerHTML = body(roster, gg, xp, q).s;
+      region.innerHTML = body(roster, gg, xp, q, camOf(ctx)).s;
+      bindWatch(region);
       const f = filters(q);
       main.querySelectorAll("[data-chip]").forEach((c) => {
         const k = c.getAttribute("data-chip");
@@ -176,6 +180,7 @@ export default {
       const aside = main.querySelector(".mb-aside");
       if (aside) aside.textContent = shown + " of " + total;
     };
+    bindWatch(main);
     const input = main.querySelector("#ro-filter");
     if (input) input.addEventListener("input", () => redraw(setQuery({ q: input.value })));
     const sel = main.querySelector("#ro-sort");

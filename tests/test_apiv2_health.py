@@ -550,10 +550,90 @@ class Handler(unittest.TestCase):
                 health.quests, "questers", return_value=(200, {"questers": []})
             ),
         ):
-            self.assertEqual(
-                (200, []),
-                (health.health({}, ctx)[0], health.health({}, ctx)[1]["findings"]),
-            )
+            status, payload = health.health({}, ctx)
+        self.assertEqual((200, []), (status, payload["findings"]))
+        # #2246: the empty list is not "nothing is wrong": it names the reads
+        # it could not make, once each, with the reason.
+        self.assertEqual(
+            [
+                "guild",
+                "guild_bank_eventlog",
+                "overseer_command",
+                "overseer_dungeon_run",
+                "overseer_guild_run",
+            ],
+            sorted({r["read"] for r in payload["incomplete"]}),
+        )
+        self.assertEqual(
+            len(payload["incomplete"]), len({r["read"] for r in payload["incomplete"]})
+        )
+        for entry in payload["incomplete"]:
+            self.assertEqual(health.INCOMPLETE_REASON, entry["reason"])
+
+    def test_a_complete_read_says_nothing_was_missed(self):
+        answers = {
+            health.NOW_SQL: [{"now_at": NOW}],
+            guildrun._RUN_SQL: [],
+            health.BANK_SQL: [],
+            health.BANK_MOVED_SQL: [],
+            health.FUND_SQL: [],
+            health.INVITES_SQL: [],
+            health.FAMILY_RUNS_SQL: [],
+        }
+        ctx, _ = ctx_for(answers)
+        with (
+            mock.patch.object(
+                health.members, "stuck", return_value=(200, {"members": []})
+            ),
+            mock.patch.object(
+                health.members, "roster", return_value=(200, {"members": []})
+            ),
+            mock.patch.object(
+                health.quests, "questers", return_value=(200, {"questers": []})
+            ),
+        ):
+            payload = health.health({}, ctx)[1]
+        self.assertEqual([], payload["findings"])
+        self.assertEqual([], payload["incomplete"])
+
+    def test_one_member_stuck_and_a_missing_table_give_a_finding_and_the_gap(self):
+        gap = realmread.MISSING_TABLE
+        answers = {
+            health.NOW_SQL: [{"now_at": NOW}],
+            guildrun._RUN_SQL: [],
+            health.BANK_SQL: [],
+            health.BANK_MOVED_SQL: [],
+            health.FUND_SQL: [],
+            health.INVITES_SQL: gap,
+            health.FAMILY_RUNS_SQL: [],
+        }
+        ctx, _ = ctx_for(answers)
+        stuck = {
+            "members": [
+                {
+                    "name": "Grug",
+                    "step": "s",
+                    "blocker": "b",
+                    "since": NOW - 3 * HOUR,
+                    "kind": "hold",
+                }
+            ]
+        }
+        with (
+            mock.patch.object(health.members, "stuck", return_value=(200, stuck)),
+            mock.patch.object(
+                health.members, "roster", return_value=(200, {"members": []})
+            ),
+            mock.patch.object(
+                health.quests, "questers", return_value=(200, {"questers": []})
+            ),
+        ):
+            payload = health.health({}, ctx)[1]
+        self.assertEqual(["stuck:s"], [f["key"] for f in payload["findings"]])
+        self.assertEqual(
+            [{"read": "overseer_command", "reason": health.INCOMPLETE_REASON}],
+            payload["incomplete"],
+        )
 
     def test_the_handler_flags_a_member_dead_past_the_release_bound(self):
         answers = {
