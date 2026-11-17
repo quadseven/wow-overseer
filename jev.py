@@ -72,6 +72,18 @@ chosen by `JEV_BACKEND` (default `jev`):
           carry the service's own `latency_ms`, which the tally and the
           comparison keep beside the round trip.
 
+JEV_PROVIDER=openai (#2899) selects the openai backend ahead of JEV_BACKEND
+and puts it on a small model with a spend ledger (see jev_openai): the key is
+OPENAI_API_KEY (or the file named by OPENAI_API_KEY_FILE), the model is
+JEV_OPENAI_MODEL (default gpt-5-nano; JEV_OPENAI_MODEL_<KIND> overrides one
+kind, so a kind that misses the bar can step up), JEV_OPENAI_REASONING is the
+reasoning effort sent (default low), and a hard monthly cap
+(JEV_OPENAI_CAP_USD, never above 90) skips calls near it. `JEV_MODE_<KIND>`
+takes `compare` (an alias of shadow: the answer is recorded beside the
+heuristic's, which acts) or `act`, and an `act` kind runs as compare until the
+hourly report says it clears the bar (jev_openai.BAR). Free text from the
+model is never logged: only a cleaned, capped error note.
+
 A backend with no token (or, for strands, no URL) answers `no_key` and the
 heuristic acts. A strands service that is down or slow is an ordinary `error`
 or `timeout` outcome, counted in the tally and logged once an hour.
@@ -128,6 +140,7 @@ from collections import OrderedDict
 import dataclasses
 from dataclasses import dataclass
 
+import jev_openai
 import llmpool
 
 log = logging.getLogger("wow-overseer.jev")
@@ -137,10 +150,12 @@ MODEL = "jev-latest"
 TIMEOUT_SECONDS = 3.0
 CONCURRENCY = 4
 CACHE_SIZE = 512
+# A cached answer is served for this long (JEV_CACHE_TTL_SECONDS), then asked again.
+CACHE_TTL_SECONDS = 3600.0
 CLEF_BASE = "https://api.cloudflare.com/client/v4/accounts/%s/ai/run/%s"
 CLEF_MODEL = "@cf/cloudflare/clef"
 OPENAI_URL = "https://api.openai.com/v1/decisions"
-OPENAI_MODEL = "gpt-6-luna"
+OPENAI_MODEL = jev_openai.DEFAULT_MODEL
 STRANDS_URL = "http://127.0.0.1:8790/"
 STRANDS_MODEL = "strands-decider-2b"
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
@@ -159,6 +174,20 @@ SLOT_POLL_SECONDS = 0.05
 
 OFF, SHADOW, ACT = "off", "shadow", "act"
 MODES = (OFF, SHADOW, ACT)
+# `compare` is shadow by another name: asked, recorded beside the heuristic.
+COMPARE = "compare"
+_act_gate = None
+_gate_said: set = set()
+
+
+def set_act_gate(gate) -> None:
+    """Install `gate(kind) -> bool`: an `act` kind runs as shadow until it says
+    True (jev_openai.ActGate). None removes it."""
+    global _act_gate
+    _act_gate = gate
+    _gate_said.clear()
+
+
 DEFAULT_MODE = SHADOW
 
 # Outcome.status values. Only ANSWERED and CACHED carry answers.
@@ -171,6 +200,8 @@ ERROR = "error"
 INVALID = "invalid"
 # Asked nothing: the backend refused payment or auth and its window is open.
 PAUSED = "paused"
+# Asked nothing: the spend ledger refused the call (cap, unpriced model).
+CAPPED = "capped"
 
 
 def mode(kind: str, environ=None, default: str = DEFAULT_MODE) -> str:
@@ -183,8 +214,10 @@ def mode(kind: str, environ=None, default: str = DEFAULT_MODE) -> str:
     """
     env = os.environ if environ is None else environ
     raw = str(env.get("JEV_MODE_" + kind.upper(), "") or "").strip().lower()
+    if raw == COMPARE:
+        return SHADOW
     if not raw:
-        return default if default in MODES else DEFAULT_MODE
+        return _gated(kind, default if default in MODES else DEFAULT_MODE)
     if raw not in MODES:
         log.warning(
             "jev: JEV_MODE_%s=%r is not one of %s; using %s",
@@ -194,7 +227,22 @@ def mode(kind: str, environ=None, default: str = DEFAULT_MODE) -> str:
             DEFAULT_MODE,
         )
         return DEFAULT_MODE
-    return raw
+    return _gated(kind, raw)
+
+
+def _gated(kind: str, chosen: str) -> str:
+    """ACT held at SHADOW while the gate says the kind has not cleared the bar."""
+    if chosen != ACT or _act_gate is None or _act_gate(kind):
+        return chosen
+    if kind not in _gate_said:
+        _gate_said.add(kind)
+        log.warning(
+            "jev: JEV_MODE_%s=act, but %s has not cleared the bar yet; running "
+            "compare, the heuristic acts",
+            kind.upper(),
+            kind,
+        )
+    return SHADOW
 
 
 def effective_mode(kind: str, act_supported: bool, environ=None) -> str:
@@ -466,6 +514,7 @@ class JevBackend:
     """TypeSafe's Jev: the request and response this module was built on."""
 
     name = "jev"
+    key_env = "TYPESAFE_API_KEY"
     # A local backend needs a URL and no key, and may use plain http on a
     # loopback host.
     local = False
@@ -473,6 +522,9 @@ class JevBackend:
     def service_ms(self, data) -> int:
         """The service's own latency in ms when the body reports one, else 0."""
         return 0
+
+    def error_note(self, raw) -> str:
+        return ""
 
     def request(self, url, model, key, state, questions) -> tuple:
         body = json.dumps(
@@ -540,9 +592,32 @@ class OpenAIBackend:
 
     name = "openai"
     local = False
+    key_env = "OPENAI_API_KEY"
+
+    def __init__(self, effort: str = "") -> None:
+        # The reasoning effort sent with each request ("" sends none): these
+        # are short classification calls, so a low one is enough.
+        self.effort = str(effort or "").strip().lower()
 
     def service_ms(self, data) -> int:
         return 0
+
+    def usage(self, data):
+        """Tokens the response reports (jev_openai.UsageUnknown when none)."""
+        return jev_openai.Usage.from_openai(
+            data.get("usage") if isinstance(data, dict) else None
+        )
+
+    def error_note(self, raw) -> str:
+        """The API's error message, cleaned to a strict charset and capped:
+        model or provider free text never reaches a log line as it came."""
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return ""
+        err = data.get("error") if isinstance(data, dict) else None
+        text = err.get("message") if isinstance(err, dict) else err
+        return jev_openai.clean_reason(text if isinstance(text, str) else "")
 
     def request(self, url, model, key, state, questions) -> tuple:
         sent = []
@@ -584,9 +659,10 @@ class OpenAIBackend:
             if isinstance(state, str)
             else json.dumps(state, sort_keys=True, default=str)
         )
-        body = json.dumps({"model": model, "input": text, "questions": sent}).encode(
-            "utf-8"
-        )
+        payload = {"model": model, "input": text, "questions": sent}
+        if self.effort:
+            payload["reasoning"] = {"effort": self.effort}
+        body = json.dumps(payload).encode("utf-8")
         headers = {
             "Authorization": "Bearer " + key,
             "Content-Type": "application/json",
@@ -643,6 +719,16 @@ def backend_name(environ=None, var: str = "JEV_BACKEND") -> str:
     """The named backend, or `jev` when unset or unknown (said once)."""
     env = os.environ if environ is None else environ
     raw = str(env.get(var, "") or "").strip().lower()
+    if var == "JEV_BACKEND":
+        provider = str(env.get("JEV_PROVIDER", "") or "").strip().lower()
+        if provider in BACKENDS:
+            return provider
+        if provider:
+            log.warning(
+                "jev: JEV_PROVIDER=%r is not one of %s; ignored",
+                provider,
+                "/".join(BACKENDS),
+            )
     if not raw:
         return "jev" if var == "JEV_BACKEND" else ""
     if raw not in BACKENDS:
@@ -678,9 +764,12 @@ def _settings(name: str, env) -> dict:
         return {"api_key": key, "url": url, "model": model}
     if name == "openai":
         return {
-            "api_key": _read_secret(env.get("OPENAI_API_KEY_FILE", "")),
+            "api_key": str(env.get("OPENAI_API_KEY", "") or "").strip()
+            or _read_secret(env.get("OPENAI_API_KEY_FILE", "")),
             "url": env.get("OPENAI_DECISIONS_URL", "") or OPENAI_URL,
-            "model": env.get("OPENAI_DECISIONS_MODEL", "") or OPENAI_MODEL,
+            "model": env.get("JEV_OPENAI_MODEL", "")
+            or env.get("OPENAI_DECISIONS_MODEL", "")
+            or OPENAI_MODEL,
         }
     if name == "strands":
         # Unset is the local default; explicitly empty turns the backend off.
@@ -765,7 +854,7 @@ class Tally:
                         del c["service"][:-TALLY_SAMPLES]
             elif status in (ERROR, TIMEOUT, INVALID):
                 c["errors"] += 1
-            elif status == PAUSED:
+            elif status in (PAUSED, CAPPED):
                 c["paused"] += 1
 
     def agreement(self, kind: str, agree, backend: str | None = None) -> None:
@@ -953,9 +1042,25 @@ def _url_ok(url, backend, allow_http=()) -> bool:
     return host in allow_http and cluster_service_host(host)
 
 
+def _normalize(value):
+    """`value` with every string's whitespace collapsed and trimmed, so two
+    questions that differ only in spacing are one question."""
+    if isinstance(value, str):
+        return " ".join(value.split())
+    if isinstance(value, dict):
+        return {k: _normalize(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_normalize(v) for v in value]
+    return value
+
+
 def _cache_key(model: str, state, questions: dict) -> str:
     text = json.dumps(
-        {"model": model, "state": state, "questions": questions},
+        {
+            "model": model,
+            "state": _normalize(state),
+            "questions": _normalize(questions),
+        },
         sort_keys=True,
         separators=(",", ":"),
         default=str,
@@ -982,8 +1087,17 @@ class Client:
         compare_sink=None,
         allow_http_hosts=(),
         pause_seconds: float = PAUSE_SECONDS,
+        spend=None,
+        models=None,
+        cache_ttl: float = CACHE_TTL_SECONDS,
     ):
         self.backend = backend or JEV_BACKEND
+        # The spend ledger (jev_openai.Spend), or None for a backend that costs
+        # the operator nothing per call; the model each kind asks, where it is
+        # not the client's own; how long a cached answer may be served.
+        self.spend = spend
+        self.models = dict(models or {})
+        self.cache_ttl = max(0.0, float(cache_ttl))
         # A local backend with an empty URL is a switched-off one (no_key);
         # any other URL must be https, or plain http on a loopback host or an
         # opted-in cluster service host.
@@ -1048,8 +1162,26 @@ class Client:
                     exc,
                     name,
                 )
+        backend = BACKENDS[name]
+        if name == "openai":
+            # Its own instance: the reasoning effort belongs to this client.
+            backend = OpenAIBackend(env.get("JEV_OPENAI_REASONING", "low"))
+            kw.setdefault("spend", jev_openai.Spend(env=env))
+            kw.setdefault(
+                "models",
+                {
+                    k[len("JEV_OPENAI_MODEL_") :].lower(): v.strip()
+                    for k, v in env.items()
+                    if k.startswith("JEV_OPENAI_MODEL_") and str(v).strip()
+                },
+            )
         return cls(
-            settings.pop("api_key"), backend=BACKENDS[name], **settings, **common, **kw
+            settings.pop("api_key"),
+            backend=backend,
+            **settings,
+            **common,
+            cache_ttl=float(env.get("JEV_CACHE_TTL_SECONDS", CACHE_TTL_SECONDS)),
+            **kw,
         )
 
     @property
@@ -1073,8 +1205,8 @@ class Client:
                 )
             else:
                 log.warning(
-                    "jev: no TYPESAFE_API_KEY; %s and every other judgment keeps "
-                    "the heuristic",
+                    "jev: no %s; %s and every other judgment keeps the heuristic",
+                    self.backend.key_env,
                     kind,
                 )
             self._said_no_key = True
@@ -1083,7 +1215,7 @@ class Client:
     def _remember(self, key: str, value: tuple) -> None:
         if not self._cache_size:
             return
-        self._cache[key] = value
+        self._cache[key] = value + (self._clock(),)
         self._cache.move_to_end(key)
         while len(self._cache) > self._cache_size:
             self._cache.popitem(last=False)
@@ -1155,7 +1287,7 @@ class Client:
             other = await self.shadow._ask_one(kind, state, questions)
             # A repeat (cached) was recorded when it was first asked; busy
             # and no_key asked nothing.
-            if other.status in (CACHED, BUSY, NO_KEY, PAUSED):
+            if other.status in (CACHED, BUSY, NO_KEY, PAUSED, CAPPED):
                 return
             rows = compare_rows(
                 kind,
@@ -1209,21 +1341,47 @@ class Client:
                 self._skipped += 1
                 return self._said(kind, Outcome(PAUSED, 0, detail=self._paused_detail))
             self._paused_until = None
-        key = _cache_key(self.backend.name + ":" + self.model, state, questions)
+        model = self.models.get(kind.lower()) or self.model
+        key = _cache_key(
+            self.backend.name + ":" + model + ":" + kind.lower(), state, questions
+        )
         hit = self._cache.get(key)
+        if (
+            hit is not None
+            and self.cache_ttl
+            and self._clock() - hit[2] > self.cache_ttl
+        ):
+            del self._cache[key]
+            hit = None
         if hit is not None:
             self._cache.move_to_end(key)
             return Outcome(CACHED, 0, answers=hit[0], model=hit[1])
+        if self.spend is not None:
+            refused = await asyncio.to_thread(self.spend.refusal, model, True)
+            if refused is not None:
+                held = TALLY.first_failure((self.backend.name, CAPPED, refused.code))
+                if held is not None:
+                    log.warning(
+                        "jev: backend=%s kind=%s skipped: %s (%d like it held back "
+                        "this hour)",
+                        self.backend.name,
+                        kind,
+                        refused.text,
+                        held,
+                    )
+                return self._tallied(kind, Outcome(CAPPED, 0, detail=refused.code))
         # No await between a free slot and taking it (`_in_flight += 1`
         # below): on one event loop no other ask can run in that gap, so a
         # woken waiter cannot overfill the slots.
         if not await self._free_slot(wait):
             log.info("jev: kind=%s status=busy in_flight=%d", kind, self._in_flight)
+            if self.spend is not None:
+                self.spend.release()
             return Outcome(BUSY, elapsed())
         # The deadline starts when the request is sent, not while it queued.
         started = self._clock()
         url, body, headers = self.backend.request(
-            self.url, self.model, self._key, state, questions
+            self.url, model, self._key, state, questions
         )
         self._in_flight += 1
         task = asyncio.ensure_future(
@@ -1236,39 +1394,65 @@ class Client:
         try:
             status, raw = await asyncio.wait_for(asyncio.shield(task), self.timeout)
         except asyncio.TimeoutError:
+            await self._spent(kind, model, TIMEOUT, elapsed(), charged=False)
             return self._said(kind, Outcome(TIMEOUT, elapsed()))
         except Exception as exc:  # the transport's own failure, of any kind
+            await self._spent(kind, model, ERROR, elapsed(), charged=False)
             return self._said(
                 kind, Outcome(ERROR, elapsed(), detail=type(exc).__name__)
             )
-        if status in PAUSE_HTTP:
-            return self._pause(
-                kind, Outcome(ERROR, elapsed(), detail="http %s" % status)
-            )
         if status != 200:
-            return self._said(
-                kind, Outcome(ERROR, elapsed(), detail="http %s" % status)
-            )
+            await self._spent(kind, model, ERROR, elapsed(), charged=False)
+            note = self.backend.error_note(raw)
+            detail = "http %s" % status + ((" " + note) if note else "")
+            if status in PAUSE_HTTP:
+                return self._pause(kind, Outcome(ERROR, elapsed(), detail=detail))
+            return self._said(kind, Outcome(ERROR, elapsed(), detail=detail))
         try:
             data = json.loads(raw)
         except (TypeError, ValueError):
+            await self._spent(kind, model, INVALID, elapsed())
             return self._said(kind, Outcome(INVALID, elapsed(), detail="not json"))
-        answers, model = self.backend.read(questions, data)
+        answers, answered_by = self.backend.read(questions, data)
         if answers is None:
+            await self._spent(kind, model, INVALID, elapsed(), data)
             return self._said(
                 kind, Outcome(INVALID, elapsed(), detail="no typed answers")
             )
-        self._remember(key, (answers, model))
+        await self._spent(kind, model, ANSWERED, elapsed(), data)
+        self._remember(key, (answers, answered_by))
         return self._said(
             kind,
             Outcome(
                 ANSWERED,
                 elapsed(),
                 answers=answers,
-                model=model,
+                model=answered_by,
                 service_ms=self.backend.service_ms(data),
             ),
         )
+
+    async def _spent(
+        self, kind, model, status, latency_ms, data=None, charged=True
+    ) -> None:
+        """Hand one call that reached the provider to the spend ledger: priced
+        from the usage the response reports, or charged the unknown-call price
+        when it reports none. Never raises."""
+        if self.spend is None:
+            return
+        try:
+            usage = None
+            if data is not None:
+                try:
+                    usage = self.backend.usage(data)
+                except jev_openai.UsageUnknown:
+                    usage = None
+            row = self.spend.record(
+                kind, model, status, latency_ms, usage, charged, persist=False
+            )
+            await asyncio.to_thread(self.spend.persist, row)
+        except Exception:
+            log.exception("jev: spend for %s not recorded", kind)
 
     def _pause(self, kind: str, outcome: Outcome) -> Outcome:
         """A 402 or 401: ask this backend nothing until the window ends, and

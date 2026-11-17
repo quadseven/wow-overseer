@@ -89,6 +89,8 @@ COLLATIONS = {
     # bridge._ensure_jev_store NAMES utf8mb4_0900_ai_ci, the collation every
     # other bridge-owned table carries, rather than inheriting a default.
     "overseer_jev_judgment": "utf8mb4_0900_ai_ci",
+    # Bridge-owned, named in jev_openai.TABLE_SQL the same way.
+    "overseer_jev_spend": "utf8mb4_0900_ai_ci",
     # Bridge-owned (#584), named in jev_outcomes.TABLE_SQL the same way.
     "overseer_jev_outcome": "utf8mb4_0900_ai_ci",
     # Bridge-owned (#209), named in campaignqueue.CREATE_SQL the same way.
@@ -295,6 +297,8 @@ STRING_COLUMNS = {
             "subject",
         }
     ),
+    # From its own DDL (jev_openai.TABLE_SQL): every VARCHAR and CHAR column.
+    "overseer_jev_spend": frozenset({"kind", "model", "month", "status"}),
     # From its own DDL (jev_outcomes.TABLE_SQL): every VARCHAR column.
     "overseer_jev_outcome": frozenset(
         {"before_state", "chose", "instead_of", "kind", "outcome", "subject"}

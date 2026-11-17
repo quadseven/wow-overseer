@@ -229,8 +229,12 @@ def _by_kind(rows: list) -> dict:
     return out
 
 
-def view(rows, recent: int = 12) -> dict:
-    """The Decree's Jev card from overseer_jev_judgment rows, newest first."""
+def view(rows, recent: int = 12, openai=None) -> dict:
+    """The Decree's Jev card from overseer_jev_judgment rows, newest first.
+
+    `openai` is the per-kind report of the OpenAI backend as text lines
+    (jev_openai.summary_line): answer rate, latency, agreement, cost per 1,000
+    calls and whether the kind clears the bar (#2899)."""
     rows, compared = _split_compare(rows)
     by_kind: dict = {}
     for row in rows:
@@ -251,6 +255,7 @@ def view(rows, recent: int = 12) -> dict:
             for b in sorted(compared)
             for k, kind_rows in sorted(_by_kind(compared[b]).items())
         ],
+        "openai": [str(x) for x in (openai or ())],
         "empty": EMPTY,
         "keep_title": KEEP_TITLE,
         "keep_differ": [
