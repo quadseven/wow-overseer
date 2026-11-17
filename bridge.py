@@ -20578,6 +20578,9 @@ class Bridge(discord.Client):
             members, facts, busy, cap, spawn_walks, cohort)
         self._log_guild_job_plan(members, plan)
         _log_capped("guild jobs", plan.notes)
+        # The death loop's reasons are never capped (#2152): every listed
+        # member that got no escape step is named, whatever else the pass says.
+        _log_loop_lines(plan.loop_lines)
         # A class quest that yields to levelling is named every pass, uncapped.
         for line in plan.yields:
             log.info("guild jobs: %s", line)
@@ -36206,6 +36209,15 @@ def _log_capped(prefix: str, notes) -> None:
         log.info("%s: %s", prefix, note)
     if len(notes) > GUILD_ROUTE_NOTE_LINES:
         log.info("%s: and %d more like it", prefix, len(notes) - GUILD_ROUTE_NOTE_LINES)
+
+
+def _log_loop_lines(lines) -> None:
+    """One INFO line per listed death looper that got no escape step (#2152).
+
+    Uncapped on purpose: the cap of _log_capped hid every one of these on the
+    dev realm, with ninety other notes ahead of them in the same pass."""
+    for line in lines or ():
+        log.info("guild jobs: %s", line)
 
 
 # THE LINES A PASS REPEATS UNCHANGED (#1142). Measured read-only on the dev
