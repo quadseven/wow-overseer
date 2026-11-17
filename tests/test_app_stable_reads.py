@@ -23,15 +23,19 @@ PRELUDE = r"""
 const STORE = new Map(Object.entries(globalThis.__store || {}));
 globalThis.__fetches = [];
 globalThis.document = {
-  querySelector: () => ({ getAttribute: () => "/dev" }),
+  querySelector: (selector) => selector === 'meta[name="overseer-base"]'
+    ? { getAttribute: () => "/dev" }
+    : null,
   addEventListener: () => {},
   hidden: false,
 };
 globalThis.window = {
-  sessionStorage: {
+  localStorage: {
     getItem: (k) => (STORE.has(k) ? STORE.get(k) : null),
     setItem: (k, v) => STORE.set(k, String(v)),
     removeItem: (k) => STORE.delete(k),
+    key: (i) => Array.from(STORE.keys())[i] || null,
+    get length() { return STORE.size; },
   },
   setTimeout: () => 0,
   clearTimeout: () => {},
