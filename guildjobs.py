@@ -8022,7 +8022,7 @@ def _cross_step(m, move, recent):
                 source_for(classquest.CROSS_ACTION, m.name),
             ),
         ),
-        goal=classquest.CONTINENTS.get(int(move.to_map), ""),
+        goal=classquest.MAP_WORDS.get(int(move.to_map), ""),
     )
     return step, move.said, ""
 
