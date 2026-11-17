@@ -93,6 +93,14 @@ DROP_SQL = (
     "JOIN acore_world.creature_template c ON c.lootid = l.Entry "
     "WHERE l.Reference <> 0 AND r.Item IN ({ids})"
 )
+# Chests and other lootable gameobjects that hold an item: a required item with one
+# of these is not "without a source" (#2735, #2736).
+OBJECT_LOOT_SQL = (
+    "SELECT DISTINCT l.Item AS item, g.entry AS entry "
+    "FROM acore_world.gameobject_loot_template l "
+    "JOIN acore_world.gameobject_template g ON g.type = 3 AND g.Data1 = l.Entry "
+    "WHERE l.Item IN ({ids})"
+)
 REWARD_SQL = (
     "SELECT ID AS quest, RewardItem1 AS item FROM acore_world.quest_template "
     "WHERE RewardItem1 IN ({ids}) UNION ALL "
@@ -339,6 +347,7 @@ def load(read) -> tuple:
         drops = rows_for(DROP_SQL, item_ids)
         rewards = rows_for(REWARD_SQL, item_ids)
         vendors = rows_for(VENDOR_SQL, item_ids)
+        object_loot = rows_for(OBJECT_LOOT_SQL, item_ids)
         spawns = rows_for(SPAWN_COUNTS_SQL, objective_ids)
         object_spawns = rows_for(OBJECT_COUNTS_SQL, objective_ids)
         by_id = {int(r["quest"]): r for r in quest_rows}
@@ -356,6 +365,7 @@ def load(read) -> tuple:
         for row in rewards:
             reward_by_item.setdefault(int(row["item"]), set()).add(int(row["quest"]))
         vendor_by_item = evidence(vendors, "item")
+        object_by_item = evidence(object_loot, "item")
         spawn_by_entry = {}
         for kind, rows in (("creature", spawns), ("object", object_spawns)):
             for row in rows:
@@ -376,6 +386,7 @@ def load(read) -> tuple:
                             "droppers": sorted(drop_by_item.get(item, ())),
                             "rewards": sorted(reward_by_item.get(item, ())),
                             "vendors": sorted(vendor_by_item.get(item, ())),
+                            "objects": sorted(object_by_item.get(item, ())),
                         }
                     )
             for i in range(1, 5):
