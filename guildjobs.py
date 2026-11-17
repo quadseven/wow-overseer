@@ -5239,9 +5239,7 @@ def _loop_line_reason(m, loop, inputs, state) -> str:
         return "the step was refused: %s" % state.refused[m.name]
     if not _in_loop_zone(m, loop):
         return "already out of the zone"
-    return _death_loop_reason(
-        m, loop, inputs.leveling, inputs.recent, inputs.campaign
-    )
+    return _death_loop_reason(m, loop, inputs.leveling, inputs.recent, inputs.campaign)
 
 
 def _plan_family_class_member(
