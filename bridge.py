@@ -37102,12 +37102,13 @@ _JOB_QUEST_ASKS_SQL = (
 
 def _job_deaths(cur, names: list) -> list:
     """The deaths deathloop.loops judges: a member dying over and over in one
-    zone leaves it (#1464)."""
+    zone leaves it (#1464). A day of them (deathloop.SLOW_READ_SECONDS), so a
+    member dying once or twice an hour is judged too (#2152, #2615)."""
     if not names:
         return []
     return _job_read(
         cur, "deaths", deathloop.SQL.format(holes=",".join(["%s"] * len(names))),
-        (*names, deathloop.READ_SECONDS))
+        (*names, deathloop.SLOW_READ_SECONDS))
 
 
 def _fetch_job_facts(family_names: list) -> dict:
@@ -37174,8 +37175,12 @@ def _fetch_job_facts(family_names: list) -> dict:
     facts["class_book"] = book
     facts["spell_reagents"] = spell_reagents
     facts["quest_asks"] = guildjobs.quest_asks_from_rows(quest_ask_rows)
+    # slow=True: the escape reaches a member whose deaths come one or two an
+    # hour (#2152). The quiet clock still ends the loop, so a member held out
+    # of its zone is listed for QUIET_SECONDS at most, the bound of #3703.
     facts["death_loops"] = deathloop.loops(
-        death_rows, {str(r["name"]): int(r.get("level") or 0) for r in rows})
+        death_rows, {str(r["name"]): int(r.get("level") or 0) for r in rows},
+        slow=True)
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}
