@@ -143,6 +143,11 @@ class SubmitTest(Base):
             self.submit(control_dbimport=OLD_DB, **CONTROL)
         self.assertEqual(self.cluster.of("jobs"), [])
 
+    def test_a_control_dbimport_is_refused_on_a_treatment_only_submit_too(self):
+        with self.assertRaisesRegex(submit.SubmitError, "db-import"):
+            self.submit(arm="treatment", control_dbimport=OLD_DB)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
     def test_control_image_must_be_a_digest(self):
         bad = {**CONTROL, "control_worldserver": "registry.example.com/ws:latest"}
         with self.assertRaisesRegex(submit.SubmitError, "sha256"):

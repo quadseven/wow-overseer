@@ -178,13 +178,6 @@ def _images_for(arm, live_images, args, live_bridge=None):
         if live_bridge is not None:
             img["bridge"] = args.get("treatment_bridge") or live_bridge
     else:
-        if args.get("control_dbimport"):
-            raise SubmitError(
-                "--control-dbimport is no longer taken: the db-import schema step is the same "
-                "for both arms (only the worldserver binary under test differs), and a control "
-                "db-import older than a changed module SQL update file re-applies that file to "
-                "the template and cannot boot. Drop the flag; both arms run the live db-import."
-            )
         if not args.get("control_worldserver"):
             raise SubmitError("a control arm needs --control-worldserver (by digest)")
         img = {
@@ -295,6 +288,13 @@ def submit(
     """Create the suspended Jobs. Returns the submission record (also saved)."""
     args = dict(args or {})
     arm_arg = args.get("arm", "both")
+    if args.get("control_dbimport"):
+        raise SubmitError(
+            "--control-dbimport is no longer taken: the db-import schema step is the same "
+            "for both arms (only the worldserver binary under test differs), and a control "
+            "db-import older than a changed module SQL update file re-applies that file to "
+            "the template and cannot boot. Drop the flag; both arms run the live db-import."
+        )
     if arm_arg not in ("control", "treatment", "both"):
         raise SubmitError("--arm must be control, treatment or both")
     raw, decree = _load_decree(decree_path, args)
