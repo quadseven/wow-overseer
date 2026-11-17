@@ -23092,7 +23092,7 @@ class Bridge(discord.Client):
         # family casts there together, so the aim stays on the hub.
         reads = await asyncio.to_thread(_movement_reads, list(names))
         route = ""
-        if why == townerrand.BAG_PRESSURE_WHY and standing and stops_of:
+        if townerrand.room_errand(why) and standing and stops_of:
             # THE CAST IS READ, NOT INFERRED (#2333): the head holds a stone
             # that is off cooldown and is alive, and no member is left with
             # the long walk. Looked up like the stops above; without the
@@ -23143,7 +23143,7 @@ class Bridge(discord.Client):
             route, route_line = "", ""
             bankers_of = globals().get("_fetch_errand_banker_stops")
             bank_reads = globals().get("_bank_first_reads")
-            if bankers_of and bank_reads and why == townerrand.BAG_PRESSURE_WHY:
+            if bankers_of and bank_reads and townerrand.room_errand(why):
                 # ONLY THE MEMBERS WITH THE LEADER CHOOSE THE COUNTER: a
                 # follower thousands of yards off cannot reach it, and its
                 # stacks kept the family on a vendor aim that sold nothing.
@@ -23152,17 +23152,33 @@ class Bridge(discord.Client):
                 sellable, bank_routed = await asyncio.to_thread(
                     bank_reads, list(names), here)
                 if townerrand.bank_first(why, sellable, bank_routed):
-                    banker_stops = townerrand.vendor_stops(
-                        await asyncio.to_thread(bankers_of, leader, standing),
+                    side_mask = (
                         situation.ALLIANCE_MASK if teams.get(leader) == "alliance"
                         else situation.HORDE_MASK
-                        if teams.get(leader) == "horde" else 0,
-                        kind="banker")
+                        if teams.get(leader) == "horde" else 0)
+                    banker_stops = townerrand.vendor_stops(
+                        await asyncio.to_thread(bankers_of, leader, standing),
+                        side_mask, kind="banker")
+                    # A BIND TOWN WITH NO BANKER IS NOT A BANKER STOP: the
+                    # stone reaching it keeps the hub only where a banker
+                    # stands beside it (a camp with a mailbox and vendors
+                    # drained nothing for 48 minutes, 2026-11-17). Read on
+                    # the hub's own map, which may not be the head's.
+                    hub_has_banker = True
+                    if hub and hub.get("bind"):
+                        at_hub = townerrand.vendor_stops(
+                            await asyncio.to_thread(
+                                bankers_of, leader,
+                                {"map_id": hub.get("map_id"),
+                                 "pos_x": hub.get("x"), "pos_y": hub.get("y")}),
+                            side_mask, kind="banker")
+                        hub_has_banker = townerrand.banker_at_hub(hub, at_hub)
                     vault = await asyncio.to_thread(_nearest_vault, leader)
                     route, spot, route_line = townerrand.bank_route(
                         why, sellable, bank_routed, hub, banker_stops, vault,
                         standing, released, now, deaths=deaths,
-                        hearth_reaches=hearth_reaches, walled=walled)
+                        hearth_reaches=hearth_reaches, walled=walled,
+                        hub_has_banker=hub_has_banker)
                     log.info("town errand: %s%s has no stack a vendor would buy "
                              "and %d routed to the bank; %s (%s)", why, label,
                              bank_routed,

@@ -118,13 +118,19 @@ BAG_PRESSURE_WHY = "campaign held at the dungeon door for bag room"
 LOOP_WHY = "profession loop: "
 
 
+def room_errand(why: str) -> bool:
+    """Whether the errand goes to town to empty the bags: the campaign's
+    bag-room errand and the profession loop's."""
+    return why == BAG_PRESSURE_WHY or str(why or "").startswith(LOOP_WHY)
+
+
 def steps_for(why: str, route: str = "") -> tuple:
     """The step order for an errand started for `why`: bag room first for the
     bag-pressure errand and for the profession loop's, which go to town to
     empty the bags. A bag-room errand on a bank or vault route banks first."""
-    if route in (ROUTE_BANKER, ROUTE_VAULT) and why == BAG_PRESSURE_WHY:
+    if route in (ROUTE_BANKER, ROUTE_VAULT) and room_errand(why):
         return BANK_ROOM_STEP_ORDER
-    if why == BAG_PRESSURE_WHY or str(why or "").startswith(LOOP_WHY):
+    if room_errand(why):
         return ROOM_STEP_ORDER
     return STEP_ORDER
 
@@ -720,12 +726,30 @@ def bank_first(why: str, sellable, bank_routed: int) -> bool:
     at least one stack to the bank. An unread member keeps the vendor, as an
     unread count always has. `sellable` is {member: count or None}.
     """
-    if why != BAG_PRESSURE_WHY or int(bank_routed or 0) <= 0:
+    if not room_errand(why) or int(bank_routed or 0) <= 0:
         return False
     counts = list((sellable or {}).values())
     if not counts or any(c is None for c in counts):
         return False
     return sum(int(c) for c in counts) == 0
+
+
+# How near a banker must stand to a hub to be that hub's banker: the counters of
+# a town stand together, and the bank step needs one within 8 yards of the
+# members once they are gathered at the mailbox.
+BANKER_AT_HUB_YARDS = 120.0
+
+
+def banker_at_hub(hub: dict, bankers) -> bool:
+    """Whether a banker spot (`vendor_stops(..., kind="banker")`) stands within
+    BANKER_AT_HUB_YARDS of `hub` on its map."""
+    if not hub:
+        return False
+    return any(
+        _same_map(b, {"map_id": hub.get("map_id")})
+        and _planar(b, hub) <= BANKER_AT_HUB_YARDS
+        for b in (bankers or ())
+    )
 
 
 def bank_route(
@@ -741,6 +765,7 @@ def bank_route(
     deaths=(),
     hearth_reaches: bool = False,
     walled=None,
+    hub_has_banker: bool = True,
 ) -> tuple:
     """(route, spot, line): where a bag-room errand aims to make room at the bank.
 
@@ -751,7 +776,11 @@ def bank_route(
     stop is passed over when it was released unlanded lately, lies along ground
     the family died on (`lethal_stop`), or the town slot would refuse the walk
     (`walled`). With the head's stone reaching a bind hub the family casts
-    there in one go, and that town's banker serves (#2329).
+    there in one go, and that town's banker serves (#2329), when one stands
+    there: `hub_has_banker` is False for a bind town that has none (a camp with
+    a mailbox and vendors), and the stone then keeps no hub, so the nearest
+    banker, then the vault, is the aim. Measured 2026-11-17: a family hearthed to
+    such a camp and spent 48 minutes at counters that took nothing.
     """
     if not bank_first(why, sellable, bank_routed):
         return "", {}, ""
@@ -763,7 +792,13 @@ def bank_route(
         "y": leader_at.get("pos_y"),
     }
     walled = walled or (lambda _spot: False)
-    if hub and hub.get("bind") and hearth_reaches and not walled(hub):
+    if (
+        hub
+        and hub.get("bind")
+        and hearth_reaches
+        and hub_has_banker
+        and not walled(hub)
+    ):
         return ROUTE_BANKER, dict(hub), "the head's stone reaches its bind town"
 
     def usable(spot) -> bool:
