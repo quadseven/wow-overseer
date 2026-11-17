@@ -10940,10 +10940,19 @@ class Bridge(discord.Client):
                             "again" % (refusal, count)
                         )
                     else:
+                        # The routing is reserved BEFORE the helper runs:
+                        # the await yields, and a second ask for the same
+                        # errand must see this one spent. A helper that
+                        # finds nothing gives it back.
+                        counts[key] = (count + 1, started or now)
                         waypoint, crossed = await asyncio.to_thread(
                             detour, leader, aim)
-                        if waypoint:
-                            counts[key] = (count + 1, started or now)
+                        if not waypoint:
+                            held = counts.get(key)
+                            if held and held[0] > 1:
+                                counts[key] = (held[0] - 1, held[1])
+                            else:
+                                counts.pop(key, None)
                 if not waypoint:
                     if len(crossed) > 1:
                         refusal = "%s; the line also crosses %s" % (

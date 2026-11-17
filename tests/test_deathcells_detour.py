@@ -466,7 +466,7 @@ class TheDetourHelperReadsSafeSurveyedGround(unittest.TestCase):
         self.assertEqual(len(crossed), 1)
 
 
-def _door_live(refuse, detour):
+def _door_live(refuse, detour, yielding=False):
     """The real `_claim_town_slot` with a live refusal and detour, a fake
     clock, and the real `_DETOUR_CAP` / `_DETOUR_WINDOW_SECONDS` constants.
     Returns (fn, me, consts); the same `me` is reused across asks so the
@@ -482,6 +482,9 @@ def _door_live(refuse, detour):
     clock = [1000.0]
 
     async def to_thread(fn, *args):
+        if yielding:
+            # A real thread hop lets another ask run before this one returns.
+            await asyncio.sleep(0)
         return fn(*args)
 
     def reached(_leader):
@@ -576,6 +579,46 @@ class TheDoorCapsDetoursPerErrand(unittest.TestCase):
         clock[0] += consts["_DETOUR_WINDOW_SECONDS"] + 1.0
         self.assertEqual(self.ask(fn, me), "reached")
         self.assertEqual(len(calls), cap + 1)
+
+    def test_two_concurrent_asks_cannot_both_spend_the_last_routing(self):
+        calls = []
+
+        def detour(leader, aim):
+            calls.append(aim)
+            return "at:0:-7500.0,-500.0,40.0", ()
+
+        fn, me, consts, _clock = _door_live(
+            lambda leader, aim: "crosses lava", detour, yielding=True
+        )
+        cap = consts["_DETOUR_CAP"]
+
+        async def ask():
+            try:
+                return await fn(me, "gather", "Lead", self.AIM)
+            except _Reached:
+                return "reached"
+
+        async def run(count):
+            return await asyncio.gather(*[ask() for _ in range(count)])
+
+        # Both asks read the same count before either writes it back; the
+        # budget must still be spent exactly once per routing.
+        for _ in range(cap - 1):
+            self.assertEqual(asyncio.run(run(1)), ["reached"])
+        with self.assertLogs("test_deathcells_detour", level="WARNING"):
+            out = asyncio.run(run(2))
+        self.assertEqual(sorted(map(str, out)), ["False", "reached"])
+        self.assertEqual(len(calls), cap)
+
+    def test_a_detour_that_finds_nothing_gives_the_routing_back(self):
+        fn, me, consts, _clock = _door_live(
+            lambda leader, aim: "crosses lava", lambda leader, aim: ("", ())
+        )
+        cap = consts["_DETOUR_CAP"]
+        with self.assertLogs("test_deathcells_detour", level="WARNING"):
+            for _ in range(cap + 2):
+                self.assertIs(asyncio.run(fn(me, "gather", "Lead", self.AIM)), False)
+        self.assertNotIn("already been routed around", repr(me.__dict__))
 
 
 if __name__ == "__main__":
