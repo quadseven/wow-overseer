@@ -340,6 +340,25 @@ class GuildFund(unittest.TestCase):
         )
         self.assertNotIn("B", {x.member for x in plan.letters})
 
+    def test_training_budget_lowers_the_level_25_to_29_median_first(self):
+        members = [
+            member("A", 0, 3 * GOLD, 25),
+            member("B", 0, 3 * GOLD, 26),
+            member("C", 0, 5 * GOLD, 27),
+            member("D", 0, 6 * GOLD, 28),
+            member("E", 0, 8 * GOLD, 29),
+        ] + [member("M%d" % i, 0, 2 * GOLD, 40) for i in range(4)]
+
+        plan = guildfund.plan("Master", members, 31 * GOLD, guildfund.Ledger(), {})
+        funded = {letter.member: letter.copper for letter in plan.letters}
+        remaining_training = sorted(
+            member.training - member.money - funded.get(member.name, 0)
+            for member in members
+            if 25 <= member.level <= 29
+        )
+
+        self.assertLess(remaining_training[2], 2 * GOLD)
+
     def test_the_guild_spends_half_its_bank_a_day_on_training(self):
         members = [member("M%d" % i, 0, 9 * GOLD) for i in range(20)]
         plan = guildfund.plan("Grug", members, 100 * GOLD, guildfund.Ledger(), {})
