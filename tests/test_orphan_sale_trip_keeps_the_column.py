@@ -118,7 +118,11 @@ class AReservingErrandDoesNotCutAnOrphanSaleTripEither(unittest.TestCase):
         slot.reserve("town errand", 99.0, "bag room")
         ask(slot, "town errand", "at:0:1,2,3", "vendor", 100.0, urgent=True)
         d = ask(
-            slot, "town errand", "at:0:1,2,3", "vendor", 100.0 + ORPHAN_LEASE + 1,
+            slot,
+            "town errand",
+            "at:0:1,2,3",
+            "vendor",
+            100.0 + ORPHAN_LEASE + 1,
             urgent=True,
         )
         self.assertEqual(townslot.SLOT_PREEMPT, d.verdict, d.reason)
