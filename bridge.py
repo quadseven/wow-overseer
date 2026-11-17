@@ -21666,6 +21666,7 @@ class Bridge(discord.Client):
                     # cannot open it, so the ask is given up now instead of
                     # walking two more helpers across the map to wait for it.
                     board.give_up(run.ask_id)
+                    board.refuse_road(run)
                 log.info("class party: the meeting for %s's %s fails: %s", run.leader,
                          run.title, meeting.why)
                 return False
@@ -32644,6 +32645,11 @@ def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
     asks, answers, now = facts["asks"], facts["answers"], facts["now"]
     board.prune([a.id for a in classask.quest_asks(asks)
                  if a.state in guildsocial.LIVE_ASKS])
+    # A MEMBER WHOSE ROAD WAS REFUSED FOR GOOD IS NOT OFFERED THE QUEST AGAIN at
+    # the level and map it was refused at (#2071): its ask closes, and it asks
+    # no more until something about the road has changed.
+    on_refused_road = board.road_refused(helps)
+    helps = [h for h in helps if h.member not in on_refused_road]
     quest_ids = {a.id for a in classask.quest_asks(asks)}
     pugs, answered, pug_held = guildpug.pug_mates(
         list(pug_rows), [a for a in answers if a.ask_id in quest_ids],
