@@ -4,7 +4,7 @@
 // fetched (stale-while-revalidate); the server's ETag turns an unchanged
 // answer into a 304, which the browser answers from its own cache. Only the reads of the view on screen are polled, and
 // polling stops while the page is hidden. The last good answer to each read is
-// also kept for this tab (sessionStorage), so a reload paints at once from it,
+// also kept on this device (localStorage), so a reload paints at once from it,
 // marked "saved" until the world answers again (see the end of this file).
 
 // A page has a document; a view rendered to text under node (the tests, which
@@ -228,37 +228,100 @@ function justRead(path) {
   return !!(e && e.at && !e.saved && !e.error && Date.now() - e.at < 1000);
 }
 
-// ---- the copy kept for this tab -------------------------------------------------
-// The last good answer to each read, kept in sessionStorage under the page's
-// own mount (another realm on the same origin keeps its own). A reload draws
-// from it at once with its real age, flagged `saved` so health() reports
-// "saved" and the page says so until the world answers. Storage can be off,
-// full or throw: every touch is guarded, and without it the app reads as
-// before. Errors are never kept, and an answer too big to keep drops the old
-// copy rather than leave it to be shown as current.
+// ---- the copy kept on this device ------------------------------------------------
+// The last good answer to each read is kept for a day under the page's mount
+// and build. A reload draws from it at once with its real age, flagged `saved`
+// until the world answers. Storage can be off, full or throw: every touch is
+// guarded, and without it the app reads as before. Errors are never kept, and
+// an oversized answer drops the old copy rather than leaving it current.
 const SAVE_PREFIX = "overseer.read:";
 const SAVE_MAX_CHARS = 1000000;
+const SAVE_MAX_TOTAL_CHARS = 1500000;
+const SAVE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const SAVE_MOUNT_PREFIX = SAVE_PREFIX + encodeURIComponent(BASE || "/") + ":";
+const SAVE_NAMESPACE = SAVE_MOUNT_PREFIX + (BUILD || "unversioned") + ":";
+let storagePruned = false;
 
-function saveKey(path) { return SAVE_PREFIX + u(path); }
+function saveKey(path) { return SAVE_NAMESPACE + path; }
+
+function removeSaved(key) {
+  try { window.localStorage.removeItem(key); } catch (err) { /* storage off */ }
+}
+
+// Remove stale versions and expired or malformed entries for this mount.
+// Other mounts on the same origin keep their own copies.
+function pruneSavedCopies() {
+  if (storagePruned) return;
+  try {
+    const storage = window.localStorage;
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (!key || !key.startsWith(SAVE_MOUNT_PREFIX)) continue;
+      let remove = !key.startsWith(SAVE_NAMESPACE);
+      if (!remove) {
+        let kept = null;
+        try { kept = JSON.parse(storage.getItem(key)); } catch (err) { remove = true; }
+        if (!kept || typeof kept.text !== "string" || !Number.isFinite(kept.at) ||
+          kept.at <= 0 || Date.now() - kept.at > SAVE_MAX_AGE_MS) remove = true;
+      }
+      if (remove) { storage.removeItem(key); i--; }
+    }
+    storagePruned = true;
+  } catch (err) { storagePruned = true; }
+}
+
+function currentSavedEntries(storage, replacingKey) {
+  const entries = [];
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i);
+    if (!key || key === replacingKey || !key.startsWith(SAVE_NAMESPACE)) continue;
+    const raw = storage.getItem(key);
+    let kept = null;
+    try { kept = JSON.parse(raw); } catch (err) { continue; }
+    entries.push({ key, raw, at: kept.at });
+  }
+  return entries;
+}
 
 function save(path, e) {
+  const key = saveKey(path);
   try {
-    if (e.text.length > SAVE_MAX_CHARS) { window.sessionStorage.removeItem(saveKey(path)); return; }
-    window.sessionStorage.setItem(saveKey(path), JSON.stringify({ at: e.at, text: e.text }));
-  } catch (err) {
-    try { window.sessionStorage.removeItem(saveKey(path)); } catch (err2) { /* storage off */ }
-  }
+    const storage = window.localStorage;
+    if (e.text.length > SAVE_MAX_CHARS) { storage.removeItem(key); return; }
+    pruneSavedCopies();
+    const value = JSON.stringify({ at: e.at, text: e.text });
+    const needed = key.length + value.length;
+    if (needed > SAVE_MAX_TOTAL_CHARS) { storage.removeItem(key); return; }
+    const entries = currentSavedEntries(storage, key);
+    let total = entries.reduce((size, entry) => size + entry.key.length + entry.raw.length, 0);
+    entries.sort((a, b) => a.at - b.at);
+    while (total + needed > SAVE_MAX_TOTAL_CHARS && entries.length) {
+      const oldest = entries.shift();
+      storage.removeItem(oldest.key);
+      total -= oldest.key.length + oldest.raw.length;
+    }
+    if (total + needed > SAVE_MAX_TOTAL_CHARS) { storage.removeItem(key); return; }
+    storage.setItem(key, value);
+  } catch (err) { removeSaved(key); }
 }
 
 function restore(path) {
+  pruneSavedCopies();
   let kept = null;
   try {
-    const raw = window.sessionStorage.getItem(saveKey(path));
+    const raw = window.localStorage.getItem(saveKey(path));
     kept = raw ? JSON.parse(raw) : null;
   } catch (err) { kept = null; }
-  if (!kept || typeof kept.text !== "string" || !kept.at) return null;
+  if (!kept || typeof kept.text !== "string" || !Number.isFinite(kept.at) ||
+    kept.at <= 0 || Date.now() - kept.at > SAVE_MAX_AGE_MS) {
+    removeSaved(saveKey(path));
+    return null;
+  }
   let data;
-  try { data = JSON.parse(kept.text); } catch (err) { return null; }
+  try { data = JSON.parse(kept.text); } catch (err) {
+    removeSaved(saveKey(path));
+    return null;
+  }
   const e = { data, text: kept.text, projection: stableProjection(kept.text), at: kept.at, error: null, failures: 0, inflight: null, saved: true };
   cache.set(path, e);
   return e;
