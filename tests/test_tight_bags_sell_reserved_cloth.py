@@ -64,7 +64,9 @@ def sold(m, kept=None):
 
 class ATightMemberKeepsItsFullestClothAndSellsTheRest(unittest.TestCase):
     def test_the_two_fullest_stacks_stay_and_the_rest_sells(self):
-        self.assertEqual({LINEN_B.guid, SILK.guid, MAGEWEAVE.guid}, sold(member(free=0)))
+        self.assertEqual(
+            {LINEN_B.guid, SILK.guid, MAGEWEAVE.guid}, sold(member(free=0))
+        )
         self.assertEqual(
             {LINEN_B.guid, SILK.guid, MAGEWEAVE.guid},
             sold(member(free=1)),
