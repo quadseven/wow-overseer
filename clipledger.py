@@ -108,6 +108,9 @@ class Views:
         self.rows = [r for r in rows if r.get("map") is not None]
         self.now = now
         self.families = [frozenset(names) for names in (families or {}).values()]
+        # The tiers the last pick tried: (tier, name, path), path "" for a
+        # view that was not there. Read by plan_requests for a suppressed row.
+        self.tried = []
 
     def _family_of(self, name):
         for names in self.families:
@@ -140,21 +143,25 @@ class Views:
 
     def pick(self, who, leader, members, detail, reason=NOT_IN_A_RUN):
         """(path, detail) for `who`; `leader` is None when no run is known."""
+        self.tried = []
         own = self.path_of(who)
+        self.tried.append(("subject", who, own))
         if own:
             return own, detail
         if leader is None:
             return "", _with_view(detail, reason)
-        if leader != who and self.path_of(leader):
-            return self.path_of(leader), _with_view(
-                detail, "view: %s (leader)" % leader
-            )
+        if leader != who:
+            lead = self.path_of(leader)
+            self.tried.append(("leader", leader, lead))
+            if lead:
+                return lead, _with_view(detail, "view: %s (leader)" % leader)
         present = set(members)
         for name in self.roster:
-            if name in present and name not in (who, leader) and self.path_of(name):
-                return self.path_of(name), _with_view(
-                    detail, "view: %s (party member)" % name
-                )
+            if name in present and name not in (who, leader):
+                path = self.path_of(name)
+                self.tried.append(("party member", name, path))
+                if path:
+                    return path, _with_view(detail, "view: %s (party member)" % name)
         return "", _with_view(detail, NO_STREAMED_IN_RUN)
 
     def for_event(self, who, at, map_id, detail):
@@ -191,6 +198,7 @@ def _request(key, kind, who, views, at, window, detail, map_id=None, members=Non
         "window_end": end,
         "state": "pending",
         "detail": detail,
+        "tried": list(views.tried),
     }
 
 
@@ -440,8 +448,34 @@ def plan_requests(
             seen.add(row["event_key"])
             if not row["stream_path"]:
                 row["state"] = "no_view"
+        if row["state"] != "no_view":
+            row.pop("tried", None)
         out.append(row)
     return out
+
+
+def suppression_line(row: Mapping, reads: Callable[[str], str] | None = None) -> str:
+    """One log line for a suppressed (no_view) row: the tiers tried, who was
+    asked at each, and why none gave a view, so the cause is readable from the
+    log and not only from the Chronicle note. `reads(path)` may add a liveness
+    read (poll and frame age) for a tier that had a path."""
+    tiers = []
+    for tier, name, path in row.get("tried") or ():
+        if path:
+            read = reads(path) if reads else ""
+            tiers.append(
+                "%s %s: path %s%s" % (tier, name, path, " (%s)" % read if read else "")
+            )
+        else:
+            tiers.append("%s %s: not streamed" % (tier, name))
+    return "clip suppressed: %s (%s) for %s at %s; tried %s; %s" % (
+        row.get("event_key", "?"),
+        row["kind"],
+        row["character"],
+        row["event_at"],
+        "; ".join(tiers) or "no tier",
+        row.get("detail") or NO_VIEW_LINE,
+    )
 
 
 # --- timing out rows the agent never finished ----------------------------

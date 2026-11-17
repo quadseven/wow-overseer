@@ -4505,6 +4505,19 @@ def _clip_path(name: str) -> str:
     return family.broadcast_path(name) if family.is_streamed(name) else ""
 
 
+def _clip_view_read(path: str) -> str:
+    """The liveness read of a stream path for the suppression log line: how
+    long ago the cutter last polled it and how old its newest segment is."""
+    now = time.time()
+    with _VIEW_SEEN_LOCK:
+        seen = _VIEW_SEEN.get(path)
+        segment = _VIEW_SEGMENT.get(path)
+    return "poll %s, segment %s" % (
+        "never" if seen is None else "%ds ago" % (now - seen),
+        "unknown" if segment is None else "%ds old" % (now - segment),
+    )
+
+
 def _clip_who() -> tuple:
     """(roster names across the families, family guild names, the families)."""
     families = FAMILIES.families()
@@ -4696,6 +4709,8 @@ def scan_clips() -> dict:
             late_horizon=horizon,
         )
         for row in planned:
+            if row["state"] == "no_view":
+                log.info("%s", clipledger.suppression_line(row, _clip_view_read))
             cur.execute(_CLIP_INSERT, (
                 row["kind"], row["character"], row["stream_path"],
                 row["event_key"], row["event_at"], row["window_start"],

@@ -755,5 +755,56 @@ class RetentionTests(unittest.TestCase):
         self.assertEqual("ready", rows[0]["state"])
 
 
+class SuppressionLineTests(unittest.TestCase):
+    """A suppressed trigger leaves one log line naming each tier tried."""
+
+    def test_a_no_view_row_carries_the_tiers_tried_in_order(self):
+        (row,) = plan(
+            loot_rows=[in_dungeon(loot(7, who="Cedar")), seen_in("Birch")],
+            runs=[run()],
+            roster=FAMILY,
+            path_of=only("Dogwood"),
+        )
+        self.assertEqual("no_view", row["state"])
+        self.assertEqual(
+            [
+                ("subject", "Cedar", ""),
+                ("leader", "Alder", ""),
+                ("party member", "Birch", ""),
+            ],
+            row["tried"],
+        )
+
+    def test_a_row_that_got_a_view_carries_no_tiers(self):
+        rows = plan(loot_rows=[loot(7)])
+        self.assertNotIn("tried", rows[0])
+
+    def test_the_line_names_every_tier_and_the_reason(self):
+        row = {
+            "kind": "loot",
+            "character": "Cedar",
+            "event_at": NOW,
+            "detail": "Test Blade; no streamed family member in the run",
+            "tried": [("subject", "Cedar", ""), ("leader", "Alder", "")],
+        }
+        line = clipledger.suppression_line(row)
+        self.assertIn("subject Cedar: not streamed", line)
+        self.assertIn("leader Alder: not streamed", line)
+        self.assertIn("no streamed family member in the run", line)
+
+    def test_a_tier_with_a_path_shows_its_liveness_read(self):
+        row = {
+            "kind": "loot",
+            "character": "Cedar",
+            "event_at": NOW,
+            "detail": "",
+            "tried": [("subject", "Cedar", "wdcedar")],
+        }
+        line = clipledger.suppression_line(
+            row, lambda path: "poll 4s ago, frame 90s old"
+        )
+        self.assertIn("subject Cedar: path wdcedar (poll 4s ago, frame 90s old)", line)
+
+
 if __name__ == "__main__":
     unittest.main()
