@@ -80,7 +80,9 @@ class AHuntThatNeverKillsIsLeft(unittest.TestCase):
             hunt_row(10 * i + 5, status="error", reason="no free bag slot")
             for i in range(questers.FRUITLESS_HUNTS)
         ]
-        self.assertNotIn(KOBOLDS, questers.fruitless_entries("Mirra", questers.attempts(rows)))
+        self.assertNotIn(
+            KOBOLDS, questers.fruitless_entries("Mirra", questers.attempts(rows))
+        )
 
     def test_it_hunts_again_once_the_rows_are_old(self):
         age = questers.FRUITLESS_MINUTES + 5
@@ -88,14 +90,20 @@ class AHuntThatNeverKillsIsLeft(unittest.TestCase):
         self.assertEqual(move(rows).kind, classquest.HUNT)
 
     def test_another_creature_is_not_left_for_this_ones_rows(self):
-        rows = [hunt_row(10 * i + 5, entry=999) for i in range(questers.FRUITLESS_HUNTS)]
+        rows = [
+            hunt_row(10 * i + 5, entry=999) for i in range(questers.FRUITLESS_HUNTS)
+        ]
         self.assertEqual(move(rows).kind, classquest.HUNT)
 
     def test_a_quest_it_cannot_hunt_runs_its_stall_clock(self):
         rows = [hunt_row(10 * i + 5) for i in range(questers.FRUITLESS_HUNTS)]
         tried = questers.attempts(rows)
         working = questers._working(
-            world(), holder(), 0, frozenset(), frozenset(),
+            world(),
+            holder(),
+            0,
+            frozenset(),
+            frozenset(),
             questers.fruitless_entries("Mirra", tried),
         )
         self.assertIn(2, working)

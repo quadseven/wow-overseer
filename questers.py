@@ -2041,7 +2041,9 @@ def _takes(cat: Catalogue, member, skip, left, tried) -> tuple:
     return takes, never_held
 
 
-def _hunt(cat: Catalogue, member, skip, left, object_left=frozenset(), idle=frozenset()):
+def _hunt(
+    cat: Catalogue, member, skip, left, object_left=frozenset(), idle=frozenset()
+):
     """The hunt at the nearest objective spawn within the quester's level of
     an incomplete quest it holds, or a crossing to one on the other classic
     continent. A nearby hunt always takes priority over a crossing. A chest
