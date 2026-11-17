@@ -146,6 +146,10 @@ class JobDirective:
 
     mode: str
     source: str
+    # One member's own job (#2407), or "" for the whole family. A named member
+    # is accepted only while the family is not linked and the mode is not a
+    # dungeon or raid job; individual.member_order_refusal says why not.
+    member: str = ""
 
 
 @dataclass(frozen=True)
@@ -438,6 +442,15 @@ def _job_mode(text: str):
     return parse_order(text)
 
 
+def _member_order(text: str):
+    """jobs.parse_member_order, late-imported like _job_mode: (mode, member)
+    for "job <mode> for <member>", else None. Asked before the family-wide
+    phrases so the trailing name is never read as part of the mode."""
+    from jobs import parse_member_order
+
+    return parse_member_order(text)
+
+
 def _queue_order(text: str):
     """campaignqueue.parse_order, late-imported like _job_mode. A message
     that starts with "queue" is a queue order and nothing else, so it is
@@ -486,6 +499,15 @@ def _unaddressed(text: str, dedicated: bool, author_id: str = "") -> list:
                 text=queue.text,
                 source=f"discord:{author_id}",
                 partner=queue.partner,
+            )
+        ]
+    member_order = _member_order(text)
+    if member_order is not None:
+        return [
+            JobDirective(
+                mode=member_order[0],
+                source=f"discord:{author_id}",
+                member=member_order[1],
             )
         ]
     mode = _job_mode(text)

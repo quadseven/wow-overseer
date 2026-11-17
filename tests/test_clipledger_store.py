@@ -592,6 +592,22 @@ class TheViewRule(unittest.TestCase):
         self.assertIn("{holes}", map_server._CLIP_OPEN_RUN_SQL)
 
 
+class TheSuppressionLog(unittest.TestCase):
+    def test_a_trigger_with_no_view_logs_one_line_naming_the_tiers_tried(self):
+        store = FakeStore()
+        with self.assertLogs("wow-map", level=logging.INFO) as logs:
+            result = scan(store, Realm(loot=[loot_row()]), path_of=lambda name: "")
+        self.assertEqual(1, result["written"])
+        lines = [m for m in logs.output if "clip suppressed" in m]
+        self.assertEqual(1, len(lines))
+        self.assertIn("subject Alder: not streamed", lines[0])
+        self.assertIn("loot:7", lines[0])
+
+    def test_a_trigger_with_a_view_logs_no_suppression(self):
+        with self.assertNoLogs("wow-map", level=logging.INFO):
+            scan(FakeStore(), Realm(loot=[loot_row()]))
+
+
 class TheSql(unittest.TestCase):
     def test_the_loot_interval_is_a_bound_parameter_not_formatted_in(self):
         self.assertIn("INTERVAL %s MINUTE", map_server._CLIP_LOOT_SQL)

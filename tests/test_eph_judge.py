@@ -236,6 +236,105 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(r["verdict"], "INVALID")
 
 
+class StartWaitTest(unittest.TestCase):
+    """A world's port opens before the family has logged in, so `start` waits for it."""
+
+    def decree(self):
+        d = copy.deepcopy(GUZZLER)
+        d["observe"].append(
+            {
+                "name": "cast-is-in-the-world",
+                "role": "precondition",
+                "when": "start",
+                "sql": "SELECT COUNT(*) FROM corpse WHERE guid = @cast0",
+                "expect": {"scalar": "= 1"},
+            }
+        )
+        return d
+
+    def run_waiting(self, world, clock, wait=600, poll=10):
+        return judge.Judge(
+            self.decree(),
+            world,
+            HANDOFF,
+            log_text=lambda: "",
+            clock=clock.monotonic,
+            sleep=clock.sleep,
+            poll=poll,
+            run_id="run-1",
+            sha="a" * 64,
+            arm="control",
+            start_wait=wait,
+        ).run()
+
+    def test_a_precondition_that_holds_a_minute_late_is_judged_not_invalid(self):
+        clock = Clock()
+        world = guzzler_world(clock)
+        world.answer("FROM corpse", lambda now: [(1 if now >= 60 else 0,)])
+        r = self.run_waiting(world, clock)
+        self.assertEqual(r["verdict"], "PASS", r["reasons"])
+        self.assertGreaterEqual(r["start_wait_s"], 60)
+        self.assertLess(r["start_wait_s"], 90)
+        self.assertEqual(named(r, "cast-is-in-the-world")["status"], "held")
+
+    def test_no_order_is_given_and_no_act_clock_runs_during_the_wait(self):
+        clock = Clock()
+        world = guzzler_world(clock)
+        world.answer("FROM corpse", lambda now: [(1 if now >= 60 else 0,)])
+        r = self.run_waiting(world, clock)
+        self.assertTrue(world.commands)
+        self.assertGreaterEqual(world.commands[0][0], 60, "first order after the wait")
+        self.assertEqual(
+            r["acts"][0]["fired_s"], 0, "the act clock starts when the wait ends"
+        )
+
+    def test_a_precondition_that_never_holds_ends_invalid_after_the_limit(self):
+        clock = Clock()
+        world = guzzler_world(clock)
+        world.answer("FROM corpse", [(0,)])
+        r = self.run_waiting(world, clock, wait=120)
+        self.assertEqual(r["verdict"], "INVALID")
+        self.assertTrue(
+            any("cast-is-in-the-world" in x for x in r["reasons"]), r["reasons"]
+        )
+        self.assertGreaterEqual(clock.now, 120)
+        self.assertLess(clock.now, 140, "it waits the limit, not the whole window")
+        self.assertEqual(world.commands, [])
+        self.assertEqual(r["start_wait_s"], int(clock.now))
+
+    def test_a_timed_out_precondition_is_retried_inside_the_wait(self):
+        clock = Clock()
+        world = guzzler_world(clock)
+        world.answer(
+            "FROM corpse",
+            lambda now: judge.QueryTimeout("slow") if now < 20 else [(1,)],
+        )
+        r = self.run_waiting(world, clock)
+        self.assertEqual(r["verdict"], "PASS", r["reasons"])
+
+    def test_a_zero_wait_samples_once_as_before(self):
+        clock = Clock()
+        world = guzzler_world(clock)
+        world.answer("FROM corpse", [(0,)])
+        r = self.run_waiting(world, clock, wait=0)
+        self.assertEqual(r["verdict"], "INVALID")
+        self.assertLess(clock.now, 1)
+
+    def test_the_entry_reads_the_limit_from_the_environment(self):
+        self.assertEqual(judge.start_wait_from_env({}), judge.START_WAIT_SECONDS)
+        self.assertEqual(
+            judge.start_wait_from_env({"EPH_START_WAIT_SECONDS": "90"}), 90
+        )
+        self.assertEqual(
+            judge.start_wait_from_env({"EPH_START_WAIT_SECONDS": "junk"}),
+            judge.START_WAIT_SECONDS,
+        )
+        self.assertEqual(
+            judge.start_wait_from_env({"EPH_START_WAIT_SECONDS": "-5"}),
+            judge.START_WAIT_SECONDS,
+        )
+
+
 class ScalarAndCreditTest(unittest.TestCase):
     def test_an_ambiguous_scalar_makes_the_run_invalid(self):
         clock = Clock()
@@ -897,6 +996,116 @@ class ConfigMapStoreTest(unittest.TestCase):
         self.assertNotIn(self.marker, str(cm.exception))
         self.assertNotIn(self.marker, http.calls[0][3].decode("utf-8"))
         self.assertNotIn(self.marker, repr(self.store(http).namespace))
+
+
+class FlakyHttp:
+    """Scripted answers: an exception is raised, an int is a status."""
+
+    def __init__(self, *script):
+        self.script = list(script)
+        self.calls = []
+
+    def __call__(self, method, url, headers, body):
+        self.calls.append((method, url))
+        step = self.script.pop(0) if self.script else 201
+        if isinstance(step, Exception):
+            raise step
+        return step, b"{}"
+
+
+class WriteRetryTest(unittest.TestCase):
+    def store(self, http, **kw):
+        self.slept = []
+        self.lines = []
+        return judge.ConfigMapStore(
+            "https://api.example.invalid",
+            "t",
+            "eph-ns",
+            http,
+            sleep=self.slept.append,
+            log=self.lines.append,
+            **kw,
+        )
+
+    def cm(self):
+        return {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": "eph-result-run-1", "namespace": "eph-ns"},
+            "data": {"verdict": "PASS"},
+        }
+
+    def test_two_connect_timeouts_then_success_writes_the_result(self):
+        http = FlakyHttp(TimeoutError("timed out"), OSError("unreachable"), 201)
+        self.store(http).write(self.cm())
+        self.assertEqual(len(http.calls), 3)
+        self.assertEqual(len(self.slept), 2)
+        self.assertEqual(len(self.lines), 2, "each failed attempt is printed")
+        self.assertIn("attempt 1", self.lines[0])
+
+    def test_the_backoff_grows_and_is_capped(self):
+        http = FlakyHttp(*[TimeoutError("t")] * 8, 201)
+        self.store(http, retry_seconds=10_000).write(self.cm())
+        self.assertEqual(self.slept, sorted(self.slept))
+        self.assertLessEqual(max(self.slept), judge.WRITE_BACKOFF_CAP)
+        self.assertGreater(self.slept[-1], self.slept[0])
+
+    def test_a_server_error_or_throttle_is_retried(self):
+        http = FlakyHttp(503, 429, 201)
+        self.store(http).write(self.cm())
+        self.assertEqual(len(http.calls), 3)
+
+    def test_a_client_refusal_is_not_retried(self):
+        http = FlakyHttp(403, 201)
+        with self.assertRaises(judge.JudgeError):
+            self.store(http).write(self.cm())
+        self.assertEqual(len(http.calls), 1)
+
+    def test_already_exists_after_a_lost_answer_counts_as_written(self):
+        http = FlakyHttp(TimeoutError("t"), 409)
+        self.store(http).write(self.cm())
+        self.assertEqual(len(http.calls), 2)
+
+    def test_a_first_attempt_conflict_is_still_an_error(self):
+        with self.assertRaises(judge.JudgeError):
+            self.store(FlakyHttp(409)).write(self.cm())
+
+    def test_it_gives_up_after_the_limit_with_a_judge_error(self):
+        http = FlakyHttp(*[TimeoutError("t")] * 1000)
+        with self.assertRaises(judge.JudgeError) as cm:
+            self.store(http, retry_seconds=60).write(self.cm())
+        self.assertIn("attempts", str(cm.exception))
+        self.assertLessEqual(sum(self.slept), 60)
+
+    def test_a_failing_write_leaves_the_whole_result_in_the_log(self):
+        out = []
+
+        class Dead:
+            def write(self, cm):
+                raise judge.JudgeError("result not written after 5 attempts")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            handoff = d / "handoff.json"
+            handoff.write_text(json.dumps(HANDOFF), encoding="utf-8")
+            rc = judge.run(
+                str(
+                    ROOT
+                    / "data"
+                    / "decrees"
+                    / "brd-guzzler-exit-zero-patron-deaths.yaml"
+                ),
+                {**RunEntryTest.ENV, "EPH_VARS_FILE": str(handoff)},
+                connect=lambda **kw: ScriptedConn(),
+                store=Dead(),
+                log_path=str(d / "world.log"),
+                out=out.append,
+                clock=Clock(),
+            )
+        self.assertEqual(rc, 2)
+        full = json.loads(out[-1])
+        self.assertIn(full["verdict"], ("PASS", "FAIL", "INVALID"))
+        self.assertEqual(full["run_id"], "run-9")
 
 
 class InClusterTest(unittest.TestCase):
