@@ -306,6 +306,29 @@ class TheSubmodulePin(unittest.TestCase):
         self.assertEqual(1, len(warnings), result.stderr)
         self.assertIn("fetch failed", warnings[0])
 
+    def test_a_failed_fetch_reason_hides_url_credentials(self):
+        """git can name a credential-bearing origin URL in a fetch error;
+        the warning built from it must not print the token."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("pin_check", PIN_CHECK)
+        pin_check = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pin_check)
+        fetched = subprocess.CompletedProcess(
+            ["git", "fetch"],
+            128,
+            stdout="",
+            stderr=(
+                "fatal: unable to access "
+                "'https://x-access-token:ghs_SECRET123@github.com/o/r.git/': "
+                "Could not resolve host: github.com\n"
+            ),
+        )
+        reason = pin_check._fetch_failure_reason(fetched)
+        self.assertNotIn("ghs_SECRET123", reason)
+        self.assertNotIn("x-access-token", reason)
+        self.assertIn("https://***@github.com/o/r.git/", reason)
+
     def test_a_failed_fetch_still_fails_in_github_actions(self):
         with tempfile.TemporaryDirectory() as temporary:
             checkout = self._checkout_with_broken_origin(pathlib.Path(temporary))

@@ -2,8 +2,17 @@
 
 import argparse
 import os
+import re
 import subprocess
 import sys
+
+# The userinfo part of a URL (`user:token@` or `token@`) in git's output.
+_URL_CREDENTIALS = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@")
+
+
+def _redact(text):
+    """Text with the credential part of every URL replaced by `***`."""
+    return _URL_CREDENTIALS.sub(r"\g<scheme>***@", text)
 
 
 def _fetch_failure_reason(fetch):
@@ -12,7 +21,7 @@ def _fetch_failure_reason(fetch):
     lines = [line.strip() for line in (fetch.stderr or "").splitlines()]
     lines = [line for line in lines if line]
     if lines:
-        return " ".join(lines[-1].split())
+        return _redact(" ".join(lines[-1].split()))
     return "git fetch exited %d" % fetch.returncode
 
 
@@ -54,7 +63,7 @@ def main(argv=None):
             )
             return 0
         if fetched.stderr:
-            sys.stderr.write(fetched.stderr)
+            sys.stderr.write(_redact(fetched.stderr))
         return fetched.returncode
     result = subprocess.run(
         [
