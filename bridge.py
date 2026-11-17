@@ -38984,14 +38984,15 @@ def _pvp_crossings(rows, family_rows, busy, recent) -> dict:
         crossings = [r for r in recent or ()
                      if r.name == name and r.action in guildjobs.CROSS_ACTIONS]
         under_way = pvpgear.crossing_under_way(crossings)
-        idle = name not in busy and pvpgear.family_idle_in_town(
-            pvpgear.family_rows_for(name, str(row.get("guild_name") or ""), family_rows))
+        family = pvpgear.family_rows_for(name, str(row.get("guild_name") or ""), family_rows)
+        idle = name not in busy and pvpgear.family_idle_in_town(family)
         out[name] = pvpgear.Crossing(
             idle or under_way,
             pvpgear.dock_reachable(pvpgear.other_continent(row.get("snapshot_map")),
                                    guildjobs.class_walls(name, recent), crossings),
             guildjobs.pvp_walk_cooldown(name, recent) == 0,
-            cooling=guildjobs.crossing_cooling(name, recent) and not under_way)
+            cooling=guildjobs.crossing_cooling(name, recent) and not under_way,
+            home_map=pvpgear.home_continent(name, family))
     return out
 
 
