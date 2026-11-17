@@ -66,6 +66,7 @@ import gearrouting
 import gearroutingexec
 import gearroutingread
 import seatmeter
+import jev_openai
 import jevview
 import levelroute
 import llmmode
@@ -2306,12 +2307,23 @@ def _fetch_jev_view() -> dict:
                         raise
                     break
                 rows = list(cur.fetchall())
+                openai = _fetch_jev_openai(cur)
         finally:
             conn.close()
     except Exception:
         log.exception("jev record unreadable; the Decree shows none")
         return jevview.view([])
-    return jevview.view(rows)
+    return jevview.view(rows, openai=openai)
+
+
+def _fetch_jev_openai(cur) -> list:
+    """The OpenAI backend's per-kind report as lines, or none where it has never
+    run (no spend table yet); the card is one card and never fails for it."""
+    try:
+        report = jev_openai.fetch_report(cur, os.environ)
+    except Exception:
+        return []
+    return [jev_openai.summary_line(k, v) for k, v in report.items()]
 
 
 # --- the Council and the Eye (infra#2597) -----------------------------------

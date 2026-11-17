@@ -394,7 +394,13 @@ class BridgeWiring(unittest.TestCase):
             def cursor(self):
                 return Cursor()
 
-        scope = {"_connect": Conn, "json": json, "jev": jev, "jev_outcomes": jo}
+        scope = {
+            "_connect": Conn,
+            "json": json,
+            "jev": jev,
+            "jev_outcomes": jo,
+            "_jev_report_tick": lambda: None,
+        }
         exec(insert, scope)  # noqa: S102 - bridge.py's own source
         scope["_insert_jev_comparisons"](
             [
