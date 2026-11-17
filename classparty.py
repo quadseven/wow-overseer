@@ -589,14 +589,17 @@ class Board:
 
     A restart forgets it: the module's own parties end by themselves within 30
     minutes, and the ask rows run out. Times are seconds on one monotonic
-    clock."""
+    clock. The one exception is `roads`, the refused roads (refuse_road): the
+    bridge passes a mapping that keeps them across a restart (#2071), because
+    a road that stays refused does not stop being refused when the bridge is
+    redeployed."""
 
-    def __init__(self):
+    def __init__(self, roads=None):
         self.parties: dict = {}
         self._refused: dict = {}
         self._failures: dict = {}
         self._cooling: dict = {}
-        self._roads: dict = {}
+        self._roads: dict = {} if roads is None else roads
         self._unsupported_until = 0.0
 
     def runs(self) -> list:
