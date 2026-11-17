@@ -247,6 +247,46 @@ class ADeferralSaysHowManyMovesWait(unittest.TestCase):
         self.assertIn("3 planned move(s) waiting", line)
 
 
+class ADeferralNamesTheMembersThatHoldTheSplit(unittest.TestCase):
+    """#2568: the line must say WHO is far and whether each holds bank work, or
+    a deferral cannot be told from the straggler defect."""
+
+    def test_the_line_names_the_far_member_and_its_planned_moves(self):
+        moves = [deposit("Bork", 600, "Linen"), deposit("Bork", 601, "Cloth")]
+        run = _Run(moves=moves).run()
+        (line,) = [w for w in run.warnings if "remained split" in w]
+        self.assertIn("far members: Bork 2804 yards away, 2 planned move(s)", line)
+
+    def test_a_member_on_another_map_is_named_by_its_map(self):
+        now = time.monotonic()
+        movement = vendor_stall.FamilyMovement(
+            positions=(("Grug", 0, 0.0, 0.0), ("Og", 1, 5.0, 5.0)),
+            steady_since=now,
+            split_since=now,
+        )
+        progress = vendor_stall.FamilyProgress(True, True, False, 9.0, movement)
+        self.assertEqual(
+            vendor_stall.far_members(progress, {"Og": 1}),
+            "Og on map 1, 1 planned move(s)",
+        )
+
+    def test_a_far_member_with_no_planned_move_reads_zero(self):
+        now = time.monotonic()
+        movement = vendor_stall.FamilyMovement(
+            positions=(("Grug", 0, 0.0, 0.0), ("Og", 0, 900.0, 0.0)),
+            steady_since=now,
+            split_since=now,
+        )
+        progress = vendor_stall.FamilyProgress(True, True, False, 9.0, movement)
+        self.assertIn(
+            "Og 900 yards away, 0 planned", vendor_stall.far_members(progress)
+        )
+
+    def test_an_unreadable_family_names_nobody(self):
+        progress = vendor_stall.FamilyProgress(False, False, False, 0.0, None)
+        self.assertEqual(vendor_stall.far_members(progress), "")
+
+
 class AStragglerWithNoBankWorkDoesNotVetoTheTrip(unittest.TestCase):
     """The split rule is judged over the trip's own party (the leader and the
     members with bank work), so a far member with nothing to bank cannot hold
