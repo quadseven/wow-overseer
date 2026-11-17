@@ -548,6 +548,10 @@ class PartyRun:
     deadline: float | None = None
     outcome: str = ""
     walks: dict = field(default_factory=dict)
+    # The leader's level and map when the ask was planned: what a refused road
+    # is held against (Board.refuse_road).
+    level: int = 0
+    map_id: int = 0
 
     def names(self) -> tuple:
         return (self.leader,) + tuple(self.helpers)
@@ -592,6 +596,7 @@ class Board:
         self._refused: dict = {}
         self._failures: dict = {}
         self._cooling: dict = {}
+        self._roads: dict = {}
         self._unsupported_until = 0.0
 
     def runs(self) -> list:
@@ -628,6 +633,30 @@ class Board:
     def give_up(self, ask_id) -> None:
         """Count the ask out at once: its failures reach MAX_FAILURES."""
         self._failures[int(ask_id)] = MAX_FAILURES
+
+    def refuse_road(self, run) -> None:
+        """Keep the leader's refused road: its quest, level and map when the
+        module refused the way for good (leader_road_refused). The road stays
+        refused until the member's level or map is not these (#2071), not for
+        as long as a cooldown lasts: a cooldown ran out, and the member asked
+        again from the same place, three hours apart, with the same road
+        under it."""
+        if int(run.level) > 0:
+            self._roads[run.leader] = (int(run.quest), int(run.level), int(run.map_id))
+
+    def road_refused(self, helps) -> set:
+        """The members among `helps` still on the road that was refused for
+        them. A member whose level or map changed is let go."""
+        held = set()
+        for h in helps:
+            road = self._roads.get(h.member)
+            if road is None:
+                continue
+            if road == (int(h.move.quest), int(h.level), int(h.map_id)):
+                held.add(h.member)
+            else:
+                del self._roads[h.member]
+        return held
 
     def failures(self, ask_id) -> int:
         return self._failures.get(int(ask_id), 0)
@@ -764,6 +793,8 @@ def _run(ask, need, standing, spot) -> PartyRun:
         need.move.title,
         spot,
         {y.member: y.id for y in chosen},
+        level=int(getattr(need, "level", 0) or 0),
+        map_id=int(getattr(need, "map_id", 0) or 0),
     )
 
 
