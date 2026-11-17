@@ -291,6 +291,11 @@ LOG_STATE_REFUSALS = frozenset(
 # never counted toward a broken quest, and the quester sells before the take
 # is asked again (#1992).
 BAG_ROOM_REFUSAL = "no bag room for the item the giver hands over"
+# The module's words for a hand-in CanRewardQuest refuses (mod-overseer
+# QUEST_CORE_WILL_NOT_REWARD, retryable). Among its causes is a reward the bags
+# cannot hold: a quest with a reward choice is refused for a quester whose
+# bags are full (#2788, #2790).
+REWARD_REFUSAL = "the core will not reward it now"
 
 # The world's own words for a spawn that is not there (classquest.SPAWN_REFUSALS).
 GONE = "no such spawn in the world"
@@ -1194,14 +1199,40 @@ def walk_wall(name, tried) -> tuple:
     return (reason, wait) if wait > 0 else ("", 0)
 
 
-def refusals(name, tried) -> dict:
+def _reward_room_refusal(a, free_slots) -> bool:
+    """Whether this hand-in refusal is the core's reward refusal for a quester
+    whose bags read full: the reward has nowhere to go, so the refusal says
+    nothing about the quest (#2788, #2790). A refusal for a quester whose bags
+    are unread or have room is left to count, since it names some other rule."""
+    if a.reason != REWARD_REFUSAL or free_slots is None or int(free_slots) > 0:
+        return False
+    found = _CHAIN_ROW.match(a.command)
+    return bool(found and found.group(1) == "turnin")
+
+
+def reward_room_refused(name, tried, free_slots) -> frozenset:
+    """The quest ids whose hand-in the core refused for this quester, whose
+    bags read full, inside SELL_COOLDOWN_MINUTES: the hand-in waits for the
+    sale and is asked again after it (the take's wait, `bag_room_refused`)."""
+    return frozenset(
+        int(_CHAIN_ROW.match(a.command).group(2))
+        for a in tried or ()
+        if a.name == name
+        and a.failed
+        and a.age_minutes < SELL_COOLDOWN_MINUTES
+        and _reward_room_refusal(a, free_slots)
+    )
+
+
+def refusals(name, tried, free_slots=None) -> dict:
     """(verb, quest id) -> (times refused, the last words) for this quester's
-    takes and hand-ins the world refused."""
+    takes and hand-ins the world refused. A hand-in the core refused to reward
+    while the quester's bags read full (`free_slots`) is not counted."""
     out: dict = {}
     for a in sorted(tried or (), key=lambda a: -a.age_minutes):
         if a.name != name or not a.failed or a.reason in LOG_STATE_REFUSALS:
             continue
-        if a.reason == BAG_ROOM_REFUSAL:
+        if a.reason == BAG_ROOM_REFUSAL or _reward_room_refusal(a, free_slots):
             continue
         found = _CHAIN_ROW.match(a.command)
         if not found:
@@ -1280,7 +1311,7 @@ def _module_complete(name, tried) -> frozenset:
     )
 
 
-def turn_in_held(name, tried) -> frozenset:
+def turn_in_held(name, tried, free_slots=None) -> frozenset:
     """The quest ids whose hand-in this quester leaves for now: the world
     refused it FAILS_BEFORE_BROKEN times or more, and its last refusal is
     newer than TURN_IN_RETRY_MINUTES, doubled for each refusal past those.
@@ -1296,11 +1327,18 @@ def turn_in_held(name, tried) -> frozenset:
 
     A hand-in the module refused as never retryable (`cannot_turn_in`) is held
     from the first refusal for as long as that row is in the rows the pass
-    reads: asking again cannot change the answer."""
+    reads: asking again cannot change the answer.
+
+    A hand-in the core refused to reward while the quester's bags read full
+    (`free_slots`) is neither counted nor held for the long hold: the quester
+    sells first and asks again after SELL_COOLDOWN_MINUTES (`reward_room_refused`).
+    Pindle's Return to Bellowfiz was refused 959 times in six days and Fizzik's
+    The Perfect Stout hand-in sat refused for nine, each with every bag slot
+    full, and both were filed as broken quests."""
     count: dict = {}
     newest: dict = {}
     for a in tried or ():
-        if a.name != name or not a.failed:
+        if a.name != name or not a.failed or _reward_room_refusal(a, free_slots):
             continue
         found = _CHAIN_ROW.match(a.command)
         if not found or found.group(1) != "turnin":
@@ -1308,12 +1346,16 @@ def turn_in_held(name, tried) -> frozenset:
         qid = int(found.group(2))
         count[qid] = count.get(qid, 0) + 1
         newest[qid] = min(newest.get(qid, a.age_minutes), a.age_minutes)
-    return frozenset(
-        qid
-        for qid, times in count.items()
-        if times >= FAILS_BEFORE_BROKEN
-        and newest[qid] < TURN_IN_RETRY_MINUTES * 2 ** (times - FAILS_BEFORE_BROKEN)
-    ) | frozenset(cannot_turn_in(name, tried))
+    return (
+        frozenset(
+            qid
+            for qid, times in count.items()
+            if times >= FAILS_BEFORE_BROKEN
+            and newest[qid] < TURN_IN_RETRY_MINUTES * 2 ** (times - FAILS_BEFORE_BROKEN)
+        )
+        | frozenset(cannot_turn_in(name, tried))
+        | reward_room_refused(name, tried, free_slots)
+    )
 
 
 class Clock:
@@ -1636,7 +1678,7 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
     is told every quest in the log, so it must be asked once a pass."""
     gone = gone_spawns(member.name, tried)
     object_gone = gone_spawns(member.name, tried, OBJECT_KIND)
-    refused = refusals(member.name, tried)
+    refused = refusals(member.name, tried, member.free_slots)
     final = cannot_turn_in(member.name, tried)
     working = _working(
         cat,
@@ -1950,7 +1992,7 @@ def next_move(
     # holds broken is still handed in; one whose turn-in NPC this pass found
     # missing is left, and so is one whose hand-in the world keeps refusing,
     # until its hold is over (`turn_in_held`), the module-complete ones too.
-    hand_skip = turn_in_held(member.name, tried) | {
+    hand_skip = turn_in_held(member.name, tried, member.free_slots) | {
         b.quest for b in found if b.reason in (ENDER_MISSING, OBJECT_ENDER_MISSING)
     }
     object_left = left_spawns(member.name, tried, OBJECT_KIND)
