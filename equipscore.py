@@ -331,11 +331,40 @@ def resistance_only(row: dict, book=None) -> bool:
     )
 
 
+# Slots that carry no armor by design: neck, finger, trinket and held items.
+# Armor on one is an accident of the piece, not a defence.
+NO_ARMOR_SLOTS = frozenset({2, 11, 12, 23})
+
+
+def armor_counts(row: dict, wearer: Wearer, stats: dict) -> bool:
+    """Does the piece's armor value count toward its price for this wearer
+    (wow-overseer#2132)? Not on a neck, finger, trinket or held item, which
+    carry none by design. Not on a body piece of another material than the
+    wearer's own when every stat it carries but stamina is dead for the role:
+    a mail caster robe's high armor must not outbid a plate tank's piece. A
+    piece with no stat at all still counts, so an armor-only piece fills an
+    empty slot."""
+    if _int(row.get("inventory_type")) in NO_ARMOR_SLOTS:
+        return False
+    tier = armor_tier(row, wearer)
+    own = bag_pressure.preferred_armor_subclass(wearer.class_id, wearer.level)
+    if tier <= 0 or tier == own:
+        return True
+    weights = statweights.stat_weights(wearer.role)
+    # Stamina is every role's stat, so it does not make a piece fit.
+    named = [k for k, v in stats.items() if k != "armor" and v]
+    return not named or any(
+        weights.get(_ROLE_STAT.get(k, ""), 0.0) > 0 for k in named if k != "stamina"
+    )
+
+
 def value(row: dict, wearer: Wearer, key: str = "", book=None) -> tuple:
     """(gear score, role score, armor tier) of one piece for this member, in hand `key`."""
     if row is None or resistance_only(row, book):
         return (0.0, 0.0, 0)
     stats = stats_of(row, book)
+    if "armor" in stats and not armor_counts(row, wearer, stats):
+        stats = {k: v for k, v in stats.items() if k != "armor"}
     gs = gearscore.score(stats, wearer.spec, wearer.level, key) if wearer.spec else 0.0
     return (gs, role_score(stats, wearer.role), armor_tier(row, wearer))
 
