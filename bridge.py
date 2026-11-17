@@ -24994,7 +24994,8 @@ class Bridge(discord.Client):
             owed=frozenset(_class_owed_names(self)),
             every_family=frozenset(gfacts["family"]), mid_run=mid_run, current=current,
             stranded=why, stranded_pass=True, seats_held=held,
-            family_members=family_members)
+            family_members=family_members,
+            leader_map=standin.head_map(family_members, key, leader))
 
     async def _standin_lock_facts(self, key: str, current, rows: list, fam,
                                   gfacts: dict, doors: dict, candidates: tuple):
@@ -25019,7 +25020,8 @@ class Bridge(discord.Client):
             resting=frozenset(gfacts["resting"]), benched=frozenset(gfacts["benched"]),
             owed=frozenset(_class_owed_names(self)),
             every_family=frozenset(gfacts["family"]), mid_run=mid_run, current=current,
-            family_members=family_members, lock_pass=True)
+            family_members=family_members, lock_pass=True,
+            leader_map=standin.head_map(family_members, key, leader))
 
     async def _note_turn(self, key: str, turn) -> None:
         """Record a family's new turn. A failed write is logged and the pass
@@ -25075,7 +25077,8 @@ class Bridge(discord.Client):
             resting=frozenset(gfacts["resting"]), benched=frozenset(gfacts["benched"]),
             owed=frozenset(_class_owed_names(self)),
             every_family=frozenset(gfacts["family"]), mid_run=mid_run, current=current,
-            family_members=family_members)
+            family_members=family_members,
+            leader_map=standin.head_map(family_members, key, leader))
 
     async def _send_queue_item_notices(self) -> None:
         """Retry saved completion notices, acknowledging only a Discord send."""
