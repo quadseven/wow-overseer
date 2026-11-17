@@ -40,6 +40,9 @@ PASS, FAIL, INVALID = "PASS", "FAIL", "INVALID"
 POLL_SECONDS = 10
 CREDIT_DB, CREDIT_TABLE = "acore_characters", "log_encounter"
 QUERY_TIMEOUT_SECONDS = 30
+# The world's port opens before the family has logged in (measured: one to two
+# minutes later), so `start` preconditions are polled for up to this long.
+START_WAIT_SECONDS = 600
 MAX_SAMPLE_ROWS = 20
 MAX_MATCHED_LINES = 20
 MAX_CELL_CHARS = 300
@@ -257,7 +260,11 @@ class Judge:
         sha="",
         arm="",
         schema=None,
+        start_wait=0,
     ):
+        self.start_wait = start_wait
+        self.start_waited = 0
+        self.t0 = None
         self.decree = decree
         self.world = world
         self.handoff = handoff
@@ -275,14 +282,13 @@ class Judge:
     # -- entry --
     def run(self):
         started = self.clock()
-        t0 = None
         try:
-            t0 = self.world.db_now()
-            reasons = self._execute(t0, started)
+            self.t0 = self.world.db_now()
+            reasons = self._execute(self.t0, started)
         except JudgeError as exc:
             reasons = [f"harness refused: {exc}"]
             self._mark_unreached(reasons)
-        return self._result(t0, self.clock() - started, reasons)
+        return self._result(self.t0, self.clock() - started, reasons)
 
     def _mark_unreached(self, reasons):
         for row in self.act_rows:
@@ -307,6 +313,7 @@ class Judge:
             "arm": self.arm,
             "t0": t0,
             "elapsed_s": int(elapsed),
+            "start_wait_s": int(self.start_waited),
             "assertions": records,
             "acts": self.act_rows,
         }
@@ -314,6 +321,9 @@ class Judge:
     # -- setup --
     def _execute(self, t0, started):
         duration, steps = self._prepare(t0)
+        # The family logs in after the port opens: wait for the start
+        # preconditions, then start every clock (t0, the act timeline, the window).
+        started = self._await_start(started)
         # start observations, once, before any order is given
         for name, o in self.observes.items():
             if o.get("when") == "start":
@@ -325,6 +335,37 @@ class Judge:
             if o.get("when") == "end" or "log" in o:
                 self._observe(name, started)
         return self._invalid_reasons()
+
+    def _await_start(self, started):
+        """Poll the `start` preconditions until they hold, for at most `start_wait`.
+
+        Nothing is recorded and no order is given while waiting: a look that
+        fails (violated, timed out, errored) is simply "not yet". When the wait
+        ends, held or not, the normal single start sampling follows and decides:
+        a precondition that still does not hold is INVALID, naming it. Returns
+        the new clock origin for the act timeline and the window.
+        """
+        names = [
+            n
+            for n, o in self.observes.items()
+            if o.get("when") == "start" and o.get("role") == "precondition"
+        ]
+        if names and self.start_wait > 0:
+            waiting_from = self.clock()
+            while True:
+                if all(self._evaluate(n)["status"] == "held" for n in names):
+                    break
+                waited = self.clock() - waiting_from
+                if waited >= self.start_wait:
+                    break
+                self.sleep(min(self.poll, self.start_wait - waited))
+            self.start_waited = self.clock() - waiting_from
+            started = self.clock()
+            self.t0 = self.world.db_now()
+            self.rendered = self._render(
+                self.observes, {**self.handoff["variables"], "t0": self.t0}
+            )
+        return started
 
     @staticmethod
     def _unheld_precondition(r):
@@ -339,6 +380,12 @@ class Judge:
         duration = lint.duration_seconds(self.decree.get("duration"))
         if duration is None:
             raise JudgeError("decree has no valid duration")
+        rendered = self._render(observes, variables)
+        steps = self._plan_acts(observes)
+        self.observes, self.rendered = observes, rendered
+        return duration, steps
+
+    def _render(self, observes, variables):
         rendered = {}
         for name, o in observes.items():
             if "sql" in o:
@@ -347,9 +394,7 @@ class Judge:
                 if problems:
                     raise JudgeError(f"observation {name}: " + "; ".join(problems))
                 rendered[name] = sql
-        steps = self._plan_acts(observes)
-        self.observes, self.rendered = observes, rendered
-        return duration, steps
+        return rendered
 
     def _window(self, steps, duration, started):
         """The measured window: fire due acts, sample continuous observations."""
@@ -726,6 +771,15 @@ def _invalid(decree_id, env, sha, reason):
     }  # fmt: skip
 
 
+def start_wait_from_env(env):
+    """EPH_START_WAIT_SECONDS, or the default when unset, unreadable or negative."""
+    try:
+        value = int(env.get("EPH_START_WAIT_SECONDS", ""))
+    except ValueError:
+        return START_WAIT_SECONDS
+    return value if value >= 0 else START_WAIT_SECONDS
+
+
 def _read_log(path):
     """The worldserver log, or a refusal: a log we cannot read must never read as zero matches."""
     if not path:
@@ -822,7 +876,7 @@ def _judge(raw, sha, env, connect, log_path, clock, anchors_path):
             log_text=lambda: _read_log(log_path),
             clock=clock.monotonic, sleep=clock.sleep,
             run_id=env.get("EPH_RUN_ID", ""), sha=sha, arm=env.get("EPH_ARM", ""),
-            schema=live,
+            schema=live, start_wait=start_wait_from_env(env),
         ).run()  # fmt: skip
     except Exception as exc:  # noqa: BLE001 - a broken world is INVALID, never a verdict on the fix
         return _invalid(decree_id, env, sha, f"the world could not be judged: {exc!r}")
