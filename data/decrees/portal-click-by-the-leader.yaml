@@ -2,7 +2,9 @@
 # map before and after, or a named refusal (mod-overseer issue 410). Oz, the Zug family mage, casts a
 # portal with the cast verb (the first word of a cast row is a spell id: 11418 is Portal: Undercity, which
 # Oz knows at 60 and which takes a Rune of Portals) and Zug stands beside it on Kalimdor. A portal lasts about a
-# minute, so the leader is told to use it 25 seconds after the cast (the cast waits 20 seconds: a character that has
+# minute, and a cast can be refused as "already casting" (a second live run: the mage's only cast was refused and the run
+# was INVALID), so the cast is ordered three times, 12 seconds apart, and the leader is told to use a portal at 56 seconds,
+# inside the minute of whichever cast applied (the first cast waits 20 seconds: a character that has
 # just logged in is still casting, measured: "character is already casting" at 0 seconds, accepted a few minutes later).
 # Fix: mod-overseer pull 1057.
 # Scope: the map before and after the click is read from the character table. A crossing means the row is
@@ -27,7 +29,11 @@ arrange:
 act:
   - at: 20s
     command: {who: Oz, kind: cast, text: "11418"}
-  - at: 45s
+  - at: 32s
+    command: {who: Oz, kind: cast, text: "11418"}
+  - at: 44s
+    command: {who: Oz, kind: cast, text: "11418"}
+  - at: 56s
     command: {who: Zug, kind: quest, text: "use-portal"}
 observe:
   - name: leader-starts-on-map-1
