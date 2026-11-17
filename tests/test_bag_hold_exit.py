@@ -34,6 +34,7 @@ import unittest
 
 import bag_pressure
 import bank
+import claims
 import jobs
 import townerrand
 
@@ -339,6 +340,8 @@ def _drive(world, clock, log):
     ns = {
         "jobs": jobs,
         "bag_pressure": bag_pressure,
+        "claims": claims,
+        "claim_store": claims.Claims(),
         "time": clock,
         "log": log,
         "TOWN_FIRST_SOURCE": TOWN_FIRST,
@@ -384,7 +387,8 @@ def _drive(world, clock, log):
     def drive():
         withheld = []
         written = ns["_drive_dungeon"](
-            "zulfarrak", 50, list(NAMES), "overseer:queue", withheld=withheld
+            "zulfarrak", 50, list(NAMES), "overseer:queue", withheld=withheld,
+            claim_store=ns["claim_store"]
         )
         return written, withheld
 
@@ -448,10 +452,10 @@ class TheHoldEnds(unittest.TestCase):
 
     def test_the_bag_room_errand_stops_once_the_hold_is_released(self):
         needed = self.ns["_bag_errand_needed"]
-        self.assertTrue(needed(NAMES, MEASURED, True))
+        self.assertTrue(needed(NAMES, MEASURED, True, self.ns["claim_store"]))
         self._minutes(46)
-        self.assertFalse(needed(NAMES, MEASURED, True))
-        self.assertFalse(needed(NAMES, MEASURED, False))
+        self.assertFalse(needed(NAMES, MEASURED, True, self.ns["claim_store"]))
+        self.assertFalse(needed(NAMES, MEASURED, False, self.ns["claim_store"]))
 
     def test_a_town_errand_under_way_is_not_sent_back_to_questing(self):
         self._minutes(46)
@@ -463,7 +467,11 @@ class TheHoldEnds(unittest.TestCase):
     def test_a_sale_the_release_opened_reopens_the_errand(self):
         self.ns["_sale_reopens_hold"] = lambda names, free: True
         self._minutes(46)
-        self.assertTrue(self.ns["_bag_errand_needed"](NAMES, MEASURED, True))
+        self.assertTrue(
+            self.ns["_bag_errand_needed"](
+                NAMES, MEASURED, True, self.ns["claim_store"]
+            )
+        )
 
 
 class TheReleasedHoldSells(unittest.TestCase):

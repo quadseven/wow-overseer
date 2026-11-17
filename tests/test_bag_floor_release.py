@@ -18,6 +18,7 @@ import unittest
 
 import bag_pressure
 import clearance
+import claims
 import disposition
 import equipscore
 
@@ -235,6 +236,8 @@ class TheBridgeWiring(unittest.TestCase):
         logged = []
         ns = {
             "bag_pressure": bag_pressure,
+            "claims": claims,
+            "claim_store": claims.Claims(),
             "equipscore": types.SimpleNamespace(plan=lambda *a, **k: plan),
             "_BAG_HOLD_STUCK": {"Zrog": ("Zrog",)},
             "OWNER_KEEPS": (),
@@ -244,6 +247,10 @@ class TheBridgeWiring(unittest.TestCase):
             "_jev_item_book": lambda: None,
             "_log_changed": lambda *a, **k: logged.append(a),
         }
+        key = claims.MemberClaims.key(NAMES)
+        ns["claim_store"].members._holds[key] = claims.MemberHold(
+            names=key, best=(("Zrog", 1),), released=True
+        )
         wanted = [
             node
             for node in ast.parse(BRIDGE).body
@@ -254,7 +261,9 @@ class TheBridgeWiring(unittest.TestCase):
         exec(  # noqa: S102 - bridge.py's own source
             compile(ast.Module(body=wanted, type_ignores=[]), "bridge.py", "exec"), ns
         )
-        return ns["_released_floor_fits"](fits_of([MAIL]), [MAIL], WORN, NAMES), logged
+        return ns["_released_floor_fits"](
+            fits_of([MAIL]), [MAIL], WORN, NAMES, ns["claim_store"]
+        ), logged
 
     def test_a_released_member_at_the_floor_is_let_go_and_logged(self):
         fits, logged = self._fits({"Zrog": 1}, plan_of())

@@ -100,6 +100,7 @@ class _FakeEconomySelf:
 
     def __init__(self):
         self.slot = townslot.Slot()
+        self._claims = claims.Claims()
 
     def _cohort_town_slot(self, cohort=None):
         return self.slot
@@ -180,7 +181,6 @@ def _run_vendor_once(stuck):
             "_count_sales",
             "_queue_vendor_sales",
             "_report_vendor_claim",
-            "_bag_hold_released",
         ],
         {
             "_BAG_HOLD_STUCK": dict(stuck),
@@ -234,6 +234,15 @@ def _run_vendor_once(stuck):
         },
     )
     me = _FakeEconomySelf()
+    if stuck:
+        key = claims.MemberClaims.key(FAMILY)
+        me._claims.members._holds[key] = claims.MemberHold(
+            names=key,
+            best=(("Bork", FREE["Bork"]),),
+            since=0.0,
+            seen=0.0,
+            released=True,
+        )
     me._vendor_pass_mode = lambda *a, **kw: ns["_vendor_pass_mode"](me, *a, **kw)
     me._take_vendor_aim = lambda *a: ns["_take_vendor_aim"](me, *a)
     cohort = townslot.Cohort(key="Grug", leader="Grug", names=FAMILY)
@@ -278,8 +287,14 @@ class ThePureRule(unittest.TestCase):
 
 class TheReleasedReading(unittest.TestCase):
     def _released(self, stuck, names):
-        ns = _load(["_bag_hold_released"], {"_BAG_HOLD_STUCK": stuck})
-        return ns["_bag_hold_released"](names)
+        store = claims.Claims()
+        held = tuple(name for name in names if stuck.get(name))
+        if held:
+            key = claims.MemberClaims.key(names)
+            store.members._holds[key] = claims.MemberHold(
+                names=key, best=tuple((name, 1) for name in held), released=True
+            )
+        return store.member_released(names)
 
     def test_any_member_with_a_released_hold_counts(self):
         self.assertTrue(self._released({"Grug": ("Bork",)}, FAMILY))

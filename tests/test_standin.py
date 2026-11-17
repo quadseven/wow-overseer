@@ -786,7 +786,7 @@ class TheFamilyRunsWithoutOg(_Exempt):
             bridge,
             _gear_gate=gear_gate,
             _fetch_free_slots=free_slots,
-            _bag_hold_stuck=lambda names, slots: tuple(
+            _bag_hold_stuck=lambda names, slots, claim_store=None: tuple(
                 n for n in names if slots.get(n) == 0
             ),
             _town_first=town_first,

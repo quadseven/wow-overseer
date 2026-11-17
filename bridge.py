@@ -3279,22 +3279,22 @@ def _bag_hold_why(names, at_least: float = 0.0) -> str:
     return "; ".join(parts + [note])
 
 
-def _say_bag_hold(key: tuple, names, progress, now: float) -> None:
+def _say_bag_hold(key: tuple, names, hold, now: float) -> None:
     """Forget a hold's notes once it ends; log once per hold why it stands
     once it has gone bag_pressure.BAG_HOLD_REASON_SECONDS with no gain."""
-    if progress is None:
+    if hold is None:
         _BAG_HOLD_SAID.pop(key, None)
         _TOWN_PASS_NOTE.pop(key, None)
         return
-    if (now - progress.since < bag_pressure.BAG_HOLD_REASON_SECONDS
-            or _BAG_HOLD_SAID.get(key) == progress.since):
+    if (now - hold.since < bag_pressure.BAG_HOLD_REASON_SECONDS
+            or _BAG_HOLD_SAID.get(key) == hold.since):
         return
-    _BAG_HOLD_SAID[key] = progress.since
+    _BAG_HOLD_SAID[key] = hold.since
     log.warning("bag hold: %s at %d or fewer free slots for %d minutes with "
-                "no slot gained: %s",
-                ", ".join(name for name, _free in progress.best),
+                "no slot gained: %s; %s",
+                ", ".join(name for name, _free in hold.best),
                 bag_pressure.TOWN_RUN_FREE_SLOTS,
-                int((now - progress.since) // 60), _bag_hold_why(names))
+                int((now - hold.since) // 60), hold.why, _bag_hold_why(names))
 
 _MEMO_CREATE_SQL = ("CREATE TABLE IF NOT EXISTS overseer_bridge_memo ("
                     "kind VARCHAR(32) NOT NULL, subject VARCHAR(191) NOT NULL, "
@@ -3510,7 +3510,7 @@ def _trip_clock(movement) -> float:
     return movement.steady_since if split is None else split
 
 
-def _bag_hold_stuck(names, free_slots: dict) -> tuple:
+def _bag_hold_stuck(names, free_slots: dict, claim_store) -> tuple:
     """Members held at the floor once the hold is released (no town pass gave
     any of them a slot in bag_pressure.BAG_HOLD_STUCK_SECONDS); () while room
     is still being made or nobody is at the floor.
@@ -3522,33 +3522,58 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
     # Looked up, not called by name: the campaign tests load this function in
     # isolation. A town errand under way is a pass not yet failed (#986).
     errand = globals().get("_town_errand_active")
-    progress = bag_pressure.bag_hold_progress(
-        _BAG_HOLD.get(key), free_slots, now,
-        running=bool(errand and errand(names)))
-    if progress is None:
+    prior = _BAG_HOLD.get(key)
+    previous = (
+        claims.MemberHold(
+            names=key,
+            best=prior.best,
+            since=prior.since,
+            seen=prior.seen,
+            released=prior.released,
+        )
+        if prior is not None
+        else None
+    )
+    hold = claim_store.member_observe(
+        names,
+        free_slots,
+        now,
+        running=bool(errand and errand(names)),
+        previous=previous,
+    )
+    if hold is None:
         _BAG_HOLD.pop(key, None)
         # The hold ended: clear the memo this function writes below.
         _memo_delete("bag_hold", ",".join(key))
         result = ()
+        hold_to_say = None
     else:
+        progress = bag_pressure.BagHoldProgress(
+            best=hold.best,
+            since=hold.since,
+            seen=hold.seen,
+            released=hold.released,
+        )
         # 2-HOUR HARD TIMEOUT (#1203). A hold that has stood with no gain and
         # no town pass made room is forgotten: the family is no longer held at
         # the bag floor, the stuck list stops reporting it, and the family is
         # free to take another route (banker, mailbox, or next town). This is
         # the #872 bound - no banker/vendor wait longer than 2 hours.
-        if (progress.released
-                and now - progress.since >= bag_pressure.BAG_HOLD_FORGET_SECONDS):
+        if (hold.released
+                and now - hold.since >= bag_pressure.BAG_HOLD_FORGET_SECONDS):
             hold_why = globals().get("_bag_hold_why")
             reason = hold_why(names) if hold_why else ""
             _BAG_HOLD.pop(key, None)
             _memo_delete("bag_hold", ",".join(key))
             log.warning(
                 "bag hold: %s at the bag floor timed out after %d minutes "
-                "with no room made (bag floor full of kept items, timeout "
-                "reached); %s, so the family is routed to another option",
-                ", ".join(name for name, _free in progress.best),
-                int(bag_pressure.BAG_HOLD_FORGET_SECONDS // 60), reason)
+                "with no room made (timeout reached); %s; %s, so the family is routed to "
+                "another option",
+                ", ".join(name for name, _free in hold.best),
+                int(bag_pressure.BAG_HOLD_FORGET_SECONDS // 60), hold.why, reason)
+            claim_store.member_reset(names)
             result = ()
+            hold_to_say = None
         else:
             _BAG_HOLD[key] = progress
             wall = time.time()
@@ -3556,10 +3581,11 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
                      "seen": wall - (now - progress.seen), "released": progress.released}
             _memo_upsert("bag_hold", ",".join(key), value, value["since"],
                          wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
-            result = bag_pressure.bag_hold_stuck(progress)
-    say = globals().get("_say_bag_hold")
-    if say is not None:
-        say(key, names, progress, now)
+            result = claim_store.member_stuck(names)
+            hold_to_say = hold
+    say_hold = globals().get("_say_bag_hold")
+    if say_hold is not None:
+        say_hold(key, names, hold_to_say, now)
     for name in names:
         # The family key is its leader's name, one of these members, so
         # _queue_owns_job reads that member's bag hold result.
@@ -3570,28 +3596,21 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
     return result
 
 
-def _bag_hold_released(names) -> bool:
-    """Whether the hold at the bag floor has been released for any of these
-    members: no town pass made room in bag_pressure.BAG_HOLD_STUCK_SECONDS,
-    so the family quests until there is room (#872). Read from what the
-    campaign gate last recorded, with no query of its own."""
-    return any(_BAG_HOLD_STUCK.get(str(name)) for name in names or ())
-
-
-def _released_floor_members(names) -> frozenset:
+def _released_floor_members(names, claim_store) -> frozenset:
     """The members a released hold of this family named when last judged."""
-    return frozenset(member for name in names or ()
-                     for member in _BAG_HOLD_STUCK.get(str(name), ()))
+    return frozenset(claim_store.member_stuck(names))
 
 
-def _released_floor_fits(fits: dict, gear_rows: list, worn: list, names) -> dict:
+def _released_floor_fits(
+    fits: dict, gear_rows: list, worn: list, names, claim_store
+) -> dict:
     """`fits` with what a released hold's members will not wear let go (#1678).
 
     `bag_pressure.floor_release_fits` decides; this reads its facts and logs
     each stack. Rows the gear score cannot read leave `fits` as they are, so
     a failed read keeps every piece. Blocking.
     """
-    held = _released_floor_members(names)
+    held = _released_floor_members(names, claim_store)
     if not held:
         return fits
     # The hold is only re-judged while a campaign waits, so its record can be
@@ -3612,7 +3631,7 @@ def _released_floor_fits(fits: dict, gear_rows: list, worn: list, names) -> dict
     return released
 
 
-def _bag_hold_read(names) -> tuple:
+def _bag_hold_read(names, claim_store) -> tuple:
     """Read the bags of a family whose campaign a Jev interlude holds, so an
     interlude does not end its bag hold (#872).
 
@@ -3638,7 +3657,7 @@ def _bag_hold_read(names) -> tuple:
     if not names or tuple(sorted(names)) not in _BAG_HOLD:
         return ()
     try:
-        return _bag_hold_stuck(names, _fetch_free_slots(names))
+        return _bag_hold_stuck(names, _fetch_free_slots(names), claim_store)
     except Exception:
         log.exception("bag hold: the read for %s during an interlude failed; "
                       "retrying next cycle", ", ".join(names))
@@ -3714,7 +3733,9 @@ def _town_errand_heartbeat(said, now: float):
     return now
 
 
-def _bag_errand_needed(names, free_slots: dict, campaign_waiting: bool) -> bool:
+def _bag_errand_needed(
+    names, free_slots: dict, campaign_waiting: bool, claim_store
+) -> bool:
     """Whether the town errand still runs for bag room past its ceiling.
 
     Not once the hold is stuck, unless a vendor can now end it: otherwise the
@@ -3723,7 +3744,7 @@ def _bag_errand_needed(names, free_slots: dict, campaign_waiting: bool) -> bool:
     """
     return (bool(campaign_waiting)
             and bag_pressure.family_town_run_needed(free_slots)
-            and (not _bag_hold_stuck(names, free_slots)
+            and (not _bag_hold_stuck(names, free_slots, claim_store)
                  # Looked up: the campaign tests load this function in isolation.
                  or globals().get("_sale_reopens_hold", lambda *a: False)(
                      names, free_slots)))
@@ -3956,7 +3977,8 @@ def _admission_shadow(keyword: str, mode: str, names):
 
 
 def _drive_dungeon(keyword: str, wanted: int, names=None,
-                   source: str = "overseer:goal", withheld=None) -> tuple:
+                   source: str = "overseer:goal", withheld=None,
+                   claim_store=None) -> tuple:
     """Turn a decided dungeon goal into the roster writes that actually send
     the family in: job='dungeon:<keyword>' (or the bare 'dungeon') on every
     ENABLED character, plus the campaign cap the coordinator counts against.
@@ -4031,7 +4053,7 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
     # Looked up for the same reason as the gear gate: the campaign tests load
     # this function in isolation.
     hold_stuck = globals().get("_bag_hold_stuck")
-    stuck = hold_stuck(names, free_slots) if hold_stuck else ()
+    stuck = hold_stuck(names, free_slots, claim_store) if hold_stuck else ()
     # WHY THE HOLD STANDS, once it has stood long enough to be called stuck
     # (#986): what each member at the floor carries, and how the last town
     # pass ended. Looked up like the gates above.
@@ -5269,7 +5291,9 @@ def _reset_campaign_done(names: list) -> int:
     return reset
 
 
-def _apply_queue_move(move, names: list, family: str = "") -> str:
+def _apply_queue_move(
+    move, names: list, family: str = "", claim_store=None
+) -> str:
     """Run one campaignqueue.Move for one family. Decides nothing.
 
     The dungeon job goes through `_drive_dungeon`, the council goal's own
@@ -5301,7 +5325,8 @@ def _apply_queue_move(move, names: list, family: str = "") -> str:
                               withheld=withheld, first_kill=move.first_kill)
     else:
         written, _ = _drive_dungeon(move.keyword, move.wanted, names,
-                                    campaignqueue.SOURCE, withheld=withheld)
+                                    campaignqueue.SOURCE, withheld=withheld,
+                                    claim_store=claim_store)
     if not written:
         return "withheld: %s" % ("; ".join(withheld) or "no dungeon job insert landed")
     if move.reset:
@@ -8741,7 +8766,7 @@ class Bridge(discord.Client):
         # townslot.Slot is written to survive that: a restart finds the column
         # still set, adopts it as an errand with no owner, and gives it the
         # longer of the two leases.
-        self._town_slot = townslot.Slot(
+        self._claims = claims.Claims(
             lease=TOWN_SLOT_LEASE_SECONDS,
             releasable=_is_economy_aim,
             long_leases={
@@ -8756,11 +8781,10 @@ class Bridge(discord.Client):
                 CRAFT_SUPPLY_CLAIMANT: TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS,
             },
         )
+        self._town_slot = self._claims.slot_for(None)
         # A cut-off follower can make one self-contained vendor walk during a
-        # bag hold. It is not the family's leader travel slot, so record these
-        # independent writes in per-character ledgers instead of replacing the
-        # leader's holder.
-        self._stranded_vendor_slots: dict[str, townslot.Slot] = {}
+        # bag hold. It keeps an independent column from its family's leader.
+        self._stranded_vendor_slots: dict[str, claims.Slot] = {}
         # The town errand and weapon-training passes share one traveller and
         # may yield the same live errand. Serialize that handoff per family.
         self._town_errand_locks: dict[tuple[str, ...], asyncio.Lock] = {}
@@ -11024,7 +11048,9 @@ class Bridge(discord.Client):
             claimant == WEAPON_SKILL_CLAIMANT
             and await asyncio.to_thread(_is_weapon_training_route, column)
         )
-        decision = slot.want(
+        cohort_key = getattr(cohort, "slot_key", getattr(cohort, "key", cohort))
+        decision = self._claims.want_column(
+            cohort_key,
             claimant=claimant, character=character, aim=aim, leader=leader,
             column=column, retaskable=_retaskable_from(aim), now=now,
             urgent=urgent, distance=distance,
@@ -11112,21 +11138,7 @@ class Bridge(discord.Client):
             return self._town_slot
         slot = self._cohort_town_slots.get(key)
         if slot is None:
-            slot = claims.new_column_slot(
-                lease=TOWN_SLOT_LEASE_SECONDS,
-                releasable=_is_economy_aim,
-                long_leases={
-                    GATHER_CLAIMANT: TOWN_SLOT_GATHER_LEASE_SECONDS,
-                    FLIGHT_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
-                    LEVEL_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
-                    ATTUNE_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
-                    "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
-                    GEAR_HOUSE_CLAIMANT: TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS,
-                },
-                firm_leases={
-                    CRAFT_SUPPLY_CLAIMANT: TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS,
-                },
-            )
+            slot = self._claims.slot_for(key)
             self._cohort_town_slots[key] = slot
         return slot
 
@@ -12805,7 +12817,9 @@ class Bridge(discord.Client):
         fits = bag_pressure.family_fits(gear_rows, equipped, names)
         # Looked up: the economy tests load this pass in isolation.
         release = globals().get("_released_floor_fits", lambda fits, *_: fits)
-        fits = await asyncio.to_thread(release, fits, gear_rows, equipped, names)
+        fits = await asyncio.to_thread(
+            release, fits, gear_rows, equipped, names, self._claims
+        )
         # A piece no member can ever wear (#375): gear.py abstains on relics,
         # so `fits` never calls one FIT_NOBODY.
         members = tidy.members_from_rows(equipped)
@@ -14334,7 +14348,7 @@ class Bridge(discord.Client):
         waiting = gearroutingexec.fetchable(result, world.postable)
         if not waiting:
             return
-        busy = claims.busy_members(
+        busy = self._claims.busy(
             getattr(self, "_guild_run_names", ()), getattr(self, "_job_steps", ()),
             getattr(self, "_corps_steps", ()), getattr(self, "_dues_walks", ()),
             getattr(self, "_crafter_walks", ()), getattr(self, "_post_walks", ()),
@@ -14945,6 +14959,7 @@ class Bridge(discord.Client):
             # wrote.
             if await asyncio.to_thread(_release_trade_errand, name, "vendor"):
                 released += 1
+                self._claims.forget_slot("stranded vendor:" + name)
                 self._stranded_vendor_slots.pop(name, None)
                 log.info(
                     "economy: %s was carrying a vendor errand with nothing left "
@@ -14987,12 +15002,12 @@ class Bridge(discord.Client):
                 # No door read means no way to tell a run's aim from a stale
                 # one, and the safe answer is the one that changes nothing.
                 return 0
-            stranded = claims.stranded_aims_far_from_doors(
+            stranded = self._claims.stranded_aims_far_from_doors(
                 aims, leader, ground=travel.is_ground_aim,
                 releasable=_is_economy_aim, doors=doors,
             )
         else:
-            stranded = claims.stranded_nonleader_aims(
+            stranded = self._claims.stranded_nonleader_aims(
                 aims, leader, ground=travel.is_ground_aim,
                 releasable=_is_economy_aim,
             )
@@ -15304,22 +15319,31 @@ class Bridge(discord.Client):
         # Not once the bag hold is released (#872): the family was sent
         # questing, and its quest walk is a ground aim too. Looked up: the
         # economy tests load this pass in isolation.
-        hold_released = globals().get("_bag_hold_released")
         current_aim = await asyncio.to_thread(_current_travel_npc, leader)
-        if claims.may_release_ground(
-                aim=current_aim,
-                pressure=bag_pressure.family_town_run_needed(
-                    free_slots, sellable=sellable_counts),
-                in_run=in_run,
-                errand_active=_town_errand_active(names),
-                hold_released=bool(hold_released and hold_released(names)),
-                ground=travel.is_ground_aim):
+        pressure = bag_pressure.family_town_run_needed(
+            free_slots, sellable=sellable_counts)
+        errand_active = _town_errand_active(names)
+        release = self._claims.release_ground(
+            aim=current_aim,
+            pressure=pressure,
+            in_run=in_run,
+            errand_active=errand_active,
+            hold_released=self._claims.member_released(names),
+            ground=travel.is_ground_aim,
+        )
+        if release.legal:
             if await asyncio.to_thread(_release_trade_errand, leader, current_aim):
                 log.warning(
                     "economy: released stale leader ground aim %s under bag "
                     "pressure; vendor maintenance gets the town slot next",
                     current_aim,
                 )
+        elif pressure and not in_run and not errand_active and travel.is_ground_aim(current_aim):
+            log.info(
+                "economy: kept stale leader ground aim %s under bag pressure: %s",
+                current_aim,
+                release.why,
+            )
 
         # THE RECIPE HAND-OFF RUNS ABOVE THE TOWN-RUN GATE, ON PURPOSE
         # (infra#3731). It was the only half of this pass that did until
@@ -15411,7 +15435,9 @@ class Bridge(discord.Client):
         fits = bag_pressure.family_fits(gear_rows, worn, names)
         # Looked up: the economy tests load this pass in isolation.
         release = globals().get("_released_floor_fits", lambda fits, *_: fits)
-        fits = await asyncio.to_thread(release, fits, gear_rows, worn, names)
+        fits = await asyncio.to_thread(
+            release, fits, gear_rows, worn, names, self._claims
+        )
         gear_sales = bag_pressure.gear_candidates(
             gear_rows, disposition.Family(vendor_reachable=True),
             available=SELL_ROUTES, fits=fits, keep_names=OWNER_KEEPS,
@@ -19174,7 +19200,7 @@ class Bridge(discord.Client):
         self._dues_walks = guildroute.live_runs(
             self._dues_walks, now, guildroute.GUILD_STEP_SECONDS)
         posted = await asyncio.to_thread(_dues_recent_holders)
-        busy = claims.busy_members(getattr(self, "_guild_run_names", ()), self._dues_walks,
+        busy = self._claims.busy(getattr(self, "_guild_run_names", ()), self._dues_walks,
                 self._guild_mail_runs, getattr(self, "_job_steps", ()),
                 getattr(self, "_train_walks", ()))
         # NATURALLY EARNED ONLY (the operator, 2026-09-24): a member posts dues
@@ -19314,7 +19340,7 @@ class Bridge(discord.Client):
         )
         receivers = sorted({x.receiver for x in letters})
         free_slots = await asyncio.to_thread(_fetch_free_slots, receivers)
-        busy = claims.busy_members(getattr(self, "_guild_run_names", ()), self._crafter_walks, self._guild_mail_runs,
+        busy = self._claims.busy(getattr(self, "_guild_run_names", ()), self._crafter_walks, self._guild_mail_runs,
                 self._dues_walks, getattr(self, "_job_steps", ()),
                 getattr(self, "_train_walks", ()))
         plan, notes = crafters.visits(letters, designated, known,
@@ -19468,7 +19494,7 @@ class Bridge(discord.Client):
         online = {str(r["receiver"]) for r in rows if int(r.get("online") or 0)}
         receivers = sorted({x.receiver for x in letters} & online)
         free_slots = await asyncio.to_thread(_fetch_free_slots, receivers)
-        busy = claims.busy_members(getattr(self, "_guild_run_names", ()), self._post_walks,
+        busy = self._claims.busy(getattr(self, "_guild_run_names", ()), self._post_walks,
                 self._crafter_walks, self._guild_mail_runs,
                 self._dues_walks, self._corps_steps,
                 getattr(self, "_job_steps", ()),
@@ -19686,7 +19712,7 @@ class Bridge(discord.Client):
         walk, and the refusal spends the step's cooldown."""
         self._train_walks = guildroute.live_runs(
             self._train_walks, now, guildroute.GUILD_STEP_SECONDS)
-        return claims.busy_members(getattr(self, "_guild_run_names", ()), self._train_walks,
+        return self._claims.busy(getattr(self, "_guild_run_names", ()), self._train_walks,
                 self._dues_walks, self._guild_mail_runs,
                 self._corps_steps, getattr(self, "_post_walks", ()),
                 getattr(self, "_job_steps", ()))
@@ -19805,7 +19831,7 @@ class Bridge(discord.Client):
         # Any bot another guild pass has on a walk is left alone: the module
         # would refuse a second walk anyway, and the refusal would spend the
         # step's cooldown.
-        busy = claims.busy_members(getattr(self, "_guild_run_names", ()), self._corps_steps, self._dues_walks,
+        busy = self._claims.busy(getattr(self, "_guild_run_names", ()), self._corps_steps, self._dues_walks,
                 self._guild_mail_runs, self._crafter_walks,
                 getattr(self, "_job_steps", ()),
                 getattr(self, "_train_walks", ()))
@@ -20329,7 +20355,7 @@ class Bridge(discord.Client):
         now = time.monotonic()
         self._job_steps = guildroute.live_runs(
             self._job_steps, now, guildroute.GUILD_STEP_SECONDS)
-        busy = claims.busy_members(getattr(self, "_guild_run_names", ()), self._job_steps, self._corps_steps, self._dues_walks,
+        busy = self._claims.busy(getattr(self, "_guild_run_names", ()), self._job_steps, self._corps_steps, self._dues_walks,
                 self._guild_mail_runs, self._crafter_walks,
                 getattr(self, "_train_walks", ()))
         busy -= self._stranded_knights_freed(members)
@@ -20398,8 +20424,8 @@ class Bridge(discord.Client):
             "hand-over run": self._guild_mail_runs,
             "crafter walk": self._crafter_walks,
         }
-        freed = claims.stranded_knights(members, self._job_steps, held)
-        for name, labels in claims.stranded_held_labels(
+        freed = self._claims.freed_knights(members, self._job_steps, held)
+        for name, labels in self._claims.stranded_held_labels(
             members, self._job_steps, held
         ).items():
             if name in freed:
@@ -22447,7 +22473,8 @@ class Bridge(discord.Client):
             free_slots = await asyncio.to_thread(_fetch_free_slots, names)
             campaign_waiting = await asyncio.to_thread(_campaign_waiting, names)
             bag_pressure_needed = await asyncio.to_thread(
-                _bag_errand_needed, names, free_slots, campaign_waiting)
+                _bag_errand_needed, names, free_slots, campaign_waiting,
+                self._claims)
             # THE ROOM THE ADMISSION GATE ASKS FOR (#2116): the same two
             # questions it asks, so an errand ends exactly when the campaign
             # it was sent for would be let in.
@@ -22568,7 +22595,14 @@ class Bridge(discord.Client):
                     aimed += 1
                 slot = self._stranded_vendor_slots.get(name)
                 if slot is None:
-                    slot = townslot.Slot(releasable=_is_economy_aim)
+                    slot = self._claims.slot_for(
+                        "stranded vendor:" + name,
+                        lease=townslot.LEASE_SECONDS,
+                        orphan_lease=townslot.ORPHAN_LEASE_SECONDS,
+                        releasable=_is_economy_aim,
+                        long_leases=None,
+                        firm_leases=None,
+                    )
                     self._stranded_vendor_slots[name] = slot
                 slot.adopt(
                     claimant="bag pressure", character=name, aim="vendor",
@@ -22646,10 +22680,14 @@ class Bridge(discord.Client):
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
         campaign_waiting = await asyncio.to_thread(_campaign_waiting, names)
         bag_pressure_needed = await asyncio.to_thread(
-            _bag_errand_needed, names, free_slots, campaign_waiting)
+            _bag_errand_needed, names, free_slots, campaign_waiting,
+            self._claims)
         # Looked up: the adapter tests load this method in isolation.
-        released = globals().get("_released_floor_members", lambda names: ())
-        floor_sale = bag_pressure_needed and bool(released(names))
+        released = globals().get("_released_floor_members")
+        floor_sale = bool(
+            bag_pressure_needed and released
+            and released(names, self._claims)
+        )
         # THE PROFESSION LOOP'S TOWN PHASE (#2419). Looked up: the adapter
         # tests load this method in isolation.
         loop_why = globals().get("_PROF_LOOP_TOWN", {}).get(
@@ -24301,7 +24339,10 @@ class Bridge(discord.Client):
         # _drive_dungeon is what decides whether bag pressure withholds
         # this cycle; 0 written either means that, or an empty roster, and
         # both are already logged there with the reason.
-        await asyncio.to_thread(_drive_dungeon, action.keyword, action.wanted)
+        await asyncio.to_thread(
+            _drive_dungeon, action.keyword, action.wanted,
+            claim_store=self._claims,
+        )
 
     # --- the campaign queue (#209) --------------------------------------------
 
@@ -24547,7 +24588,7 @@ class Bridge(discord.Client):
         # escalated ask may reach are read first.
         class_helps = getattr(self, "_class_helps", ())
         class_pugs = await _class_pug_rows(facts, class_helps, bounds)
-        mid_job = claims.busy_members(getattr(self, "_job_steps", ()), getattr(self, "_corps_steps", ()),
+        mid_job = self._claims.busy(getattr(self, "_job_steps", ()), getattr(self, "_corps_steps", ()),
                    getattr(self, "_dues_walks", ()), getattr(self, "_guild_mail_runs", ()),
                    getattr(self, "_crafter_walks", ()),
                    getattr(self, "_train_walks", ()),
@@ -24825,8 +24866,7 @@ class Bridge(discord.Client):
         # the level route aimed it at a quest every two minutes and this
         # clear took the aim back seconds later, so nobody quested. Looked
         # up: the queue tests load this method in isolation.
-        released = globals().get("_bag_hold_released")
-        questing_for_room = bool(released and released(fam["names"]))
+        questing_for_room = self._claims.member_released(fam["names"])
         if not _pass_completed("dungeon_pace:" + key):
             self._log_waiting_for_pass(
                 "queue: %s waits for its first dungeon pace pass" % campaignqueue._family(key))
@@ -24871,11 +24911,12 @@ class Bridge(discord.Client):
             # Looked up: the queue tests load this method in isolation.
             hold_read = globals().get("_bag_hold_read")
             if hold_read is not None:
-                await asyncio.to_thread(hold_read, fam["names"])
+                await asyncio.to_thread(hold_read, fam["names"], self._claims)
             return
         try:
-            said = await asyncio.to_thread(_apply_queue_move, move,
-                                           fam["names"], key)
+            said = await asyncio.to_thread(
+                _apply_queue_move, move, fam["names"], key, self._claims
+            )
             log.info("queue: %s: %s", campaignqueue._family(key), said)
         except Exception:
             # One family's failure must not cost the other its advance.

@@ -47,7 +47,6 @@ SLOT_NOT_THE_LEADER = townslot.SLOT_NOT_THE_LEADER
 SLOT_GIVE_UP = townslot.SLOT_GIVE_UP
 GRANTED = townslot.GRANTED
 
-Holder = townslot.Holder
 Want = townslot.Want
 Decision = townslot.Decision
 Reservation = townslot.Reservation
@@ -111,34 +110,6 @@ def new_column_slot(
         long_leases=long_leases,
         firm_leases=firm_leases,
     )
-
-
-def column_expiry(
-    holder: Holder | None,
-    now: float,
-    lease: float = LEASE_SECONDS,
-    orphan_lease: float = ORPHAN_LEASE_SECONDS,
-    long_leases=None,
-) -> float:
-    """When this holder's lease runs out, or now when there is none."""
-    if holder is None:
-        return now
-    return holder.since + lease_for(holder, lease, orphan_lease, long_leases)
-
-
-def release_legal(holder: Holder | None, releasable) -> bool:
-    """Whether this process may hand that holder's aim back.
-
-    A trainer errand answers False and can never be preempted by
-    anybody: the predicate is the same guard the write's WHERE clause
-    is built from, so this never grants a release the update refuses.
-    """
-    if holder is None or releasable is None:
-        return False
-    try:
-        return bool(releasable(holder.aim))
-    except (AttributeError, KeyError, TypeError, ValueError):
-        return False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -321,6 +292,7 @@ class MemberClaims:
         free_slots: dict,
         now: float,
         running: bool = False,
+        previous: MemberHold | None = None,
     ) -> MemberHold | None:
         key = self.key(names)
         hold = member_hold_observe(
@@ -328,7 +300,7 @@ class MemberClaims:
             free_slots,
             now,
             running=running,
-            previous=self._holds.get(key),
+            previous=previous if previous is not None else self._holds.get(key),
         )
         if hold is None:
             self._holds.pop(key, None)
@@ -466,31 +438,45 @@ class Claims:
             long_leases=long_leases,
             firm_leases=firm_leases,
         )
-        self.releasable = releasable
         self._slots: dict = {}
         self.members = MemberClaims()
 
-    def slot_for(self, cohort=None):
+    def slot_for(self, cohort=None, **options):
         """The column ledger for one family's cohort key."""
         key = str(getattr(cohort, "key", cohort) or "")
         if key not in self._slots:
-            self._slots[key] = new_column_slot(**self.kwargs)
+            self._slots[key] = new_column_slot(**(self.kwargs | options))
         return self._slots[key]
+
+    def forget_slot(self, cohort=None) -> None:
+        """Drop an independent column ledger once its guarded aim is released."""
+        key = str(getattr(cohort, "key", cohort) or "")
+        self._slots.pop(key, None)
 
     def want_column(self, cohort=None, **ask) -> Decision:
         """May this pass have the traveller now, and what says so."""
         return self.slot_for(cohort).want(**ask)
 
     def member_observe(
-        self, names, free_slots: dict, now: float, running: bool = False
+        self,
+        names,
+        free_slots: dict,
+        now: float,
+        running: bool = False,
+        previous: MemberHold | None = None,
     ) -> MemberHold | None:
-        return self.members.observe(names, free_slots, now, running=running)
+        return self.members.observe(
+            names, free_slots, now, running=running, previous=previous
+        )
 
     def member_released(self, names) -> bool:
         return self.members.released(names)
 
     def member_stuck(self, names) -> tuple:
         return self.members.stuck(names)
+
+    def member_reset(self, names) -> None:
+        self.members.reset(names)
 
     def release_ground(self, **kw) -> Release:
         return ground_release(**kw)
@@ -500,3 +486,12 @@ class Claims:
 
     def freed_knights(self, members, own_steps, held) -> set:
         return stranded_knights(members, own_steps, held)
+
+    def stranded_held_labels(self, members, own_steps, held) -> dict:
+        return stranded_held_labels(members, own_steps, held)
+
+    def stranded_nonleader_aims(self, aims, leader, **kw) -> set:
+        return stranded_nonleader_aims(aims, leader, **kw)
+
+    def stranded_aims_far_from_doors(self, aims, leader, **kw) -> set:
+        return stranded_aims_far_from_doors(aims, leader, **kw)

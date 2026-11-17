@@ -33,6 +33,7 @@ import pathlib
 import unittest
 
 import bag_pressure
+import claims
 import jobs
 import townerrand
 
@@ -128,6 +129,8 @@ def _bridge(world, clock, log, reasons=True):
     ns = {
         "jobs": jobs,
         "bag_pressure": bag_pressure,
+        "claims": claims,
+        "claim_store": claims.Claims(),
         "townerrand": townerrand,
         "time": clock,
         "log": log,
@@ -218,10 +221,13 @@ class Errand:
         free = self.world.free
         withheld = []
         self.ns["_drive_dungeon"](
-            "zulfarrak", 50, list(NAMES), "overseer:queue", withheld=withheld
+            "zulfarrak", 50, list(NAMES), "overseer:queue", withheld=withheld,
+            claim_store=self.ns["claim_store"]
         )
         self.withheld = withheld
-        needed = self.ns["_bag_errand_needed"](NAMES, free, True)
+        needed = self.ns["_bag_errand_needed"](
+            NAMES, free, True, self.ns["claim_store"]
+        )
         state = self.state
         if not state.active and not state.ended:
             why = townerrand.should_start(

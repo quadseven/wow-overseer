@@ -15,6 +15,7 @@ import types
 import unittest
 
 import bag_pressure
+import claims
 import gearup
 import guildbank
 import guildwork
@@ -463,6 +464,7 @@ class Family:
 
     def __init__(self, test):
         self.t = test
+        self._claims = claims.Claims()
         self.slot = Slot()
         self.aims = []
         self.vendor_passes = 0
@@ -510,6 +512,7 @@ class TheAdapter(unittest.TestCase):
             },
         ]
         ns = {
+            "claims": claims,
             "asyncio": asyncio,
             "_pass_completed": lambda name: True,
             "log": types.SimpleNamespace(info=lambda *a, **k: None),
@@ -647,7 +650,7 @@ class TheAdapter(unittest.TestCase):
         self.ns["_mail_gear_holders"] = lambda names: {}
         self.ns["_campaign_waiting"] = lambda names: True
         self.ns["_fetch_free_slots"] = lambda names: {"Bork": 0, "Grug": 0}
-        self.ns["_bag_hold_stuck"] = lambda names, free_slots: False
+        self.ns["_bag_hold_stuck"] = lambda names, free_slots, claim_store=None: False
         state = asyncio.run(
             self.fam._town_errand_start(
                 te.State(), ["Bork", "Grug"], "Grug", False, self.now, ""
@@ -682,7 +685,7 @@ class TheAdapter(unittest.TestCase):
         self.ns["_mail_gear_holders"] = lambda names: {}
         self.ns["_campaign_waiting"] = lambda names: True
         self.ns["_fetch_free_slots"] = lambda names: {"Bork": 0, "Grug": 0}
-        self.ns["_bag_hold_stuck"] = lambda names, free_slots: False
+        self.ns["_bag_hold_stuck"] = lambda names, free_slots, claim_store=None: False
         state = asyncio.run(
             self.fam._town_errand_start(
                 te.State(), ["Bork", "Grug"], "Grug", False, self.now, ""
@@ -837,7 +840,7 @@ class TheAdapter(unittest.TestCase):
         # The step's own counter work is not what is under test.
         self.fam._town_errand_step = lambda *a: asyncio.sleep(0, result=False)
         self.ns["_campaign_waiting"] = lambda names: True
-        self.ns["_bag_hold_stuck"] = lambda names, free_slots: False
+        self.ns["_bag_hold_stuck"] = lambda names, free_slots, claim_store=None: False
         self.ns["_fetch_free_slots"] = lambda names: {"Bork": 0, "Grug": 0}
         self.ns["_TOWN_ERRANDS"][("Bork", "Grug")] = te.State(
             phase=te.STEPS,
@@ -862,7 +865,7 @@ class TheAdapter(unittest.TestCase):
         self.ns["_TOWN_ERRANDS"][("Bork", "Grug")] = te.State(ended=self.now - 3600.0)
         self.ns["_mail_gear_holders"] = lambda names: {}
         self.ns["_campaign_waiting"] = lambda names: True
-        self.ns["_bag_hold_stuck"] = lambda names, free_slots: False
+        self.ns["_bag_hold_stuck"] = lambda names, free_slots, claim_store=None: False
         self.ns["_fetch_free_slots"] = lambda names: {"Bork": 0, "Grug": 1}
         self.fam._mid_run = lambda names: asyncio.sleep(0, result=True)
         state = self.tick()
@@ -1195,6 +1198,7 @@ class TheCutOffVendorAimAdapter(unittest.TestCase):
         exec(compile(module, "bridge.py", "exec"), ns)  # noqa: S102
         self.ns = ns
         self.adapter = types.SimpleNamespace()
+        self.adapter._claims = claims.Claims()
         self.adapter._stranded_vendor_slots = self.ledgers
 
     def run_aim(self, positions=None, slots=None, in_run=False):

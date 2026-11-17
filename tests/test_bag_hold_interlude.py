@@ -64,7 +64,7 @@ class TheHoldKeepsItsClockThroughAnInterlude(unittest.TestCase):
         for _ in range(minutes):
             self.clock.now += 60.0
             if read:
-                self.ns["_bag_hold_read"](list(NAMES))
+                self.ns["_bag_hold_read"](list(NAMES), self.ns["claim_store"])
 
     def test_the_gap_is_longer_than_the_rule_allows(self):
         self.assertGreater(INTERLUDE_MINUTES * 60.0, bag_pressure.BAG_HOLD_GAP_SECONDS)
@@ -121,7 +121,9 @@ class TheHoldKeepsItsClockThroughAnInterlude(unittest.TestCase):
             raise AssertionError("read bags with no hold to keep")
 
         self.ns["_fetch_free_slots"] = no_read
-        self.assertEqual((), self.ns["_bag_hold_read"](list(NAMES)))
+        self.assertEqual(
+            (), self.ns["_bag_hold_read"](list(NAMES), self.ns["claim_store"])
+        )
         self.assertEqual({}, self.ns["_BAG_HOLD"])
 
     def test_a_failed_read_is_logged_and_keeps_the_hold(self):
@@ -132,7 +134,9 @@ class TheHoldKeepsItsClockThroughAnInterlude(unittest.TestCase):
             raise RuntimeError("database gone")
 
         self.ns["_fetch_free_slots"] = broken
-        self.assertEqual((), self.ns["_bag_hold_read"](list(NAMES)))
+        self.assertEqual(
+            (), self.ns["_bag_hold_read"](list(NAMES), self.ns["claim_store"])
+        )
         self.assertEqual(before, self.ns["_BAG_HOLD"])
         self.assertTrue(
             any("during an interlude failed" in line for line in self.log.lines)
@@ -144,7 +148,7 @@ class TheQueueReadsDuringAnInterlude(unittest.TestCase):
         self.world = FakeWorld([_q(1, "ragefire", 50, "queued", 0)])
         self.reads = []
 
-    def _read(self, names):
+    def _read(self, names, claim_store=None):
         self.reads.append(sorted(names))
         return ()
 

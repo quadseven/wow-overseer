@@ -150,27 +150,6 @@ class ColumnLeaseRules(unittest.TestCase):
         self.assertTrue(d.writes)
         self.assertIsNotNone(d.release)
 
-    def test_release_is_legal_only_for_a_releasable_aim(self):
-        holder = townslot.Holder("economy", "Grug", "vendor", since=0.0)
-        trainer = townslot.Holder("economy", "Grug", "trainer:1", since=0.0)
-        self.assertTrue(claims.release_legal(holder, economy))
-        self.assertFalse(claims.release_legal(trainer, economy))
-
-    def test_a_predicate_programming_error_is_not_swallowed(self):
-        holder = townslot.Holder("economy", "Grug", "vendor", since=0.0)
-
-        def broken_predicate(_aim):
-            return unknown_name  # noqa: F821
-
-        with self.assertRaises(NameError):
-            claims.release_legal(holder, broken_predicate)
-
-    def test_expiry_is_since_plus_the_lease(self):
-        holder = townslot.Holder("economy", "Grug", "vendor", since=10.0)
-        self.assertEqual(
-            10.0 + claims.LEASE_SECONDS, claims.column_expiry(holder, 100.0)
-        )
-
     def test_an_orphan_gets_only_the_short_grace(self):
         orphan = townslot.Holder("", "Grug", "vendor", since=0.0)
         self.assertEqual(townslot.ORPHAN_GROUND_GRACE_SECONDS, claims.lease_for(orphan))
@@ -283,6 +262,23 @@ class MemberHoldsOverTime(unittest.TestCase):
         hold = claims.member_hold_observe(FAMILY, MEASURED, 0.0)
         self.assertEqual(progress.best, hold.best)
         self.assertEqual(bag_pressure.bag_hold_stuck(progress), hold.stuck)
+
+    def test_the_claims_facade_restores_and_resets_a_released_hold(self):
+        store = claims.Claims()
+        previous = store.member_observe(FAMILY, MEASURED, 0.0)
+
+        restarted = claims.Claims()
+        hold = previous
+        for minute in range(1, 46):
+            hold = restarted.member_observe(
+                FAMILY, MEASURED, 60.0 * minute, previous=hold
+            )
+
+        self.assertTrue(hold.released)
+        self.assertTrue(restarted.member_released(FAMILY))
+        self.assertEqual(("Grog",), restarted.member_stuck(FAMILY))
+        restarted.member_reset(FAMILY)
+        self.assertFalse(restarted.member_released(FAMILY))
 
     def test_a_store_is_in_process_and_starts_empty(self):
         store = claims.MemberClaims()
