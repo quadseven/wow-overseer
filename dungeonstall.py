@@ -363,6 +363,7 @@ ERRAND_STATE = "on an errand of its own"
 RECALL_SECONDS = 10 * 60
 # After a recall the bridge does not send that member off on a self-contained
 # errand again for this long, or the recall would be undone on the next pass.
+# Every economy aim writer reads it through errandgate.decide (#2323).
 RECALL_COOLDOWN_SECONDS = 30 * 60
 
 _ERRAND_WORDS = {

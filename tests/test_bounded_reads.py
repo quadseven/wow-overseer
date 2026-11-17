@@ -529,7 +529,7 @@ class ModelCallsHaveTheirOwnThreads(unittest.TestCase):
             else:
                 off_pool.append(node.lineno)
         self.assertEqual(off_pool, [], "_ask_llm handed to a non-model pool")
-        self.assertEqual(on_pool, 6)
+        self.assertEqual(on_pool, 7)
 
 
 if __name__ == "__main__":

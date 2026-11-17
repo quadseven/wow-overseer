@@ -1,0 +1,57 @@
+# Blackrock Depths: a between-pulls hold of waivable (DPS) low mana plus a
+# lagging member reaching the ceiling does not end the run; the run goes on.
+# One follower (Og) is parked at an outdoor graveyard as the lagging member; he is outside the instance, not at the door.
+# Scope: only the lagging half of the mixed hold is arranged. A decree cannot set a member's mana (the cast
+# fields are level, health, money, skills, spells, items, quests, homebind and position), so the waivable-mana
+# half of issue 147 is NOT seeded and NOT asserted: a pass here does not show the mixed hold ended well, and
+# issue 147 stays a live check. The lagging member (Og, held at an outdoor graveyard, outside the instance) must not end the run at the ceiling.
+# Fix: mod-dungeon-clear pull 148.
+decree: v1
+id: brd-hold-waivable-mana-and-lag
+proves:
+  - {repo: quadseven/mod-dungeon-clear, issue: 147, criterion: "a lagging member held outside does not end a BRD run at the ceiling (the waivable-mana half of the mixed hold is not arranged and not asserted here)"}
+fix: {repo: quadseven/mod-dungeon-clear, commit: "998a4cec350d979bccd1654caa03097cfceb611a"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 45m
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, at: {areatrigger: 1466}}
+    ceiling: "nothing granted but position"
+  - who: Og
+    set: {alive: true, at: {graveyard: 1}}
+    ceiling: "nothing granted but position"
+arrange:
+  - instance: {map: "Blackrock Depths", as: brd, bind: family:grug}
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+observe:
+  - name: lagging-member-starts-apart
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid = @Og AND map_id != 230
+    expect: {scalar: "= 1"}
+  - name: run-opened-in-brd
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run WHERE map_id = 230 AND started_at >= @t0
+    expect: {scalar: ">= 1"}
+  # The judge needs the core's own credited-encounter record when an instance is arranged.
+  - name: encounter-credited
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM log_encounter
+      WHERE map = 230 AND time >= @t0
+    expect: {scalar: ">= 1"}
+  - name: run-did-not-end-at-the-hold-ceiling
+    role: check
+    when: end
+    sql: |
+      SELECT id, outcome, ended_reason FROM overseer_dungeon_run
+      WHERE map_id = 230 AND started_at >= @t0 AND ended_reason LIKE '%ceiling%'
+    expect: {rows: 0}

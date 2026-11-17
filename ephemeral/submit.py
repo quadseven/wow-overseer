@@ -23,7 +23,9 @@ from .kube import KubeError
 from .miniyaml import YamlError, loads
 
 REALM_RANGE = range(100, 200)
-BASE_DEADLINE_PAD = 15 * 60
+# Boot (15 min) plus the judge's bounded wait for the family to log in (10 min).
+BASE_DEADLINE_PAD = 25 * 60
+_PREFIX = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 BRIDGE = "bridge"  # the sidecar's container name in the template
 BRIDGE_PULL_NAME = "ghcr"  # the bridge image is a private package
 BRIDGE_DEPLOYMENT = (
@@ -178,13 +180,11 @@ def _images_for(arm, live_images, args, live_bridge=None):
         if live_bridge is not None:
             img["bridge"] = args.get("treatment_bridge") or live_bridge
     else:
-        if not (args.get("control_worldserver") and args.get("control_dbimport")):
-            raise SubmitError(
-                "a control arm needs --control-worldserver and --control-dbimport (by digest)"
-            )
+        if not args.get("control_worldserver"):
+            raise SubmitError("a control arm needs --control-worldserver (by digest)")
         img = {
             "worldserver": args["control_worldserver"],
-            "dbimport": args["control_dbimport"],
+            "dbimport": live_images["dbimport"],
         }
         if live_bridge is not None:
             if not args.get("control_bridge"):
@@ -290,6 +290,13 @@ def submit(
     """Create the suspended Jobs. Returns the submission record (also saved)."""
     args = dict(args or {})
     arm_arg = args.get("arm", "both")
+    if args.get("control_dbimport"):
+        raise SubmitError(
+            "--control-dbimport is no longer taken: the db-import schema step is the same "
+            "for both arms (only the worldserver binary under test differs), and a control "
+            "db-import older than a changed module SQL update file re-applies that file to "
+            "the template and cannot boot. Drop the flag; both arms run the live db-import."
+        )
     if arm_arg not in ("control", "treatment", "both"):
         raise SubmitError("--arm must be control, treatment or both")
     raw, decree = _load_decree(decree_path, args)
@@ -311,6 +318,22 @@ def submit(
     live_images, pins, base_files = read_live(cfg, kube)
     live_bridge = read_bridge_image(cfg, kube) if bridge_on else None
     files, deltas = _config_for(world, base_files, bridge_on)
+    prefix = args.get("control_playerbots_prefix")
+    control_files = files
+    if prefix is not None:
+        if not _PREFIX.match(prefix):
+            raise SubmitError(
+                "--control-playerbots-prefix must be a bare name such as AiPlayerbot (no dot, no space)"
+            )
+        control_files = {
+            g: confmerge.rename_prefix(t, "Playerbots.", prefix + ".")
+            if g == "playerbots"
+            else t
+            for g, t in files.items()
+        }
+        deltas.append(
+            f"control arm: playerbots keys written as {prefix}.* (the control image predates the rename to Playerbots.*)"
+        )
     arms = ["control", "treatment"] if arm_arg == "both" else [arm_arg]
     arm_bridge = {
         arm: _images_for(arm, live_images, args, live_bridge).get("bridge")
@@ -371,7 +394,10 @@ def submit(
         )
         return record
     for job, rid, arm, realm in pending:
-        _create_run(kube, job, rid, arm, realm, batch, decree_id, raw, files, sha)
+        _create_run(
+            kube, job, rid, arm, realm, batch, decree_id, raw,
+            control_files if arm == "control" else files, sha,
+        )  # fmt: skip
         out(f"queued {rid} ({arm}) on {node}")
     save_record(cfg, record)
     return record

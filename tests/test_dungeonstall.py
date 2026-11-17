@@ -23,6 +23,7 @@ from unittest.mock import patch
 import claims
 from _stub_modules import PYMYSQL
 from test_campaign_queue import FakeWorld, _load, _Log, _q
+from test_errand_recall_loop import bag_pressure_pass, vendor_pass_release
 
 import bag_pressure  # noqa: E402
 import campaignplan  # noqa: E402
@@ -31,6 +32,7 @@ import council  # noqa: E402
 import crossing  # noqa: E402
 import dungeonpace  # noqa: E402
 import dungeonstall as stall  # noqa: E402
+import errandgate  # noqa: E402
 import jev_family_intent  # noqa: E402
 import jobs  # noqa: E402
 import raidrun  # noqa: E402
@@ -1091,10 +1093,11 @@ class AMemberInsideAnInstanceIsNeverGivenAnErrand(unittest.TestCase):
         )
 
     def test_the_bridge_reads_who_is_inside_before_aiming(self):
-        body = BRIDGE[BRIDGE.index("async def _aim_stranded_bag_pressure_members") :]
-        body = body[: body.index("    async def _town_errand_yield_for_weapon")]
-        self.assertIn("inside=inside", body)
-        self.assertIn("_members_inside_instance", body)
+        """The pass is run with the bridge's own helpers beside it (#2323);
+        it was pinned as text, which a renamed helper passed."""
+        self.assertEqual((2, ["Bork", "Grog"]), bag_pressure_pass())
+        self.assertEqual((1, ["Grog"]), bag_pressure_pass(maps={"Bork": 230}))
+        self.assertEqual((0, []), bag_pressure_pass(maps={"Bork": 230, "Grog": 230}))
 
     def release(self, aims, maps):
         released = []
@@ -1134,9 +1137,11 @@ class AMemberInsideAnInstanceIsNeverGivenAnErrand(unittest.TestCase):
         self.assertEqual([], released)
 
     def test_the_vendor_pass_hands_back_aims_inside_during_a_run(self):
-        body = BRIDGE[BRIDGE.index("    async def _vendor_once") :]
-        body = body[: body.index("    async def", 10)]
-        self.assertIn("_release_instance_economy_aims", body)
+        """The whole vendor pass is run (#2323), during a run and with no
+        run row at all; it was pinned as text."""
+        self.assertEqual([("Zug", "vendor")], vendor_pass_release(in_run=True))
+        self.assertEqual([("Zug", "vendor")], vendor_pass_release(in_run=False))
+        self.assertEqual([], vendor_pass_release(in_run=True, inside=False))
 
 
 if __name__ == "__main__":
@@ -2056,6 +2061,8 @@ class TheErrandARunWaitsOn(unittest.TestCase):
             ),
             "_DOOR_HOLD_SINCE": holds,
             "_ERRAND_RECALLED": recalled,
+            "_ERRAND_SERVED": {},
+            "errandgate": errandgate,
             "_door_run_boss_age": lambda leader: None,
             "_current_travel_npc": current,
             "_is_economy_aim": lambda aim: aim in ("vendor", "banker"),
@@ -2165,7 +2172,12 @@ class TheErrandARunWaitsOn(unittest.TestCase):
         self.assertFalse(stall.recall_cooling(None, 100.0))
 
     def test_the_bag_pressure_aim_skips_a_member_in_its_cooldown(self):
-        body = BRIDGE[BRIDGE.index("async def _aim_stranded_bag_pressure_members") :]
-        body = body[: body.index("    async def _town_errand_yield_for_weapon")]
-        self.assertIn("_without_recalled", body)
-        self.assertIn("recall_cooling", BRIDGE)
+        """The pass is run with a recalled member (#2323); it was pinned as
+        text."""
+        self.assertEqual(
+            (1, ["Bork"]), bag_pressure_pass(recalled={"Grog": 940.0}, now=1000.0)
+        )
+        over = 940.0 + stall.RECALL_COOLDOWN_SECONDS
+        self.assertEqual(
+            (2, ["Bork", "Grog"]), bag_pressure_pass(recalled={"Grog": 940.0}, now=over)
+        )

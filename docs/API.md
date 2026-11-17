@@ -11,10 +11,13 @@ Each entry: path, query parameters, what it answers, one example.
 
 ## Who may call the cutter routes
 
-`GET /api/clips/pending` and the three `POST /api/clips/` routes carry no
-token, the same trust model as `POST /api/frame`: anything that can reach
-the site's port can call them. A token would be a new credential, which a
-person adds, so none is used. What bounds the damage: every state change
+`GET /api/clips/pending` and the three `POST /api/clips/` routes need the
+shared cutter token, sent as `Authorization: Bearer <token>` and compared
+in constant time against the `CUTTER_TOKEN` environment variable. With
+that variable unset the four routes refuse (503): they fail closed. A
+wrong or missing token is 403. An upload may name `path=<stream path>`;
+when it does, it must be the claimed row's own stream path (403
+otherwise). What else bounds the damage: every state change
 is conditional on the row's current state and a lost race answers 409;
 an upload is capped at 128 MiB, must start with an MP4 `ftyp` box, is
 saved only under a name derived from the row, and never overwrites an
@@ -24,7 +27,7 @@ the row is `cutting` with no file; at most 2 uploads run at once (a third
 answers 503); the body must arrive within 600 seconds, and no single read
 may wait over 30 seconds (408); a clip folder that cannot be written
 (full, or an I/O error) answers 507. No database connection is held while the
-body is read. Keep the port on a network that only trusted hosts can reach.
+body is read.
 
 ## `GET /`
 
@@ -94,9 +97,9 @@ body is read. Keep the port on a network that only trusted hosts can reach.
 
 ## `GET /api/clips/pending`
 
-- Query: `paths`, `ages`
-- Answers: the pending rows on those stream paths, oldest first, at most 10, with the database clock.
-- Example: `overseer get /api/clips/pending paths=X`
+- Query: none
+- Answers: see the handler
+- Example: `overseer get /api/clips/pending`
 
 ## `GET /api/council`
 

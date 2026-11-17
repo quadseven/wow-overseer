@@ -19,7 +19,7 @@ CHECKED = GUZZLER.replace("issue: TODO", "issue: 12").replace(
     "commit: TODO", f"commit: {FIX}"
 )
 CONTROL = {
-    "control_worldserver": OLD_WS, "control_dbimport": OLD_DB, "control_pin": OLD,
+    "control_worldserver": OLD_WS, "control_pin": OLD,
 }  # fmt: skip
 BRIDGE_ON = GUZZLER.replace("bridge: off", 'bridge: "on"')
 WITH_BRIDGE = {**CONTROL, "control_bridge": OLD_BRIDGE}
@@ -57,6 +57,50 @@ class Base(unittest.TestCase):
 
 
 class SubmitTest(Base):
+    def _run_conf(self, suffix):
+        cm = next(
+            c for c in self.cluster.of("configmaps", "wow-ephemeral")
+            if c["metadata"]["name"].endswith(suffix)
+        )  # fmt: skip
+        return cm["data"]["playerbots.overrides.conf"]
+
+    def test_a_control_prefix_renames_only_the_control_arms_playerbots_keys(self):
+        rec = self.submit(control_playerbots_prefix="AiPlayerbot", **CONTROL)
+        for suffix in ("-c1", "-c2", "-c3"):
+            keys = confmerge.parse(self._run_conf(suffix))
+            self.assertIn("AiPlayerbot.Enabled", keys)
+            self.assertIn("AiPlayerbot.MaxRandomBots", keys)
+            self.assertFalse([k for k in keys if k.startswith("Playerbots.")], suffix)
+        for suffix in ("-t1", "-t2", "-t3"):
+            keys = confmerge.parse(self._run_conf(suffix))
+            self.assertIn("Playerbots.Enabled", keys)
+            self.assertFalse([k for k in keys if k.startswith("AiPlayerbot.")], suffix)
+        self.assertTrue(any("AiPlayerbot" in d for d in rec["fidelity_deltas"]))
+
+    def test_the_rename_keeps_values_and_leaves_comments_and_other_keys(self):
+        lines = [
+            "# Playerbots.Enabled is documented here",
+            "Playerbots.Enabled = 1",
+            "Overseer.X = 2",
+            "",
+        ]
+        out = confmerge.rename_prefix(
+            chr(10).join(lines), "Playerbots.", "AiPlayerbot."
+        )
+        lines[1] = "AiPlayerbot.Enabled = 1"
+        self.assertEqual(out, chr(10).join(lines))
+
+    def test_without_the_prefix_nothing_changes(self):
+        self.submit(**CONTROL)
+        self.assertIn("Playerbots.Enabled", self._run_conf("-c1"))
+        self.assertNotIn("AiPlayerbot", self._run_conf("-c1"))
+
+    def test_a_malformed_prefix_is_refused_and_creates_nothing(self):
+        for bad in ("Ai Playerbot", "AiPlayerbot.", "", "x" + chr(10) + "y"):
+            with self.assertRaisesRegex(submit.SubmitError, "prefix"):
+                self.submit(control_playerbots_prefix=bad, **CONTROL)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
     def test_creates_six_suspended_jobs_with_owned_run_configs(self):
         rec = self.submit(**CONTROL)
         jobs = self.cluster.of("jobs")
@@ -78,7 +122,8 @@ class SubmitTest(Base):
         rec = self.submit(**CONTROL)
         by = {r["arm"]: r["images"] for r in rec["runs"]}
         self.assertEqual(by["treatment"], {"worldserver": WS, "dbimport": DB})
-        self.assertEqual(by["control"], {"worldserver": OLD_WS, "dbimport": OLD_DB})
+        # the schema step is the same for both arms: only the worldserver differs
+        self.assertEqual(by["control"], {"worldserver": OLD_WS, "dbimport": DB})
         text = json.dumps(self.cluster.of("jobs")[0])
         self.assertIn("client-data-a", text)
         self.assertNotIn("{{", text)
@@ -123,6 +168,28 @@ class SubmitTest(Base):
     def test_control_arm_without_images_is_refused_and_creates_nothing(self):
         with self.assertRaisesRegex(submit.SubmitError, "control"):
             self.submit()
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_the_control_db_upgrade_is_the_live_one_so_a_changed_update_file_cannot_break_it(
+        self,
+    ):
+        self.submit(**CONTROL)
+        for job in self.cluster.of("jobs"):
+            spec = job["spec"]["template"]["spec"]
+            images = [c["image"] for c in spec["initContainers"]]
+            self.assertIn(DB, images, job["metadata"]["name"])
+            self.assertNotIn(OLD_DB, json.dumps(job))
+
+    def test_a_control_dbimport_is_refused_with_the_reason(self):
+        with self.assertRaisesRegex(
+            submit.SubmitError, "db-import.*same for both arms"
+        ):
+            self.submit(control_dbimport=OLD_DB, **CONTROL)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_a_control_dbimport_is_refused_on_a_treatment_only_submit_too(self):
+        with self.assertRaisesRegex(submit.SubmitError, "db-import"):
+            self.submit(arm="treatment", control_dbimport=OLD_DB)
         self.assertEqual(self.cluster.of("jobs"), [])
 
     def test_control_image_must_be_a_digest(self):

@@ -33,6 +33,31 @@ def letters(*rows):
 
 
 class TheGuildTakesItsPost(unittest.TestCase):
+    def test_a_member_held_by_another_verb_is_not_walked_again_at_once(self):
+        # Grakk was refused "character is held by another verb" 37 times in a
+        # day: nothing remembered the hold, so every pass asked again (#2764).
+        rows = letters(row("Grakk", 7, 70))
+        plan, notes = guildpost.visits(rows, {"Grakk"}, held={"Grakk"})
+        self.assertEqual(plan, [])
+        self.assertTrue(any("Grakk" in n and "held" in n for n in notes))
+        plan, _ = guildpost.visits(rows, {"Grakk"}, held=set())
+        self.assertEqual(len(plan), 1)
+
+    def test_only_a_held_answer_starts_the_hold(self):
+        self.assertTrue(guildpost.is_held("character is held by another verb"))
+        self.assertTrue(
+            guildpost.is_held("walk refused: character is held by another verb.")
+        )
+        self.assertFalse(
+            guildpost.is_held("the ground toward the mailbox does not hold")
+        )
+        self.assertFalse(guildpost.is_held(""))
+        self.assertGreaterEqual(guildpost.HELD_BACKOFF_SECONDS, 12 * 60)
+
+    def test_the_bridge_remembers_a_held_post_walk(self):
+        self.assertIn("guildpost.is_held", BRIDGE)
+        self.assertIn("_post_held_until", BRIDGE)
+
     def test_a_member_with_letters_walks_and_takes_each_out(self):
         plan, _ = guildpost.visits(
             letters(row("Bodo", 7, 70), row("Bodo", 8, 80)), {"Bodo"}
