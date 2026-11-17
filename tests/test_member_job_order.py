@@ -42,7 +42,8 @@ class TheParse(unittest.TestCase):
 
     def test_the_member_order_is_not_read_in_a_shared_channel(self):
         self.assertEqual(
-            parse_directive("job craft for Bork", ME, ALLOWED, dedicated=False), [])
+            parse_directive("job craft for Bork", ME, ALLOWED, dedicated=False), []
+        )
 
 
 class TheRefusals(unittest.TestCase):
@@ -75,15 +76,18 @@ class TheWrite(unittest.TestCase):
     """_set_job writes one row for a named member, and says whom."""
 
     BRIDGE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
-        encoding="utf-8")
+        encoding="utf-8"
+    )
 
     def test_set_job_asks_the_member_rule_before_it_writes(self):
         body = self.BRIDGE.split("async def _set_job(", 1)[1].split(
-            "async def _queue_holds_job", 1)[0]
+            "async def _queue_holds_job", 1
+        )[0]
         self.assertIn("d.member", body)
         self.assertIn("individual.member_order_refusal(", body)
-        self.assertLess(body.index("individual.member_order_refusal("),
-                        body.index("_insert_job"))
+        self.assertLess(
+            body.index("individual.member_order_refusal("), body.index("_insert_job")
+        )
         self.assertIn("names = [member]", body)
 
 

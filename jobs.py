@@ -532,7 +532,8 @@ def parse_order(text: str) -> str | None:
 
 
 _MEMBER_ORDER = re.compile(
-    r"^job\s+(?P<mode>.+?)\s+for\s+(?P<member>[a-z]{2,12})$", re.IGNORECASE)
+    r"^job\s+(?P<mode>.+?)\s+for\s+(?P<member>[a-z]{2,12})$", re.IGNORECASE
+)
 
 
 def parse_member_order(text: str):
