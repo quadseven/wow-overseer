@@ -1260,9 +1260,7 @@ class TheWedgeAtTheDoor(unittest.TestCase):
         """#2151: the walk restarted every few minutes, interleaved with a
         quest drive and a town errand, so the quarter-hour fold never held
         ten and the run stayed open for forty minutes."""
-        got = stall.door_unreachable(
-            "shadowfang", (1, stall.DOOR_RESTART_BOUND)
-        )
+        got = stall.door_unreachable("shadowfang", (1, stall.DOOR_RESTART_BOUND))
         self.assertIsNotNone(got)
         self.assertIn("restarted %d times" % stall.DOOR_RESTART_BOUND, got.why)
 
