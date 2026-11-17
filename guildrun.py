@@ -146,6 +146,15 @@ CLASS_WALK_WINDOW_SECONDS = 12 * 60
 CLASS_WALK_SOURCE_PREFIXES = ("guildjobs:classquest:", "guildjobs:classquest-cross:")
 HEARTH_HELD_WORDS = "character is held by another verb"
 
+# A REGROUP HEARTH IS NOT CAST AT A MEMBER THAT IS WALKING (#2895). The module
+# refuses a cast with these words while the character is in motion, and a
+# member following the family does not stop until the family does, so the
+# regroup's retry every pass landed nothing (118 refusals in eight hours on the
+# dev realm). A caller that asks for it (the town errand's regroup) holds the
+# member for this long after such a refusal; the guild run keeps asking at once.
+HEARTH_MOVING_WORDS = "character is moving"
+REGROUP_MOVING_BACKOFF_SECONDS = 180
+
 
 def class_walk_busy(rows: list) -> set:
     """The members with a class quest walk row younger than
@@ -158,11 +167,14 @@ def class_walk_busy(rows: list) -> set:
     }
 
 
-def hearth_backed_off(newest: list) -> set:
+def hearth_backed_off(newest: list, moving_seconds: int = 0) -> set:
     """The members whose newest hearth row for this source was refused for the
     stone's cooldown less than HEARTH_BACKOFF_SECONDS ago, or was refused as
     held or left unchanged less than CLASS_WALK_WINDOW_SECONDS ago. `newest` is
-    one row per member: {name, status, detail, age} with the age in seconds."""
+    one row per member: {name, status, detail, age} with the age in seconds.
+
+    `moving_seconds`, when positive, also holds a member whose newest hearth was
+    refused for being in motion that recently (HEARTH_MOVING_WORDS)."""
     out = set()
     for row in newest or ():
         status = str(row.get("status") or "")
@@ -174,6 +186,8 @@ def hearth_backed_off(newest: list) -> set:
             status == "error" and HEARTH_HELD_WORDS in detail
         ):
             held = age < CLASS_WALK_WINDOW_SECONDS
+        elif status == "error" and HEARTH_MOVING_WORDS in detail:
+            held = age < int(moving_seconds)
         else:
             held = False
         if held:
