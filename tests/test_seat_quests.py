@@ -82,6 +82,14 @@ class WhatTheSeatMayTake(unittest.TestCase):
         self.assertEqual(out.untaken[0].givers, (GIVER,))
         self.assertEqual(len(lines), 1)
         self.assertIn(SEAT, lines[0])
+        self.assertIn("1 items covered, 1 takable, 1 with a giver, 0 closed", lines[0])
+
+    def test_a_seat_whose_read_now_finds_nothing_loses_its_old_list(self):
+        old = ready_seat(
+            untaken=(seatquests.questuntaken.Untaken(QUEST, "", (), (GIVER,), True),)
+        )
+        (out,), _ = relieve([old], read_with(rows=[quest_row(MinLevel=61)]))
+        self.assertEqual(out.untaken, ())
 
     def test_a_quest_in_the_log_or_rewarded_is_not_untaken(self):
         held = ready_seat(quest_log={QUEST: 1})

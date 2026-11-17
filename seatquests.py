@@ -145,5 +145,7 @@ def relieve(members, read, now, memo, environ=None):
     out = []
     for m in members:
         found = memo.found(m.name) if m in seats else ()
-        out.append(replace(m, untaken=found) if found else m)
+        # Always replace, even with nothing: a seat whose last read found no
+        # quest must not keep an older answer's list.
+        out.append(replace(m, untaken=found) if m in seats else m)
     return out, tuple(lines)
