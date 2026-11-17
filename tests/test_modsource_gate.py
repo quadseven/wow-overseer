@@ -290,16 +290,12 @@ class TheSubmodulePin(unittest.TestCase):
         (checkout / "file").write_text("pin\n", encoding="utf-8")
         self._git(checkout, "add", "file")
         self._git(checkout, "commit", "-m", "pin")
-        self._git(
-            checkout, "remote", "add", "origin", str(root / "missing.git")
-        )
+        self._git(checkout, "remote", "add", "origin", str(root / "missing.git"))
         return checkout
 
     def test_a_failed_fetch_warns_and_passes_outside_github_actions(self):
         with tempfile.TemporaryDirectory() as temporary:
-            checkout = self._checkout_with_broken_origin(
-                pathlib.Path(temporary)
-            )
+            checkout = self._checkout_with_broken_origin(pathlib.Path(temporary))
             result = self._run_gate_with_actions(checkout, None)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         warnings = [
@@ -312,9 +308,7 @@ class TheSubmodulePin(unittest.TestCase):
 
     def test_a_failed_fetch_still_fails_in_github_actions(self):
         with tempfile.TemporaryDirectory() as temporary:
-            checkout = self._checkout_with_broken_origin(
-                pathlib.Path(temporary)
-            )
+            checkout = self._checkout_with_broken_origin(pathlib.Path(temporary))
             result = self._run_gate_with_actions(checkout, "true")
         self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertNotIn("WARNING: mod-overseer pin not checked", result.stderr)
