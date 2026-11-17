@@ -1,6 +1,8 @@
 # A use-portal row for the leader next to a mage portal walks to the portal, clicks it and reports the
 # map before and after, or a named refusal (mod-overseer issue 410). Oz, the Zug family mage, casts a
-# portal with the cast verb and Zug stands beside it on Kalimdor.
+# portal with the cast verb (the first word of a cast row is a spell id: 11418 is Portal: Undercity, which
+# Oz knows at 60 and which takes a Rune of Portals) and Zug stands beside it on Kalimdor. A portal lasts about a
+# minute, so the leader is told to use it 15 seconds after the cast.
 # Fix: mod-overseer pull 1057.
 # Scope: the map before and after the click is read from the character table. A crossing means the row is
 # applied AND the leader no longer stands on the start map; a refusal means an error row that carries a reason.
@@ -15,14 +17,14 @@ runs: {control: 3, treatment: 3}
 duration: 20m
 cast:
   - who: family:zug
-    set: {alive: true, at: {creature: "Gazlowe"}}
-    ceiling: "nothing granted but position"
+    set: {alive: true, items: [{name: "Rune of Portals", count: 5}], at: {creature: "Gazlowe"}}
+    ceiling: "position, and the five Runes of Portals the mage needs to cast the portal, are the only grants"
 arrange:
   - group: {members: family:zug, leader: Zug}
 act:
   - at: 0s
-    command: {who: Oz, kind: cast, text: "portal"}
-  - at: 2m
+    command: {who: Oz, kind: cast, text: "11418"}
+  - at: 15s
     command: {who: Zug, kind: quest, text: "use-portal"}
 observe:
   - name: leader-starts-on-map-1
