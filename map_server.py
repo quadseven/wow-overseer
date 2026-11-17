@@ -4273,12 +4273,19 @@ def _fetch_agenda(names=None) -> dict:
             lambda sql, params: rd.rows(sql, params, what="creature names"),
             [r.get("travel_npc") for r in roster_rows],
         )
+        # The campaign queue's pending rows (#2796): the banner reads the
+        # campaign's state off its own family's, so a queued entry waiting to
+        # start is not said as a finished campaign. A realm whose bridge has
+        # not made the table reads [] and the leader's counter decides alone.
+        queue_rows = rd.rows(campaignqueue.SELECT_PENDING_SQL, (),
+                             what=campaignqueue.TABLE)
         db_now = rd.db_now()
     return {"roster_rows": roster_rows, "run_rows": run_rows,
             "instance_rows": instance_rows, "goal_rows": goal_rows,
             "trade_rows": trade_rows, "event_rows": event_rows,
             "quest_titles": quest_titles, "creatures": creatures,
-            "standin_rows": standin_rows, "now": db_now}
+            "standin_rows": standin_rows, "queue_rows": queue_rows,
+            "now": db_now}
 
 
 def _fetch_streams() -> list:
@@ -4719,21 +4726,32 @@ def _clip_cursor():
 def sweep_clips() -> dict:
     """The sweeps that hold whether or not any stream is live: a cutting row
     whose cutter went silent fails, and an expired row loses its file. Without
-    a clip folder nothing is deleted and no row is marked."""
+    a clip folder nothing is deleted and no row is marked. The partial uploads
+    a dead process left are removed first: they need no database, so a
+    database that is down does not keep them."""
+    root = _clips_root()
+    partial = clipcutter.sweep_partials(root) if root else 0
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT NOW() AS now")
         timed_out = clipledger.time_out(cur, now=cur.fetchone()["now"])
-        root = _clips_root()
         return {"timed_out": timed_out,
-                "deleted": clipledger.delete_expired(cur, root) if root else 0}
+                "deleted": clipledger.delete_expired(cur, root) if root else 0,
+                "partial": partial}
 
 
 def clip_tick() -> dict:
-    """One timer pass: the scan, then the sweeps, even when the scan fails."""
+    """One timer pass: the scan, then the sweeps, even when the scan fails.
+
+    A pass that planned, expired, timed out or removed anything logs one line
+    with its counts; a pass that did nothing logs nothing."""
+    scan = None
     try:
-        return scan_clips()
+        scan = scan_clips()
+        return scan
     finally:
-        sweep_clips()
+        line = clipledger.tick_line(scan, sweep_clips())
+        if line:
+            log.info(line)
 
 
 def start_clip_scanner(every: float = CLIP_SCAN_SECONDS, scan=None,
@@ -4972,6 +4990,12 @@ MAX_FRAMES = 4 * stream.MAX_CHANNELS
 # next poll.
 _VIEW_SEEN: dict = {}
 _VIEW_SEEN_LOCK = threading.Lock()
+# When the newest segment of each stream path's recording was written, epoch
+# seconds, for the paths whose last poll carried an age (the poll time minus
+# that age). Guarded by _VIEW_SEEN_LOCK and never holds a path _VIEW_SEEN does
+# not: a poll that names a path with no age removes it, so a view never keeps
+# a segment clock its capture side stopped reporting.
+_VIEW_SEGMENT: dict = {}
 
 
 # Where the page reaches the model-viewer cache. Also the value of the
@@ -6432,11 +6456,15 @@ class Handler(BaseHTTPRequestHandler):
             frame_at = {n: r.get("frame_at") for n, r in _FRAMES.items()}
         with _VIEW_SEEN_LOCK:
             seen = dict(_VIEW_SEEN)
+            segments = dict(_VIEW_SEGMENT)
         recorder_at = {t["name"]: seen[family.broadcast_path(t["name"])]
                      for t in wall["tiles"]
                      if family.broadcast_path(t["name"]) in seen}
+        segment_at = {t["name"]: segments[family.broadcast_path(t["name"])]
+                      for t in wall["tiles"]
+                      if family.broadcast_path(t["name"]) in segments}
         payload["tiles"] = eye.build_tiles(
-            wall["tiles"], frame_at, recorder_at, time.time())
+            wall["tiles"], frame_at, recorder_at, time.time(), segment_at)
         return 200, payload
 
     @_get_route("wealth query failed")
@@ -7520,19 +7548,33 @@ class Handler(BaseHTTPRequestHandler):
 
     @_get_route("pending clips query failed")
     def _clips_pending(query: dict, ctx) -> tuple[int, dict]:
-        """GET /api/clips/pending?paths=a,b - the pending rows on those stream paths,
-        oldest first, at most 10, with the database clock."""
+        """GET /api/clips/pending?paths=a,b&ages=a:3 - the pending rows on those stream
+        paths, oldest first, at most 10, with the database clock.
+
+        The optional ages=a:3,b:41 gives, per path, the age in seconds of the
+        newest segment its recorder has written; the eye read's tiles use it as
+        that view's frame clock. A bad age refuses the poll and stamps nothing."""
         if not _clips_root():
             return 503, {"error": clipcutter.NO_DIR}
         raw = query.get("paths", [""])[0]
         code, payload = clipcutter.pending(ctx.read, raw)
         if code == 200:
+            paths = clipcutter.paths_of(raw)
+            ages, refusal = clipcutter.ages_of(query.get("ages", [""])[0], paths)
+            if refusal:
+                return refusal
             now = time.time()
             with _VIEW_SEEN_LOCK:
-                for path in clipcutter.paths_of(raw):
+                for path in paths:
                     _VIEW_SEEN[path] = now
+                    if path in ages:
+                        _VIEW_SEGMENT[path] = now - ages[path]
+                    else:
+                        _VIEW_SEGMENT.pop(path, None)
                 while len(_VIEW_SEEN) > MAX_FRAMES:
-                    del _VIEW_SEEN[min(_VIEW_SEEN, key=_VIEW_SEEN.get)]
+                    oldest = min(_VIEW_SEEN, key=_VIEW_SEEN.get)
+                    del _VIEW_SEEN[oldest]
+                    _VIEW_SEGMENT.pop(oldest, None)
         return code, payload
 
     def _cutter_call(self, call, late: bool = False) -> None:

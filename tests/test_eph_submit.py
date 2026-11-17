@@ -362,7 +362,7 @@ class BridgeTest(Base):
             if c["name"] == "bridge":
                 c["volumeMounts"] = [
                     {"name": "run", "mountPath": "/run/eph", "readOnly": True},
-                    {"name": "tmp", "mountPath": "/tmp"},
+                    {"name": "tmp", "mountPath": "/scratch"},
                 ]
         cm["data"]["job.yaml"] = json.dumps(doc)
         self.submit(BRIDGE_ON, arm="treatment")

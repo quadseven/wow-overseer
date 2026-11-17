@@ -14,8 +14,13 @@ typed by hand: a disc exists because deaths exist, and ages out with them.
 WHAT IT DOES NOT DO. It knows lines, not routes: the worldserver still picks
 the path between the two ends, so a refusal here means "do not ask for this
 walk", and the module's own avoidance (a separate change that needs a
-worldserver roll) is what would route around a disc. Drowning is left out on
-purpose: water deaths sit in every lake and would void whole coasts.
+worldserver roll) is what would route around a disc. The one step past a
+refusal it can take is `detour`: given surveyed points (spawns the world
+itself placed, read by the caller), it names the one whose two straight legs
+both clear every disc, so the bridge can write the walk as two aims instead
+of stranding it. The legs are still lines, with the same disagreement in
+both directions. Drowning is left out on purpose: water deaths sit in every
+lake and would void whole coasts.
 
 PURE. Every function takes rows and points and returns plain values.
 """
@@ -52,8 +57,16 @@ INTERACT_YARDS = 12.0
 # ledge it dropped from. A walker whose own z is this far (or more) below
 # that ledge is on the floor under it, and the floor does not kill.
 FALL_CLEARANCE_YARDS = MIN_FALL_YARDS
+# A lava or slime disc condemns the liquid, not the air over it. A walk whose
+# two ends both stand at least this far above the liquid's surface (the highest
+# death z in the disc) is on a bridge, a ledge or a city floor over it.
+LIQUID_CLEARANCE_YARDS = 10.0
 # How far back the rows are read, in days.
 DEATH_DAYS = 7
+# A detour may run at most this many times the direct walk: past it the
+# route by way of the waypoint is a different journey through unsurveyed
+# country, not a step around the disc, and the refusal stands instead.
+MAX_DETOUR_RATIO = 2.0
 
 SQL = (
     "SELECT map AS map_id, pos_x AS x, pos_y AS y, pos_z AS z, killer_type, "
@@ -107,6 +120,9 @@ class Disc:
     # in it is a fall with a known landing z; None for lava, slime or a fall
     # with no z (those condemn the ground whatever height the walker is at).
     top_z: float | None = None
+    # The highest z a liquid death in a lava or slime disc was recorded at,
+    # i.e. the surface at least; None for a fall disc or a row with no z.
+    surface_z: float | None = None
 
     def said(self) -> str:
         return "%d %s death%s within %d yards of (%d, %d) on map %d" % (
@@ -154,7 +170,7 @@ def discs(rows) -> list:
             z, fell = _num(r, "z"), _num(r, "yards_fallen")
             top = z + fell if kind == "fall" and z is not None and fell else None
             spots.append(
-                (int(_num(r, "map_id")), _num(r, "x"), _num(r, "y"), kind, top)
+                (int(_num(r, "map_id")), _num(r, "x"), _num(r, "y"), kind, top, z)
             )
     parent = list(range(len(spots)))
 
@@ -167,7 +183,14 @@ def discs(rows) -> list:
     for i, a in enumerate(spots):
         for j in range(i + 1, len(spots)):
             b = spots[j]
-            if a[0] == b[0] and math.hypot(a[1] - b[1], a[2] - b[2]) <= CLUSTER_YARDS:
+            # A KIND CLUSTERS WITH ITS OWN KIND ONLY: a void fall 140 yards from
+            # a lava pool is not part of the pool, and merging them grew a
+            # 3-death disc to 157 yards over a whole city (Ironforge).
+            if (
+                a[0] == b[0]
+                and a[3] == b[3]
+                and math.hypot(a[1] - b[1], a[2] - b[2]) <= CLUSTER_YARDS
+            ):
                 parent[find(i)] = find(j)
     groups: dict = {}
     for i, s in enumerate(spots):
@@ -182,6 +205,10 @@ def discs(rows) -> list:
         kinds = sorted({m[3] for m in members})
         tops = [m[4] for m in members]
         top_z = min(tops) if all(t is not None for t in tops) else None
+        zs = [m[5] for m in members]
+        surface_z = (
+            max(zs) if kinds != ["fall"] and all(v is not None for v in zs) else None
+        )
         out.append(
             Disc(
                 map_id=members[0][0],
@@ -191,6 +218,7 @@ def discs(rows) -> list:
                 kind="/".join(kinds),
                 deaths=len(members),
                 top_z=top_z,
+                surface_z=surface_z,
             )
         )
     return sorted(out, key=lambda d: (d.map_id, d.x, d.y))
@@ -218,6 +246,20 @@ def _on_the_floor(disc, start) -> bool:
     )
 
 
+def _over_the_liquid(disc, start, goal) -> bool:
+    """Whether a lava or slime disc's liquid lies well below BOTH ends of the
+    walk, so that the walk is on dry ground over it. Needs both z and the
+    disc's surface; with any missing the disc stands. The path between the
+    ends is not sampled: a route that dives to the liquid between two high
+    ends is the one case this does not see."""
+    if disc.surface_z is None:
+        return False
+    zs = (_num(start, "z"), _num(goal, "z"))
+    return all(
+        z is not None and z >= disc.surface_z + LIQUID_CLEARANCE_YARDS for z in zs
+    )
+
+
 def _to_segment(disc, a, b) -> float:
     dx, dy = b[1] - a[1], b[2] - a[2]
     span = dx * dx + dy * dy
@@ -229,6 +271,32 @@ def _to_segment(disc, a, b) -> float:
     return math.hypot(disc.x - a[1] - t * dx, disc.y - a[2] - t * dy)
 
 
+def crossings(all_discs, start, goal) -> list:
+    """Every disc the line start -> goal passes through, in disc order.
+
+    The judgement `crossing` makes, kept whole: a disc the walker already
+    stands in is ignored (it must be able to leave), a goal inside a disc is
+    caught, and a point that cannot be read crosses nothing.
+    """
+    a, b = _point(start), _point(goal)
+    if a is None or b is None or a[0] != b[0]:
+        return []
+    # At the counter already: a few steps are no crossing.
+    if math.hypot(b[1] - a[1], b[2] - a[2]) <= INTERACT_YARDS:
+        return []
+    out = []
+    for disc in all_discs or ():
+        if disc.map_id != a[0]:
+            continue
+        if _on_the_floor(disc, start) or _over_the_liquid(disc, start, goal):
+            continue
+        if math.hypot(disc.x - a[1], disc.y - a[2]) <= disc.radius:
+            continue
+        if _to_segment(disc, a, b) <= disc.radius:
+            out.append(disc)
+    return out
+
+
 def crossing(all_discs, start, goal):
     """The first disc the line start -> goal passes through, or None.
 
@@ -236,22 +304,66 @@ def crossing(all_discs, start, goal):
     a goal inside a disc is caught, and a point that cannot be read refuses
     nothing: the check is advisory.
     """
+    hits = crossings(all_discs, start, goal)
+    return hits[0] if hits else None
+
+
+def detour(all_discs, start, goal, candidates):
+    """The surveyed point to walk by way of, so the walk crosses no disc.
+
+    `candidates` are points the world itself surveyed ({map_id, x, y, ...}:
+    spawns the caller read out of the world database); nothing here invents
+    a coordinate. A candidate serves when it stands outside every disc and
+    both straight legs, start -> candidate and candidate -> goal, clear
+    every disc; of those, the shortest total walk wins, and no route whose
+    total walk runs past MAX_DETOUR_RATIO times the direct walk serves at
+    all. The outside-every-disc test is its own on purpose: `crossing`
+    never judges ground the walker already stands in, so a walker standing
+    in a disc could otherwise be routed by way of a point inside that same
+    disc. None when the straight line already clears (nothing to route
+    around), when no candidate serves, or when an end cannot be read. The
+    candidate is returned as given, so the caller keeps the surveyed height
+    it carried.
+    """
     a, b = _point(start), _point(goal)
     if a is None or b is None or a[0] != b[0]:
         return None
-    # At the counter already: a few steps are no crossing.
-    if math.hypot(b[1] - a[1], b[2] - a[2]) <= INTERACT_YARDS:
+    if crossing(all_discs, start, goal) is None:
         return None
-    for disc in all_discs or ():
-        if disc.map_id != a[0]:
+    ceiling = MAX_DETOUR_RATIO * math.hypot(b[1] - a[1], b[2] - a[2])
+    best, best_key = None, None
+    for cand in candidates or ():
+        c = _point(cand)
+        if c is None or c[0] != a[0]:
             continue
-        if _on_the_floor(disc, start):
+        if any(
+            d.map_id == c[0] and math.hypot(d.x - c[1], d.y - c[2]) <= d.radius
+            for d in all_discs or ()
+        ):
             continue
-        if math.hypot(disc.x - a[1], disc.y - a[2]) <= disc.radius:
+        if crossing(all_discs, start, cand) is not None:
             continue
-        if _to_segment(disc, a, b) <= disc.radius:
-            return disc
-    return None
+        if crossing(all_discs, cand, goal) is not None:
+            continue
+        total = math.hypot(c[1] - a[1], c[2] - a[2]) + math.hypot(
+            b[1] - c[1], b[2] - c[2]
+        )
+        if total > ceiling:
+            continue
+        key = (total, c[1], c[2])
+        if best_key is None or key < best_key:
+            best, best_key = cand, key
+    return best
+
+
+def _aim_z(aim):
+    """The finite z of an `at:<map>:<x>,<y>,<z>` aim, or None (inf and nan are
+    not heights: the disc then stands)."""
+    try:
+        z = float(str(aim).split(":", 2)[2].split(",")[2])
+    except (IndexError, ValueError):
+        return None
+    return z if math.isfinite(z) else None
 
 
 def aim_refusal(all_discs, here, aim, spawn=None) -> str:
@@ -265,7 +377,7 @@ def aim_refusal(all_discs, here, aim, spawn=None) -> str:
         return ""
     ground = places.parse_ground_aim(aim)
     if ground:
-        goal = {"map_id": ground[0], "x": ground[1], "y": ground[2]}
+        goal = {"map_id": ground[0], "x": ground[1], "y": ground[2], "z": _aim_z(aim)}
         what = aim
     elif spawn and keyword_mask(aim):
         goal = spawn

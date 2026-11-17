@@ -849,7 +849,8 @@ def choose(
     level = int(level)
     fitting = _fitting(team, level, map_id, zone_id, bands, masters, opens, nodes)
     if avoid:
-        fitting = [f for f in fitting if f.hub.zone_id != int(avoid)]
+        avoided = {int(avoid)} if isinstance(avoid, int) else {int(z) for z in avoid}
+        fitting = [f for f in fitting if f.hub.zone_id not in avoided]
     if not fitting:
         return Choice(refused="no %s hub fits level %d" % (team, level))
     ground = ground_of(team, map_id, zone_id)

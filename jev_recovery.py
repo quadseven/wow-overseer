@@ -72,7 +72,8 @@ RECOVERY_CRITERIA = {
     ),
     "one_copy": (
         "Walk everybody out through the reset and in together, into one copy "
-        "of the dungeon. Right when the party was split across maps or copies."
+        "of the dungeon. Right when `failure_outcome` is `split_failed`, or the "
+        "party was split across maps or copies."
     ),
     "replan": (
         "Throw away the staging point and route and plan them again. Right "
@@ -80,8 +81,8 @@ RECOVERY_CRITERIA = {
         "kept being taken back near the door."
     ),
     "reset_instance": (
-        "Reset the instance and try the same approach again. Right when the "
-        "reset failed or nothing else fits."
+        "Reset the instance and try the same approach again. Right when "
+        "`failure_outcome` is `reset_failed`, or no more specific fact fits."
     ),
     # mod-overseer offers this only when most of the family is bound at one
     # inn on the dungeon's continent and most can hearth there now; its facts
@@ -172,6 +173,11 @@ def _text(row: dict, key: str) -> str:
 
 def _number(row: dict, key: str) -> int:
     return int(row.get(key) or 0)
+
+
+def _failure_outcome(failure: str) -> str:
+    outcome, separator, _reason = failure.partition(": ")
+    return outcome if separator else ""
 
 
 def request_from_row(row: dict) -> Request | None:
@@ -317,6 +323,8 @@ def state_for(request: Request, context: Context) -> dict:
         ),
         "recent_recoveries_and_what_followed": list(context.history),
     }
+    if request.kind == KIND_RECOVERY:
+        state["failure_outcome"] = _failure_outcome(request.failure)
     if context.perception:
         state["perception"] = dict(context.perception)
     for extend in FACT_EXTENDERS:
@@ -332,7 +340,9 @@ def question(request: Request, context: Context):
         instructions = (
             "A family of World of Warcraft adventurers tried to enter a dungeon "
             "together and failed before getting inside. `what_happened` is the "
-            "failure, `module_facts` what the server measured, `recent_timeline` "
+            "failure; `failure_outcome` is its server outcome tag and the outcome "
+            "the module's heuristic branches on. `module_facts` is what the server "
+            "measured, `recent_timeline` "
             "the run's own recent events (newest first), `members` where each "
             "one stands, and `recent_recoveries_and_what_followed` how earlier "
             "recoveries worked out. The campaign never stops; choose the "

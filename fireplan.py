@@ -378,6 +378,9 @@ _RANKS = tuple(RANK_VALUE)
 DARK_IRON_ORE, DARK_IRON_BAR = 11370, 11371
 FIERY_CORE, LAVA_CORE, CORE_LEATHER = 17010, 17011, 17012
 BLOOD_OF_THE_MOUNTAIN = 11382
+INCENDOSAUR_SCALE, DARK_IRON_RESIDUE = 18944, 18945
+WHAT_THE_FLUX_ITEM = 18922
+IRON_BAR, HEAVY_LEATHER, KINGSBLOOD, COAL = 3575, 4234, 3356, 3857
 ITEM_NAMES = {
     DARK_IRON_ORE: "Dark Iron Ore",
     DARK_IRON_BAR: "Dark Iron Bar",
@@ -385,8 +388,29 @@ ITEM_NAMES = {
     LAVA_CORE: "Lava Core",
     CORE_LEATHER: "Core Leather",
     BLOOD_OF_THE_MOUNTAIN: "Blood of the Mountain",
+    INCENDOSAUR_SCALE: "Incendosaur Scale",
+    DARK_IRON_RESIDUE: "Dark Iron Residue",
+    WHAT_THE_FLUX_ITEM: "Secret Plans: Fiery Flux",
+    IRON_BAR: "Iron Bar",
+    HEAVY_LEATHER: "Heavy Leather",
+    KINGSBLOOD: "Kingsblood",
+    COAL: "Coal",
 }
 ORE_PER_BAR = 8
+
+# Burninate's reputation ladder. What the Flux? opens the repeatable supply
+# quests through Friendly; Gaining Acceptance carries Friendly to Honored.
+WHAT_THE_FLUX = 7722
+BURNINATE = 14624
+NEUTRAL_TURNINS = (
+    (8241, ((INCENDOSAUR_SCALE, 2), (IRON_BAR, 4), (COAL, 1))),
+    (8242, ((INCENDOSAUR_SCALE, 2), (HEAVY_LEATHER, 10), (COAL, 1))),
+    (7736, ((INCENDOSAUR_SCALE, 2), (KINGSBLOOD, 4), (COAL, 1))),
+)
+FRIENDLY_TURNIN = (7737, ((DARK_IRON_RESIDUE, 4),))
+DARK_IRON_QUESTS = frozenset(
+    {WHAT_THE_FLUX, FRIENDLY_TURNIN[0]} | {quest for quest, _needs in NEUTRAL_TURNINS}
+)
 
 # Lokhtos's turn-ins: (quest, ((item, count), ...)). quest_template_addon gives
 # every one of them RequiredMinRepValue 9000 on faction 59.
@@ -628,13 +652,14 @@ IRON_ROAD = (
 # counter gets a walk (`walk_to`, the plan entry Lokhtos stocks) rather than
 # a row the executor would refuse for range.
 #
-# OFF UNLESS ASKED FOR. The pass runs only with DARK_IRON_ENABLED=1: the road's
-# lower ladder and its craft steps have no executor yet, and none of the
-# counter rows has been seen to land live.
+# OFF UNLESS ASKED FOR. The pass runs only with DARK_IRON_ENABLED=1. Learn,
+# smelt, gather and craft still have no executor, and none of the counter rows
+# has been seen to land live.
 # ---------------------------------------------------------------------------
 
 SMELT_SPELL = 14891  # Smelt Dark Iron
 SOURCE = "overseer:dark-iron"
+TOWN_CLAIMANT = "dark-iron"
 REFUSED_RETRY_MINUTES = 360
 ENABLE_ENV = "DARK_IRON_ENABLED"
 
@@ -655,8 +680,10 @@ class Smith:
     name: str
     learned: frozenset = frozenset()
     standing: int = 0
+    level: int = 60
     held: tuple = ()  # ((entry, count), ...)
     in_log: frozenset = frozenset()  # quest ids in the quest log
+    rewarded: frozenset | None = frozenset()  # completed prerequisite quests
     money: int = 0
     free_slots: int = 0
     stocks: frozenset = frozenset()  # entries a reachable vendor sells
@@ -673,6 +700,7 @@ class IronTurn:
     errand: towntrip.Errand | None = None
     note: str = ""
     walk_to: int = 0  # an item entry Lokhtos stocks, when he is out of reach
+    walk_npc: int = 0  # an NPC entry to reach before taking or turning in a quest
 
 
 def spare(held: dict, made=()) -> dict:
@@ -704,11 +732,54 @@ def _turnin(held: dict, made) -> int:
     return 0
 
 
+def _burninate_turnin(smith: Smith) -> tuple[int, str]:
+    """The next Burninate quest and its item preconditions, or a reason to wait."""
+    if smith.level < 45:
+        return 0, "%s is below level 45 for Burninate's reputation quests" % smith.name
+    if smith.rewarded is None:
+        return 0, "%s has no readable rewarded-quest history" % smith.name
+
+    held = dict(smith.held)
+    if WHAT_THE_FLUX not in smith.rewarded:
+        if WHAT_THE_FLUX not in smith.in_log:
+            return WHAT_THE_FLUX, ""
+        if held.get(WHAT_THE_FLUX_ITEM, 0) < 1:
+            return 0, "%s is still looking for Secret Plans: Fiery Flux" % smith.name
+        return WHAT_THE_FLUX, ""
+
+    turnins = (
+        NEUTRAL_TURNINS if smith.standing < RANK_VALUE[FRIENDLY] else (FRIENDLY_TURNIN,)
+    )
+    active = next((row for row in turnins if row[0] in smith.in_log), None)
+    if active is not None:
+        choices = (active,)
+    else:
+        choices = turnins
+
+    for quest, needs in choices:
+        missing = [
+            (item, count - held.get(item, 0))
+            for item, count in needs
+            if held.get(item, 0) < count
+        ]
+        if not missing:
+            return quest, ""
+        if active is not None:
+            detail = ", ".join(
+                "%d %s" % (count, ITEM_NAMES[item]) for item, count in missing
+            )
+            return 0, "%s needs %s for Burninate quest:%d" % (smith.name, detail, quest)
+
+    return 0, "%s has no complete Burninate turn-in set" % smith.name
+
+
 def _at_lokhtos(stocks) -> bool:
     return any(p.entry in stocks for p in PLANS)
 
 
-def iron_member(smith: Smith, made=(), blocked=frozenset()) -> IronTurn:
+def iron_member(
+    smith: Smith, made=(), blocked=frozenset(), nearby_npcs=frozenset()
+) -> IronTurn:
     """The road and the next counter row for one blacksmith.
 
     `made` is the pieces the guild has crafted (a durable record: the craft
@@ -731,29 +802,37 @@ def iron_member(smith: Smith, made=(), blocked=frozenset()) -> IronTurn:
     plan = step.plan
     if step.kind == GRIND:
         if standing < TURNIN_MIN_STANDING:
-            return IronTurn(
-                pipe,
-                note="%s: below Honored %s takes no turn-in; "
-                "the reputation is %s, which has no command yet"
-                % (smith.name, VENDOR, LOWER_LADDER),
+            quest, note = _burninate_turnin(smith)
+            if not quest:
+                return IronTurn(pipe, note=note)
+            if BURNINATE not in nearby_npcs:
+                return IronTurn(
+                    pipe,
+                    note="%s needs Burninate for quest:%d" % (smith.name, quest),
+                    walk_npc=BURNINATE,
+                )
+            verb = "turnin" if quest in smith.in_log else "take"
+            errand = towntrip.Errand(
+                smith.name, "quest", "%s quest:%d" % (verb, quest), step.said
             )
-        quest = _turnin(held, made)
-        if not quest:
-            return IronTurn(
-                pipe,
-                note="%s holds nothing spare to hand in (cores "
-                "and leather are kept for the pieces and Flarecore)" % smith.name,
+        else:
+            quest = _turnin(held, made)
+            if not quest:
+                return IronTurn(
+                    pipe,
+                    note="%s holds nothing spare to hand in (cores "
+                    "and leather are kept for the pieces and Flarecore)" % smith.name,
+                )
+            if not _at_lokhtos(smith.stocks):
+                return IronTurn(
+                    pipe,
+                    note="%s is not at %s for a turn-in" % (smith.name, VENDOR),
+                    walk_to=plan.entry,
+                )
+            verb = "turnin" if quest in smith.in_log else "take"
+            errand = towntrip.Errand(
+                smith.name, "quest", "%s quest:%d" % (verb, quest), step.said
             )
-        if not _at_lokhtos(smith.stocks):
-            return IronTurn(
-                pipe,
-                note="%s is not at %s for a turn-in" % (smith.name, VENDOR),
-                walk_to=plan.entry,
-            )
-        verb = "turnin" if quest in smith.in_log else "take"
-        errand = towntrip.Errand(
-            smith.name, "quest", "%s quest:%d" % (verb, quest), step.said
-        )
     else:
         if plan.entry not in smith.stocks:
             return IronTurn(

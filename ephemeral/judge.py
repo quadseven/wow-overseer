@@ -128,6 +128,19 @@ def expectation_holds(expect, rows):
     return _OPS[m.group(1)](float(value), float(m.group(2))), f"scalar={value}"
 
 
+def log_bound_holds(expect, count):
+    """Whether `count` matching log lines satisfy a log assertion's bound.
+
+    A bound the lint would refuse raises: an unreadable bound is INVALID, never
+    a pass.
+    """
+    problem = lint.log_bound_problem(expect)
+    if problem:
+        raise JudgeError(f"bad log expectation {expect!r}: {problem}")
+    fewest, most = lint.log_bound_range(expect)
+    return count >= fewest and (most is None or count <= most)
+
+
 def render_sql(sql, variables):
     """Fill @name from the seed handoff; refuses a name it does not know."""
 
@@ -521,9 +534,12 @@ class Judge:
             rec["pattern"] = o["log"]["pattern"]
             rec["matched"] = [ln[:MAX_CELL_CHARS] for ln in lines[:MAX_MATCHED_LINES]]
             rec["observed"] = f"count={len(lines)}"
-            rec["status"] = (
-                "held" if len(lines) == o["log"]["expect"]["count"] else "violated"
-            )
+            try:
+                held = log_bound_holds(o["log"]["expect"], len(lines))
+            except JudgeError as exc:
+                rec["status"], rec["detail"] = "error", str(exc)[:MAX_CELL_CHARS]
+                return rec
+            rec["status"] = "held" if held else "violated"
             return rec
         rec["when"] = o["when"]
         rec["sql"] = self.rendered[name]

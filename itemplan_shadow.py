@@ -67,6 +67,7 @@ BAG_SLOTS = "bag slot capacity"
 RECIPE_RANK = "recipe skill rank"
 ITEM_STATS = "item template stats"
 INSTANCE_SOULBOUND = "item-instance soulbound flags"
+WORN_BAGS = "worn bag sizes"
 INPUTS = (
     QUEST_LOG,
     WORN_GEAR,
@@ -80,6 +81,7 @@ INPUTS = (
     RECIPE_RANK,
     ITEM_STATS,
     INSTANCE_SOULBOUND,
+    WORN_BAGS,
 )
 
 # Pass names in the disagreement lines.
@@ -149,6 +151,10 @@ class Extras:
     slots in the personal bank and its bags. `guild_free` is (family, tab) ->
     free slots. `guild_roster` is ((name, trade, skill, online), ...), and
     `guild_crafters` contains only online members from that roster.
+    `worn_bags` is `itemplan_data.worn_bags`' answer, holder -> the slot
+    counts of the bags it wears; left None, the plan keeps every carried bag
+    (#2274). `fishers` is the family members with the Fishing skill, which
+    `family_skills` leaves out.
     """
 
     open_quest_items: Mapping[str, frozenset] | None = None
@@ -174,6 +180,8 @@ class Extras:
     # None is unread, which vendors nothing.
     failed_listings: Mapping[tuple, int] | None = None
     known_spells: Mapping[str, frozenset] | None = None
+    worn_bags: Mapping[str, tuple] | None = None
+    fishers: frozenset | None = None
     # (holder, item guid) -> the guild loot policy's route, or None; see
     # itemplan.Context.loot_route. None means no policy is wired in.
     loot_route: Callable | None = None
@@ -340,6 +348,8 @@ def _context(extras: Extras, verdicts) -> itemplan.Context:
         known_spells=extras.known_spells,
         banker_free=extras.banker_free or {},
         loot_route=extras.loot_route,
+        worn_bags=extras.worn_bags,
+        fishers=extras.fishers,
     )
 
 
@@ -584,6 +594,7 @@ _ABSENT_NOTE = {
     RECIPE_RANK: "recipe skill rank",
     ITEM_STATS: "item template stats",
     INSTANCE_SOULBOUND: "item-instance soulbound flags",
+    WORN_BAGS: "worn bag sizes",
 }
 
 
@@ -618,6 +629,7 @@ def _missing(extras: Extras, verdicts=None) -> tuple:
         or ITEM_STATS in extras.unread,
         INSTANCE_SOULBOUND: extras.instance_soulbound is None
         or INSTANCE_SOULBOUND in extras.unread,
+        WORN_BAGS: extras.worn_bags is None,
     }
     out = []
     for name in INPUTS:
@@ -842,9 +854,11 @@ def run(
         written = _log_detail(
             report, out, family, _LAST if state is None else state, clock()
         )
+        bigger_bags, fishing_poles = itemplan.kept_for_use(report.plan)
         out.info(
             "%s tick: members %d, stacks %d, disagreements %d, no room %d, "
-            "detail written for %d member(s), unchanged %d, ran without: %s",
+            "detail written for %d member(s), unchanged %d, "
+            "kept for use: bigger bags %d, fishing poles %d, ran without: %s",
             PREFIX,
             len(report.plan.members),
             len(report.plan.decisions),
@@ -852,6 +866,8 @@ def run(
             report.no_room,
             written,
             len(report.detail) - written,
+            bigger_bags,
+            fishing_poles,
             "; ".join(report.missing) or "nothing",
         )
         return report
