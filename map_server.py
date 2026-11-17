@@ -4979,6 +4979,12 @@ MAX_FRAMES = 4 * stream.MAX_CHANNELS
 # next poll.
 _VIEW_SEEN: dict = {}
 _VIEW_SEEN_LOCK = threading.Lock()
+# When the newest segment of each stream path's recording was written, epoch
+# seconds, for the paths whose last poll carried an age (the poll time minus
+# that age). Guarded by _VIEW_SEEN_LOCK and never holds a path _VIEW_SEEN does
+# not: a poll that names a path with no age removes it, so a view never keeps
+# a segment clock its capture side stopped reporting.
+_VIEW_SEGMENT: dict = {}
 
 
 # Where the page reaches the model-viewer cache. Also the value of the
@@ -6439,11 +6445,15 @@ class Handler(BaseHTTPRequestHandler):
             frame_at = {n: r.get("frame_at") for n, r in _FRAMES.items()}
         with _VIEW_SEEN_LOCK:
             seen = dict(_VIEW_SEEN)
+            segments = dict(_VIEW_SEGMENT)
         recorder_at = {t["name"]: seen[family.broadcast_path(t["name"])]
                      for t in wall["tiles"]
                      if family.broadcast_path(t["name"]) in seen}
+        segment_at = {t["name"]: segments[family.broadcast_path(t["name"])]
+                      for t in wall["tiles"]
+                      if family.broadcast_path(t["name"]) in segments}
         payload["tiles"] = eye.build_tiles(
-            wall["tiles"], frame_at, recorder_at, time.time())
+            wall["tiles"], frame_at, recorder_at, time.time(), segment_at)
         return 200, payload
 
     @_get_route("wealth query failed")
@@ -7527,19 +7537,33 @@ class Handler(BaseHTTPRequestHandler):
 
     @_get_route("pending clips query failed")
     def _clips_pending(query: dict, ctx) -> tuple[int, dict]:
-        """GET /api/clips/pending?paths=a,b - the pending rows on those stream paths,
-        oldest first, at most 10, with the database clock."""
+        """GET /api/clips/pending?paths=a,b&ages=a:3 - the pending rows on those stream
+        paths, oldest first, at most 10, with the database clock.
+
+        The optional ages=a:3,b:41 gives, per path, the age in seconds of the
+        newest segment its recorder has written; the eye read's tiles use it as
+        that view's frame clock. A bad age refuses the poll and stamps nothing."""
         if not _clips_root():
             return 503, {"error": clipcutter.NO_DIR}
         raw = query.get("paths", [""])[0]
         code, payload = clipcutter.pending(ctx.read, raw)
         if code == 200:
+            paths = clipcutter.paths_of(raw)
+            ages, refusal = clipcutter.ages_of(query.get("ages", [""])[0], paths)
+            if refusal:
+                return refusal
             now = time.time()
             with _VIEW_SEEN_LOCK:
-                for path in clipcutter.paths_of(raw):
+                for path in paths:
                     _VIEW_SEEN[path] = now
+                    if path in ages:
+                        _VIEW_SEGMENT[path] = now - ages[path]
+                    else:
+                        _VIEW_SEGMENT.pop(path, None)
                 while len(_VIEW_SEEN) > MAX_FRAMES:
-                    del _VIEW_SEEN[min(_VIEW_SEEN, key=_VIEW_SEEN.get)]
+                    oldest = min(_VIEW_SEEN, key=_VIEW_SEEN.get)
+                    del _VIEW_SEEN[oldest]
+                    _VIEW_SEGMENT.pop(oldest, None)
         return code, payload
 
     def _cutter_call(self, call, late: bool = False) -> None:
