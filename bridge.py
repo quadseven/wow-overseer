@@ -38628,7 +38628,8 @@ _RAID_SUPPLY_BANK_SQL = (
 )
 _RAID_SUPPLY_ROWS_SQL = (
     "SELECT target_name, target_arg, command, source, status, "
-    "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
+    "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age, "
+    "IF(source LIKE '%%:collect:%%', result, '') AS result FROM overseer_command "
     "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY"
 )
 _RAID_SUPPLY_SEAT_REAGENTS_SQL = (

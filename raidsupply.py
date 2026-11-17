@@ -1383,7 +1383,16 @@ def equip_step(raider_member, raider, gear):
 def _cooling(step, recent) -> bool:
     minutes = COOLDOWN_MINUTES.get(step.action, 30)
     age = (recent or {}).get((step.holder, step.action, int(step.key)))
-    return age is not None and age < minutes
+    if age is not None and age < minutes:
+        return True
+    if step.action == "collect":
+        # A collect the module refused for bag room waits as long as a corps
+        # collect does (#2925): the bags stay full until something sells.
+        full = (recent or {}).get(
+            (step.holder, guildcorps.FULL_BAGS_COLLECT, int(step.key))
+        )
+        return full is not None and full < guildcorps.FULL_BAGS_COLLECT_MINUTES
+    return False
 
 
 @dataclass(frozen=True)
