@@ -4445,24 +4445,28 @@ _STRAY_FOLLOWERS_SQL = (
     "LIMIT 500"
 )
 _STRAY_RECENT_SQL = (
-    "SELECT target_name, MIN(TIMESTAMPDIFF(MINUTE, created_at, NOW())) AS age "
+    "SELECT target_name, MIN(TIMESTAMPDIFF(MINUTE, created_at, NOW())) AS age, "
+    "COUNT(*) AS tries "
     "FROM overseer_command WHERE source LIKE %s "
     "AND created_at > NOW() - INTERVAL 1 DAY GROUP BY target_name"
 )
 
 
 def _fetch_stray_followers() -> tuple:
-    """(followers, name -> minutes since its last leave row) for strayfollow."""
+    """(followers, name -> minutes since its last leave row, name -> leave rows
+    in the last day) for strayfollow."""
     guilds = sorted(raidteams.GROUPS)
     if not guilds:
-        return (), {}
+        return (), {}, {}
     sql = _STRAY_FOLLOWERS_SQL.format(guilds=",".join(["%s"] * len(guilds)))
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, guilds)
         followers = strayfollow.followers_from_rows(cur.fetchall())
         cur.execute(_STRAY_RECENT_SQL, (strayfollow.SOURCE + ":%",))
-        recent = {str(r["target_name"]): int(r["age"]) for r in cur.fetchall()}
-    return followers, recent
+        asked = cur.fetchall()
+    recent = {str(r["target_name"]): int(r["age"]) for r in asked}
+    tries = {str(r["target_name"]): int(r["tries"]) for r in asked}
+    return followers, recent, tries
 
 
 # THE RARE NODES AND THE RIDERS' READS (memberloop.py). The world does not
@@ -28451,13 +28455,23 @@ class Bridge(discord.Client):
         await self.wait_until_ready()
         cycle = float(os.environ.get("STRAY_FOLLOW_SECONDS", "300"))
         since: dict = {}
+        told: set = set()
         while not self.is_closed():
             try:
-                followers, recent = await asyncio.to_thread(_fetch_stray_followers)
+                followers, recent, tries = await asyncio.to_thread(
+                    _fetch_stray_followers)
                 now = time.monotonic()
                 since = strayfollow.track(since, followers, now)
+                guilds = frozenset(raidteams.GROUPS)
                 rows, lines = strayfollow.plan(
-                    followers, since, now, recent, frozenset(raidteams.GROUPS))
+                    followers, since, now, recent, guilds, tries)
+                # One line a member, not one a cycle, for a member given up.
+                for line in strayfollow.gave_up(followers, since, now, tries, guilds):
+                    if line not in told:
+                        told.add(line)
+                        log.info("stray followers: %s", line)
+                if len(told) > 500:
+                    told.clear()
                 for r, line in zip(rows, lines):
                     row_id = await asyncio.to_thread(
                         _insert_guild, r.name, r.command, r.source)
