@@ -79,9 +79,9 @@ def urlfetch(url, headers):
     if not url.startswith("https://"):
         raise RegistryError("registry requests must be https")
     opener = urllib.request.build_opener(_NoRedirect)
-    req = urllib.request.Request(url, headers=headers)
+    req = urllib.request.Request(url, headers=headers)  # noqa: S310 - https only (checked above), redirects refused
     try:
-        with opener.open(req, timeout=20) as resp:  # noqa: S310 - https only (checked above), redirects refused
+        with opener.open(req, timeout=20) as resp:
             return (
                 resp.status,
                 {k.lower(): v for k, v in resp.headers.items()},
