@@ -51,6 +51,67 @@ class TheGatherPhaseHandsOutMemberTargets(unittest.TestCase):
         got = individual.gather_targets(rows, SKILLS, "Grug", "farm:mining", ENV)
         self.assertEqual(set(got.values()), {"farm:mining"})
 
+    def test_a_member_with_its_own_kill_drop_order_gets_it_alone(self):
+        # Og is thin on Silk Cloth; nobody else in the family needs it.
+        got = individual.gather_targets(
+            GATHER_ROWS,
+            SKILLS,
+            "Grug",
+            "farm:4306",
+            ENV,
+            member_orders={"Og": "farm:4306"},
+        )
+        self.assertEqual(got["Og"], "farm:4306")
+        self.assertEqual(got["Ugga"], "farm:herbalism")
+        self.assertEqual(got["Grug"], "farm:mining")
+
+    def test_the_others_keep_their_own_skill_not_the_familys_item(self):
+        got = individual.gather_targets(
+            GATHER_ROWS,
+            SKILLS,
+            "Grug",
+            "farm:4306",
+            ENV,
+            member_orders={"Og": "farm:4306"},
+        )
+        self.assertEqual(
+            {n for n, j in got.items() if j == "farm:4306"}, {"Og", "Bork"}
+        )
+
+    def test_a_member_order_for_a_family_not_named_is_ignored(self):
+        got = individual.gather_targets(
+            GATHER_ROWS,
+            SKILLS,
+            "Zug",
+            "farm:mining",
+            ENV,
+            member_orders={"Og": "farm:4306"},
+        )
+        self.assertEqual(set(got.values()), {"farm:mining"})
+
+    def test_a_linked_family_ignores_member_orders(self):
+        rows = dict(GATHER_ROWS, Og="dungeon")
+        got = individual.gather_targets(
+            rows,
+            SKILLS,
+            "Grug",
+            "farm:mining",
+            ENV,
+            member_orders={"Bork": "farm:4306"},
+        )
+        self.assertEqual(set(got.values()), {"farm:mining"})
+
+    def test_a_member_order_the_job_table_refuses_is_not_used(self):
+        got = individual.gather_targets(
+            GATHER_ROWS,
+            SKILLS,
+            "Grug",
+            "farm:mining",
+            ENV,
+            member_orders={"Og": "farm:nonsense"},
+        )
+        self.assertEqual(got["Og"], "farm:mining")
+
     def test_a_member_sitting_out_is_left_out(self):
         got = individual.gather_targets(
             GATHER_ROWS, SKILLS, "Grug", "farm:mining", ENV, exempt=("Og",)
@@ -94,6 +155,7 @@ class TheLoopWritesTheTargets(unittest.TestCase):
         body = text[a : text.index("    async def _prof_loop_facts(", a)]
         self.assertIn("profloop.GATHER", body)
         self.assertLess(body.index("gather_targets("), body.index("_prof_loop_write("))
+        self.assertIn("member_orders=facts.member_orders", body)
 
 
 def _run_farm_individual(phase):

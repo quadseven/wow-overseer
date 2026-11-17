@@ -341,6 +341,54 @@ class GatherTarget(unittest.TestCase):
         }
         self.assertEqual("farm:4338", profloop.gather_job(self.SKILLS, plans)[0])
 
+    def test_each_crafter_gets_its_own_kill_drop_order(self):
+        og = reagentplan.Short(
+            reagentplan.Reagent(4306, "Silk Cloth", 12),
+            reagentplan.Stock(bags=11),
+            reagentplan.GATHER,
+            "Og",
+            "roams",
+        )
+        oz = reagentplan.Short(
+            reagentplan.Reagent(4338, "Mageweave Cloth", 8),
+            reagentplan.Stock(),
+            reagentplan.AUCTION,
+            "Oz",
+            "short",
+        )
+        vault = reagentplan.Short(
+            reagentplan.Reagent(4306, "Silk Cloth", 12),
+            reagentplan.Stock(bags=2, guild_bank=40),
+            reagentplan.GUILD_BANK,
+            "Zug",
+            "vault",
+        )
+        plans = {
+            "Og": reagentplan.Plan("Og", 3839, True, 2, (), (og,)),
+            "Oz": reagentplan.Plan("Oz", 12053, True, 0, (oz,)),
+            "Zug": reagentplan.Plan("Zug", 3839, True, 0, (vault,)),
+            "Bork": reagentplan.Plan("Bork", 3756, False),
+        }
+        got = profloop.member_kill_drops(plans)
+        self.assertEqual({"Og", "Oz"}, set(got))
+        self.assertEqual("farm:4306", got["Og"][0])
+        self.assertEqual("farm:4338", got["Oz"][0])
+        self.assertIn("Og is short of Silk Cloth", got["Og"][1])
+
+    def test_member_kill_drops_agrees_with_the_family_wide_choice(self):
+        thin = reagentplan.Short(
+            reagentplan.Reagent(4306, "Silk Cloth", 12),
+            reagentplan.Stock(bags=11),
+            reagentplan.GATHER,
+            "Og",
+            "roams",
+        )
+        plans = {"Og": reagentplan.Plan("Og", 3839, True, 2, (), (thin,))}
+        self.assertEqual(
+            profloop.gather_job(self.SKILLS, plans),
+            profloop.member_kill_drops(plans)["Og"],
+        )
+
     def test_sandworm_meat_entry_comes_from_gathered(self):
         self.assertIn(20424, profloop.KILL_DROP_ENTRIES)
         self.assertNotIn(20401, profloop.KILL_DROP_ENTRIES)

@@ -212,7 +212,13 @@ def farm_retargets(
 
 
 def gather_targets(
-    job_by_name: dict, skills_by_name: dict, family, loop_job, environ=None, exempt=()
+    job_by_name: dict,
+    skills_by_name: dict,
+    family,
+    loop_job,
+    environ=None,
+    exempt=(),
+    member_orders=None,
 ) -> dict:
     """{member: job} the profession loop's GATHER phase writes (#2498).
 
@@ -223,14 +229,28 @@ def gather_targets(
     (`farmjob.target_for`); a member with no node trade keeps the loop's job,
     and an ITEM order (`farm:<entry>`) or `quest` is the family's and goes to
     all. Members in `exempt` are left out.
+
+    `member_orders` (#2502) is name -> the kill-drop order that member's own
+    reagent plan needs (`profloop.member_kill_drops`). In an individual,
+    unlinked family that member gets it alone, and the others keep their own
+    skill target instead of following an item they do not eat. Elsewhere it is
+    ignored: a linked or unnamed family moves as one.
     """
     skip = set(exempt or ())
     names = sorted(n for n in (job_by_name or {}) if n not in skip)
     job = str(loop_job or "").strip().lower()
-    if not (active(job_by_name, family, environ) and farmjob.order_of(job)[1]):
+    own = {
+        n: str(j).strip().lower()
+        for n, j in (member_orders or {}).items()
+        if jobs.can_set(str(j).strip().lower())
+    }
+    if not active(job_by_name, family, environ):
+        return {n: loop_job for n in names}
+    if not (farmjob.order_of(job)[1] or own):
         return {n: loop_job for n in names}
     return {
-        n: farmjob.target_for((skills_by_name or {}).get(n)) or loop_job for n in names
+        n: own.get(n) or farmjob.target_for((skills_by_name or {}).get(n)) or loop_job
+        for n in names
     }
 
 

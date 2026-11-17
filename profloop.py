@@ -222,6 +222,9 @@ class Facts:
     queue_owns: bool = False
     gather_job: str = "quest"
     gather_why: str = ""
+    # name -> kill-drop job that crafter's own plan needs (#2502); read only
+    # by an individual family's gather phase.
+    member_orders: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -237,41 +240,68 @@ class Step:
     moved: bool = False
 
 
+def _kill_drop_gap(p):
+    """(key, job, why) for one plan's biggest non-town kill-drop gap, or None.
+
+    A `Short` and a THIN reagent (#2502) both count. `key` sorts the biggest
+    gap first and breaks ties by entry then crafter name.
+    """
+    if not getattr(p, "judged", False):
+        return None
+    best = None
+    for s in tuple(getattr(p, "shorts", ()) or ()) + tuple(
+        getattr(p, "thin", ()) or ()
+    ):
+        if s.reagent.vendor:
+            continue
+        if s.source not in (reagentplan.GATHER, reagentplan.AUCTION):
+            continue
+        entry = int(s.reagent.entry)
+        if entry not in KILL_DROP_ENTRIES:
+            continue
+        job = "farm:%d" % entry
+        if not jobs.can_set(job):
+            continue
+        shortage = max(1, int(s.reagent.per_cast) - int(s.have.bags))
+        key = (-shortage, entry, str(p.name))
+        if best is None or key < best[0]:
+            why = "%s is short of %s (need %d, bags %d)" % (
+                p.name,
+                s.reagent.label,
+                int(s.reagent.per_cast),
+                int(s.have.bags),
+            )
+            best = (key, job, why)
+    return best
+
+
 def _kill_drop_short(plans):
     """(job, why) for the first non-town kill-drop reagent shortage, or None."""
     items = plans.values() if isinstance(plans, dict) else (plans or ())
     best = None
     for p in items:
-        if not getattr(p, "judged", False):
-            continue
-        # A THIN reagent (#2502) is one the bags hold for under SHORT_CASTS
-        # casts: the craft rhythm already calls the crafter short of it.
-        for s in tuple(getattr(p, "shorts", ()) or ()) + tuple(
-            getattr(p, "thin", ()) or ()
-        ):
-            if s.reagent.vendor:
-                continue
-            if s.source not in (reagentplan.GATHER, reagentplan.AUCTION):
-                continue
-            entry = int(s.reagent.entry)
-            if entry not in KILL_DROP_ENTRIES:
-                continue
-            job = "farm:%d" % entry
-            if not jobs.can_set(job):
-                continue
-            shortage = max(1, int(s.reagent.per_cast) - int(s.have.bags))
-            key = (-shortage, entry, str(p.name))
-            if best is None or key < best[0]:
-                why = "%s is short of %s (need %d, bags %d)" % (
-                    p.name,
-                    s.reagent.label,
-                    int(s.reagent.per_cast),
-                    int(s.have.bags),
-                )
-                best = (key, job, why)
+        gap = _kill_drop_gap(p)
+        if gap is not None and (best is None or gap[0] < best[0]):
+            best = gap
     if best is None:
         return None
     return best[1], best[2]
+
+
+def member_kill_drops(plans) -> dict:
+    """{crafter: (job, why)}: each crafter's own kill-drop order (#2502).
+
+    The family-wide `gather_job` names the one biggest gap for everybody. An
+    individual family hands each member its own instead, so the tailor goes
+    for silk while the smith mines, the same rule per crafter.
+    """
+    items = plans.values() if isinstance(plans, dict) else (plans or ())
+    out = {}
+    for p in items:
+        gap = _kill_drop_gap(p)
+        if gap is not None:
+            out[str(p.name)] = (gap[1], gap[2])
+    return out
 
 
 def gather_job(skills: dict, plans=None) -> tuple:
