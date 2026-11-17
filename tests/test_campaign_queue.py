@@ -403,8 +403,9 @@ class FakeWorld:
                     r["status"] = "done"
         return 1
 
-    def drive(self, keyword, wanted, names=None, source="", withheld=None,
-              claim_store=None):
+    def drive(
+        self, keyword, wanted, names=None, source="", withheld=None, claim_store=None
+    ):
         if self.withhold:
             if withheld is not None:
                 withheld.append("bags are near full")
@@ -515,8 +516,9 @@ def _queue_pass(world, holds=None, stuck=None, extra=None, **hooks):
     )
     if stuck:
         for family in {row["family"] for row in world.roster}:
-            names = tuple(sorted(row["name"] for row in world.roster
-                                 if row["family"] == family))
+            names = tuple(
+                sorted(row["name"] for row in world.roster if row["family"] == family)
+            )
             members = tuple((name, 0) for name in names if stuck.get(name))
             if members:
                 key = claims.MemberClaims.key(names)

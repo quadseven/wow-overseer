@@ -291,7 +291,7 @@ class TheBridgeCarriesItOut(unittest.TestCase):
         )
         self.assertIn('ATTUNE_CLAIMANT = "%s"' % attunestep.CLAIMANT, BRIDGE)
         self.assertEqual(
-            BRIDGE.count("ATTUNE_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS"), 2
+            BRIDGE.count("ATTUNE_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS"), 1
         )
 
     def test_a_realm_without_the_quest_kind_is_said_not_crashed(self):

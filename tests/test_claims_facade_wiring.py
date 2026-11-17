@@ -22,13 +22,16 @@ def _path(node):
 class ClaimsFacadeWiring(unittest.TestCase):
     def test_bridge_routes_claims_through_one_facade(self):
         calls = [
-            _path(node.func)
-            for node in ast.walk(TREE)
-            if isinstance(node, ast.Call)
+            _path(node.func) for node in ast.walk(TREE) if isinstance(node, ast.Call)
         ]
 
         self.assertEqual(1, calls.count("claims.Claims"))
-        for method in ("slot_for", "member_observe", "member_released", "release_ground"):
+        for method in (
+            "slot_for",
+            "member_observe",
+            "member_released",
+            "release_ground",
+        ):
             self.assertTrue(
                 any(path.endswith(f".{method}") for path in calls),
                 f"bridge.py does not call Claims.{method}",
@@ -41,7 +44,9 @@ class ClaimsFacadeWiring(unittest.TestCase):
     def test_hold_and_ground_release_reasons_are_logged(self):
         why_values = []
         for call in ast.walk(TREE):
-            if not isinstance(call, ast.Call) or not _path(call.func).startswith("log."):
+            if not isinstance(call, ast.Call) or not _path(call.func).startswith(
+                "log."
+            ):
                 continue
             for arg in call.args:
                 why_values.extend(

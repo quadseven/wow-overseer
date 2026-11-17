@@ -20,6 +20,7 @@ import types
 import unittest
 from unittest.mock import patch
 
+import claims
 from _stub_modules import PYMYSQL
 from test_campaign_queue import FakeWorld, _load, _Log, _q
 
@@ -579,6 +580,7 @@ def _pass(world):
         return world.dungeonquest_held
 
     me = types.SimpleNamespace(
+        _claims=claims.Claims(),
         _activity_holds=lambda key=None: "",
         _campaign_owns_travel=nothing,
         _leave_town_when_done=nothing,

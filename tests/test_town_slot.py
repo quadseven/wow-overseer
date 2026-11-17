@@ -309,19 +309,23 @@ class TheDoorDoesThreeThingsInOneOrder(unittest.TestCase):
         for it to be forgotten; one place that reads `_head_now` and refuses
         anybody else is the rule enforced."""
         self.assertIn("leader = await asyncio.to_thread(_head_now)", self.code)
-        self.assertLess(self.code.index("_head_now"), self.code.index("slot.want("))
+        self.assertLess(
+            self.code.index("_head_now"), self.code.index("self._claims.want_column(")
+        )
         # Another family's leader is read here too, from its own rows (#150).
         self.assertIn(
             "leader = await asyncio.to_thread(_cohort_leader, cohort)", self.code
         )
         self.assertLess(
-            self.code.index("_cohort_leader"), self.code.index("slot.want(")
+            self.code.index("_cohort_leader"),
+            self.code.index("self._claims.want_column("),
         )
 
     def test_it_reads_the_column_before_it_decides(self):
         self.assertIn("_current_travel_npc, leader", self.code)
         self.assertLess(
-            self.code.index("_current_travel_npc"), self.code.index("slot.want(")
+            self.code.index("_current_travel_npc"),
+            self.code.index("self._claims.want_column("),
         )
 
     def test_it_hands_the_write_s_own_guard_to_the_decision(self):
@@ -535,7 +539,8 @@ class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
 
     def test_the_ledger_is_built_once_on_the_client(self):
         init = _block("    def __init__(self, allowed_ids: frozenset[str]):")
-        self.assertIn("self._town_slot = townslot.Slot(", init)
+        self.assertIn("self._claims = claims.Claims(", init)
+        self.assertIn("self._town_slot = self._claims.slot_for(None)", init)
 
     def test_it_is_wired_to_the_release_guard(self):
         """Without the predicate the slot is fail-closed and preempts nothing,

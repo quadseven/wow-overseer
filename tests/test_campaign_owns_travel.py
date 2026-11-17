@@ -511,8 +511,25 @@ def _bridge_self(world, clock, log):
             "_staging_phase": world.staging_phase,
         },
     )
+    claim_store = claims.Claims(
+        lease=townslot.LEASE_SECONDS,
+        releasable=economy,
+        long_leases={
+            "gather": townslot.GATHER_LEASE_SECONDS,
+            "flight": townslot.GATHER_LEASE_SECONDS,
+            "level": townslot.GATHER_LEASE_SECONDS,
+            "attunement": townslot.GATHER_LEASE_SECONDS,
+            "dungeon quests": townslot.GATHER_LEASE_SECONDS,
+            "gear house": townslot.GATHER_LEASE_SECONDS,
+        },
+        firm_leases={
+            "craft_supply": townslot.REAGENT_TRIP_LEASE_SECONDS,
+        },
+    )
     me = types.SimpleNamespace(
-        _town_slot=townslot.Slot(releasable=economy), _cohort_town_slots={}
+        _claims=claim_store,
+        _town_slot=claim_store.slot_for(None),
+        _cohort_town_slots={},
     )
     for name in (
         "_campaign_owns_travel",

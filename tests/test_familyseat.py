@@ -9,7 +9,6 @@ hold.
 """
 
 import asyncio
-import types
 import unittest
 from unittest import mock
 
@@ -414,7 +413,7 @@ class TheBridgeHalf(unittest.TestCase):
         self.assertIn('"lendable": lendable', body)
 
     def test_the_queue_waits_for_a_member_out_in_a_guild_run(self):
-        this = types.SimpleNamespace()
+        this = _Self()
         fam = {"names": ["Grug", "Ugga", "Og"]}
         with mock.patch.object(
             bridge, "_guild_run_members_out", lambda: {"Ugga", "Mok"}
@@ -427,7 +426,7 @@ class TheBridgeHalf(unittest.TestCase):
         self.assertNotIn("Grug", bridge._LENT_HOLD_SAID)
 
     def test_off_the_queue_holds_nobody(self):
-        this = types.SimpleNamespace()
+        this = _Self()
         fam = {"names": ["Ugga"]}
         with (
             mock.patch.dict(bridge.os.environ, {fs.ENV_SWITCH: "off"}),

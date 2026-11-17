@@ -387,8 +387,12 @@ def _drive(world, clock, log):
     def drive():
         withheld = []
         written = ns["_drive_dungeon"](
-            "zulfarrak", 50, list(NAMES), "overseer:queue", withheld=withheld,
-            claim_store=ns["claim_store"]
+            "zulfarrak",
+            50,
+            list(NAMES),
+            "overseer:queue",
+            withheld=withheld,
+            claim_store=ns["claim_store"],
         )
         return written, withheld
 
@@ -468,9 +472,7 @@ class TheHoldEnds(unittest.TestCase):
         self.ns["_sale_reopens_hold"] = lambda names, free: True
         self._minutes(46)
         self.assertTrue(
-            self.ns["_bag_errand_needed"](
-                NAMES, MEASURED, True, self.ns["claim_store"]
-            )
+            self.ns["_bag_errand_needed"](NAMES, MEASURED, True, self.ns["claim_store"])
         )
 
 

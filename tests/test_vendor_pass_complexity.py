@@ -111,6 +111,7 @@ def _thread(fn, *a, **k):
 
 class TheVendorPassIsUnderTheReviewCaps(unittest.TestCase):
     FUNCTIONS = (
+        "_release_stale_ground_aim_for_vendor",
         "_vendor_once",
         "_settle_vendor_errand",
         "_take_vendor_aim",

@@ -221,8 +221,12 @@ class Errand:
         free = self.world.free
         withheld = []
         self.ns["_drive_dungeon"](
-            "zulfarrak", 50, list(NAMES), "overseer:queue", withheld=withheld,
-            claim_store=self.ns["claim_store"]
+            "zulfarrak",
+            50,
+            list(NAMES),
+            "overseer:queue",
+            withheld=withheld,
+            claim_store=self.ns["claim_store"],
         )
         self.withheld = withheld
         needed = self.ns["_bag_errand_needed"](

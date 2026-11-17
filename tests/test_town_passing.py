@@ -20,6 +20,7 @@ import pathlib
 import types
 import unittest
 
+import claims
 from test_family_economy_parity import (  # noqa: F401
     ALLIANCE,
     FAKE_ASYNCIO,
@@ -555,6 +556,7 @@ class TheListingWalkIsTakenOnlyForWhatCanBeListed(unittest.TestCase):
                 )
 
         me = Me()
+        me._claims = claims.Claims()
         me.claims, me.spent = [], []
         asyncio.run(ns["_auction_sales_once"](me, ALLIANCE, "Grug", "aim", None))
         return world, log, me
@@ -685,6 +687,7 @@ class TheListingWalkSkipsAMapWithNoAuctioneer(unittest.TestCase):
                 )
 
         me = Me()
+        me._claims = claims.Claims()
         me.claims, me.spent = [], []
         asyncio.run(ns["_auction_sales_once"](me, ALLIANCE, "Grug", "aim", None))
         return world, log, me

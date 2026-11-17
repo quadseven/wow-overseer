@@ -15158,6 +15158,39 @@ class Bridge(discord.Client):
         """Settle the current trip before deciding whether the pass can continue."""
         return await self._settle_vendor_errand(names, leader)
 
+    async def _release_stale_ground_aim_for_vendor(
+        self,
+        names: list,
+        leader: str,
+        current_aim: str,
+        pressure: bool,
+        in_run: bool,
+        errand_active: bool,
+    ) -> None:
+        release = self._claims.release_ground(
+            aim=current_aim,
+            pressure=pressure,
+            in_run=in_run,
+            errand_active=errand_active,
+            hold_released=self._claims.member_released(names),
+            ground=travel.is_ground_aim,
+        )
+        if release.legal:
+            if await asyncio.to_thread(_release_trade_errand, leader, current_aim):
+                log.warning(
+                    "economy: released stale leader ground aim %s under bag "
+                    "pressure; vendor maintenance gets the town slot next",
+                    current_aim,
+                )
+        elif pressure and not in_run and not errand_active and travel.is_ground_aim(
+            current_aim
+        ):
+            log.info(
+                "economy: kept stale leader ground aim %s under bag pressure: %s",
+                current_aim,
+                release.why,
+            )
+
     async def _vendor_once(self, cohort=None) -> None:
         """Queue carried junk and outgrown gear for the world sell executor.
 
@@ -15323,27 +15356,9 @@ class Bridge(discord.Client):
         pressure = bag_pressure.family_town_run_needed(
             free_slots, sellable=sellable_counts)
         errand_active = _town_errand_active(names)
-        release = self._claims.release_ground(
-            aim=current_aim,
-            pressure=pressure,
-            in_run=in_run,
-            errand_active=errand_active,
-            hold_released=self._claims.member_released(names),
-            ground=travel.is_ground_aim,
+        await self._release_stale_ground_aim_for_vendor(
+            names, leader, current_aim, pressure, in_run, errand_active
         )
-        if release.legal:
-            if await asyncio.to_thread(_release_trade_errand, leader, current_aim):
-                log.warning(
-                    "economy: released stale leader ground aim %s under bag "
-                    "pressure; vendor maintenance gets the town slot next",
-                    current_aim,
-                )
-        elif pressure and not in_run and not errand_active and travel.is_ground_aim(current_aim):
-            log.info(
-                "economy: kept stale leader ground aim %s under bag pressure: %s",
-                current_aim,
-                release.why,
-            )
 
         # THE RECIPE HAND-OFF RUNS ABOVE THE TOWN-RUN GATE, ON PURPOSE
         # (infra#3731). It was the only half of this pass that did until
