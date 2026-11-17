@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import bag_market
 import bag_pressure
 import bag_upgrade
 import bankbags
@@ -100,6 +101,26 @@ def choose_offers(member: guildjobs.Member, offers) -> tuple:
     return (min(within, key=lambda o: (-o.slots, o.price, o.entry)),)
 
 
+def upgrade_offer(member: guildjobs.Member, bags, offers):
+    """The bag a member with every position full buys to replace its smallest.
+
+    The largest offer the purse pays for above its reserve that beats the
+    smallest worn bag by `bag_market.MIN_UPGRADE_GAIN` slots (the cheapest on a
+    tie), or None. It needs one free slot for the new bag to land in, as the
+    core swaps the smallest bag out when it is put on (wow-overseer#2435)."""
+    smallest = bag_market.smallest_worn(bags)
+    if smallest is None or int(member.free_slots or 0) < 1:
+        return None
+    reserve = bag_pressure.bag_reserve(member.level)
+    fits = [
+        o
+        for o in offers
+        if o.slots >= smallest + bag_market.MIN_UPGRADE_GAIN
+        and bag_pressure.bag_purchase_allowed(member.money, o.price, True, reserve)
+    ]
+    return min(fits, key=lambda o: (-o.slots, o.price, o.entry)) if fits else None
+
+
 def plan(members, containers, vendors, cap=guildroute.MAIL_RUN_YARDS):
     """One bounded bag step per member; all prices and stock come from the world."""
     inventory = {m.name: m for m in containers}
@@ -127,6 +148,15 @@ def plan(members, containers, vendors, cap=guildroute.MAIL_RUN_YARDS):
             continue
         positions = bag_pressure.open_bag_positions([bags]).get(member.name, 0)
         if positions <= 0:
+            upgrade = upgrade_offer(
+                member,
+                bags,
+                [o for v in vendors.get(member.name, ()) for o in v.offers],
+            )
+            if upgrade is not None:
+                step = _upgrade_step(member, upgrade, vendors, cap, source)
+                if step is not None:
+                    steps[member.name] = step
             continue
         buyer = bag_pressure.BagBuyer(
             member.name, member.level, member.money, positions, member.free_slots
@@ -179,3 +209,40 @@ def plan(members, containers, vendors, cap=guildroute.MAIL_RUN_YARDS):
                 yards=trip.vendor.yards,
             )
     return steps, tuple(notes)
+
+
+def _upgrade_step(member, offer, vendors, cap, source):
+    """The walk, the buy and the equip rows for a full member's bigger bag."""
+    stocking = [v for v in vendors.get(member.name, ()) if offer in v.offers]
+    if not stocking:
+        return None
+    vendor = min(stocking, key=lambda v: (v.yards, v.entry))
+    purchase = bag_pressure.BagPurchase(
+        buyer=member.name,
+        entry=offer.entry,
+        name=offer.name,
+        slots=offer.slots,
+        price=offer.price,
+        why="every bag position is full and the smallest worn bag is smaller",
+    )
+    return Recovery(
+        guildcorps.Step(
+            member.name,
+            guildjobs.BAG_ACTION,
+            purchase.entry,
+            "%s buys %s for up to %d copper to replace its smallest bag"
+            % (member.name, purchase.name, purchase.price),
+            rows=(
+                guildcorps.Row("buy", purchase.command, "", source),
+                guildcorps.Row("bot", purchase.equip_command, "", source),
+            ),
+            walk=guildcorps.Row(
+                "buy",
+                "walk-to-vendor item:%d%s"
+                % (purchase.entry, guildroute.errand_cap_word(cap)),
+                "",
+                guildjobs.source_for(guildjobs.BAG_ACTION + "-walk", member.name),
+            ),
+        ),
+        yards=vendor.yards,
+    )
