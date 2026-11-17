@@ -693,5 +693,47 @@ class ThePlannerIntervenesAtRisk(unittest.TestCase):
                 self.assertNotIn("creature:%d " % spawn_of("redridge"), row.command)
 
 
+# ---- a loop in a dungeon or a door area names its place (#1881) ------------------
+
+ZUL_FARRAK_ZONE, ZUL_FARRAK_MAP = 1176, 209
+SCARLET_ENCLAVE_ZONE, EBON_HOLD_MAP = 4298, 609
+
+
+class ALoopOutsideTheDrawnZonesIsNamed(unittest.TestCase):
+    """The health finding read "Dying in somewhere this page cannot place" for
+    members dying in Zul'Farrak, in a dungeon's door area and at the Death Knight
+    start: zones.json draws no rectangles there, so the reader named nothing."""
+
+    def loop_in(self, zone, map_id):
+        rows = [
+            dict(death(a, zone=zone, level=40), map=map_id)
+            for a in (10, 14, 18, 22, 26)
+        ]
+        return deathloop.loops(rows, {"Clunk": 40})["Clunk"]
+
+    def test_a_loop_inside_a_dungeon_names_the_dungeon(self):
+        loop = self.loop_in(ZUL_FARRAK_ZONE, ZUL_FARRAK_MAP)
+        self.assertEqual("Zul'Farrak", loop.place)
+        self.assertEqual("Dying in Zul'Farrak", members.loop_blocker(loop, NOW)["step"])
+
+    def test_a_loop_in_a_door_area_or_the_death_knight_start_is_named(self):
+        self.assertEqual("Uldaman", self.loop_in(1337, EASTERN_KINGDOMS).place)
+        self.assertEqual("Blackrock Mountain", self.loop_in(25, EASTERN_KINGDOMS).place)
+        self.assertEqual(
+            "Plaguelands: The Scarlet Enclave",
+            self.loop_in(SCARLET_ENCLAVE_ZONE, EBON_HOLD_MAP).place,
+        )
+
+    def test_an_id_nothing_names_still_says_so(self):
+        self.assertEqual(
+            "somewhere this page cannot place",
+            self.loop_in(999999, EASTERN_KINGDOMS).place,
+        )
+
+    def test_the_drawn_zones_are_named_as_before(self):
+        self.assertEqual("Redridge Mountains", levelroute.zone_name(REDRIDGE))
+        self.assertEqual("Redridge Mountains", levelroute.zone_name(REDRIDGE, 0))
+
+
 if __name__ == "__main__":
     unittest.main()

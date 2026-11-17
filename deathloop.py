@@ -97,7 +97,7 @@ class Loop:
 
     @property
     def place(self) -> str:
-        return levelroute.zone_name(self.zone)
+        return levelroute.zone_name(self.zone, self.map_id)
 
     def reason(self) -> str:
         """'died 7 times in Redridge Mountains within an hour, mostly to Great
@@ -241,7 +241,7 @@ class Risk:
 
     @property
     def place(self) -> str:
-        return levelroute.zone_name(self.zone)
+        return levelroute.zone_name(self.zone, self.map_id)
 
     def reason(self) -> str:
         return "%s, with no level gained" % self.trigger
