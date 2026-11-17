@@ -204,8 +204,9 @@ failed precondition makes that run INVALID, never a pass.
 Meant to run as the world pod's last step, after the seed. In the pod it needs no
 flags: `seed` and `judge` both default `EPH_VARS_FILE` to `/tmp/eph-vars.json` (the
 volume both containers mount), and the judge reads the worldserver log from
-`EPH_LOG_FILE`, else `$EPH_LOGS_DIR/Server.log` (the stock worldserver file
-appender); `--log` overrides both. With none of them it reports a log that
+`EPH_LOG_FILE`, else `$EPH_LOGS_DIR/Module.log` (a file appender every submitted
+world adds, which carries the module's and the bots' lines at trace and info
+level); `--log` overrides both. With none of them it reports a log that
 could not be read, which is INVALID.
 It reads the variables and resolved cast the seed left in `EPH_VARS_FILE`, runs
 the `act` steps (by time, or when a named observation first holds), samples the
@@ -324,5 +325,12 @@ treatment arm's is the base realm's running bridge image unless
 Discord token, no external keys), talks only to the pod's loopback database, and
 adds its requests to the world's, so the dispatcher counts it. With `bridge: "off"`
 the sidecar and its pull secret are removed and the Job is the one it was before.
+
+For a fix in this repo's bridge code, each arm's fix presence is read from the
+commit baked into that arm's bridge image (its `OVERSEER_COMMIT`, found through
+the image registry with the namespace's `ghcr` pull secret and checked against
+the image digest), so no pin needs typing. `--control-pin` and `--treatment-pin`
+still win when given; an image whose commit cannot be read is recorded as
+unchecked.
 
 Not built: requeueing an INVALID first pair (resubmit instead) and PR-built images.

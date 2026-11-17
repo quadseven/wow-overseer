@@ -627,9 +627,10 @@ def decide(
         else jev.HEURISTIC
     )
     if fresh and answer.choice in {c.name for c in shut}:
-        # An agreement with the heuristic counts as Jev's at any confidence,
-        # and the policy's agreement path never asks whether the name may
-        # act. A name the fit gates shut out may not act, even by agreement.
+        # Policy.acted now honors can_act on an agreement (#2134), but can_act
+        # here is only "the name is a criterion", not "the fit gates let it
+        # act", so this demotion stays: a name the fit gates shut out may not
+        # act, even by agreement.
         acted = jev.HEURISTIC
     pick, reason = _pick_and_reason(
         council, acted, answer if fresh else None, criteria, members, piece, shut

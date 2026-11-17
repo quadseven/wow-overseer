@@ -48,6 +48,7 @@ class Base(unittest.TestCase):
         return submit.submit(
             self.cfg, self.kube, self.gh, self.decree, args,
             clock=self.clock, out=lambda *_: None,
+            image_env=getattr(self, "image_env", None),
         )  # fmt: skip
 
     def compare(self, pin, status):
@@ -196,6 +197,76 @@ class SubmitTest(Base):
         with self.assertRaises(kube.KubeError):
             self.submit(**CONTROL)
         self.assertEqual(self.cluster.of("jobs"), [])
+
+
+class ModuleLogTest(Base):
+    """The world writes the module's and the bots' log lines to the file the judge reads."""
+
+    def worldserver_conf(self, rid_suffix="-c1"):
+        cm = next(
+            c for c in self.cluster.of("configmaps", "wow-ephemeral")
+            if c["metadata"]["name"].endswith(rid_suffix)
+        )  # fmt: skip
+        return cm["data"]["worldserver.overrides.conf"]
+
+    def setUp(self):
+        super().setUp()
+        cm = self.cluster.objs[("configmaps", "base-realm", "worldserver-overrides-h1")]
+        cm["data"]["worldserver.overrides.conf"] = (
+            "MaxPlayerLevel = 60\nAppender.Overseer = 1,6,7\n"
+            "Logger.module.overseer = 6,Overseer\n"
+        )
+
+    def test_a_file_appender_writes_the_file_the_judge_reads(self):
+        from ephemeral import podpaths
+
+        self.submit(**CONTROL)
+        conf = confmerge.parse(self.worldserver_conf())
+        kind, level, _flags, name, mode = (
+            conf["Appender.EphModule"].strip('"').split(",")
+        )
+        self.assertEqual(kind, "2")  # a file appender
+        self.assertEqual(level, "6")
+        self.assertEqual(name, podpaths.LOG_NAME)
+        self.assertEqual(mode, "w")
+
+    def test_the_judge_resolves_that_same_file_from_the_pods_logs_directory(self):
+        from ephemeral import podpaths
+
+        self.submit(**CONTROL)
+        conf = confmerge.parse(self.worldserver_conf())
+        written = conf["Appender.EphModule"].strip('"').split(",")[3]
+        self.assertEqual(
+            podpaths.log_path(None, {"EPH_LOGS_DIR": "/logs"}), "/logs/Module.log"
+        )
+        self.assertEqual(
+            podpaths.log_path(None, {"EPH_LOGS_DIR": "/logs"}), "/logs/" + written
+        )
+
+    def test_the_module_and_the_bots_log_to_it_and_keep_their_other_appenders(self):
+        self.submit(**CONTROL)
+        conf = confmerge.parse(self.worldserver_conf())
+        self.assertEqual(
+            conf["Logger.module.overseer"].strip('"'), "6,Overseer EphModule"
+        )
+        self.assertIn("EphModule", conf["Logger.playerbots"])
+        self.assertIn("Console", conf["Logger.playerbots"])
+
+    def test_each_key_appears_once_even_when_the_base_file_set_it(self):
+        self.submit(**CONTROL)
+        text = self.worldserver_conf()
+        for key in (
+            "Logger.module.overseer",
+            "Appender.EphModule",
+            "Appender.Overseer",
+        ):
+            self.assertEqual(text.count(key + " "), 1, key)
+
+    def test_the_change_is_listed_as_a_fidelity_delta(self):
+        rec = self.submit(**CONTROL)
+        self.assertTrue(
+            any(d.startswith("Appender.EphModule:") for d in rec["fidelity_deltas"])
+        )
 
 
 def _names(job, key):
@@ -384,6 +455,77 @@ class BridgeTest(Base):
         self.assertNotIn("bridge: off", text)
         off = self.submit(**CONTROL)
         self.assertIn("bridge: off", "; ".join(off["fidelity_deltas"]))
+
+
+BRIDGE_FIX = (
+    BRIDGE_ON.replace("issue: TODO", "issue: 12")
+    .replace("commit: TODO", f"commit: {FIX}")
+    .replace("quadseven/mod-dungeon-clear", "quadseven/wow-overseer")
+)
+
+
+class BridgePinTest(Base):
+    """A bridge fix proves presence from the commit baked into each arm's bridge image (no manual pins)."""
+
+    def setUp(self):
+        super().setUp()
+        self.asked = []
+        self.commits = {BRIDGE: SHA, OLD_BRIDGE: OLD}
+
+        def image_env(ref, name):
+            self.asked.append((ref, name))
+            return self.commits.get(ref)
+
+        self.image_env = image_env
+
+    def compare(self, pin, status):
+        path = f"repos/quadseven/wow-overseer/compare/{FIX}...{pin}"
+        self.fake_gh.answers[("GET", path)] = {"status": status}
+
+    def test_the_map_has_the_bridge_repo(self):
+        from ephemeral import runcfg
+
+        self.assertEqual(
+            runcfg.DEFAULT_FIX_PIN_ENV["quadseven/wow-overseer"], "OVERSEER_COMMIT"
+        )
+
+    def test_both_arms_are_checked_from_their_own_images(self):
+        self.compare(SHA, "ahead")
+        self.compare(OLD, "diverged")
+        rec = self.submit(BRIDGE_FIX, **WITH_BRIDGE)
+        self.assertEqual(rec["presence"]["treatment"], {"pin": SHA, "state": "present"})
+        self.assertEqual(rec["presence"]["control"], {"pin": OLD, "state": "absent"})
+        self.assertIn((BRIDGE, "OVERSEER_COMMIT"), self.asked)
+        self.assertIn((OLD_BRIDGE, "OVERSEER_COMMIT"), self.asked)
+
+    def test_a_control_image_that_already_has_the_fix_is_refused(self):
+        self.compare(SHA, "ahead")
+        self.compare(OLD, "ahead")
+        with self.assertRaisesRegex(submit.SubmitError, "control"):
+            self.submit(BRIDGE_FIX, **WITH_BRIDGE)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_an_explicit_pin_beats_the_image(self):
+        other = "e" * 40
+        self.compare(other, "diverged")
+        self.compare(SHA, "ahead")
+        rec = self.submit(BRIDGE_FIX, **{**WITH_BRIDGE, "control_pin": other})
+        self.assertEqual(rec["presence"]["control"]["pin"], other)
+
+    def test_an_image_whose_commit_cannot_be_read_is_unchecked_not_an_error(self):
+        self.commits = {}
+        rec = self.submit(BRIDGE_FIX, **WITH_BRIDGE)
+        self.assertEqual(rec["presence"]["treatment"]["state"], "unchecked")
+        self.assertEqual(rec["presence"]["control"]["state"], "unchecked")
+
+    def test_a_malformed_commit_from_an_image_is_not_trusted(self):
+        self.commits = {BRIDGE: "not-a-sha", OLD_BRIDGE: "abc"}
+        rec = self.submit(BRIDGE_FIX, **WITH_BRIDGE)
+        self.assertEqual(rec["presence"]["treatment"]["state"], "unchecked")
+
+    def test_other_repos_still_read_the_worldserver_pins_not_the_image(self):
+        self.submit(CHECKED, arm="treatment")
+        self.assertEqual(self.asked, [])
 
 
 class ConfMergeTest(unittest.TestCase):

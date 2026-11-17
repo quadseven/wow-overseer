@@ -64,7 +64,7 @@ class TheJobsPassReadsTheDay(unittest.TestCase):
     def test_the_job_facts_judge_the_slow_rule(self):
         body = function_source("_fetch_job_facts")
         self.assertTrue(
-            re.search(r"deathloop\.loops\(.{0,200}?slow=True", body, re.S),
+            re.search(r"deathloop\.(loops\(.{0,200}?slow=True|judge\()", body, re.S),
             "the guild jobs facts must judge slow loops",
         )
 

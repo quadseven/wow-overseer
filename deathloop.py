@@ -67,6 +67,13 @@ SLOW_MIN_DEATHS = 12
 SLOW_WINDOW_SECONDS = 24 * 3600
 # How far back a reader that judges slow loops reads, by the same reasoning.
 SLOW_READ_SECONDS = SLOW_WINDOW_SECONDS + QUIET_SECONDS
+# A formed loop leaves its zone avoided for this long after the member's newest
+# death there, or until a level gain, whichever comes first (#2591, #3703): a
+# level-60 member never gains a level, so "until a level gain" alone would ban
+# it from the zone for ever. Under SLOW_READ_SECONDS, which is what is read.
+AVOID_SECONDS = 24 * 3600
+# A risk judged from deaths this fresh only: an old pair of deaths is no risk.
+RISK_READ_SECONDS = WINDOW_SECONDS
 # The stuck reader's kind for the entry.
 KIND = "death-loop"
 
@@ -97,7 +104,7 @@ class Loop:
 
     @property
     def place(self) -> str:
-        return levelroute.zone_name(self.zone)
+        return levelroute.zone_name(self.zone, self.map_id)
 
     def reason(self) -> str:
         """'died 7 times in Redridge Mountains within an hour, mostly to Great
@@ -241,7 +248,7 @@ class Risk:
 
     @property
     def place(self) -> str:
-        return levelroute.zone_name(self.zone)
+        return levelroute.zone_name(self.zone, self.map_id)
 
     def reason(self) -> str:
         return "%s, with no level gained" % self.trigger
@@ -344,7 +351,8 @@ def avoided_zones(rows, levels=None) -> dict:
     `loops` clears on its quiet window alone; a loop's zone stays avoided
     after that window lapses (#2591), so this read ignores the quiet clock
     and judges every window the rows hold. A level gained since the loop
-    (the member's level now differs from the loop's) clears the avoidance."""
+    (the member's level now differs from the loop's) clears the avoidance, and
+    so does AVOID_SECONDS without a death in the zone."""
     levels = levels or {}
     out = {}
     for name, deaths in _deaths_of(rows).items():
@@ -354,11 +362,32 @@ def avoided_zones(rows, levels=None) -> dict:
         zones = {
             zone
             for zone, zone_deaths in by_zone.items()
-            if zone and _zone_loop(name, zone_deaths, levels.get(name)) is not None
+            if zone
+            and zone_deaths[0].age <= AVOID_SECONDS
+            and _zone_loop(name, zone_deaths, levels.get(name)) is not None
         }
         if zones:
             out[name] = zones
     return out
+
+
+def judge(rows, levels=None) -> tuple:
+    """(loops, risks, avoided) for one read of SLOW_READ_SECONDS of deaths.
+
+    The guild jobs pass's single judgement (#2152, #2591): the loops with the
+    slow rule, the risks over only the newest RISK_READ_SECONDS of rows, and
+    the zones left avoided (bounded by AVOID_SECONDS). Pure."""
+    rows = list(rows or ())
+    fresh = [
+        r
+        for r in rows
+        if _int(r.get("age"), RISK_READ_SECONDS + 1) <= RISK_READ_SECONDS
+    ]
+    return (
+        loops(rows, levels, slow=True),
+        risks(fresh, levels),
+        avoided_zones(rows, levels),
+    )
 
 
 def _zone_found(name, zone_deaths, level_now, slow) -> Loop | None:

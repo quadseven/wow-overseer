@@ -54,7 +54,7 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      enroll.py \
      tabard.py crossing.py \
      vendor_stall.py \
-     campaignqueue.py dungeonpace.py dungeonstall.py standin.py speakgate.py \
+     campaignqueue.py dungeonpace.py dungeonstall.py errandgate.py standin.py speakgate.py \
      campaignhandoff.py campaignplan.py dungeonladder.py director.py levelroute.py \
      preraid.py fireplan.py recipehunt.py gearscore.py gearupgrades.py pvpgear.py equipscore.py \
      runtimeline.py runreport.py runstory.py places.py commandwords.py orderrecord.py \

@@ -149,6 +149,7 @@ import dungeonprogression
 import dungeonstall
 import enchantfor
 import equipscore
+import errandgate
 import item_plan
 import jev
 import jev_items
@@ -6092,7 +6093,10 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
     for key, member in seen.items():
         stamp = _DOOR_HOLD_SINCE.get(key)
         if stamp is None or stamp[0] != head_id:
-            stamp = (head_id, now)
+            # AN ERRAND TAKEN UP AGAIN AFTER A RECALL GOES ON COUNTING (#2323).
+            # Looked up: the verdict harness loads this function in isolation.
+            start = globals().get("_errand_clock_start")
+            stamp = (head_id, start(key, head_id, now) if start else now)
             _DOOR_HOLD_SINCE[key] = stamp
         ages[member.name] = (member.state, now - stamp[1])
     return ages
@@ -6136,18 +6140,51 @@ def _door_run_boss_age(leader: str):
 
 # name -> monotonic time its errand of its own was handed back at a door (#2280).
 _ERRAND_RECALLED: dict = {}
+# (leader, name) -> errandgate.Served: the errand time the member had served
+# when it was recalled, so its next errand clock goes on from there (#2323).
+_ERRAND_SERVED: dict = {}
+# (name, claimant) -> the reason last logged, so a held aim is said once.
+_ERRAND_HOLD_SAID: dict = {}
 
 
-def _without_recalled(targets):
-    """`targets` less the members recalled from an errand at a door lately: a
-    recalled member is not sent straight back out (#2280), or the next pass
-    would undo the recall. Looked up: adapter tests load callers in isolation."""
-    recalled = globals().get("_ERRAND_RECALLED", {})
-    cooling = getattr(globals().get("dungeonstall"), "recall_cooling", None)
-    if cooling is None or not recalled:
-        return targets
-    now = time.monotonic()
-    return tuple(n for n in targets if not cooling(recalled.get(n), now))
+def _economy_aim_hold(claimant: str, name: str, inside=None) -> str:
+    """Why the pass `claimant` may not aim `name` now, or "" when it may (#2323).
+
+    THE ONE CHECK EVERY ECONOMY AIM WRITER ASKS. The recall cooldown (#2280)
+    was read by the bag pressure aim only, so the bank, guild bank, repair,
+    craft supply and forge passes aimed a recalled member again on the next
+    cycle, and the instance guard had the same single reader. The rule is
+    errandgate.decide; this gathers its facts. `inside` is whether the member
+    stands inside an instance when the caller has already read it, else it is
+    read here. A pass that is not the economy's reads nothing and is allowed."""
+    if not errandgate.is_economy(claimant):
+        return ""
+    if inside is None:
+        inside = name in _members_inside_instance([name])
+    verdict = errandgate.decide(
+        time.monotonic(), _ERRAND_RECALLED.get(name), claimant, bool(inside))
+    said = verdict.said(name, claimant)
+    if _ERRAND_HOLD_SAID.get((name, claimant)) != verdict.reason:
+        _ERRAND_HOLD_SAID[(name, claimant)] = verdict.reason
+        if said:
+            log.info("economy: %s", said)
+    return said
+
+
+def _economy_aimable(claimant: str, names, inside=()) -> tuple:
+    """`names` less the members the pass `claimant` may not aim now, with
+    `inside` the members already read inside an instance (#2323)."""
+    return tuple(
+        n for n in names if not _economy_aim_hold(claimant, n, n in inside))
+
+
+def _errand_clock_start(key: tuple, head_id: int, now: float) -> float:
+    """When the fresh hold clock `key` (leader, name, state) counts from: now,
+    or for an errand taken up again after a recall under the same queue entry,
+    when the recalled errand began (#2323)."""
+    if key[2] != dungeonstall.ERRAND_STATE:
+        return now
+    return errandgate.resume_since(now, _ERRAND_SERVED.get(key[:2]), head_id)
 
 
 def _members_inside_instance(names: list) -> frozenset:
@@ -6180,7 +6217,7 @@ def _release_instance_economy_aims(names: list) -> list:
     return released
 
 
-def _recall_door_errands(leader: str, ages: dict) -> list:
+def _recall_door_errands(leader: str, ages: dict, head_id: int = 0) -> list:
     """Hand back the errand of every member whose errand of its own has kept
     the family waiting at the door past dungeonstall.RECALL_SECONDS (#2280).
 
@@ -6189,15 +6226,25 @@ def _recall_door_errands(leader: str, ages: dict) -> list:
     it short of the 30 minute stand-down. The recall is the bound well inside
     that: the economy's own aim (`_is_economy_aim`) is released, so the member
     follows the leader again; an aim the economy did not write is left alone
-    for the stand-down. Returns the names released."""
+    for the stand-down. Returns the names released.
+
+    THE STAND-DOWN CLOCK IS KEPT ACROSS THE RECALL (#2323). The errand time
+    served is recorded under queue entry `head_id`, and a member whose clock
+    has reached the stand-down bound is not recalled again: recall after
+    recall would put the stand-down off for good."""
     released = []
     for name in dungeonstall.errand_recalls(ages):
+        if not errandgate.recall_due(ages[name][1]):
+            continue
         aim = _current_travel_npc(name)
         if not aim or not _is_economy_aim(aim):
             continue
         if not _release_trade_errand(name, aim):
             continue
-        _ERRAND_RECALLED[name] = time.monotonic()
+        now = time.monotonic()
+        _ERRAND_RECALLED[name] = now
+        _ERRAND_SERVED[(leader, name)] = errandgate.Served(
+            head_id, ages[name][1], now)
         released.append(name)
         log.info(
             "door recall: %s had been on an errand of its own (%s) for %d "
@@ -6245,9 +6292,10 @@ def _door_wedge(head: dict, names: list, leader: str):
     # function in isolation.
     recall = globals().get("_recall_door_errands")
     if recall is not None and ages:
-        for name in recall(leader, ages):
+        # The member's hold clock is NOT restarted (#2323): it ends when the
+        # errand state does, and an errand taken up again counts on.
+        for name in recall(leader, ages, head_id):
             ages.pop(name, None)
-            _DOOR_HOLD_SINCE.pop((leader, name, dungeonstall.ERRAND_STATE), None)
     # The stall line names the errand that held the run (#2280).
     errand_of = globals().get("_current_travel_npc")
     for name, (state, age) in ages.items():
@@ -6313,6 +6361,41 @@ def _order_parked(key: str, door: str, head_id: int = 0) -> dict | None:
         return dict(rows[0]) if rows else None
 
 
+# The ids of the regroup holds whose order has run again (#2280). A hold gates
+# one restart, the one after its stand-down: the pace row stays the door's
+# newest hold for as long as the order lives, and without this a later pause
+# of the same order (a town trip between runs) would be held on it again. A
+# bridge restart forgets it, and the party is then asked to stand together
+# once more before the order next starts, which is the safe side.
+_REGROUP_SPENT: dict = {}
+
+
+def _regroup_wait(head: dict, parked: dict | None, leader: str, names: list):
+    """The dungeonstall.Restart that keeps operator order `head` waiting for
+    its party after its backoff, or None when the order may run (#2280).
+
+    dungeonstall.restart_after_hold decides; this gathers what it reads, and
+    reads nothing unless the hold carries the regroup mark and is not spent.
+    The family is running the order again once any member is back on its
+    dungeon job."""
+    hold_id = int((parked or {}).get("id") or 0)
+    if (
+        str((parked or {}).get("target") or "") != dungeonstall.REGROUP
+        or hold_id in _REGROUP_SPENT
+    ):
+        return None
+    job = jobs.dungeon_job(str(head.get("keyword") or ""))
+    running = bool(job) and job in _jobs_of(names).values()
+    positions = {} if running else _fetch_positions(list(names))
+    verdict = dungeonstall.restart_after_hold(
+        parked, running, leader, names, positions)
+    if verdict.reason in (dungeonstall.TOGETHER, dungeonstall.RUNNING):
+        if len(_REGROUP_SPENT) > 256:
+            _REGROUP_SPENT.clear()
+        _REGROUP_SPENT[hold_id] = True
+    return None if verdict.allowed else verdict
+
+
 # (family key, door) -> the id of the pace row whose hold was last said, so
 # the held-door line is logged once per door per hold window (#1078).
 _STALL_HOLD_SAID: dict = {}
@@ -6332,8 +6415,9 @@ def _stall_write(key: str, leave) -> None:
                 cur.execute(dungeonstall.CANCEL_SQL, (qid,))
             # An operator's order is held, never cancelled (#2216): its rows
             # are not in `drop`, and its pace row is the hold's own decision.
+            # The target marks an order held for an unassembled party (#2280).
             cur.execute(dungeonpace.INSERT_SQL, (
-                key, leave.decision, leave.door, "",
+                key, leave.decision, leave.door, leave.target,
                 (leave.drop or leave.park)[0], "rule",
                 None, leave.why[:255], ""))
             cur.execute(dungeonpace.CLOSE_SQL, ("left", int(cur.lastrowid or 0)))
@@ -6742,13 +6826,14 @@ _HELD_FETCH_SINCE: dict = {}
 
 def _vendor_seller_fetch_blocks_trip(
     names: list, leader: str, free_slots: dict, sellable_counts: dict,
-    in_run: bool, since=None, now=None,
+    in_run: bool, since=None, now=None, waited_seconds: float = 0.0,
 ):
     """Leave travel to the module while a sellable follower needs fetching.
 
     For at most vendor_stall.HELD_FETCH_BOUND_SECONDS per hold (#1983): a
     follower held past it is left behind, named once, and the trip is judged
-    for the members standing with the leader. Returns a vendor_stall.HeldFetch
+    for the members standing with the leader. `waited_seconds` is the sellers'
+    vendor wait from the step store, which a restart does not reset. Returns a vendor_stall.HeldFetch
     (truthy while the trip is blocked), or False when nothing is held.
     """
     if in_run or not (
@@ -6761,7 +6846,8 @@ def _vendor_seller_fetch_blocks_trip(
         return False
     since = _HELD_FETCH_SINCE if since is None else since
     now = time.monotonic() if now is None else now
-    result = vendor_stall.held_fetch_bound(leader, held, since, now)
+    result = vendor_stall.held_fetch_bound(
+        leader, held, since, now, waited_seconds=waited_seconds)
     for name in result.newly_left:
         member = held[name]
         log.info(
@@ -10919,6 +11005,11 @@ class Bridge(discord.Client):
         else:
             leader = await asyncio.to_thread(_cohort_leader, cohort)
         slot = self._cohort_town_slot(cohort)
+        # A RECALLED MEMBER, OR ONE INSIDE AN INSTANCE, TAKES NO ECONOMY
+        # ERRAND (#2323). Looked up: adapter tests load this door in isolation.
+        held = globals().get("_economy_aim_hold", lambda *_a: "")
+        if await asyncio.to_thread(held, claimant, character):
+            return False
         # GROUND THE FAMILY DIED ON TWICE IS NOT A WALK (#2457): a ground aim
         # whose line from the leader crosses a death disc is not written.
         # Looked up like _fetch_family_death_spots above: the check is advisory.
@@ -15216,11 +15307,13 @@ class Bridge(discord.Client):
             # comes alive the moment ENTER lifts the stage holds.
             await self._release_stranded_ground_errands(names, leader,
                                                         run_doors=True)
-            # AND NO ECONOMY AIM ON A MEMBER INSIDE THE INSTANCE (#2280).
-            # Looked up: the adapter tests load this method in isolation.
-            drop = globals().get("_release_instance_economy_aims")
-            if drop is not None:
-                await asyncio.to_thread(drop, names)
+        # AND NO ECONOMY AIM ON A MEMBER INSIDE AN INSTANCE (#2280), RUN ROW
+        # OR NOT (#2323): a member inside whose run row is stale or ended
+        # kept its aim while this sat in the in-run branch.
+        # Looked up: the adapter tests load this method in isolation.
+        drop = globals().get("_release_instance_economy_aims")
+        if drop is not None:
+            await asyncio.to_thread(drop, names)
 
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
 
@@ -15447,6 +15540,8 @@ class Bridge(discord.Client):
         held_seller_for_leader = await asyncio.to_thread(
             _vendor_seller_fetch_blocks_trip, names, leader, free_slots,
             sellable_counts, in_run,
+            waited_seconds=await asyncio.to_thread(
+                _fetch_vendor_wait_seconds, names),
         )
         # A FOLLOWER HELD PAST THE BOUND IS LEFT BEHIND (#1983): the trip is
         # judged on the goods of the members who walk with the leader, so it
@@ -20494,7 +20589,9 @@ class Bridge(discord.Client):
             family_members=family_members, family_danger=family_danger,
             family_candidates=facts.get("family_members", ()),
             family_holds=family_class_holds,
-            loops=facts.get("death_loops"))
+            loops=facts.get("death_loops"),
+            risks=facts.get("death_risks"),
+            avoided=facts.get("death_avoided"))
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
                  "member(s)%s", time.perf_counter() - plan_started, len(members),
                  _family_label(cohort))
@@ -22521,9 +22618,11 @@ class Bridge(discord.Client):
             pressure=True, in_run=in_run, at_counter=at_counter,
             inside=inside,
         )
-        without = globals().get("_without_recalled")
-        if without is not None:
-            targets = without(targets)
+        # ...NOR ONE RECALLED FROM AN ERRAND LATELY (#2280): the one check
+        # every economy aim writer asks (#2323).
+        # Looked up: the adapter tests load this method in isolation.
+        aimable = globals().get("_economy_aimable", lambda _c, names, _i: names)
+        targets = aimable("bag pressure", targets, inside)
         aimed = 0
         for name in targets:
             current = await asyncio.to_thread(_current_travel_npc, name)
@@ -25007,7 +25106,8 @@ class Bridge(discord.Client):
             owed=frozenset(_class_owed_names(self)),
             every_family=frozenset(gfacts["family"]), mid_run=mid_run, current=current,
             stranded=why, stranded_pass=True, seats_held=held,
-            family_members=family_members)
+            family_members=family_members,
+            leader_map=standin.head_map(family_members, key, leader))
 
     async def _standin_lock_facts(self, key: str, current, rows: list, fam,
                                   gfacts: dict, doors: dict, candidates: tuple):
@@ -25032,7 +25132,8 @@ class Bridge(discord.Client):
             resting=frozenset(gfacts["resting"]), benched=frozenset(gfacts["benched"]),
             owed=frozenset(_class_owed_names(self)),
             every_family=frozenset(gfacts["family"]), mid_run=mid_run, current=current,
-            family_members=family_members, lock_pass=True)
+            family_members=family_members, lock_pass=True,
+            leader_map=standin.head_map(family_members, key, leader))
 
     async def _note_turn(self, key: str, turn) -> None:
         """Record a family's new turn. A failed write is logged and the pass
@@ -25088,7 +25189,8 @@ class Bridge(discord.Client):
             resting=frozenset(gfacts["resting"]), benched=frozenset(gfacts["benched"]),
             owed=frozenset(_class_owed_names(self)),
             every_family=frozenset(gfacts["family"]), mid_run=mid_run, current=current,
-            family_members=family_members)
+            family_members=family_members,
+            leader_map=standin.head_map(family_members, key, leader))
 
     async def _send_queue_item_notices(self) -> None:
         """Retry saved completion notices, acknowledging only a Discord send."""
@@ -25419,6 +25521,14 @@ class Bridge(discord.Client):
         parked, resting = await self._order_hold(key, rows[0])
         if resting:
             return self._order_step_past(key, rows, parked)
+        # NO RESTART UNTIL THE PARTY STANDS TOGETHER (#2280): an order held
+        # for an unassembled party waits past its backoff for every member
+        # to stand with the leader. dungeonstall.restart_after_hold decides.
+        waits = await asyncio.to_thread(
+            _regroup_wait, rows[0], parked, str(fam["leader"].get("name") or ""),
+            names)
+        if waits is not None:
+            return self._order_step_past(key, rows, parked, waits)
         stuck = await asyncio.to_thread(_stall_reads, names, rows[0], parked)
         silent_stall = await asyncio.to_thread(_silent_stall, rows[0], names)
         if silent_stall is not None:
@@ -25468,21 +25578,26 @@ class Bridge(discord.Client):
             _order_parked, key, door, int(head["id"])))
         return parked, parked is not None and int(parked.get("left_s") or 0) > 0
 
-    def _order_step_past(self, key: str, rows: list, parked: dict) -> bool:
+    def _order_step_past(self, key: str, rows: list, parked: dict,
+                         waits=None) -> bool:
         """The head order is held (#2216): step past it until its backoff
         ends, saying so once per hold. Only when nothing is left behind it
-        does the queue hold (True)."""
+        does the queue hold (True). `waits` is the dungeonstall.Restart of an
+        order past its backoff and waiting for its party (#2280): that is
+        said once per change in who is away."""
         door = campaignplan.wing_of(str(rows[0].get("keyword") or ""))
         rest = [r for r in rows
                 if campaignplan.wing_of(str(r.get("keyword") or "")) != door]
         marker = (key, door)
-        if _STALL_HOLD_SAID.get(marker) != parked["id"]:
-            _STALL_HOLD_SAID[marker] = parked["id"]
+        said = parked["id"] if waits is None else (parked["id"], waits.apart)
+        if _STALL_HOLD_SAID.get(marker) != said:
+            _STALL_HOLD_SAID[marker] = said
             after = ("%s runs meanwhile" % council.keyword_place(str(rest[0]["keyword"]))
                      if rest else "nothing else is queued, so the family waits")
+            until = (dungeonstall.held_until_said(parked["left_s"])
+                     if waits is None else waits.said())
             log.info("stall: %s: the order for %s is held, not cancelled; it %s; %s",
-                     campaignqueue._family(key), door,
-                     dungeonstall.held_until_said(parked["left_s"]), after)
+                     campaignqueue._family(key), door, until, after)
         if not rest:
             return True
         rows[:] = rest
@@ -37216,12 +37331,12 @@ def _fetch_job_facts(family_names: list) -> dict:
     facts["class_book"] = book
     facts["spell_reagents"] = spell_reagents
     facts["quest_asks"] = guildjobs.quest_asks_from_rows(quest_ask_rows)
-    # slow=True: the escape reaches a member whose deaths come one or two an
-    # hour (#2152). The quiet clock still ends the loop, so a member held out
-    # of its zone is listed for QUIET_SECONDS at most, the bound of #3703.
-    facts["death_loops"] = deathloop.loops(
-        death_rows, {str(r["name"]): int(r.get("level") or 0) for r in rows},
-        slow=True)
+    # One judgement of the day's deaths (deathloop.judge): the loops with the
+    # slow rule (#2152), the risks (#2591) and the bounded avoided zones, which
+    # guildjobs.plan takes as loops=, risks= and avoided= (#2663).
+    levels = {str(r["name"]): int(r.get("level") or 0) for r in rows}
+    (facts["death_loops"], facts["death_risks"],
+     facts["death_avoided"]) = deathloop.judge(death_rows, levels)
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}
@@ -38997,14 +39112,15 @@ def _pvp_crossings(rows, family_rows, busy, recent) -> dict:
         crossings = [r for r in recent or ()
                      if r.name == name and r.action in guildjobs.CROSS_ACTIONS]
         under_way = pvpgear.crossing_under_way(crossings)
-        idle = name not in busy and pvpgear.family_idle_in_town(
-            pvpgear.family_rows_for(name, str(row.get("guild_name") or ""), family_rows))
+        family = pvpgear.family_rows_for(name, str(row.get("guild_name") or ""), family_rows)
+        idle = name not in busy and pvpgear.family_idle_in_town(family)
         out[name] = pvpgear.Crossing(
             idle or under_way,
             pvpgear.dock_reachable(pvpgear.other_continent(row.get("snapshot_map")),
                                    guildjobs.class_walls(name, recent), crossings),
             guildjobs.pvp_walk_cooldown(name, recent) == 0,
-            cooling=guildjobs.crossing_cooling(name, recent) and not under_way)
+            cooling=guildjobs.crossing_cooling(name, recent) and not under_way,
+            home_map=pvpgear.home_continent(name, family))
     return out
 
 

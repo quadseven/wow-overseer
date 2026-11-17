@@ -63,6 +63,9 @@ THE RULE (`verdict`), the first line that applies:
     trades uses, or an uncommon-or-lower
     recipe for a trade the member lacks
     (`Judge.trades`; unread, kept)
+  * white cloth the forecast reserves, in a  sell (#1592): all but the
+    member at one free slot or fewer         CLOTH_STACKS_KEPT fullest stacks
+                                             (`cloth_overflow`)
   * a trade good, gem or recipe the bank     keep
     forecast reserves (bankforecast.py)
   * a recipe the forecast did not judge      keep
@@ -188,6 +191,7 @@ class Judge:
     is unread (no trade good, gem or recipe is then sold). `protected` are the
     entries never sold at all. `trades` is the set of trade skill ids the
     member holds, None while they are unread (the trade-use rule is then off).
+    `tight` is True when the member's bags have one free slot or fewer.
     """
 
     level: int
@@ -195,6 +199,7 @@ class Judge:
     reserved: frozenset | None = None
     protected: frozenset = frozenset()
     trades: frozenset | None = None
+    tight: bool = False
 
 
 def _int(value, default=0) -> int:
@@ -340,6 +345,39 @@ def redundant_upgrades(items, judge: Judge) -> frozenset:
         keep = WEAPON_UPGRADES_KEPT if bucket == "weapon" else UPGRADES_KEPT
         out.update(_int(i.guid) for i in pieces[keep:])
     return frozenset(out)
+
+
+# Cloth is trade goods subclass 5. A member short of room keeps this many of
+# its fullest white cloth stacks for its own trade and the bank run.
+CLOTH = 5
+CLOTH_STACKS_KEPT = 2
+
+
+def cloth_overflow(items, judge: Judge) -> frozenset:
+    """Guids of the white cloth stacks a member at one free slot or fewer lets
+    go though the bank forecast reserves them (#1592).
+
+    Read on the dev realm on 2026-11-09: 441 slots (92 gold) of white cloth sat
+    in full members' bags, held by the forecast or a held trade. The fullest
+    CLOTH_STACKS_KEPT stacks stay (guid breaks a tie); only a priced,
+    unprotected white-or-lower cloth stack beyond them sells. Nothing sells
+    while the member has room, and an uncommon or better stack is never
+    touched.
+    """
+    if not judge.tight or judge.reserved is None:
+        return frozenset()
+    stacks = [
+        i
+        for i in items or ()
+        if _int(i.item_class) == TRADE_GOODS
+        and _int(i.subclass) == CLOTH
+        and _int(i.quality) <= COMMON
+        and _int(i.sell_price) > 0
+        and _int(i.entry) not in judge.protected
+        and verdict(i, judge)[0] is KEEP
+    ]
+    stacks.sort(key=lambda i: (-_int(i.count, 1), _int(i.guid)))
+    return frozenset(_int(i.guid) for i in stacks[CLOTH_STACKS_KEPT:])
 
 
 def sells(item, judge: Judge) -> bool:
