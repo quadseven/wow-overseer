@@ -142,14 +142,16 @@ def hunt_bags_full(age=2, name="Mirra"):
 
 class AHuntRefusedForBagRoomWaitsOnTheSale(unittest.TestCase):
     """A hunt the world refused for a full bag was asked again every pass: the
-    member's refusals ran to 142 in a day. The hunt is held for the sale's
-    cooldown and the member sells first, as it does after a refused take."""
+    member's refusals ran to 142 in a day. The member sells first, then the hunt
+    waits for room or the bounded retry window."""
 
     HUNTING = dict(x=-400.0, quest_log={1: 3}, quests_done=frozenset({2, 3}))
 
-    def test_the_refusal_is_read_inside_the_cooldown_only(self):
+    def test_the_refusal_is_held_until_the_bounded_retry_window_ends(self):
         self.assertTrue(questers.bags_full_hunt("Mirra", [hunt_bags_full(age=2)]))
-        old = [hunt_bags_full(age=questers.SELL_COOLDOWN_MINUTES)]
+        within = [hunt_bags_full(age=questers.SELL_COOLDOWN_MINUTES)]
+        self.assertTrue(questers.bags_full_hunt("Mirra", within))
+        old = [hunt_bags_full(age=questers.BAG_HUNT_RETRY_MINUTES)]
         self.assertFalse(questers.bags_full_hunt("Mirra", old))
         self.assertFalse(
             questers.bags_full_hunt("Mirra", [hunt_bags_full(name="Kellan")])
@@ -158,7 +160,7 @@ class AHuntRefusedForBagRoomWaitsOnTheSale(unittest.TestCase):
     def test_it_sends_the_member_to_sell_whatever_its_bags_read(self):
         self.assertTrue(questers.needs_sale(mirra(free_slots=8), [hunt_bags_full()]))
 
-    def test_the_hunt_is_not_asked_again_until_the_cooldown_is_over(self):
+    def test_the_hunt_is_not_asked_again_until_the_bounded_wait_is_over(self):
         member = mirra(**self.HUNTING)
         asked = questers.plan(world(), member, questers.Clock(), 0.0)
         self.assertEqual(asked.move.kind, classquest.HUNT)
@@ -167,8 +169,19 @@ class AHuntRefusedForBagRoomWaitsOnTheSale(unittest.TestCase):
         )
         self.assertIsNone(held.move)
         self.assertIn("bag", held.line)
-        later = [hunt_bags_full(age=questers.SELL_COOLDOWN_MINUTES)]
+        sale_cooldown = [hunt_bags_full(age=questers.SELL_COOLDOWN_MINUTES)]
+        still_held = questers.plan(
+            world(), member, questers.Clock(), 0.0, tried=sale_cooldown
+        )
+        self.assertIsNone(still_held.move)
+        later = [hunt_bags_full(age=questers.BAG_HUNT_RETRY_MINUTES)]
         again = questers.plan(world(), member, questers.Clock(), 0.0, tried=later)
+        self.assertEqual(again.move.kind, classquest.HUNT)
+
+    def test_a_free_slot_releases_the_hold_before_its_retry_window(self):
+        member = mirra(**self.HUNTING, free_slots=2)
+        refused = [hunt_bags_full(age=10)]
+        again = questers.plan(world(), member, questers.Clock(), 0.0, tried=refused)
         self.assertEqual(again.move.kind, classquest.HUNT)
 
     def test_a_refusal_of_another_kind_holds_nothing(self):

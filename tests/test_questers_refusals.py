@@ -57,7 +57,7 @@ class AnItemHuntRefusedForBagRoomSellsFirst(unittest.TestCase):
     def test_the_refusal_is_read_for_this_quester_inside_the_cooldown(self):
         self.assertTrue(questers.bags_full_hunt("Mirra", [full_hunt()]))
         self.assertFalse(questers.bags_full_hunt("Kellan", [full_hunt()]))
-        old = [full_hunt(age=questers.SELL_COOLDOWN_MINUTES)]
+        old = [full_hunt(age=questers.BAG_HUNT_RETRY_MINUTES)]
         self.assertFalse(questers.bags_full_hunt("Mirra", old))
 
     def test_a_bag_read_with_room_still_needs_a_sale_after_it(self):
