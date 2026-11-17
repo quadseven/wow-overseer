@@ -411,10 +411,12 @@ class TheHeldFollowerGuardHasABound(unittest.TestCase):
         for the whole bound the held follower is left behind at once."""
         since = {}
         fresh = vendor_stall.held_fetch_bound(
-            "Zug", ["Zork"], since, 0.0, waited_seconds=self.BOUND - 1)
+            "Zug", ["Zork"], since, 0.0, waited_seconds=self.BOUND - 1
+        )
         self.assertTrue(fresh)
         old = vendor_stall.held_fetch_bound(
-            "Zug", ["Zork"], {}, 0.0, waited_seconds=4880)
+            "Zug", ["Zork"], {}, 0.0, waited_seconds=4880
+        )
         self.assertFalse(old)
         self.assertEqual(("Zork",), old.left_behind)
         self.assertEqual(("Zork",), old.newly_left)
