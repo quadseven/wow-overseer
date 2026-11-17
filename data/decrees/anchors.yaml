@@ -44,6 +44,23 @@ anchors:
     z: 5.1
     o: 0.0
     provenance: {source: acore_world.creature, ref: "guid 30521 (Theramore Guard)", observed: "2026-11-15", note: "a guard on the Theramore pier approach; the berth itself is read by the module at run time"}
+  # Copied from game-written rows on 2026-11-15; provenance on each entry.
+  deadmines-iron-clad-door:
+    map: 36
+    zone: 1581
+    x: -100.5
+    y: -668.77
+    z: 7.41
+    o: 1.815
+    provenance: {source: acore_world.gameobject, ref: "guid 30534 (Iron Clad Door, entry 16397)", observed: "2026-11-15"}
+  deadmines-gunpowder-chest:
+    map: 36
+    zone: 1581
+    x: -106.41
+    y: -617.28
+    z: 13.85
+    o: -0.768
+    provenance: {source: acore_world.gameobject, ref: "guid 26203 (Defias Gunpowder, entry 17155)", observed: "2026-11-15"}
   # Copied from a game-written row on 2026-11-16; provenance on the entry.
   undercity-floor-by-the-mailbox:
     map: 0
