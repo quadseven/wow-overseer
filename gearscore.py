@@ -607,10 +607,18 @@ def next_target(
     Pre-raid list first, the raid list once nothing pre-raid beats what is
     worn. Within a list the highest score wins, by OUR stats. Entries with
     unknown stats are skipped.
+
+    An empty slot (`worn` is None) is beaten by any known list piece, a piece
+    that scores 0.0 included (#2208): a trinket's worth is its equip effect,
+    which the template stats do not carry, so every listed trinket scores 0.0
+    and `0 > 0` left an empty trinket slot with no target at all. The tie is
+    the guide's own order (`_phase_scores`). A worn piece that scores nothing
+    (stats `{}`) is not an empty slot: nothing is known to beat it.
     """
+    empty = worn is None
     old = score(worn, spec, level, slot) if worn else 0.0
     for phase in PREFER_PHASES:
         rows = _phase_scores(spec, phase, slot, stats_by_id, level)
-        if rows and rows[0][1] > old:
+        if rows and (empty or rows[0][1] > old):
             return (PHASE_LABEL[phase], rows[0][0], rows[0][1])
     return None

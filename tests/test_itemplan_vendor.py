@@ -763,7 +763,7 @@ class CarryOutTest(unittest.TestCase):
             self.assertTrue(any(holder in line for line in report.lines))
 
 
-def plan_one(item_row, sub=0, **template):
+def plan_one(item_row, sub=0, worn_bags=None, **template):
     """The plan the shadow builds for one carried row, with its binding read."""
     tpl = {"subclass": sub, "bonding": 0, "req_level": 1, "item_level": 5}
     tpl.update(template)
@@ -772,6 +772,7 @@ def plan_one(item_row, sub=0, **template):
         instance_soulbound={item_row["item_guid"]: False},
         open_quest_items={"Ana": frozenset({3000})},
         fire_gear=frozenset(),
+        worn_bags=worn_bags,
     )
     report = shadow.shadow(
         ["Ana"],
@@ -830,10 +831,13 @@ class ProtectedStockTest(unittest.TestCase):
         )
 
     def test_a_bag_is_held_back_as_a_bag(self):
-        # The shadow's plan sees no worn bags, so rule R2 routes any carried
-        # bag SELL_VENDOR; the route holds it back by item class 1.
+        # A spare no bigger than the worn bags is routed SELL_VENDOR by rule
+        # R2 (the plan is given the worn bags since #2274); the route still
+        # holds every bag back by item class 1.
         bag = row("Ana", 19, 4497, "Heavy Brown Bag", quality=2, sell=400, item_class=1)
-        plan_, prs = plan_one(bag, 0, container_slots=10)
+        plan_, prs = plan_one(
+            bag, 0, worn_bags={"Ana": (16, 16, 16, 16)}, container_slots=10
+        )
         self.assertEqual([d.route for d in plan_.decisions], [itemplan.SELL_VENDOR])
         held = []
         self.assertEqual(vendor.sales_for(plan_, prs, held=held), ())

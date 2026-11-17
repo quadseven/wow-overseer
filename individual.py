@@ -198,3 +198,47 @@ def gather_targets(
     return {
         n: farmjob.target_for((skills_by_name or {}).get(n)) or loop_job for n in names
     }
+
+
+# --- what a page may say of a family (#2408) ---------------------------------
+
+LINKED = "linked"
+INDIVIDUAL = "individual"
+UNREAD = "unread"
+
+
+def standing(job_by_name: dict, family, environ=None) -> dict:
+    """Whether a family reads as linked or individual by its jobs, and why.
+
+    For a surface that only reports. `state` is LINKED, INDIVIDUAL, UNREAD or
+    '' (nobody on the roster), and `reason` names the fact that decided it:
+
+      'job'      a member's dungeon or raid job links the family; `by` names
+                 every such member, sorted.
+      'unnamed'  no job links it, and the setting does not name the family.
+      'named'    no job links it, and the setting names the family.
+      'setting'  no job links it, and this process was never handed the
+                 setting, so it cannot tell 'unnamed' from 'named'.
+
+    UNSET IS NOT EMPTY HERE. The bridge treats an unset `FAMILY_INDIVIDUAL` as
+    "no family is individual", which is right for the process that acts on it.
+    A page served by another process is not handed the bridge's environment
+    unless the deployment passes it, and a page that read "unset" as "linked"
+    would call a family linked while the bridge walks its members apart. So a
+    missing key answers UNREAD, and an empty value answers 'unnamed'.
+
+    The run, the campaign queue and a summon re-link a family too; this module
+    cannot see them, and a caller that reports this answer says so.
+    """
+    rows = dict(job_by_name or {})
+    if not rows:
+        return {"state": "", "reason": "", "by": ()}
+    by = tuple(sorted(str(name) for name, job in rows.items() if links(job)))
+    if by:
+        return {"state": LINKED, "reason": "job", "by": by}
+    env = os.environ if environ is None else environ
+    if ENV not in env:
+        return {"state": UNREAD, "reason": "setting", "by": ()}
+    if enabled(family, env):
+        return {"state": INDIVIDUAL, "reason": "named", "by": ()}
+    return {"state": LINKED, "reason": "unnamed", "by": ()}

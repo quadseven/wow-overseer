@@ -29,10 +29,12 @@ never written here:
 
 A DEATH LOOP (deathloop.py, #1464) is a third record, the module's own
 overseer_death rows: deathloop.MIN_DEATHS deaths in one zone within an hour at
-one level, with no level gained since and a death in the last two hours. It
-is read for a dead or released member too, since a member in that loop is
-dead half the time, and it comes before the other two: the deaths are the
-cause. Its first-seen time is the window's first death. It stands only
+one level, with no level gained since and a death in the last two hours, or
+the slow loop of deathloop.SLOW_MIN_DEATHS deaths in one zone within a day
+(#2615), which is why this reader reads deathloop.SLOW_READ_SECONDS of
+deaths. It is read for a dead or released member too, since a member in that
+loop is dead half the time, and it comes before the other two: the deaths
+are the cause. Its first-seen time is the window's first death. It stands only
 while the member is still in that zone: once its fresh snapshot places it
 in another zone, the plan has changed and the record clears, rather than
 lingering on the death history until the two hours run out (standing_loop,
@@ -152,7 +154,8 @@ ASKS_SQL = (
 
 BASIS = (
     "Stuck means one of three records the bridge keeps: five or more deaths "
-    "in one zone within an hour with no level gained, until it gains a level, "
+    "in one zone within an hour, or twelve or more deaths in one zone within "
+    "a day, with no level gained, until it gains a level, "
     "leaves the zone, or goes two hours without dying there (first seen at "
     "the first of those deaths), a class quest it has "
     "asked the guild for help with in the last two hours (first seen at the "
@@ -240,7 +243,7 @@ def _read(ctx, names: list) -> dict:
     )
     deaths = rd.rows(
         deathloop.SQL.format(holes=h),
-        (*everyone, deathloop.READ_SECONDS),
+        (*everyone, deathloop.SLOW_READ_SECONDS),
         what="overseer_death",
     )
     leveled = rd.rows(
@@ -774,7 +777,7 @@ def build(
     guild_of = {r["name"]: r for r in guild or ()}
     streaks = ask_streaks(asks)
     members, found, follows = [], {}, {}
-    loops = deathloop.loops(deaths, _levels(rows["chars"], guild_of))
+    loops = deathloop.loops(deaths, _levels(rows["chars"], guild_of), slow=True)
     for name in _order(families, guild_of):
         if name not in rows["chars"] and name not in guild_of:
             continue

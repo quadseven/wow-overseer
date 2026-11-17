@@ -6,9 +6,10 @@ import tempfile
 import unittest
 
 from eph_fakes import (
-    DB, FIX, OLD, OLD_DB, OLD_WS, SHA, WS, FakeCluster, FakeGh, make_cfg,
+    BRIDGE, DB, FIX, OLD, OLD_BRIDGE, OLD_DB, OLD_WS, SHA, WS, FakeCluster, FakeGh,
+    make_cfg,
 )  # fmt: skip
-from ephemeral import confmerge, ghx, kube, submit
+from ephemeral import confmerge, dispatch, ghx, kube, submit
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 GUZZLER = (
@@ -20,6 +21,8 @@ CHECKED = GUZZLER.replace("issue: TODO", "issue: 12").replace(
 CONTROL = {
     "control_worldserver": OLD_WS, "control_dbimport": OLD_DB, "control_pin": OLD,
 }  # fmt: skip
+BRIDGE_ON = GUZZLER.replace("bridge: off", 'bridge: "on"')
+WITH_BRIDGE = {**CONTROL, "control_bridge": OLD_BRIDGE}
 
 
 class Base(unittest.TestCase):
@@ -126,9 +129,7 @@ class SubmitTest(Base):
         with self.assertRaisesRegex(submit.SubmitError, "sha256"):
             self.submit(**bad)
 
-    def test_bridge_on_and_pr_images_are_refused(self):
-        with self.assertRaisesRegex(submit.SubmitError, "bridge"):
-            self.submit(GUZZLER.replace("bridge: off", 'bridge: "on"'), **CONTROL)
+    def test_pr_images_are_refused(self):
         pr = GUZZLER.replace(
             "image: follow-dev", "image: {pr: quadseven/mod-overseer#5}"
         )
@@ -195,6 +196,194 @@ class SubmitTest(Base):
         with self.assertRaises(kube.KubeError):
             self.submit(**CONTROL)
         self.assertEqual(self.cluster.of("jobs"), [])
+
+
+def _names(job, key):
+    return [c["name"] for c in job["spec"]["template"]["spec"].get(key, [])]
+
+
+def _bridge(job):
+    return next(
+        c for c in job["spec"]["template"]["spec"]["initContainers"]
+        if c["name"] == "bridge"
+    )  # fmt: skip
+
+
+class BridgeTest(Base):
+    """bridge: on adds the sidecar at the arm's own digest; bridge: off renders without it (#2776)."""
+
+    def jobs_by_arm(self):
+        return {j["metadata"]["labels"]["eph/arm"]: j for j in self.cluster.of("jobs")}
+
+    def test_bridge_off_renders_no_sidecar_pull_secret_or_placeholder(self):
+        self.submit(**CONTROL)
+        for job in self.cluster.of("jobs"):
+            self.assertNotIn("bridge", _names(job, "initContainers"))
+            pull = job["spec"]["template"]["spec"]["imagePullSecrets"]
+            self.assertEqual(pull, [{"name": "registry-pull"}])
+            self.assertNotIn("BRIDGE", json.dumps(job).upper().replace("BRIDGE:", ""))
+
+    def test_bridge_off_needs_no_bridge_deployment_or_image(self):
+        del self.cluster.objs[("deployments", "base-realm", "wow-overseer")]
+        rec = self.submit(**CONTROL)
+        self.assertTrue(all("bridge" not in r["images"] for r in rec["runs"]))
+
+    def test_bridge_on_gives_each_arm_its_own_digest(self):
+        rec = self.submit(BRIDGE_ON, **WITH_BRIDGE)
+        jobs = self.jobs_by_arm()
+        self.assertEqual(_bridge(jobs["treatment"])["image"], BRIDGE)
+        self.assertEqual(_bridge(jobs["control"])["image"], OLD_BRIDGE)
+        by = {r["arm"]: r["images"]["bridge"] for r in rec["runs"]}
+        self.assertEqual(by, {"treatment": BRIDGE, "control": OLD_BRIDGE})
+
+    def test_bridge_on_adds_the_pull_secret_and_keeps_the_rest_of_the_job(self):
+        self.submit(BRIDGE_ON, **WITH_BRIDGE)
+        job = self.jobs_by_arm()["treatment"]
+        pull = [p["name"] for p in job["spec"]["template"]["spec"]["imagePullSecrets"]]
+        self.assertEqual(pull, ["registry-pull", "ghcr"])
+        self.assertEqual(
+            _names(job, "initContainers"), ["worldserver", "mysql", "bridge", "x"]
+        )
+
+    def test_treatment_bridge_can_be_pinned_by_flag(self):
+        other = "registry.example.com/bridge@sha256:" + "8" * 64
+        self.submit(BRIDGE_ON, arm="treatment", treatment_bridge=other)
+        self.assertEqual(_bridge(self.cluster.of("jobs")[0])["image"], other)
+
+    def test_a_control_arm_with_bridge_on_needs_a_control_bridge(self):
+        with self.assertRaisesRegex(submit.SubmitError, "control-bridge"):
+            self.submit(BRIDGE_ON, **CONTROL)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_bridge_images_must_be_digests(self):
+        for args in (
+            {**CONTROL, "control_bridge": "registry.example.com/bridge:latest"},
+            {**CONTROL, "control_bridge": OLD_BRIDGE, "treatment_bridge": "x:latest"},
+        ):
+            with self.assertRaisesRegex(submit.SubmitError, "bridge.*sha256"):
+                self.submit(BRIDGE_ON, **args)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_the_base_bridge_image_must_be_a_digest(self):
+        dep = self.cluster.objs[("deployments", "base-realm", "wow-overseer")]
+        dep["spec"]["template"]["spec"]["containers"][0]["image"] = "x:latest"
+        with self.assertRaisesRegex(submit.SubmitError, "bridge.*digest"):
+            self.submit(BRIDGE_ON, arm="treatment")
+
+    def test_a_template_without_the_sidecar_is_refused_not_downgraded(self):
+        cm = self.cluster.objs[("configmaps", "wow-ephemeral", "eph-world-template")]
+        doc = json.loads(cm["data"]["job.yaml"])
+        spec = doc["spec"]["template"]["spec"]
+        spec["initContainers"] = [
+            c for c in spec["initContainers"] if c["name"] != "bridge"
+        ]
+        cm["data"]["job.yaml"] = json.dumps(doc).replace("{{BRIDGE_IMAGE}}", "")
+        cm["data"]["tokens.txt"] = cm["data"]["tokens.txt"].replace(
+            "BRIDGE_IMAGE: x", ""
+        )
+        with self.assertRaisesRegex(submit.SubmitError, "no bridge sidecar"):
+            self.submit(BRIDGE_ON, arm="treatment")
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_a_sidecar_that_reaches_a_secret_or_the_api_is_refused(self):
+        cm = self.cluster.objs[("configmaps", "wow-ephemeral", "eph-world-template")]
+        for bad in (
+            {
+                "env": [
+                    {
+                        "name": "T",
+                        "valueFrom": {"secretKeyRef": {"name": "s", "key": "k"}},
+                    }
+                ]
+            },
+            {"volumeMounts": [{"name": "api-token", "mountPath": "/x"}]},
+            {"ports": [{"containerPort": 8080}]},
+        ):
+            doc = json.loads(cm["data"]["job.yaml"])
+            for c in doc["spec"]["template"]["spec"]["initContainers"]:
+                if c["name"] == "bridge":
+                    c.update(bad)
+            saved = cm["data"]["job.yaml"]
+            cm["data"]["job.yaml"] = json.dumps(doc)
+            with self.assertRaisesRegex(submit.SubmitError, "bridge sidecar must be"):
+                self.submit(BRIDGE_ON, arm="treatment")
+            cm["data"]["job.yaml"] = saved
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_a_sidecar_with_any_other_path_to_secret_data_is_refused(self):
+        cm = self.cluster.objs[("configmaps", "wow-ephemeral", "eph-world-template")]
+        saved = cm["data"]["job.yaml"]
+        cases = {
+            "envFrom secret": (
+                {"envFrom": [{"secretRef": {"name": "s"}}]},
+                [],
+            ),
+            "mount of a secret volume": (
+                {"volumeMounts": [{"name": "creds", "mountPath": "/c"}]},
+                [{"name": "creds", "secret": {"secretName": "s"}}],
+            ),
+            "mount of a projected volume": (
+                {"volumeMounts": [{"name": "proj", "mountPath": "/p"}]},
+                [
+                    {
+                        "name": "proj",
+                        "projected": {"sources": [{"secret": {"name": "s"}}]},
+                    }
+                ],
+            ),
+        }
+        for label, (patch, volumes) in cases.items():
+            doc = json.loads(saved)
+            spec = doc["spec"]["template"]["spec"]
+            spec["volumes"] += volumes
+            for c in spec["initContainers"]:
+                if c["name"] == "bridge":
+                    c.update(patch)
+            cm["data"]["job.yaml"] = json.dumps(doc)
+            with self.assertRaisesRegex(
+                submit.SubmitError, "bridge sidecar must be", msg=label
+            ):
+                self.submit(BRIDGE_ON, arm="treatment")
+        cm["data"]["job.yaml"] = saved
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_a_sidecar_may_mount_the_run_and_tmp_volumes_and_a_plain_configmap_env(
+        self,
+    ):
+        cm = self.cluster.objs[("configmaps", "wow-ephemeral", "eph-world-template")]
+        doc = json.loads(cm["data"]["job.yaml"])
+        spec = doc["spec"]["template"]["spec"]
+        spec["volumes"] += [
+            {"name": "run", "emptyDir": {}},
+            {"name": "tmp", "emptyDir": {}},
+        ]
+        for c in spec["initContainers"]:
+            if c["name"] == "bridge":
+                c["volumeMounts"] = [
+                    {"name": "run", "mountPath": "/run/eph", "readOnly": True},
+                    {"name": "tmp", "mountPath": "/scratch"},
+                ]
+        cm["data"]["job.yaml"] = json.dumps(doc)
+        self.submit(BRIDGE_ON, arm="treatment")
+        self.assertEqual(len(self.cluster.of("jobs")), 3)
+
+    def test_the_dispatcher_counts_the_sidecar_requests(self):
+        self.submit(BRIDGE_ON, **WITH_BRIDGE)
+        on = dispatch.job_requests(self.jobs_by_arm()["treatment"])
+        for j in self.cluster.of("jobs"):
+            self.cluster.objs.pop(("jobs", "wow-ephemeral", j["metadata"]["name"]))
+        self.submit(**CONTROL)
+        off = dispatch.job_requests(self.jobs_by_arm()["treatment"])
+        self.assertAlmostEqual(on[0] - off[0], 0.05)
+        self.assertEqual(on[1] - off[1], 192 * 1024**2)
+
+    def test_the_fidelity_deltas_say_what_the_bridge_is(self):
+        rec = self.submit(BRIDGE_ON, **WITH_BRIDGE)
+        text = "; ".join(rec["fidelity_deltas"])
+        self.assertIn("bridge: on", text)
+        self.assertNotIn("bridge: off", text)
+        off = self.submit(**CONTROL)
+        self.assertIn("bridge: off", "; ".join(off["fidelity_deltas"]))
 
 
 class ConfMergeTest(unittest.TestCase):

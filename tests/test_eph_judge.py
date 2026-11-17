@@ -639,6 +639,89 @@ class LogAssertionTest(unittest.TestCase):
         r = run(self.decree(0), guzzler_world(clock), clock, log="all quiet\n")
         self.assertEqual(r["verdict"], "PASS", r["reasons"])
 
+    def bounded(self, expect):
+        d = self.decree(0)
+        d["observe"][-1]["log"]["expect"] = expect
+        return d
+
+    def verdict(self, expect, log):
+        clock = Clock()
+        r = run(self.bounded(expect), guzzler_world(clock), clock, log=log)
+        return r["verdict"], named(r, "no-ghost-loop")
+
+    def test_a_required_line_that_is_absent_fails(self):
+        # #2767: a log check could only forbid a line. at_least requires one.
+        verdict, row = self.verdict({"at_least": 1}, "all quiet\n")
+        self.assertEqual(verdict, "FAIL")
+        self.assertEqual(row["status"], "violated")
+        self.assertEqual(row["observed"], "count=0")
+
+    def test_a_required_line_present_often_enough_passes(self):
+        log = "ghost loop retry 1\nfine\nghost loop retry 2\nghost retry 3\n"
+        verdict, row = self.verdict({"at_least": 2}, log)
+        self.assertEqual(verdict, "PASS")
+        self.assertEqual(row["status"], "held")
+        self.assertEqual(row["observed"], "count=3")
+        verdict, _ = self.verdict({"at_least": 4}, log)
+        self.assertEqual(verdict, "FAIL")
+
+    def test_at_most_holds_up_to_the_bound_and_not_past_it(self):
+        log = "ghost retry 1\nghost retry 2\n"
+        self.assertEqual(self.verdict({"at_most": 2}, log)[0], "PASS")
+        self.assertEqual(self.verdict({"at_most": 2}, "quiet\n")[0], "PASS")
+        self.assertEqual(self.verdict({"at_most": 1}, log)[0], "FAIL")
+
+    def test_exactly_is_the_exact_count_under_its_own_name(self):
+        log = "ghost retry 1\nghost retry 2\n"
+        self.assertEqual(self.verdict({"exactly": 2}, log)[0], "PASS")
+        self.assertEqual(self.verdict({"exactly": 1}, log)[0], "FAIL")
+        self.assertEqual(self.verdict({"exactly": 3}, log)[0], "FAIL")
+
+    def test_at_least_and_at_most_together_are_a_range(self):
+        log = "ghost retry 1\nghost retry 2\n"
+        both = {"at_least": 1, "at_most": 2}
+        self.assertEqual(self.verdict(both, log)[0], "PASS")
+        self.assertEqual(self.verdict(both, "quiet\n")[0], "FAIL")
+        self.assertEqual(self.verdict(both, log + "ghost retry 3\n")[0], "FAIL")
+
+    def test_count_still_means_exactly(self):
+        log = "ghost retry 1\n"
+        self.assertEqual(self.verdict({"count": 1}, log)[0], "PASS")
+        self.assertEqual(self.verdict({"count": 0}, log)[0], "FAIL")
+        self.assertEqual(self.verdict({"count": 2}, log)[0], "FAIL")
+
+    def test_a_bound_the_judge_cannot_read_is_invalid_never_a_pass(self):
+        # The lint refuses these first; a judge handed one anyway must not
+        # read an unknown bound as held.
+        for expect in ({}, {"about": 1}, {"at_least": "one"}, {"at_least": -1}):
+            verdict, row = self.verdict(expect, "ghost retry 1\n")
+            self.assertEqual(verdict, "INVALID", expect)
+            self.assertEqual(row["status"], "error", expect)
+
+    def test_every_shipped_decree_keeps_its_exact_count_verdict(self):
+        # #2767 regression: the rule before bounds was `matches == count`. Every
+        # log check shipped on main must still hold and fail at the same counts.
+        folder = pathlib.Path(__file__).resolve().parent.parent / "data" / "decrees"
+        seen = 0
+        for path in sorted(folder.glob("*.yaml")):
+            if path.name == "anchors.yaml":
+                continue
+            decree = loads(path.read_text(encoding="utf-8"))
+            for o in decree.get("observe") or []:
+                if "log" not in o:
+                    continue
+                expect = o["log"]["expect"]
+                if set(expect) != {"count"}:
+                    continue
+                seen += 1
+                for n in range(expect["count"] + 4):
+                    self.assertEqual(
+                        judge.log_bound_holds(expect, n),
+                        n == expect["count"],
+                        f"{path.name} {o['name']} at {n} matches",
+                    )
+        self.assertGreater(seen, 0, "no shipped decree carries an exact log count")
+
     def test_matched_lines_are_capped_and_truncated(self):
         log = "\n".join("ghost retry " + "x" * 1000 for _ in range(100))
         clock = Clock()
