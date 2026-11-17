@@ -37,6 +37,10 @@ class Untaken:
     quest_id: int
     title: str
     items: tuple  # carried item ids that this quest names, sorted
+    # The giver spawns (guildjobs.Spot) and whether a carried item starts the
+    # quest, set by seatquests once the world has been read.
+    givers: tuple = ()
+    by_item: bool = False
 
 
 @dataclass(frozen=True)

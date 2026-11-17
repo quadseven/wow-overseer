@@ -134,6 +134,7 @@ import itemplan_disenchant
 import itemplan_route
 import itemplan_vendor
 import seatbags
+import seatquests
 import itemsource
 import purse
 import pvpgear
@@ -20571,6 +20572,10 @@ class Bridge(discord.Client):
             _seat_bag_relief, members, cap)
         for line in seat_lines:
             log.info("guild jobs: %s", line)
+        # A RAID SEAT TAKES THE QUESTS ITS QUEST ITEMS NAME (#2648).
+        members, quest_lines = await asyncio.to_thread(_seat_untaken_quests, members)
+        for line in quest_lines:
+            log.info("guild jobs: %s", line)
         plan = await self._plan_guild_jobs(
             members, facts, busy, cap, spawn_walks, cohort)
         self._log_guild_job_plan(members, plan)
@@ -33610,6 +33615,90 @@ def _seat_bag_relief(members, cap):
     except Exception:
         log.exception("seat bags: the plan failed; the pass carries on without it")
         return list(members), ()
+
+
+_SEAT_QUEST_MEMO = seatquests.Memo()
+_SEAT_QUEST_ITEMS_SQL = (
+    "SELECT c.name AS name, ii.itemEntry AS entry "
+    "FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE it.class = 12 AND c.name IN ({names})"
+)
+_SEAT_QUEST_ROWS_SQL = (
+    "SELECT t.ID, t.LogTitle, t.QuestLevel, t.MinLevel, t.AllowableRaces, "
+    "t.Flags, t.StartItem, "
+    + ", ".join("t.RequiredItemId%d" % i for i in range(1, 7)) + ", "
+    + ", ".join("t.ItemDrop%d" % i for i in range(1, 5)) + ", "
+    "a.MaxLevel, a.AllowableClasses, a.PrevQuestID, a.NextQuestID, "
+    "a.ExclusiveGroup "
+    "FROM acore_world.quest_template t "
+    "LEFT JOIN acore_world.quest_template_addon a ON a.ID = t.ID "
+    "WHERE {where}"
+)
+_SEAT_QUEST_GIVERS_SQL = (
+    "SELECT s.quest AS quest, cr.guid AS spawn, cr.map AS map_id, "
+    "cr.position_x AS x, cr.position_y AS y, ct.name AS name "
+    "FROM acore_world.creature_queststarter s "
+    "JOIN acore_world.creature cr ON cr.id = s.id "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE s.quest IN ({quests}) AND " + towntrip.REAL_SPAWN_SQL
+)
+
+
+def _seat_untaken_quests(members):
+    """(members with the quests each seat may take, log lines), blocking.
+
+    A failed read or plan is logged and the pass carries on with the members
+    as they were."""
+    try:
+        return seatquests.relieve(
+            members, _read_seat_quests, time.monotonic(), _SEAT_QUEST_MEMO)
+    except Exception:
+        log.exception("seat quests: the plan failed; the pass carries on without it")
+        return list(members), ()
+
+
+def _read_seat_quests(names):
+    """seatquests.relieve's read for the named seats, None when it failed."""
+    if not names:
+        return seatquests.Read()
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_SEAT_QUEST_ITEMS_SQL.format(
+                names=",".join(["%s"] * len(names))), list(names))
+            carried: dict = {}
+            for row in cur.fetchall():
+                carried.setdefault(str(row["name"]), set()).add(int(row["entry"]))
+            items = sorted({e for found in carried.values() for e in found})
+            if not items:
+                return seatquests.Read(carried=carried)
+            marks = ",".join(["%s"] * len(items))
+            columns = ("StartItem",
+                       *("RequiredItemId%d" % i for i in range(1, 7)),
+                       *("ItemDrop%d" % i for i in range(1, 5)))
+            where = " OR ".join("t.%s IN (%s)" % (c, marks) for c in columns)
+            cur.execute(_SEAT_QUEST_ROWS_SQL.format(where=where),
+                        items * len(columns))
+            rows = tuple(dict(r) for r in cur.fetchall())
+            quest_ids = sorted({int(r["ID"]) for r in rows})
+            givers: dict = {}
+            if quest_ids:
+                cur.execute(_SEAT_QUEST_GIVERS_SQL.format(
+                    quests=",".join(["%s"] * len(quest_ids))), quest_ids)
+                for r in cur.fetchall():
+                    givers.setdefault(int(r["quest"]), []).append(guildjobs.Spot(
+                        kind="creature", spawn=int(r["spawn"]),
+                        map_id=int(r["map_id"]), x=float(r["x"]),
+                        y=float(r["y"]), name=str(r["name"] or ""),
+                        near=int(guildjobs.UNTAKEN_NEAR)))
+    except (OSError, pymysql.err.MySQLError) as exc:
+        log.warning("seat quests: could not read the seats' quest items: %s", exc)
+        return None
+    return seatquests.Read(
+        rows=rows, carried=carried,
+        givers={q: tuple(v) for q, v in givers.items()})
 
 
 def _read_seat_bags(names):
