@@ -11,6 +11,13 @@ are kept in the vault to a ceiling. Every other tradable recipe is listed on
 the real auction house by the character that holds it, then goes to the vendor
 after two failed listings. Nothing is generated or listed without a real
 character-held item.
+
+Changed on purpose by the operator decision on #2605 and #2607: the tests
+`test_two_failed_listings_let_the_vendor_have_it`, `..._of_a_common_recipe_go_to_the_vendor`,
+`..._of_a_dear_recipe_still_wait_for_a_release` and the listing-history test in
+`TheListingHistory` once expected "not the vendor" and now expect the vendor,
+because the decision names the vendor as the fallback after two failed
+listings. The dear recipe still waits for a release (`confirm`).
 """
 
 from __future__ import annotations
