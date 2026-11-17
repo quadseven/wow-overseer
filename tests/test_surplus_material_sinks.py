@@ -137,6 +137,22 @@ class TheOrderIsGuildBankAuctionVendor(unittest.TestCase):
         self.assertEqual(got.route, clearance.KEEP)
 
 
+class TheGuildsOverTargetMaterialCanListWithoutHistory(unittest.TestCase):
+    def test_vendor_floor_reaches_the_house_when_the_bank_has_no_room(self):
+        (got,) = clearance.plan(
+            [cloth(1)],
+            [],
+            auction_open=True,
+            vault=frozenset({"Oz"}),
+            vault_room=0,
+            over_target={2589: "the guild holds more than its target"},
+        )
+
+        self.assertEqual(clearance.AUCTION, got.route)
+        self.assertEqual(13 * disposition.AUCTION_BEATS_VENDOR_BY, got.price)
+        self.assertIn("52 copper each listed", got.why)
+
+
 class ThePlanSpreadsTheSurplus(unittest.TestCase):
     def test_each_guildmate_takes_one_stack_a_pass_and_the_rest_goes_on(self):
         stacks = [cloth(10 + i) for i in range(4)]
