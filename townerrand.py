@@ -154,6 +154,21 @@ HEARTH_SECONDS = 45.0
 # samples every 30 seconds, so 35 yards catches the completed walk before the
 # leader wanders away. Mailbox operations keep their own in-range checks.
 HUB_YARDS = 35.0
+# THE ARRIVAL IS A FEW SECONDS WIDE. The module completes the walk at the aim
+# and hands the leader back to its quest drive at once, so a leader read 30
+# seconds apart is read at the hub almost never (wow-dev 2026-11-17: arrived
+# 09:00:33, 2,000 yards away by 09:08, the errand still in GO and no sale
+# written). Within this many yards the bridge watches the leader closely.
+ARRIVAL_WATCH_YARDS = 300.0
+ARRIVAL_POLL_SECONDS = 3.0
+ARRIVAL_WATCH_SECONDS = 24.0
+
+
+def watching_arrival(hub: dict, standing) -> bool:
+    """Is the leader near enough the hub that its arrival could be missed?"""
+    return in_range(hub, standing, ARRIVAL_WATCH_YARDS)
+
+
 GATHER_YARDS = 12.0
 
 # The entry test: gear in the post, or a member this short of slots (or with

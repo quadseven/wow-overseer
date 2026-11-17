@@ -22698,6 +22698,13 @@ class Bridge(discord.Client):
                 )
         leader_at_hub = townerrand.in_range(
             hub, positions.get(leader), townerrand.HUB_YARDS)
+        if (state.phase == townerrand.GO and not leader_at_hub and not in_run):
+            # THE ARRIVAL IS SEEN, NOT SAMPLED (wow-dev 2026-11-17): see
+            # `_town_errand_watch_arrival`.
+            # Looked up: the adapter tests stub the family.
+            watch = getattr(self, "_town_errand_watch_arrival", None)
+            if watch is not None:
+                leader_at_hub = await watch(hub, leader)
         gathered = all(
             townerrand.in_range(hub, positions.get(n), townerrand.GATHER_YARDS)
             for n in names)
@@ -22755,6 +22762,30 @@ class Bridge(discord.Client):
         if new.phase == townerrand.DONE:
             await self._town_errand_release(names, leader, slot, label)
         _TOWN_ERRANDS[key] = new
+
+    async def _town_errand_watch_arrival(self, hub, leader) -> bool:
+        """Whether the leader is seen at the hub, watched closely when near it.
+
+        The worldserver ends the walk on arrival and returns the leader to its
+        quest drive within seconds, and the pass reads positions every 30
+        seconds after a 6 second settle, so the arrival fell between reads: the
+        errand stayed in GO until its 1,200 second bound, wrote no sale, and
+        the family's bag hold never lifted. A leader inside
+        `townerrand.ARRIVAL_WATCH_YARDS` is read every few seconds for the rest
+        of the pass; any read inside the hub's range is the arrival. Bounded:
+        it only runs near the hub, for one pass's length.
+        """
+        waited = 0.0
+        while True:
+            seen = (await asyncio.to_thread(
+                _fetch_fresh_positions, [leader])).get(leader)
+            if townerrand.in_range(hub, seen, townerrand.HUB_YARDS):
+                return True
+            if (not townerrand.watching_arrival(hub, seen)
+                    or waited >= townerrand.ARRIVAL_WATCH_SECONDS):
+                return False
+            await asyncio.sleep(townerrand.ARRIVAL_POLL_SECONDS)
+            waited += townerrand.ARRIVAL_POLL_SECONDS
 
     async def _aim_stranded_bag_pressure_members(
         self, names: list, leader: str, positions: dict,
