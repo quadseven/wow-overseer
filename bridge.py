@@ -19059,8 +19059,13 @@ class Bridge(discord.Client):
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
                                  self._quester_last.get(m.name, 0), crossings)
             await self._quester_ledger(m, plan, held, ledger, mono)
-            sale = (questers.sell_step(m, carried.get(m.name, ()), worn.get(m.name), kept,
-                                       cat, sold, cap, tried) if m.name in full else None)
+            # Leftovers are destroyed first: no walk, and a slot back at once.
+            sale = (questers.destroy_step(m, carried.get(m.name, ()), kept, cat, sold,
+                                          tried, _quester_destroy_guard(m.name))
+                    if m.name in full else None)
+            if sale is None and m.name in full:
+                sale = questers.sell_step(m, carried.get(m.name, ()), worn.get(m.name),
+                                          kept, cat, sold, cap, tried)
             if self._quester_start(m, plan, cat, cap, mono, hunt_verb and hunts_left > 0,
                                    sale):
                 hunts_left -= 1
@@ -34931,6 +34936,17 @@ def _quest_log_holds(holder: str, command: str) -> bool:
     return False
 
 
+def _quester_destroy_guard(holder: str):
+    """The shared loot-policy guard for a quester's destroy rows: a stack passes
+    only when `lootpolicy.allowed` says a `destroy` row may be written for it,
+    so the quest-log hold (`quest_needed`), the epic rule and the policy's own
+    verdicts bind a destroy exactly as they bind a sale."""
+    def allowed(stack) -> bool:
+        command = "guid:%d count:%d" % (int(stack.guid), int(stack.count))
+        return _loot_policy_blocks(holder, command, "destroy") is None
+    return allowed
+
+
 def _epic_blocks(holder: str, command: str, kind: str = "sell") -> bool:
     """Does the guild loot policy refuse this sell, destroy or disenchant row
     (#2385, #2389 and the policy that replaces them)?"""
@@ -37009,6 +37025,15 @@ _JOB_ITEMS_SQL = (
     "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
     "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
     "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
+)
+# THE QUEST LEFTOVERS A FULL QUESTER CARRIES (questers.destroy_step, #1813):
+# zero-price common quest-class stacks, each with the quest test, read the way
+# _JOB_ITEMS_SQL reads the rest of the bags.
+_QUESTER_LEFTOVERS_SQL = (
+    _JOB_ITEMS_SQL[: _JOB_ITEMS_SQL.index("WHERE ci.guid IN")]
+    + "WHERE ci.guid IN ({guids}) AND it.class = 12 AND it.Quality <= 1 "
+    "AND it.SellPrice = 0 "
+    + _JOB_ITEMS_SQL[_JOB_ITEMS_SQL.index("AND ((ci.bag = 0") :]
 )
 # THE FOOD AND DRINK EACH MEMBER CARRIES (restsupply.py): units by the game's
 # own category (item_template.spellcategory_1, 11 eaten and 59 drunk, what
@@ -42216,9 +42241,17 @@ def _fetch_quester_bags(names: list) -> tuple:
             entries=ids(_JOB_ENTRIES)))
         worn_rows = _job_read(cur, "quester worn gear", _JOB_WORN_SQL.format(guids=guids))
         sale_rows = _job_read(cur, "quester sales", _JOB_RECENT_SQL, (QUESTER_SALE_LIKE,))
-    carried = {name_of[guid]: stacks
-               for guid, stacks in guildjobs.carried_from_rows(item_rows).items()
-               if guid in name_of}
+        leftover_rows = _job_read(cur, "quester quest leftovers",
+                                  _QUESTER_LEFTOVERS_SQL.format(guids=guids))
+    carried = {}
+    for rows_ in (item_rows, leftover_rows):
+        for guid, stacks in guildjobs.carried_from_rows(rows_).items():
+            if guid not in name_of:
+                continue
+            have = carried.setdefault(name_of[guid], [])
+            seen = {c.guid for c in have}
+            have.extend(c for c in stacks if c.guid not in seen)
+    carried = {name: tuple(stacks) for name, stacks in carried.items()}
     return carried, _job_worn(worn_rows), guildjobs.recent_from_rows(sale_rows)
 
 
