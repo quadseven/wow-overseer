@@ -773,6 +773,11 @@ class TheRestartFoldIsReadableOutside(unittest.TestCase):
         took = step("Zug", self.TOOK, kind="intent", times=38, first=2000, last=1000)
         self.assertEqual(0, nowstatus.restart_count([took], NOW))
 
+    def test_restart_count_takes_a_wider_window(self):
+        took = step("Zug", self.TOOK, kind="intent", times=4, first=3000, last=1500)
+        self.assertEqual(0, nowstatus.restart_count([took], NOW))
+        self.assertEqual(4, nowstatus.restart_count([took], NOW, window=3600))
+
     def test_restart_count_ignores_other_steps(self):
         other = step(
             "Zug",
