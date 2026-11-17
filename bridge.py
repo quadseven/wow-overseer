@@ -9325,12 +9325,21 @@ class Bridge(discord.Client):
         if freeorders.is_farm(d.text):
             await channel.send(freeorders.FARM_REFUSAL[:1990])
             return
+        # Only the two reads that can fail on a dependency are inside a try; the
+        # prompt and the family grouping are this code's own work, so a bug in
+        # them rises instead of passing for an unreachable model.
         try:
-            fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
-            raw = await llmpool.call(
-                _ask_llm, freeorders.build_prompt(d.text, fams), freeorders.SYSTEM)
+            roster = await asyncio.to_thread(_fetch_queue_roster)
         except Exception:
-            log.exception("free order: the model or the roster was unreachable")
+            log.exception("free order: the roster was unreachable")
+            await channel.send(freeorders.NOT_UNDERSTOOD[:1990])
+            return
+        fams = campaignqueue.families(roster)
+        prompt = freeorders.build_prompt(d.text, fams)
+        try:
+            raw = await llmpool.call(_ask_llm, prompt, freeorders.SYSTEM)
+        except Exception:
+            log.exception("free order: the model was unreachable")
             await channel.send(freeorders.NOT_UNDERSTOOD[:1990])
             return
         found, heard = freeorders.decisions(raw, d.text, d.source, fams)
