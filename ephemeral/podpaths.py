@@ -19,7 +19,9 @@ import posixpath
 # The pod's own emptyDir `tmp` volume, mounted in the seed and the judge only; it is
 # not a host or shared /tmp, so the predictable name is not an attack surface.
 VARS_FILE = "/tmp/eph-vars.json"  # noqa: S108
-LOG_NAME = "Server.log"  # the stock worldserver file appender
+LOG_NAME = (
+    "Module.log"  # the file appender submit adds to every world (submit.BASELINE)
+)
 
 
 def with_vars_file(env):

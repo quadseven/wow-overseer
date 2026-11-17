@@ -204,8 +204,9 @@ failed precondition makes that run INVALID, never a pass.
 Meant to run as the world pod's last step, after the seed. In the pod it needs no
 flags: `seed` and `judge` both default `EPH_VARS_FILE` to `/tmp/eph-vars.json` (the
 volume both containers mount), and the judge reads the worldserver log from
-`EPH_LOG_FILE`, else `$EPH_LOGS_DIR/Server.log` (the stock worldserver file
-appender); `--log` overrides both. With none of them it reports a log that
+`EPH_LOG_FILE`, else `$EPH_LOGS_DIR/Module.log` (a file appender every submitted
+world adds, which carries the module's and the bots' lines at trace and info
+level); `--log` overrides both. With none of them it reports a log that
 could not be read, which is INVALID.
 It reads the variables and resolved cast the seed left in `EPH_VARS_FILE`, runs
 the `act` steps (by time, or when a named observation first holds), samples the
