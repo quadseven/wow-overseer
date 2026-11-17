@@ -22,6 +22,11 @@ THE KINDS:
 
   stuck       a member the roster reads as stuck (members.stuck_view) for
               STUCK_HOURS or more
+  stuck-short a stuck member the kind above leaves out: waiting under
+              STUCK_HOURS, or with no start on record (#2246)
+  family-stalled
+              a family the roster reads as stalled (members.stall_entry),
+              whether or not its leader is stuck on a hold of its own
   dungeon     a dungeon whose runs that went in cleared under CLEAR_FLOOR of
               at least MIN_RUNS in the last day
   questers    a guild with questers missing from the realm, with the team
@@ -288,6 +293,76 @@ def stuck_findings(stuck: dict, now_at: int) -> list:
                 who + (first.get("blocker") or "stuck with no reason on record"),
                 min(m.get("since") for m, _ in rows),
                 impact=sum(h for _, h in rows),
+            )
+        )
+    return out
+
+
+def short_stuck_findings(stuck: dict, now_at: int) -> list:
+    """The stuck members stuck_findings leaves out: waiting under STUCK_HOURS,
+    or with no start on record. They are in the stuck list, so the health read
+    names them too (#2246): on 2026-11-17 it named 14 of 29. One finding per
+    step and kind, keyed `stuck-short:<step>` so a reader that files tickets
+    can tell a brief wait from one that has lasted. A member the longer
+    finding already names is not listed again."""
+    groups: dict = {}
+    listed = list(stuck.get("members") or ())
+    steps = {m.get("name"): m.get("step") for m in listed}
+    for m in listed:
+        hours = hours_since(m.get("since"), now_at)
+        if m.get("since") and hours >= STUCK_HOURS:
+            continue
+        step = steps.get(m.get("follows")) or m.get("step")
+        step = _step_key(step or "what it is doing")
+        groups.setdefault((step, m.get("kind")), []).append((m, hours))
+    out = []
+    for (step, kind), rows in sorted(groups.items(), key=lambda kv: kv[0][0]):
+        rows.sort(key=lambda r: (-r[1], bool(r[0].get("follows")), r[0]["name"]))
+        names = [m["name"] for m, _ in rows]
+        first, longest = rows[0]
+        started = [m["since"] for m, _ in rows if m.get("since")]
+        out.append(
+            finding(
+                "stuck-short:%s" % step,
+                "%s is stuck: %s" % (names[0], step)
+                if len(names) == 1
+                else "%d members are stuck: %s" % (len(names), step),
+                STUCK_AREAS.get(kind, "members"),
+                len(names),
+                longest,
+                "%s; %s"
+                % (
+                    ", ".join(names),
+                    first.get("blocker") or "stuck with no reason on record",
+                ),
+                min(started) if started else None,
+                impact=sum(h for _, h in rows),
+            )
+        )
+    return out
+
+
+def stalled_family_findings(stuck: dict, now_at: int) -> list:
+    """One finding per stalled family (members.stall_entry: no quest, level,
+    gear change or boss credit for agenda.STALL_AFTER), read from the same
+    build as the stuck list. A leader with a hold of its own is listed there
+    under the hold and not the stall, so the family is named here (#2246)."""
+    out = []
+    for fam in stuck.get("stalled_families") or ():
+        at = fam.get("since")
+        hours = hours_since(at, now_at)
+        names = list(fam.get("members") or ())
+        out.append(
+            finding(
+                "family-stalled:%s" % fam.get("leader"),
+                "The %s family has made no progress for %.1f hours"
+                % (fam.get("leader"), hours),
+                "family",
+                max(1, len(names)),
+                hours,
+                "%s; %s"
+                % (", ".join(names), fam.get("blocker") or "no reason on record"),
+                at,
             )
         )
     return out
@@ -659,6 +734,8 @@ def build(
     """Everything read, the payload out. Pure. Highest impact first."""
     found = (
         stuck_findings(stuck, now_at)
+        + short_stuck_findings(stuck, now_at)
+        + stalled_family_findings(stuck, now_at)
         + dungeon_findings(runs, now_at, place)
         + family_loop_findings(streaks or {}, events, now_at)
         + quester_findings(questers, invites, now_at)
