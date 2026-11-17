@@ -23008,8 +23008,13 @@ class Bridge(discord.Client):
             bankers_of = globals().get("_fetch_errand_banker_stops")
             bank_reads = globals().get("_bank_first_reads")
             if bankers_of and bank_reads and why == townerrand.BAG_PRESSURE_WHY:
+                # ONLY THE MEMBERS WITH THE LEADER CHOOSE THE COUNTER: a
+                # follower thousands of yards off cannot reach it, and its
+                # stacks kept the family on a vendor aim that sold nothing.
+                here = townerrand.with_leader(
+                    names, positions, leader, everyone=bool(hearth_reaches))
                 sellable, bank_routed = await asyncio.to_thread(
-                    bank_reads, list(names))
+                    bank_reads, list(names), here)
                 if townerrand.bank_first(why, sellable, bank_routed):
                     banker_stops = townerrand.vendor_stops(
                         await asyncio.to_thread(bankers_of, leader, standing),
@@ -40947,15 +40952,17 @@ def _fetch_errand_banker_stops(leader: str, standing) -> list:
             raise
 
 
-def _bank_first_reads(names: list) -> tuple:
+def _bank_first_reads(names: list, here=None) -> tuple:
     """({member: stacks a vendor would buy or None}, stacks the item plan routes
     to the bank), for the errand's choice of counter. Blocking.
 
     The sale counts are the vendor pass's own, after the loot policy's filter,
     and a member it has not read stays None. The route count is the bank
     pass's: the plan's GUILD_BANK and BANK_PERSONAL moves."""
-    sellable = {name: _VENDOR_SELLABLE.get(name) for name in names}
-    return sellable, len(_itemplan_bank_routes(list(names)).moves)
+    here = list(names) if here is None else list(here)
+    sellable = {name: _VENDOR_SELLABLE.get(name) for name in here}
+    moves = _itemplan_bank_routes(list(names)).moves
+    return sellable, sum(1 for m in moves if m.character in here)
 
 
 # THE HOME TOWN: the mailbox spawn nearest the head's hearthstone point, on its

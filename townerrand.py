@@ -669,6 +669,34 @@ def lethal_stops(stops, here: dict, deaths) -> list:
     return out
 
 
+def with_leader(names, positions: dict, leader: str, everyone: bool = False) -> list:
+    """The members an errand's counter can serve: those standing within
+    WALK_YARDS of the leader on its map, the leader included.
+
+    A member thousands of yards off cannot reach a counter the leader walks to
+    alone (the walk is not gathered, and the module's catch-up takes tens of
+    minutes), so its stacks must not choose the counter: a vendor aim justified
+    by stacks nobody present holds sells nothing and the errand repeats. With
+    `everyone` (the head's stone brings the family to the hub) all are served.
+    A member with no reading is not here.
+    """
+    if everyone:
+        return sorted(names)
+    at = (positions or {}).get(leader)
+    if not at:
+        return sorted(names)
+    here = {
+        "map_id": at.get("map_id"),
+        "x": at.get("pos_x"),
+        "y": at.get("pos_y"),
+    }
+    return sorted(
+        n
+        for n in names
+        if n == leader or in_range(here, (positions or {}).get(n), WALK_YARDS)
+    )
+
+
 def bank_first(why: str, sellable, bank_routed: int) -> bool:
     """Whether a bag-room errand should make its room at the bank, not a vendor.
 
