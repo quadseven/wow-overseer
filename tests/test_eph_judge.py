@@ -998,6 +998,116 @@ class ConfigMapStoreTest(unittest.TestCase):
         self.assertNotIn(self.marker, repr(self.store(http).namespace))
 
 
+class FlakyHttp:
+    """Scripted answers: an exception is raised, an int is a status."""
+
+    def __init__(self, *script):
+        self.script = list(script)
+        self.calls = []
+
+    def __call__(self, method, url, headers, body):
+        self.calls.append((method, url))
+        step = self.script.pop(0) if self.script else 201
+        if isinstance(step, Exception):
+            raise step
+        return step, b"{}"
+
+
+class WriteRetryTest(unittest.TestCase):
+    def store(self, http, **kw):
+        self.slept = []
+        self.lines = []
+        return judge.ConfigMapStore(
+            "https://api.example.invalid",
+            "t",
+            "eph-ns",
+            http,
+            sleep=self.slept.append,
+            log=self.lines.append,
+            **kw,
+        )
+
+    def cm(self):
+        return {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": "eph-result-run-1", "namespace": "eph-ns"},
+            "data": {"verdict": "PASS"},
+        }
+
+    def test_two_connect_timeouts_then_success_writes_the_result(self):
+        http = FlakyHttp(TimeoutError("timed out"), OSError("unreachable"), 201)
+        self.store(http).write(self.cm())
+        self.assertEqual(len(http.calls), 3)
+        self.assertEqual(len(self.slept), 2)
+        self.assertEqual(len(self.lines), 2, "each failed attempt is printed")
+        self.assertIn("attempt 1", self.lines[0])
+
+    def test_the_backoff_grows_and_is_capped(self):
+        http = FlakyHttp(*[TimeoutError("t")] * 8, 201)
+        self.store(http, retry_seconds=10_000).write(self.cm())
+        self.assertEqual(self.slept, sorted(self.slept))
+        self.assertLessEqual(max(self.slept), judge.WRITE_BACKOFF_CAP)
+        self.assertGreater(self.slept[-1], self.slept[0])
+
+    def test_a_server_error_or_throttle_is_retried(self):
+        http = FlakyHttp(503, 429, 201)
+        self.store(http).write(self.cm())
+        self.assertEqual(len(http.calls), 3)
+
+    def test_a_client_refusal_is_not_retried(self):
+        http = FlakyHttp(403, 201)
+        with self.assertRaises(judge.JudgeError):
+            self.store(http).write(self.cm())
+        self.assertEqual(len(http.calls), 1)
+
+    def test_already_exists_after_a_lost_answer_counts_as_written(self):
+        http = FlakyHttp(TimeoutError("t"), 409)
+        self.store(http).write(self.cm())
+        self.assertEqual(len(http.calls), 2)
+
+    def test_a_first_attempt_conflict_is_still_an_error(self):
+        with self.assertRaises(judge.JudgeError):
+            self.store(FlakyHttp(409)).write(self.cm())
+
+    def test_it_gives_up_after_the_limit_with_a_judge_error(self):
+        http = FlakyHttp(*[TimeoutError("t")] * 1000)
+        with self.assertRaises(judge.JudgeError) as cm:
+            self.store(http, retry_seconds=60).write(self.cm())
+        self.assertIn("attempts", str(cm.exception))
+        self.assertLessEqual(sum(self.slept), 60)
+
+    def test_a_failing_write_leaves_the_whole_result_in_the_log(self):
+        out = []
+
+        class Dead:
+            def write(self, cm):
+                raise judge.JudgeError("result not written after 5 attempts")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            handoff = d / "handoff.json"
+            handoff.write_text(json.dumps(HANDOFF), encoding="utf-8")
+            rc = judge.run(
+                str(
+                    ROOT
+                    / "data"
+                    / "decrees"
+                    / "brd-guzzler-exit-zero-patron-deaths.yaml"
+                ),
+                {**RunEntryTest.ENV, "EPH_VARS_FILE": str(handoff)},
+                connect=lambda **kw: ScriptedConn(),
+                store=Dead(),
+                log_path=str(d / "world.log"),
+                out=out.append,
+                clock=Clock(),
+            )
+        self.assertEqual(rc, 2)
+        full = json.loads(out[-1])
+        self.assertIn(full["verdict"], ("PASS", "FAIL", "INVALID"))
+        self.assertEqual(full["run_id"], "run-9")
+
+
 class InClusterTest(unittest.TestCase):
     def test_the_api_server_address_comes_from_the_pod_environment(self):
         with tempfile.TemporaryDirectory() as tmp:
