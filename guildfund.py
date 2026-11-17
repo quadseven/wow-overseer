@@ -61,6 +61,8 @@ COPPER_PER_GOLD = 10_000
 MEMBER_DAILY_COPPER = 10 * COPPER_PER_GOLD
 # The share of the bank the guild spends on training in a day.
 DAILY_SHARE = (1, 2)
+# The live acceptance band for member class spell costs (#771).
+TRAINING_PRIORITY_LEVELS = (25, 29)
 # Below this a letter is not worth its 30 copper of postage.
 MIN_LETTER_COPPER = 50 * 100
 # A withdrawal under a gold waits for more letters.
@@ -351,11 +353,25 @@ def _refunds(master, pool, book, paid, purse) -> tuple:
 
 def _training(master, pool, book, skip, budget) -> tuple:
     """(letters, notes, shortfall): the difference to the trainer's price,
-    a day's limit a member, the budget in all."""
+    a day's limit a member, the budget in all.
+
+    The 25-29 band leads while the fund is limited: its class spell median is
+    the live target in #771. Within each band, smaller gaps go first so the
+    allowance can clear more members before it runs out.
+    """
     letters, notes = [], []
     shortfall = 0
     given = dict(book.given_today or {})
-    for m in sorted(pool, key=lambda m: (m.training - m.money, -m.level, m.name)):
+    first, last = TRAINING_PRIORITY_LEVELS
+    for m in sorted(
+        pool,
+        key=lambda m: (
+            not first <= m.level <= last,
+            m.training - m.money,
+            -m.level,
+            m.name,
+        ),
+    ):
         short = m.training - m.money
         if m.name in skip or short <= 0:
             continue
