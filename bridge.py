@@ -323,7 +323,7 @@ RELAY_BACKLOG_GRACE_SECONDS = int(os.environ.get("RELAY_BACKLOG_GRACE_SECONDS", 
 RELAY_MAX_ATTEMPTS = int(os.environ.get("RELAY_MAX_ATTEMPTS", "3"))
 
 LLM_URL = os.environ.get(
-    "LLM_URL", "http://spark-gateway.spark-gateway.svc.cluster.local:8080/v1/chat/completions"
+    "LLM_URL", "https://llm-service.example.com"
 )
 LLM_MODEL = os.environ.get("LLM_MODEL", "spark:warm-any")
 LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT_SECONDS", "120"))

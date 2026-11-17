@@ -69,9 +69,10 @@ GONE = "gone"
 # actually running, not the one in the newer source file, and says so here
 # rather than silently disagreeing with a file three directories away.
 # Each realm declares its own broadcasts. An unset or empty prefix means none.
+# The deployment owns the concrete stream origin; this fallback is inert.
 _STREAM_PREFIX = os.environ.get("WOW_STREAM_PREFIX", "").strip().lower()
 _STREAM_BASE = os.environ.get(
-    "WOW_STREAM_BASE", "https://wow.stream.ts.ehumps.me"
+    "WOW_STREAM_BASE", "https://wow-stream.example.com"
 ).rstrip("/")
 # Same shape restriction as the stream agent's own _NAME_RE (video.py): a
 # name that lands in a URL gets the same treatment frames._NAME_RE gives it.
