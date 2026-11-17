@@ -56,6 +56,19 @@ class VersionedFiles(unittest.TestCase):
         self.assertEqual(css.header("Content-Type"), "text/css; charset=utf-8")
         self.assertEqual(css.header("Cache-Control"), IMMUTABLE)
 
+    def test_a_vendored_font_is_served_with_its_type_and_immutable_cache(self):
+        rel = "fonts/inter-latin-wght-normal.woff2"
+        response = get("/app/%s/%s" % (BUILD, rel))
+        self.assertEqual(response.status(), 200)
+        self.assertEqual(response.header("Content-Type"), "font/woff2")
+        self.assertEqual(response.header("Cache-Control"), IMMUTABLE)
+        self.assertEqual(response.body(), (HERE / "app" / rel).read_bytes())
+
+    def test_other_font_extensions_are_not_served(self):
+        for ext in ("woff", "ttf", "otf", "txt"):
+            path = "/app/%s/fonts/inter-latin-wght-normal.%s" % (BUILD, ext)
+            self.assertEqual(get(path).status(), 404, path)
+
     def test_another_build_gets_the_current_bytes_and_is_never_immutable(self):
         r = get("/app/0123456789ab/main.js")
         self.assertEqual(r.status(), 200)
@@ -188,6 +201,19 @@ class ThePageNamesTheBuild(unittest.TestCase):
             first = appbuild.fingerprint(tmp)
             f.write_text("b")
             os.utime(f, (1, 1))
+            self.assertNotEqual(first, appbuild.fingerprint(tmp))
+
+    def test_the_build_changes_when_a_font_changes(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "app" / "fonts").mkdir(parents=True)
+            (root / "index.html").write_text("<html>")
+            font = root / "app" / "fonts" / "icon.woff2"
+            font.write_bytes(b"first")
+            first = appbuild.fingerprint(tmp)
+            font.write_bytes(b"second")
             self.assertNotEqual(first, appbuild.fingerprint(tmp))
 
 

@@ -1,0 +1,10 @@
+{
+  "now_font_bytes": {
+    "limit": 60000,
+    "files": [
+      "fonts/inter-latin-wght-normal.woff2",
+      "fonts/phosphor-regular-subset.woff2",
+      "fonts/phosphor-fill-subset.woff2"
+    ]
+  }
+}
