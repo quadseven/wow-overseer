@@ -357,38 +357,58 @@ def unwired_modes() -> tuple:
 CAMPAIGN_STOP = 0
 
 
+def _runs_said(count: int) -> str:
+    return "%d run%s" % (count, "" if count == 1 else "s")
+
+
+_STOPPED_MEANS = (
+    "The number of runs wanted is 0, which stops the campaign outright: no run "
+    "begins at all."
+)
+
+
+def _starting_means(state: dict) -> str:
+    """A queued head waits for its start: the counter is the campaign before."""
+    return (
+        "That count is the campaign before. The queue starts %s next, %s, and "
+        "the count begins again when it does."
+        % (
+            state.get("place") or "its next entry",
+            _runs_said(int(state.get("runs") or 0)),
+        )
+    )
+
+
+def _over_means(state: dict) -> str:
+    after = state.get("next")
+    if after:
+        return (
+            "The campaign is over: every run wanted is done. The queue moves "
+            "on to %s, %s." % (after["place"], _runs_said(int(after["runs"])))
+        )
+    return (
+        "The campaign is over: every run wanted is done, and no other run will start."
+    )
+
+
+def _left_means(counter: dict, state: dict) -> str:
+    left = int(counter.get("wanted") or 0) - int(counter.get("done") or 0)
+    if left <= 0:
+        left = int(state.get("runs") or 0) - int(state.get("done") or 0)
+    return "%s left in this campaign." % _runs_said(left)
+
+
 def _campaign_means(counter: dict, state: dict) -> str:
     """What the counter means, by the one reading of the campaign's state
     (campaignqueue.campaign_state), so it cannot contradict the queue."""
     kind = state.get("state")
-    after = state.get("next")
     if kind == campaignqueue.STARTING:
-        runs = int(state.get("runs") or 0)
-        return (
-            "That count is the campaign before. The queue starts %s next, "
-            "%d run%s, and the count begins again when it does."
-            % (state.get("place") or "its next entry", runs, "" if runs == 1 else "s")
-        )
+        return _starting_means(state)
     if kind in (campaignqueue.STOPPED, campaignqueue.NEVER_STARTED):
-        return (
-            "The number of runs wanted is 0, which stops the campaign "
-            "outright: no run begins at all."
-        )
-    if kind == campaignqueue.OVER and after:
-        return (
-            "The campaign is over: every run wanted is done. The queue moves "
-            "on to %s, %d run%s."
-            % (after["place"], after["runs"], "" if after["runs"] == 1 else "s")
-        )
+        return _STOPPED_MEANS
     if kind == campaignqueue.OVER:
-        return (
-            "The campaign is over: every run wanted is done, and no other "
-            "run will start."
-        )
-    left = int(counter.get("wanted") or 0) - int(counter.get("done") or 0)
-    if left <= 0:
-        left = int(state.get("runs") or 0) - int(state.get("done") or 0)
-    return "%d run%s left in this campaign." % (left, "" if left == 1 else "s")
+        return _over_means(state)
+    return _left_means(counter, state)
 
 
 def campaign_view(counter: dict, state: dict | None = None) -> dict:
