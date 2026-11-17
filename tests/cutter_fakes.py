@@ -120,14 +120,23 @@ class CutterLedger(FakeLedger):
             self.rowcount = 1
 
 
+TOKEN = "test-cutter-token"
+
+
 class Client:
-    def __init__(self, port):
+    """`token` is sent as the bearer header; None sends no header."""
+
+    def __init__(self, port, token=TOKEN):
         self.port = port
+        self.token = token
 
     def request(self, method, path, body=None, headers=None):
+        headers = dict(headers or {})
+        if self.token is not None:
+            headers.setdefault("Authorization", "Bearer " + self.token)
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
         try:
-            conn.request(method, path, body=body, headers=headers or {})
+            conn.request(method, path, body=body, headers=headers)
             resp = conn.getresponse()
             return resp.status, resp.read()
         finally:
@@ -141,15 +150,17 @@ class Client:
 
 
 @contextlib.contextmanager
-def serving_cutter(ledger, clips_dir):
+def serving_cutter(ledger, clips_dir, token=TOKEN):
     """The map server's Handler on a localhost port over `ledger`, with
-    CLIPS_DIR set to `clips_dir`. Yields a Client."""
+    CLIPS_DIR set to `clips_dir` and CUTTER_TOKEN set to `token`. Yields a
+    Client that sends that token."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), map_server.Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     with (
         mock.patch.object(map_server, "_connect", ledger.connect),
         mock.patch.object(map_server, "CLIPS_DIR", clips_dir, create=True),
+        mock.patch.object(map_server, "CUTTER_TOKEN", token, create=True),
     ):
         try:
             yield Client(server.server_port)

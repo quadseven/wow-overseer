@@ -340,13 +340,13 @@ class Result(CutterCase):
 
 
 class TheRoutes(unittest.TestCase):
-    def test_the_route_table_says_the_trust_is_the_frame_agents(self):
+    def test_the_route_table_says_the_cutter_token_gates_the_routes(self):
         src = (HERE / "map_server.py").read_text()
         table = src[src.index("POST_ROUTES = {") :]
         table = table[: table.index("}")]
         for path in ("claim", "file", "result"):
             self.assertIn('"/api/clips/%s"' % path, table)
-        self.assertIn("no token", src[src.index("POST_ROUTES = {") - 900 :])
+        self.assertIn("CUTTER_TOKEN", src[src.index("POST_ROUTES = {") - 900 :])
         get = src[src.index("GET_ROUTES = {") :]
         self.assertIn('"/api/clips/pending"', get[: get.index("}")])
 
