@@ -108,6 +108,7 @@ class TheSelf:
     def __init__(self, world):
         self.world = world
         self.claims = []
+        self._claims = claims.Claims()
         self.forgotten_claims = []
         self._dues_walks = {}
         self._guild_mail_runs = {}

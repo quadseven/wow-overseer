@@ -17,6 +17,7 @@ class GuildJobReservations(unittest.TestCase):
     def test_every_affected_pass_keeps_the_active_job_holder_busy(self):
         tree = ast.parse(pathlib.Path("bridge.py").read_text())
         member = SimpleNamespace(
+            _claims=claims.Claims(),
             _job_steps={"Tailor": time.monotonic()},
             _dues_walks={},
             _guild_mail_runs={},
@@ -64,6 +65,7 @@ class CorpsDuringJobWalk(unittest.IsolatedAsyncioTestCase):
         for reserved, expected in ((True, 0), (False, 1)):
             with self.subTest(job_walk_active=reserved):
                 this = SimpleNamespace(
+                    _claims=claims.Claims(),
                     _corps_steps={},
                     _dues_walks={},
                     _guild_mail_runs={},

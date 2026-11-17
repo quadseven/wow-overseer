@@ -6,6 +6,8 @@ import pathlib
 import types
 import unittest
 
+import claims
+
 SOURCE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
 
 
@@ -49,7 +51,7 @@ class RestartPassGates(unittest.IsolatedAsyncioTestCase):
             "_family_of": lambda cohort: ([], None),
             "_PACE_QUESTING": {},
         }
-        obj = types.SimpleNamespace(_waiting_for_passes=set())
+        obj = types.SimpleNamespace(_claims=claims.Claims(), _waiting_for_passes=set())
 
         def waiting(message):
             if message not in obj._waiting_for_passes:

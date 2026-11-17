@@ -1669,7 +1669,7 @@ class TheWiring(unittest.TestCase):
             BRIDGE.count('busy = set(getattr(self, "_guild_run_names", ())) | '), 0
         )
         self.assertGreaterEqual(
-            BRIDGE.count('claims.busy_members(getattr(self, "_guild_run_names", ())'),
+            BRIDGE.count('self._claims.busy(getattr(self, "_guild_run_names", ())'),
             6,
         )
 

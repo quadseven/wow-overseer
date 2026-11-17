@@ -200,7 +200,7 @@ class TheBridgeSendsTheLeader(unittest.TestCase):
             src,
         )
         self.assertEqual(
-            2,
+            1,
             src.count("GEAR_HOUSE_CLAIMANT: TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS,"),
         )
 

@@ -24,7 +24,7 @@ class TheFreedKnight(unittest.TestCase):
         self.assertIn("DEATH_KNIGHT_START_MAP", CLAIMS)
         self.assertIn("def is_stranded_knight", CLAIMS)
         self.assertIn("def stranded_knights", CLAIMS)
-        self.assertIn("claims.stranded_knights(", BRIDGE)
+        self.assertIn("self._claims.freed_knights(", BRIDGE)
 
     def test_only_a_knight_in_its_start_zone_not_on_its_own_step_is_freed(self):
         body = CLAIMS.split("def stranded_knights", 1)[1]

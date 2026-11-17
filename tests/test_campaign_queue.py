@@ -17,6 +17,7 @@ from unittest import mock
 from test_decree_order import FakeConn, FakeCursor
 
 import campaignqueue  # noqa: E402
+import claims  # noqa: E402
 import core  # noqa: E402
 import council  # noqa: E402
 import crossing  # noqa: E402
@@ -402,7 +403,9 @@ class FakeWorld:
                     r["status"] = "done"
         return 1
 
-    def drive(self, keyword, wanted, names=None, source="", withheld=None):
+    def drive(
+        self, keyword, wanted, names=None, source="", withheld=None, claim_store=None
+    ):
         if self.withhold:
             if withheld is not None:
                 withheld.append("bags are near full")
@@ -462,7 +465,6 @@ def _queue_pass(world, holds=None, stuck=None, extra=None, **hooks):
             "_campaign_queue_once",
             "_apply_queue_move",
             "_prune_bag_hold_stuck",
-            "_bag_hold_released",
         ],
         {
             "asyncio": asyncio,
@@ -504,6 +506,7 @@ def _queue_pass(world, holds=None, stuck=None, extra=None, **hooks):
         return False
 
     me = types.SimpleNamespace(
+        _claims=claims.Claims(),
         _activity_holds=lambda key=None: holds.get(key, ""),
         _campaign_owns_travel=owns_travel,
         _queue_holds=no_queue_hold,
@@ -511,6 +514,17 @@ def _queue_pass(world, holds=None, stuck=None, extra=None, **hooks):
         _plan_campaigns=no_plan,
         **hooks,
     )
+    if stuck:
+        for family in {row["family"] for row in world.roster}:
+            names = tuple(
+                sorted(row["name"] for row in world.roster if row["family"] == family)
+            )
+            members = tuple((name, 0) for name in names if stuck.get(name))
+            if members:
+                key = claims.MemberClaims.key(names)
+                me._claims.members._holds[key] = claims.MemberHold(
+                    names=key, best=members, released=True
+                )
 
     async def family_once(key, rows, fams, held):
         await ns["_campaign_queue_family_once"](me, key, rows, fams, held)

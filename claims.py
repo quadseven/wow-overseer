@@ -321,6 +321,7 @@ class MemberClaims:
         free_slots: dict,
         now: float,
         running: bool = False,
+        previous: MemberHold | None = None,
     ) -> MemberHold | None:
         key = self.key(names)
         hold = member_hold_observe(
@@ -328,7 +329,7 @@ class MemberClaims:
             free_slots,
             now,
             running=running,
-            previous=self._holds.get(key),
+            previous=previous if previous is not None else self._holds.get(key),
         )
         if hold is None:
             self._holds.pop(key, None)
@@ -466,31 +467,45 @@ class Claims:
             long_leases=long_leases,
             firm_leases=firm_leases,
         )
-        self.releasable = releasable
         self._slots: dict = {}
         self.members = MemberClaims()
 
-    def slot_for(self, cohort=None):
+    def slot_for(self, cohort=None, **options):
         """The column ledger for one family's cohort key."""
         key = str(getattr(cohort, "key", cohort) or "")
         if key not in self._slots:
-            self._slots[key] = new_column_slot(**self.kwargs)
+            self._slots[key] = new_column_slot(**(self.kwargs | options))
         return self._slots[key]
+
+    def forget_slot(self, cohort=None) -> None:
+        """Drop an independent column ledger once its guarded aim is released."""
+        key = str(getattr(cohort, "key", cohort) or "")
+        self._slots.pop(key, None)
 
     def want_column(self, cohort=None, **ask) -> Decision:
         """May this pass have the traveller now, and what says so."""
         return self.slot_for(cohort).want(**ask)
 
     def member_observe(
-        self, names, free_slots: dict, now: float, running: bool = False
+        self,
+        names,
+        free_slots: dict,
+        now: float,
+        running: bool = False,
+        previous: MemberHold | None = None,
     ) -> MemberHold | None:
-        return self.members.observe(names, free_slots, now, running=running)
+        return self.members.observe(
+            names, free_slots, now, running=running, previous=previous
+        )
 
     def member_released(self, names) -> bool:
         return self.members.released(names)
 
     def member_stuck(self, names) -> tuple:
         return self.members.stuck(names)
+
+    def member_reset(self, names) -> None:
+        self.members.reset(names)
 
     def release_ground(self, **kw) -> Release:
         return ground_release(**kw)
@@ -500,3 +515,12 @@ class Claims:
 
     def freed_knights(self, members, own_steps, held) -> set:
         return stranded_knights(members, own_steps, held)
+
+    def stranded_held_labels(self, members, own_steps, held) -> dict:
+        return stranded_held_labels(members, own_steps, held)
+
+    def stranded_nonleader_aims(self, aims, leader, **kw) -> set:
+        return stranded_nonleader_aims(aims, leader, **kw)
+
+    def stranded_aims_far_from_doors(self, aims, leader, **kw) -> set:
+        return stranded_aims_far_from_doors(aims, leader, **kw)

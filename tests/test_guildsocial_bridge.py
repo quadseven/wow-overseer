@@ -14,6 +14,7 @@ import types
 import unittest
 from unittest import mock
 
+import claims
 from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
 with stub_modules(pymysql=PYMYSQL):
@@ -167,6 +168,7 @@ class _Self:
     """The attributes `_guild_social_once` reads off the bridge."""
 
     def __init__(self):
+        self._claims = claims.Claims()
         self._guild_run_formed_at = None
         self._guild_run_names = set()
         self._guild_social_names = set()

@@ -433,7 +433,26 @@ def _bridge_self(world, clock, log):
             "_present_members": lambda names, leader="": list(names),
         },
     )
-    me = types.SimpleNamespace(_town_slot=townslot.Slot(), _cohort_town_slots={})
+    claim_store = claims.Claims(
+        lease=townslot.LEASE_SECONDS,
+        releasable=economy,
+        long_leases={
+            "gather": townslot.GATHER_LEASE_SECONDS,
+            "flight": townslot.GATHER_LEASE_SECONDS,
+            "level": townslot.GATHER_LEASE_SECONDS,
+            "attunement": townslot.GATHER_LEASE_SECONDS,
+            "dungeon quests": townslot.GATHER_LEASE_SECONDS,
+            "gear house": townslot.GATHER_LEASE_SECONDS,
+        },
+        firm_leases={
+            "craft_supply": townslot.REAGENT_TRIP_LEASE_SECONDS,
+        },
+    )
+    me = types.SimpleNamespace(
+        _claims=claim_store,
+        _town_slot=claim_store.slot_for(None),
+        _cohort_town_slots={},
+    )
 
     async def mid_run(names):
         return False
@@ -518,6 +537,7 @@ class _FakeEconomySelf:
     def __init__(self, world):
         self.world = world
         self.claims = []
+        self._claims = claims.Claims(releasable=economy)
         self.slot = townslot.Slot(releasable=economy)
 
     def _cohort_town_slot(self, cohort=None):
@@ -592,6 +612,7 @@ def _run_vendor_once(queued, at_vendor=True, extra=None):
     free = {"Zug": 2}
     ns = _load(
         [
+            "_release_stale_ground_aim_for_vendor",
             "_vendor_once",
             "_vendor_pass_mode",
             "_sellable_per_holder",
@@ -652,6 +673,9 @@ def _run_vendor_once(queued, at_vendor=True, extra=None):
         },
     )
     me = _FakeEconomySelf(world)
+    me._release_stale_ground_aim_for_vendor = lambda *a, **kw: ns[
+        "_release_stale_ground_aim_for_vendor"
+    ](me, *a, **kw)
     me._vendor_pass_mode = lambda *a, **kw: ns["_vendor_pass_mode"](me, *a, **kw)
     me._take_vendor_aim = lambda *a: ns["_take_vendor_aim"](me, *a)
     cohort = townslot.Cohort(key="Zug", leader="Zug", names=("Zug",))

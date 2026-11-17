@@ -284,6 +284,23 @@ class MemberHoldsOverTime(unittest.TestCase):
         self.assertEqual(progress.best, hold.best)
         self.assertEqual(bag_pressure.bag_hold_stuck(progress), hold.stuck)
 
+    def test_the_claims_facade_restores_and_resets_a_released_hold(self):
+        store = claims.Claims()
+        previous = store.member_observe(FAMILY, MEASURED, 0.0)
+
+        restarted = claims.Claims()
+        hold = previous
+        for minute in range(1, 46):
+            hold = restarted.member_observe(
+                FAMILY, MEASURED, 60.0 * minute, previous=hold
+            )
+
+        self.assertTrue(hold.released)
+        self.assertTrue(restarted.member_released(FAMILY))
+        self.assertEqual(("Grog",), restarted.member_stuck(FAMILY))
+        restarted.member_reset(FAMILY)
+        self.assertFalse(restarted.member_released(FAMILY))
+
     def test_a_store_is_in_process_and_starts_empty(self):
         store = claims.MemberClaims()
         self.assertIsNone(store.current(FAMILY))

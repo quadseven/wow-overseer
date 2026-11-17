@@ -22,6 +22,7 @@ from test_bag_withheld_stall import _FakeEconomySelf, _run_vendor_once
 
 import bag_pressure
 import campaignqueue
+import claims
 import dungeonstall as stall
 import errandgate
 import jev_family_intent
@@ -69,6 +70,7 @@ class World:
         self.logs = []
         self.recalled = {}
         self.slot = townslot.Slot(releasable=lambda aim: aim in ECONOMY_AIMS)
+        self.claims = claims.Claims()
 
     def release(self, name, aim):
         if self.aims.get(name) != aim:
@@ -142,7 +144,10 @@ class World:
         return _load(names, ns, optional=GATE)
 
     def adapter(self):
-        return types.SimpleNamespace(_cohort_town_slot=lambda cohort: self.slot)
+        return types.SimpleNamespace(
+            _claims=self.claims,
+            _cohort_town_slot=lambda cohort: self.slot,
+        )
 
     def ask(self, ns, claimant, aim):
         """The pass `claimant` asks the town slot door for Oz, as it does."""
@@ -379,7 +384,7 @@ def bag_pressure_pass(maps=None, recalled=None, now=1000.0):
         ],
         ns,
     )
-    adapter = types.SimpleNamespace(_stranded_vendor_slots={})
+    adapter = types.SimpleNamespace(_claims=claims.Claims(), _stranded_vendor_slots={})
     aimed = asyncio.run(
         ns["_aim_stranded_bag_pressure_members"](
             adapter, PRESSED, "Grug", PRESSED_AT, PRESSED_SLOTS, False
