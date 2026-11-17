@@ -24,6 +24,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime
 from types import SimpleNamespace
 
 import urllib.request
@@ -223,6 +224,8 @@ import tabard
 import teamsync
 import towntrip
 import deathcells
+import hearthcast
+import hearthcast_data
 import townerrand
 import townslot
 import claims
@@ -6762,6 +6765,25 @@ def _movement_reads(names: list) -> dict:
     return out
 
 
+def _hearth_hub_kept(hub: dict, leader: str, names: list, positions: dict,
+                     reads: dict) -> bool:
+    """Do the family's hearthstones carry it to `hub` (wow-overseer#2333)?
+
+    hearthcast decides, per member, from what hearthcast_data reads here: the
+    carried stone, its saved cooldown and the live pulse. A read that fails,
+    or a connection that does not open, is logged once there and reads as
+    "cannot cast", so the hub is not kept and nothing raises into the errand.
+    Reads only.
+    """
+    facts = hearthcast_data.read_from(_connect, names, log)
+    verdict = hearthcast.keeps_hub(hub, leader, hearthcast.members(
+        names, positions, reads.get("binds"), reads.get("hearthed"), facts))
+    if verdict.said:
+        log.info("town errand: the hearthstone hub is not kept as the aim: "
+                 "%s", verdict.said)
+    return verdict.keep
+
+
 # --- the family intent choice's reads and writer (jev_family_intent.py) -------
 # One row per family leader, written by mod-overseer's intent book on its party
 # poll (2026_09_26_00_overseer_family_intent.sql). The bridge writes only the
@@ -9034,6 +9056,7 @@ class Bridge(discord.Client):
         # THE GUILD'S OWN POST (#625): who is on a walk to take its letters
         # out, and when each grounded walker last used its hearthstone.
         self._post_walks: dict = {}
+        self._post_held_until: dict = {}
         self._ground_hearths: dict = {}
         # THE ACTIVITY CHOICE (#216). Per family key: what the last cycle saw
         # (breakpoint marks, when Jev was last asked, since when the family has
@@ -18749,6 +18772,15 @@ class Bridge(discord.Client):
         actors = await asyncio.to_thread(_online_guild_members)
         prefer = await asyncio.to_thread(_recruit_prefer, sorted(actors)[0]) if actors else ()
         result, age = await asyncio.to_thread(_latest_guild_shortlist)
+        # THE SHORTLIST IS RANKED BY THE GUILD'S HOLES before a name is picked:
+        # a candidate whose class can fill a missing template role (the class
+        # plus the spec where known, else the class) goes ahead of one that
+        # cannot, and one at the raid level ahead of one below it. The
+        # module's own order stands within each.
+        if actors:
+            result = recruit.order_shortlist(
+                result or {}, await asyncio.to_thread(_recruit_missing_roles, sorted(actors)[0])
+            )
         members, target = recruit.roster_from_shortlist(result or {})
         plan_args = dict(
             actors=actors,
@@ -19028,8 +19060,13 @@ class Bridge(discord.Client):
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
                                  self._quester_last.get(m.name, 0), crossings)
             await self._quester_ledger(m, plan, held, ledger, mono)
-            sale = (questers.sell_step(m, carried.get(m.name, ()), worn.get(m.name), kept,
-                                       cat, sold, cap, tried) if m.name in full else None)
+            # Leftovers are destroyed first: no walk, and a slot back at once.
+            sale = (questers.destroy_step(m, carried.get(m.name, ()), kept, cat, sold,
+                                          tried, _quester_destroy_guard(m.name))
+                    if m.name in full else None)
+            if sale is None and m.name in full:
+                sale = questers.sell_step(m, carried.get(m.name, ()), worn.get(m.name),
+                                          kept, cat, sold, cap, tried)
             if self._quester_start(m, plan, cat, cap, mono, hunt_verb and hunts_left > 0,
                                    sale):
                 hunts_left -= 1
@@ -19160,7 +19197,57 @@ class Bridge(discord.Client):
                 await self._recruit_once()
             except Exception:
                 log.exception("recruit pass failed; retrying next cycle")
+            try:
+                await self._recruit_ads_once()
+            except Exception:
+                log.exception("recruit ads pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
+
+    async def _recruit_ads_once(self) -> None:
+        """One pass of the recruiting posts: at most one line per enrolled guild
+        per hour in the faction's public channel, and one log line per prune
+        candidate (nobody is removed).
+
+        The leader says it, or an online officer when the leader is offline.
+        The channel is guildpug.CHANNEL, the module's `lfg` channel: its
+        LookingForGroup, else the poster's zone General. A guild missing no
+        template role posts nothing, and every guild's outcome is logged.
+        """
+        for guild in sorted(raidteams.GROUPS):
+            members = await asyncio.to_thread(_recruit_guild_members, guild)
+            if not members:
+                continue
+            seats = _recruit_template_seats(guild)
+            names = {str(m["name"]) for m in members}
+            surplus = names - {seat.name for seat in seats}
+            for member in recruit.prune_surplus_members(
+                members, members[0].get("db_now") or datetime.now(), surplus
+            ):
+                log.info(
+                    "recruit: %s - prune candidate %s, offline more than %d days (not removed)",
+                    guild, member["name"], recruit.RETENTION_DAYS,
+                )
+            missing = recruit.missing_template_roles(seats, names)
+            if not missing:
+                log.info("recruit: %s - no template role is missing, no ad", guild)
+                continue
+            since = await asyncio.to_thread(_minutes_since_recruit_ad, guild)
+            if not recruit.may_post_ad(since):
+                log.info(
+                    "recruit: %s - last ad %.0f minutes ago, next in %.0f",
+                    guild, since, recruit.AD_INTERVAL_MINUTES - since,
+                )
+                continue
+            poster = recruit.ad_poster(members)
+            if not poster:
+                log.info("recruit: %s - no leader or officer is online to post the ad", guild)
+                continue
+            line = recruit.recruiting_ad(guild, missing)
+            await asyncio.to_thread(
+                _insert_speak,
+                relay.SpeakCommand(poster, guildpug.CHANNEL, line, "", recruit.AD_SOURCE),
+            )
+            log.info("recruit: %s - %s says in %s: %s", guild, poster, guildpug.CHANNEL, line)
 
     async def _raid_spec_once(self, cohort=None) -> None:
         """One family's guild planned as eight groups of five, and each
@@ -19546,8 +19633,12 @@ class Bridge(discord.Client):
                 getattr(self, "_job_steps", ()),
                 getattr(self, "_train_walks", ()))
         sitting = await asyncio.to_thread(_sitting_out_to_walk, names)
+        held_until = getattr(self, "_post_held_until", {})
+        held = {n for n, until in held_until.items() if until > time.monotonic()}
+        for gone in set(held_until) - held:
+            held_until.pop(gone, None)
         plan, notes = guildpost.visits(letters, online, busy, free_slots, roster,
-                                       sitting)
+                                       sitting, held)
         log.info("%s %d letter(s) with items or gold wait for %d guild member(s) of %s's "
                  "guild; %d walk(s) this pass", guildpost.LOG_PREFIX, len(letters),
                  len({x.receiver for x in letters}), names[0] if names else "?",
@@ -19593,6 +19684,9 @@ class Bridge(discord.Client):
                 self._mail_walk_unsupported_until = (
                     time.monotonic() + guildroute.WALK_UNSUPPORTED_SECONDS)
             if answer.state != guildroute.ARRIVED:
+                if guildpost.is_held(answer.said):
+                    self._post_held_until[visit.receiver] = (
+                        time.monotonic() + guildpost.HELD_BACKOFF_SECONDS)
                 log.info("%s walk row %d for %s: %s; the post stays in the "
                          "mailbox", guildpost.LOG_PREFIX, row_id, visit.receiver,
                          answer.said or answer.state)
@@ -22790,10 +22884,15 @@ class Bridge(discord.Client):
         # A BIND HUB THE HEAD'S STONE REACHES IS NOT A LONG WALK (#2329): the
         # family casts there together, so the aim stays on the hub.
         reads = await asyncio.to_thread(_movement_reads, list(names))
-        casts = townerrand.to_hearth(hub, positions, names, reads["hearthed"],
-                                     reads["binds"])
         route = ""
         if why == townerrand.BAG_PRESSURE_WHY and standing and stops_of:
+            # THE CAST IS READ, NOT INFERRED (#2333): the head holds a stone
+            # that is off cooldown and is alive, and no member is left with
+            # the long walk. Looked up like the stops above; without the
+            # reader no hub is kept, as before #2329.
+            kept_of = globals().get("_hearth_hub_kept", lambda *a: False)
+            hearth_reaches = await asyncio.to_thread(
+                kept_of, hub, leader, list(names), positions, reads)
             stops = townerrand.vendor_stops(
                 await asyncio.to_thread(stops_of, leader, standing),
                 situation.ALLIANCE_MASK if teams.get(leader) == "alliance"
@@ -22851,7 +22950,7 @@ class Bridge(discord.Client):
                     route, spot, route_line = townerrand.bank_route(
                         why, sellable, bank_routed, hub, banker_stops, vault,
                         standing, released, now, deaths=deaths,
-                        hearth_reaches=leader in casts, walled=walled)
+                        hearth_reaches=hearth_reaches, walled=walled)
                     log.info("town errand: %s%s has no stack a vendor would buy "
                              "and %d routed to the bank; %s (%s)", why, label,
                              bank_routed,
@@ -22861,7 +22960,7 @@ class Bridge(discord.Client):
                         hub = spot
             chosen = hub if route else townerrand.choose_aim(
                 hub, stops, standing, why, released, now, deaths=deaths,
-                hearth_reaches=leader in casts, walled=walled)
+                hearth_reaches=hearth_reaches, walled=walled)
             if chosen != hub:
                 log.info("town errand: %s%s aims at %s instead of %s (%s)",
                          why, label, chosen.get("place", "a vendor"),
@@ -34888,6 +34987,17 @@ def _quest_log_holds(holder: str, command: str) -> bool:
     return False
 
 
+def _quester_destroy_guard(holder: str):
+    """The shared loot-policy guard for a quester's destroy rows: a stack passes
+    only when `lootpolicy.allowed` says a `destroy` row may be written for it,
+    so the quest-log hold (`quest_needed`), the epic rule and the policy's own
+    verdicts bind a destroy exactly as they bind a sale."""
+    def allowed(stack) -> bool:
+        command = "guid:%d count:%d" % (int(stack.guid), int(stack.count))
+        return _loot_policy_blocks(holder, command, "destroy") is None
+    return allowed
+
+
 def _epic_blocks(holder: str, command: str, kind: str = "sell") -> bool:
     """Does the guild loot policy refuse this sell, destroy or disenchant row
     (#2385, #2389 and the policy that replaces them)?"""
@@ -36966,6 +37076,15 @@ _JOB_ITEMS_SQL = (
     "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
     "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
     "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
+)
+# THE QUEST LEFTOVERS A FULL QUESTER CARRIES (questers.destroy_step, #1813):
+# zero-price common quest-class stacks, each with the quest test, read the way
+# _JOB_ITEMS_SQL reads the rest of the bags.
+_QUESTER_LEFTOVERS_SQL = (
+    _JOB_ITEMS_SQL[: _JOB_ITEMS_SQL.index("WHERE ci.guid IN")]
+    + "WHERE ci.guid IN ({guids}) AND it.class = 12 AND it.Quality <= 1 "
+    "AND it.SellPrice = 0 "
+    + _JOB_ITEMS_SQL[_JOB_ITEMS_SQL.index("AND ((ci.bag = 0") :]
 )
 # THE FOOD AND DRINK EACH MEMBER CARRIES (restsupply.py): units by the game's
 # own category (item_template.spellcategory_1, 11 eaten and 59 drunk, what
@@ -41746,6 +41865,94 @@ def _recruit_prefer(actor: str) -> tuple:
     return prefer
 
 
+def _recruit_guild_of(actor: str) -> str:
+    """The name of the guild `actor` is in, or ''."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT g.name AS name FROM guild g "
+            "JOIN guild_member gm ON gm.guildid = g.guildid "
+            "JOIN characters c ON c.guid = gm.guid WHERE c.name = %s",
+            (actor,),
+        )
+        row = cur.fetchone()
+    return str(row["name"]) if row else ""
+
+
+def _recruit_template_seats(guild: str) -> list:
+    """Every approved seat of `guild`'s raid template, or [] for a guild with none."""
+    return [seat for group in raidteams.GROUPS.get(guild, ()) for seat in group]
+
+
+def _recruit_missing_roles(actor: str) -> set:
+    """The template roles the acting character's guild has no member for.
+
+    A failed read orders nobody: the order is a preference and the module's
+    gates still judge, the same rule _recruit_prefer keeps.
+    """
+    try:
+        guild = _recruit_guild_of(actor)
+        seats = _recruit_template_seats(guild)
+        if not seats:
+            return set()
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT c.name AS name FROM guild_member gm "
+                "JOIN guild g ON g.guildid = gm.guildid "
+                "JOIN characters c ON c.guid = gm.guid WHERE g.name = %s",
+                (guild,),
+            )
+            names = {str(r["name"]) for r in cur.fetchall()}
+    except pymysql.err.MySQLError:
+        log.warning("recruit: the guild's template roles could not be read; no role is preferred")
+        return set()
+    return set(recruit.missing_template_roles(seats, names))
+
+
+def _recruit_guild_members(guild: str) -> list:
+    """Rows of `name`, `rank`, `online`, `last_seen` (a datetime or None) and
+    `db_now`: the database's clock, the one `last_seen` is read against."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.name AS name, gm.`rank` AS `rank`, "
+            "(s.name IS NOT NULL) AS online, "
+            "IF(c.logout_time > 0, FROM_UNIXTIME(c.logout_time), NULL) AS last_seen, "
+            "NOW() AS db_now "
+            "FROM guild g JOIN guild_member gm ON gm.guildid = g.guildid "
+            "JOIN characters c ON c.guid = gm.guid "
+            "LEFT JOIN overseer_snapshot s "
+            "ON s.name = c.name AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+            "WHERE g.name = %s",
+            (guild,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def _minutes_since_recruit_ad(guild: str) -> float | None:
+    """How long since this guild's recruiting line was last said, or None.
+
+    Read off the chat rows themselves, so a restart does not repost at once.
+    """
+    prefix = "%s LF " % guild
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age_s "
+                "FROM overseer_command "
+                "WHERE kind = 'chat' AND source = %s "
+                "AND LEFT(command, CHAR_LENGTH(%s)) = %s "
+                "ORDER BY id DESC LIMIT 1",
+                (recruit.AD_SOURCE, prefix, prefix),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return None
+            raise
+        row = cur.fetchone()
+    if not row:
+        return None
+    return float(row["age_s"] or 0) / 60.0
+
+
 TEAM_SYNC_SOURCE = "teams"
 TEAM_INVITE_TIMEOUT_MINUTES = 30
 
@@ -42114,9 +42321,17 @@ def _fetch_quester_bags(names: list) -> tuple:
             entries=ids(_JOB_ENTRIES)))
         worn_rows = _job_read(cur, "quester worn gear", _JOB_WORN_SQL.format(guids=guids))
         sale_rows = _job_read(cur, "quester sales", _JOB_RECENT_SQL, (QUESTER_SALE_LIKE,))
-    carried = {name_of[guid]: stacks
-               for guid, stacks in guildjobs.carried_from_rows(item_rows).items()
-               if guid in name_of}
+        leftover_rows = _job_read(cur, "quester quest leftovers",
+                                  _QUESTER_LEFTOVERS_SQL.format(guids=guids))
+    carried = {}
+    for rows_ in (item_rows, leftover_rows):
+        for guid, stacks in guildjobs.carried_from_rows(rows_).items():
+            if guid not in name_of:
+                continue
+            have = carried.setdefault(name_of[guid], [])
+            seen = {c.guid for c in have}
+            have.extend(c for c in stacks if c.guid not in seen)
+    carried = {name: tuple(stacks) for name, stacks in carried.items()}
     return carried, _job_worn(worn_rows), guildjobs.recent_from_rows(sale_rows)
 
 

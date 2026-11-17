@@ -71,6 +71,27 @@ class WorldRows(unittest.TestCase):
         self.assertIn("sold by vendor entries 277", text)
         self.assertNotIn("no source in the world rows", text)
 
+    def test_gameobject_loot_and_vendor_sale_are_sources(self):
+        row = quest_row(item1=2640, item_count1=4, item2=1941, item_count2=1)
+        ids = "1941, 2640"
+        catalogue = self.catalogue(
+            row,
+            {
+                qc.ITEM_NAMES_SQL.format(ids=ids): [
+                    {"entry": 2640, "name": "Miners' Gear"},
+                    {"entry": 1941, "name": "Cleverly Written Letter"},
+                ],
+                qc.DROP_SQL.format(ids=ids): [],
+                qc.REWARD_SQL.format(ids=ids): [],
+                qc.VENDOR_SQL.format(ids=ids): [{"item": 1941, "entry": 277}],
+                qc.OBJECT_LOOT_SQL.format(ids=ids): [{"item": 2640, "entry": 2059}],
+            },
+        )
+        text = qt.body(116, catalogue[0], [], [], "")
+        self.assertIn("gameobject loot entries 2059", text)
+        self.assertIn("sold by vendor entries 277", text)
+        self.assertNotIn("no source in the world rows", text)
+
     def test_required_item_without_any_world_source_says_so(self):
         row = quest_row(item1=1262, item_count1=1, provided_item=1353)
         catalogue = self.catalogue(

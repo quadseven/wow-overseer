@@ -66,7 +66,13 @@ class WhenTheErrandBanks(unittest.TestCase):
     def test_a_bind_town_the_stone_reaches_keeps_its_hub(self):
         home = {"map_id": 1, "x": -1035.0, "y": -3676.0, "bind": True}
         out = te.bank_route(
-            WHY, {"Zug": 0}, 26, home, bankers(NEAR), None, HEAD,
+            WHY,
+            {"Zug": 0},
+            26,
+            home,
+            bankers(NEAR),
+            None,
+            HEAD,
             hearth_reaches=True,
         )
         self.assertEqual((te.ROUTE_BANKER, home), out[:2])
@@ -122,7 +128,7 @@ class TheErrandBanksFirst(unittest.TestCase):
 
 class TheBridgeWiresIt(unittest.TestCase):
     def test_the_start_asks_for_the_bank_route_and_records_it(self):
-        start = BRIDGE[BRIDGE.index("async def _town_errand_start("):]
+        start = BRIDGE[BRIDGE.index("async def _town_errand_start(") :]
         start = start[: start.index("async def _town_errand_regroup(")]
         self.assertIn("townerrand.bank_route(", start)
         self.assertIn("_bank_first_reads", start)
@@ -130,13 +136,13 @@ class TheBridgeWiresIt(unittest.TestCase):
         self.assertIn("route=", start)
 
     def test_the_reads_are_the_policy_filtered_count_and_the_plans_routes(self):
-        body = BRIDGE[BRIDGE.index("def _bank_first_reads("):]
+        body = BRIDGE[BRIDGE.index("def _bank_first_reads(") :]
         body = body[: body.index("\n\n\n")]
         self.assertIn("_VENDOR_SELLABLE", body)
         self.assertIn("_itemplan_bank_routes", body)
 
     def test_the_vault_route_is_served_at_the_vault(self):
-        step = BRIDGE[BRIDGE.index("async def _town_errand_step("):]
+        step = BRIDGE[BRIDGE.index("async def _town_errand_step(") :]
         step = step[: step.index("async def _town_errand_fund(")]
         self.assertIn("townerrand.ROUTE_VAULT", step)
         self.assertIn("_guild_bank_passing_once", step)

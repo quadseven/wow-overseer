@@ -55,11 +55,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import statweights
+
 __all__ = [
     "AD_INTERVAL_MINUTES",
+    "AD_SOURCE",
     "MIN_RAID_LEVEL",
     "RETENTION_DAYS",
+    "ad_poster",
+    "candidate_roles",
     "may_post_ad",
+    "missing_template_roles",
+    "order_shortlist",
     "prune_surplus_members",
     "rank_raid_candidates",
     "recruiting_ad",
@@ -121,11 +128,65 @@ MIN_RAID_LEVEL = 55
 RETENTION_DAYS = 7
 
 
-def recruiting_ad(guild: str, missing_roles: list, raid_nights: list) -> str:
-    """Build one short public line describing the guild's current vacancies."""
+# The source on the chat row an ad is said by. The last post's time is read
+# back off these rows, so a restart does not repost at once.
+AD_SOURCE = "recruit-ad"
+
+# The raid template's seat roles, as raidroles names them.
+_SEAT_ROLES = ("tank", "healer", "dps")
+
+
+def _seat_role(role: str) -> str:
+    """The template seat a statweights role fills: tank, healer or dps."""
+    if role in ("tank", "healer"):
+        return role
+    return "dps" if role and role != statweights.UNKNOWN else ""
+
+
+def candidate_roles(candidate: dict) -> set:
+    """The template roles a shortlisted candidate can fill.
+
+    DECISION (the shortlist reports a class and a level, not a role or a gear
+    score): the role comes from the class plus the spec where the candidate
+    carries one, and from the class alone otherwise. A class with one role
+    whatever its tree answers that role. A class with several (a warrior, a
+    paladin, a priest, a shaman, a druid) answers every role it can play, so a
+    guild short of a healer ranks a priest ahead of a hunter without guessing
+    which tree the priest holds. An explicit `role` on the candidate wins.
+    """
+    explicit = str(candidate.get("role") or "")
+    if explicit:
+        return {explicit}
+    class_id = candidate.get("class_id", candidate.get("class"))
+    spec = candidate.get("spec")
+    if spec:
+        role = _seat_role(statweights.role_for(class_id, str(spec)))
+        if role:
+            return {role}
+    return {
+        role for role in map(_seat_role, statweights.roles_of_class(class_id)) if role
+    }
+
+
+def missing_template_roles(seats: list, member_names: set) -> list:
+    """The template roles no member holds, tank first, each named once.
+
+    `seats` are the guild's approved seats (anything with `.name` and `.seat`);
+    a seat whose name is not in `member_names` is unfilled.
+    """
+    open_roles = {seat.seat for seat in seats if seat.name not in member_names}
+    return [role for role in _SEAT_ROLES if role in open_roles]
+
+
+def recruiting_ad(guild: str, missing_roles: list) -> str:
+    """Build one short public line describing the guild's current vacancies.
+
+    No raid nights: nothing reads a guild's raid nights yet, and a line that
+    names nights nobody set is worse than one that names none. Add them back
+    when a source exists.
+    """
     roles = ", ".join(str(role) for role in missing_roles) or "raiders"
-    nights = ", ".join(str(night) for night in raid_nights) or "scheduled nights"
-    return "%s LF %s, raid nights %s" % (guild, roles, nights)
+    return "%s LF %s" % (guild, roles)
 
 
 def may_post_ad(minutes_since_last_post: float | None) -> bool:
@@ -136,22 +197,67 @@ def may_post_ad(minutes_since_last_post: float | None) -> bool:
     )
 
 
-def rank_raid_candidates(candidates: list, missing_roles: set) -> list:
-    """Drop below-level candidates and rank role fit, level eligibility, then gear."""
-    eligible = [
+def ad_poster(members: list) -> str:
+    """Who says the ad: the leader when online, else an online officer, else ''.
+
+    `members` are rows with `name`, `rank` (0 is the leader, 1 an officer) and
+    `online`.
+    """
+    for rank in (0, 1):
+        for member in sorted(members, key=lambda m: str(m.get("name", ""))):
+            if member.get("online") and member.get("rank") == rank:
+                return str(member["name"])
+    return ""
+
+
+def _ranking_key(candidate: dict, missing_roles: set) -> tuple:
+    return (
+        not (candidate_roles(candidate) & missing_roles),
+        int(candidate.get("level", 0)) < MIN_RAID_LEVEL,
+        -int(candidate.get("level", 0)),
+        -float(candidate.get("gear", 0)),
+        str(candidate.get("name", "")),
+    )
+
+
+def rank_raid_candidates(
+    candidates: list, missing_roles: set, drop_below_level: bool = True
+) -> list:
+    """Rank role fit, level eligibility, then gear; drop below-level by default.
+
+    With `drop_below_level` False a candidate under MIN_RAID_LEVEL is kept and
+    ranked after every eligible one: the sweep orders a shortlist and must not
+    be the thing that empties it.
+    """
+    pool = [
         candidate
         for candidate in candidates
-        if int(candidate.get("level", 0)) >= MIN_RAID_LEVEL
+        if not drop_below_level or int(candidate.get("level", 0)) >= MIN_RAID_LEVEL
     ]
-    return sorted(
-        eligible,
-        key=lambda candidate: (
-            candidate.get("role") not in missing_roles,
-            -int(candidate.get("level", 0)),
-            -float(candidate.get("gear", 0)),
-            str(candidate.get("name", "")),
+    return sorted(pool, key=lambda candidate: _ranking_key(candidate, missing_roles))
+
+
+def order_shortlist(result: dict, missing_roles: set) -> dict:
+    """The `guild shortlist` result with its picks ranked by the guild's holes.
+
+    Tolerant like names_from_shortlist: anything that is not a shortlist comes
+    back as it was. Nobody is dropped, and the sort is stable, so within a
+    role fit and a level band the module's own order stands: this ranks by the
+    guild's holes and never scores one candidate against another.
+    """
+    picks = result.get("shortlist") if isinstance(result, dict) else None
+    if not isinstance(picks, list) or not missing_roles:
+        return result
+    named = [pick for pick in picks if isinstance(pick, dict)]
+    rest = [pick for pick in picks if not isinstance(pick, dict)]
+    ranked = sorted(
+        named,
+        key=lambda pick: (
+            not (candidate_roles(pick) & missing_roles),
+            int(pick.get("level", 0) or 0) < MIN_RAID_LEVEL,
         ),
     )
+    return {**result, "shortlist": ranked + rest}
 
 
 def prune_surplus_members(members: list, now, surplus: set) -> list:

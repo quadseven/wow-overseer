@@ -731,11 +731,7 @@ def bank_route(
             and not walled(spot)
         )
 
-    near = [
-        (_planar(s, here), i, s)
-        for i, s in enumerate(bankers or ())
-        if usable(s)
-    ]
+    near = [(_planar(s, here), i, s) for i, s in enumerate(bankers or ()) if usable(s)]
     if near:
         _d, _i, spot = min(near, key=lambda t: (t[0], t[1]))
         return ROUTE_BANKER, dict(spot), "the nearest reachable banker"
