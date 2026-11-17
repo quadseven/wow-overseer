@@ -13,6 +13,7 @@ re-checks the quest log itself."""
 
 import types
 import unittest
+from unittest import mock
 
 import guildjobs
 import keep
@@ -165,22 +166,128 @@ class WhatItNeverDestroys(unittest.TestCase):
         self.assertEqual(len(destroy(member(), many).rows), guildjobs.MAX_SALES)
 
 
+def facts(guid, quest_needed, quality=1, item_class=QUEST):
+    return {
+        "item_guid": guid,
+        "entry": 700 + guid,
+        "quality": quality,
+        "item_class": item_class,
+        "subclass": 0,
+        "inventory_type": 0,
+        "required_level": 0,
+        "allowable_class": -1,
+        "bonding": 0,
+        "instance_flags": 0,
+        "holder": "Mirra",
+        "holder_class": 5,
+        "quest_needed": quest_needed,
+        "disenchant_id": 0,
+    }
+
+
+def run_pass_with_facts(member, carried, by_guid):
+    """The bridge pass with the REAL loot-policy guard over canned item facts."""
+    from test_questers_bridge import bridge
+    from test_questers_sell import run_pass
+
+    def read(guids):
+        return [by_guid[g] for g in guids if g in by_guid]
+
+    with (
+        mock.patch.object(bridge, "_fetch_epic_facts", read),
+        mock.patch.object(bridge, "_guild_classes", lambda: frozenset({5})),
+    ):
+        return run_pass(member, carried)
+
+
 class TheBridgeDestroysBeforeItSells(unittest.TestCase):
     def test_a_full_quester_with_leftovers_destroys_in_place_of_its_take(self):
-        from test_questers_sell import run_pass
-
-        run, asked = run_pass(quester(level=2, x=0.0, free_slots=0), (LEFTOVER, GREY))
+        run, asked = run_pass_with_facts(
+            quester(level=2, x=0.0, free_slots=0),
+            (LEFTOVER, GREY),
+            {10: facts(10, 0)},
+        )
         self.assertEqual(asked, [["Mirra"]])
         (step,) = run.started
         self.assertEqual(step.action, questers.DESTROY_ACTION)
         self.assertEqual(rows(step), ["destroy guid:10 count:1"])
 
     def test_with_no_leftover_the_sale_still_goes(self):
-        from test_questers_sell import run_pass
-
-        run, _asked = run_pass(quester(level=2, x=0.0, free_slots=0), (GREY,))
+        run, _asked = run_pass_with_facts(
+            quester(level=2, x=0.0, free_slots=0), (GREY,), {}
+        )
         (step,) = run.started
         self.assertEqual(step.action, questers.SELL_ACTION)
+
+
+class TheSharedLootPolicyGuardBindsTheDestroy(unittest.TestCase):
+    """The destroy goes through lootpolicy.allowed, kind destroy (#2761)."""
+
+    def test_an_item_an_open_quest_in_the_log_names_is_never_destroyed(self):
+        # The saved-log read says the quest names it, whatever the catalogue
+        # says: the shared guard holds it.
+        run, _asked = run_pass_with_facts(
+            quester(level=2, x=0.0, free_slots=0),
+            (LEFTOVER,),
+            {10: facts(10, 1)},
+        )
+        steps = [s for s in run.started if s.action == questers.DESTROY_ACTION]
+        self.assertEqual(steps, [])
+
+    def test_an_unread_quest_log_holds_the_item(self):
+        run, _asked = run_pass_with_facts(
+            quester(level=2, x=0.0, free_slots=0),
+            (LEFTOVER,),
+            {10: facts(10, None)},
+        )
+        self.assertEqual(
+            [s for s in run.started if s.action == questers.DESTROY_ACTION], []
+        )
+
+    def test_an_item_with_no_facts_is_held(self):
+        run, _asked = run_pass_with_facts(
+            quester(level=2, x=0.0, free_slots=0), (LEFTOVER,), {}
+        )
+        self.assertEqual(
+            [s for s in run.started if s.action == questers.DESTROY_ACTION], []
+        )
+
+    def test_the_epic_rule_holds_an_epic_through_the_guard(self):
+        epic = stack(14, 704, QUEST, quality=4, price=0, quest_needed=False)
+        run, _asked = run_pass_with_facts(
+            quester(level=2, x=0.0, free_slots=0),
+            (epic,),
+            {14: facts(14, 0, quality=4)},
+        )
+        self.assertEqual(
+            [s for s in run.started if s.action == questers.DESTROY_ACTION], []
+        )
+
+    def test_the_guard_is_asked_for_a_destroy_kind(self):
+        from test_questers_bridge import bridge
+
+        seen = []
+
+        def blocks(holder, command, kind="sell"):
+            seen.append((holder, command, kind))
+            return None
+
+        with mock.patch.object(bridge, "_loot_policy_blocks", blocks):
+            ok = bridge._quester_destroy_guard("Mirra")(LEFTOVER)
+        self.assertTrue(ok)
+        self.assertEqual(seen, [("Mirra", "guid:10 count:1", "destroy")])
+
+    def test_destroy_step_drops_a_stack_the_guard_refuses(self):
+        step = questers.destroy_step(
+            member(),
+            (LEFTOVER, LEFTOVER_B),
+            kept(),
+            catalogue(),
+            (),
+            (),
+            lambda s: s.guid != 10,
+        )
+        self.assertEqual(rows(step), ["destroy guid:11 count:3"])
 
 
 class TheLeftoverRead(unittest.TestCase):

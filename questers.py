@@ -2351,19 +2351,29 @@ def leftover_stacks(member, carried, kept, cat: Catalogue, tried=()) -> list:
     return sorted(out, key=lambda c: int(c.guid))[: guildjobs.MAX_SALES]
 
 
-def destroy_step(member, carried, kept, cat: Catalogue, recent, tried=()):
+def destroy_step(member, carried, kept, cat: Catalogue, recent, tried=(), guard=None):
     """The guildcorps.Step that destroys a full-bag quester's quest leftovers,
     or None: its bags have room or are unread, it is offline, dead or unplaced,
     its last destroy is younger than SELL_COOLDOWN_MINUTES, the reservations
     are unread, or it carries no leftover. No walk and no vendor: the world's
-    destroy verb re-checks the quest log before it destroys anything."""
+    destroy verb re-checks the quest log before it destroys anything.
+
+    `guard(stack)` is the shared loot-policy guard (the bridge's
+    `_loot_policy_blocks` through `lootpolicy.allowed`, kind `destroy`): a stack
+    it refuses is never in the step, so a destroy cannot bypass the quest-log
+    hold, the epic rule or the keep list. Unset, nothing extra is refused here;
+    the row writer asks the same guard again."""
     if not needs_sale(member, tried) or kept is None:
         return None
     if not member.online or not member.alive or not member.placed:
         return None
     if _destroying_lately(member.name, recent):
         return None
-    stacks = leftover_stacks(member, carried, kept, cat, tried)
+    stacks = [
+        s
+        for s in leftover_stacks(member, carried, kept, cat, tried)
+        if guard is None or guard(s)
+    ]
     if not stacks:
         return None
     source = guildjobs.source_for(DESTROY_ACTION, member.name)

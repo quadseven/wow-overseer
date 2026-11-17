@@ -19030,7 +19030,8 @@ class Bridge(discord.Client):
             await self._quester_ledger(m, plan, held, ledger, mono)
             # Leftovers are destroyed first: no walk, and a slot back at once.
             sale = (questers.destroy_step(m, carried.get(m.name, ()), kept, cat, sold,
-                                          tried) if m.name in full else None)
+                                          tried, _quester_destroy_guard(m.name))
+                    if m.name in full else None)
             if sale is None and m.name in full:
                 sale = questers.sell_step(m, carried.get(m.name, ()), worn.get(m.name),
                                           kept, cat, sold, cap, tried)
@@ -34847,6 +34848,17 @@ def _quest_log_holds(holder: str, command: str) -> bool:
                      holder, guid, command)
             return True
     return False
+
+
+def _quester_destroy_guard(holder: str):
+    """The shared loot-policy guard for a quester's destroy rows: a stack passes
+    only when `lootpolicy.allowed` says a `destroy` row may be written for it,
+    so the quest-log hold (`quest_needed`), the epic rule and the policy's own
+    verdicts bind a destroy exactly as they bind a sale."""
+    def allowed(stack) -> bool:
+        command = "guid:%d count:%d" % (int(stack.guid), int(stack.count))
+        return _loot_policy_blocks(holder, command, "destroy") is None
+    return allowed
 
 
 def _epic_blocks(holder: str, command: str, kind: str = "sell") -> bool:
