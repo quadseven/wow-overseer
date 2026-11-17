@@ -2751,10 +2751,7 @@ def next_move(book: Book, member, avoid=None, held_off=frozenset()):
 
 def _isle_orb_route(book: Book, member, blocked: Move) -> Move:
     """Reach a gameobject-started map 530 class quest through the Horde orb."""
-    if (
-        blocked.blocker != MAP
-        or int(getattr(member, "race", 0) or 0) != ISLE_ORB_RACE
-    ):
+    if blocked.blocker != MAP or int(getattr(member, "race", 0) or 0) != ISLE_ORB_RACE:
         return blocked
     quest = book.quests.get(int(blocked.quest))
     if quest is None or not _isle_only(member, quest.starters) or not book.isle_orbs:

@@ -86,7 +86,11 @@ def book():
         loot_rows=[],
         start_rows=[
             {"quest": RUNE_QUEST, "kind": "gameobject", "entry": RUNE_SPAWN["entry"]},
-            {"quest": SUCCUBUS_QUEST, "kind": "creature", "entry": SUCCUBUS_GIVER["entry"]},
+            {
+                "quest": SUCCUBUS_QUEST,
+                "kind": "creature",
+                "entry": SUCCUBUS_GIVER["entry"],
+            },
         ],
         condition_rows=[
             {
@@ -125,7 +129,9 @@ class TheGameobjectStartedRune(unittest.TestCase):
             "JOIN acore_world.gameobject g ON g.id = s.id",
             classquest.GAMEOBJECT_GIVERS_SQL,
         )
-        self.assertIn("JOIN acore_world.gameobject_template", classquest.GAMEOBJECT_GIVERS_SQL)
+        self.assertIn(
+            "JOIN acore_world.gameobject_template", classquest.GAMEOBJECT_GIVERS_SQL
+        )
         self.assertIn("0 AS creature", classquest.GAMEOBJECT_GIVERS_SQL)
         self.assertIn("WHERE g.id = 184503 AND g.map = 0", classquest.ISLE_ORB_SQL)
 
@@ -171,9 +177,7 @@ class TheGameobjectStartedRune(unittest.TestCase):
             blood_elf_warlock(map_id=OUTLAND, x=0.0, y=0.0), book(), [], 5000
         )
         self.assertIsNotNone(step)
-        self.assertEqual(
-            step.walk.command, "walk-to-spawn gameobject:2002 max:5000"
-        )
+        self.assertEqual(step.walk.command, "walk-to-spawn gameobject:2002 max:5000")
         self.assertEqual(step.rows[0].command, "take quest:9619")
 
     def test_the_class_step_walks_to_and_uses_the_undercity_orb(self):
@@ -182,9 +186,7 @@ class TheGameobjectStartedRune(unittest.TestCase):
         )
         self.assertIsNotNone(step)
         self.assertEqual(step.rows[0].command, "use-gameobject 184503")
-        self.assertEqual(
-            step.walk.command, "walk-to-spawn gameobject:2001 max:5000"
-        )
+        self.assertEqual(step.walk.command, "walk-to-spawn gameobject:2001 max:5000")
 
 
 if __name__ == "__main__":
