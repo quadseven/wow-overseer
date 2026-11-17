@@ -81,7 +81,7 @@ def urlfetch(url, headers):
     opener = urllib.request.build_opener(_NoRedirect)
     req = urllib.request.Request(url, headers=headers)
     try:
-        with opener.open(req, timeout=20) as resp:
+        with opener.open(req, timeout=20) as resp:  # noqa: S310 - https only (checked above), redirects refused
             return (
                 resp.status,
                 {k.lower(): v for k, v in resp.headers.items()},
