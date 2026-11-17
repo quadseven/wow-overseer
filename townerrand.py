@@ -822,7 +822,9 @@ def advance(
         if hub_yards is not None and now >= state.hearth_until:
             if state.go_best < 0 or hub_yards <= state.go_best - GO_PROGRESS_YARDS:
                 state = replace(
-                    state, go_best=hub_yards, go_best_at=now,
+                    state,
+                    go_best=hub_yards,
+                    go_best_at=now,
                     go_restarts=0 if state.go_best >= 0 else state.go_restarts,
                 )
             elif now - state.go_best_at >= GO_STALL_SECONDS:
