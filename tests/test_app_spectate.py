@@ -129,7 +129,7 @@ class TheCameraCard(unittest.TestCase):
         m = stage(cam(active=True, run=285, target="Tanky"))
         self.assertIn("Now watching Bonkers in Scarlet Monastery (the Library)", m)
         self.assertIn("Following Tanky", m)
-        self.assertIn('data-spectate-slot data-stream="%s"' % STREAM, m)
+        self.assertIn('data-spectate-slot data-spectate-stream="%s"' % STREAM, m)
 
     def test_it_says_whose_interface_is_on_screen(self):
         m = stage(cam(active=True, run=285, target="Tanky"))

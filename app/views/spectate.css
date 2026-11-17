@@ -7,7 +7,7 @@
 .sp-msg:empty { display: none; }
 .sp-region { display: grid; gap: 8px; }
 .sp-stage { gap: 8px; min-width: 0; }
-.sp-slot { display: grid; gap: 4px; }
+.sp-slot { display: grid; gap: 4px; position: relative; }
 .sp-video { width: 100%; max-width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: var(--radius-md); }
 .sp-mini { min-height: 32px; font-size: var(--fs-1); padding-inline: 10px; position: relative; z-index: 1; }
 .sp-stop { justify-self: start; }
