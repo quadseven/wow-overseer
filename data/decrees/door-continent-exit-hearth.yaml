@@ -1,0 +1,44 @@
+# A family bound wholly on the other continent from the dungeon door is not hearthed across the ocean
+# by the EXIT let-through (mod-overseer issue 1388). The Grug family is bound at Ratchet (map 1) and runs
+# Uldaman, whose door is on map 0. The failing lines are 'went home: map 70 to map 1' and
+# 'went home: map 349 to map 0'.
+# Fix: mod-overseer pull 1398.
+decree: v1
+id: door-continent-exit-hearth
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1388, criterion: "no 'went home: map 70 to map 1' or 'went home: map 349 to map 0' line for a family bound on the other continent"}
+fix: {repo: quadseven/mod-overseer, commit: "3527a5984ad0d969c09985d901fa0f2408e15a7c"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 1h
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, homebind: {creature: "Gazlowe"}, at: {areatrigger: 286}}
+    ceiling: "nothing granted but position and homebind"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:uldaman"}
+observe:
+  - name: family-is-bound-on-map-1
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_homebind WHERE guid IN (@cast) AND mapId = 1
+    expect: {scalar: "= 5"}
+  - name: uldaman-run-opened
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run WHERE map_id = 70 AND started_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: family-was-not-sent-home-across-the-sea
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run_event WHERE family = 'Grug' AND created_at >= @t0 AND kind = 'exit_hearth' AND detail LIKE '%map 1%'
+    expect: {scalar: "= 0"}
+  - name: no-went-home-across-the-ocean
+    role: check
+    log: {pattern: "went home: map (70|349) to map [01]", expect: {count: 0}}
