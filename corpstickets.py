@@ -35,6 +35,7 @@ import os
 import re
 from dataclasses import dataclass
 
+import questtickets
 import raidteams
 
 EPIC = int(os.environ.get("CORPS_TICKET_EPIC", "2396"))
@@ -163,6 +164,22 @@ KIND_WORDS = {
 }
 
 
+# The area of play each blocker kind is filed under (#2759): the station
+# holds a ticket with no `area:` label. Bag room is the economy's; a member
+# refused one step all day, wherever it stands, is a stuck member.
+AREA_OF = {
+    DEAD_LOOP: "area:stability",
+    OFF_WORLD: "area:stability",
+    FULL_BAGS: "area:economy",
+}
+DEFAULT_AREA = "area:stability"
+
+
+def labels(b: Blocker) -> tuple:
+    """The labels a blocker's issue is filed with: one area, always."""
+    return questtickets.STATE_LABELS + (AREA_OF.get(b.kind, DEFAULT_AREA),)
+
+
 def title(b: Blocker) -> str:
     return "Corps member %s %s: %d refusals in 24 hours" % (
         b.name,
@@ -272,7 +289,7 @@ def run(store, client, now: float) -> dict:
     for b in todo.new[:MAX_PER_PASS]:
         store.mark(b.key, FILING, now)
         try:
-            number = client.file(title(b), body(b))
+            number = client.file(title(b), body(b), labels(b))
         except Exception as exc:
             if "Timeout" not in type(exc).__name__:
                 store.release(b.key)

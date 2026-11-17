@@ -35,7 +35,13 @@ import raidteams
 # a ticket filed under a closed epic fails the plan check's epic row.
 EPIC = int(os.environ.get("QUEST_TICKET_EPIC", "1575"))
 REPO = os.environ.get("QUEST_TICKET_REPO", "quadseven/wow-overseer")
-LABELS = ("loom:ticket", "loom:queued")
+# The station holds a ticket with no `area:` label until a person adds one
+# (#2759), so every issue filed here goes out under exactly one area. STATE
+# is what any bridge-filed ticket carries; AREA is this filer's area of play
+# (docs/agents/area-taxonomy.md). Another filer passes its own labels.
+STATE_LABELS = ("loom:ticket", "loom:queued")
+AREA = "area:questing"
+LABELS = STATE_LABELS + (AREA,)
 MAX_PER_PASS = 5
 FILING = 0
 MEMO_KIND = "quest_tickets"
@@ -423,11 +429,19 @@ class Client:
         self.epic = EPIC if epic is None else int(epic)
         self.unlinked: list = []
 
-    def file(self, heading: str, text: str) -> int:
+    def file(self, heading: str, text: str, labels=None) -> int:
+        """`labels` default to a broken quest's. Any set with no `area:`
+        label, or more than one, is refused before a request is made."""
+        labels = list(LABELS if labels is None else labels)
+        areas = [x for x in labels if str(x).startswith("area:")]
+        if len(areas) != 1:
+            raise ValueError(
+                "a filed ticket carries exactly one area: label, got %r" % (areas,)
+            )
         made = self.github.call(
             "POST",
             "/issues",
-            {"title": heading, "body": text, "labels": list(LABELS)},
+            {"title": heading, "body": text, "labels": labels},
             ok=(201,),
         ).json()
         try:
