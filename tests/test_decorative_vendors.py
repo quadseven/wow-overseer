@@ -20,7 +20,7 @@ BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 
 # The queries that answer "where is a vendor counter" for a member or an errand.
 COUNTER_QUERIES = (
-    "_NEAREST_VENDOR_OFFSET_SQL",
+    "_NEAREST_VENDOR_READING_SQL",
     "_BAG_VENDOR_SQL",
     "_GEAR_VENDOR_SQL",
     "_SUPPLY_VENDOR_SQL",

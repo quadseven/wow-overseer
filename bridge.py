@@ -33355,10 +33355,12 @@ def _recent_range_refusals(seconds: int) -> dict:
     }
 
 
-# The nearest vendor's offset from the seller, in all three axes, for the sale
-# pass's reading line (#1962). Diagnostic only; nothing gates on it.
-_NEAREST_VENDOR_OFFSET_SQL = (
-    "SELECT cr.position_x - s.pos_x AS dx, cr.position_y - s.pos_y AS dy, "
+# The nearest vendor's template entry and offset from the seller, in all three
+# axes, for the sale pass's reading line (#1962). Diagnostic only; nothing
+# gates on it.
+_NEAREST_VENDOR_READING_SQL = (
+    "SELECT cr.id AS entry, cr.position_x - s.pos_x AS dx, "
+    "cr.position_y - s.pos_y AS dy, "
     "cr.position_z - s.pos_z AS dz "
     "FROM overseer_snapshot s "
     "JOIN acore_world.creature cr ON cr.map = s.map_id "
@@ -33370,18 +33372,18 @@ _NEAREST_VENDOR_OFFSET_SQL = (
 )
 
 
-def _nearest_vendor_offsets(name: str):
-    """(dx, dy, dz) from `name` to its nearest vendor on its map, or None."""
+def _nearest_vendor_reading(name: str):
+    """(entry, dx, dy, dz) for the nearest vendor on the seller's map, or None."""
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(_NEAREST_VENDOR_OFFSET_SQL,
+            cur.execute(_NEAREST_VENDOR_READING_SQL,
                         (name, towntrip.NPC_FLAG_VENDOR))
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 return None
             raise
         row = cur.fetchone()
-    return (row["dx"], row["dy"], row["dz"]) if row else None
+    return (row["entry"], row["dx"], row["dy"], row["dz"]) if row else None
 
 
 async def _log_sale_reading(holder: str, standing, refused_age) -> None:
@@ -33391,10 +33393,12 @@ async def _log_sale_reading(holder: str, standing, refused_age) -> None:
     pass carries on.
     """
     try:
-        offsets = await asyncio.to_thread(_nearest_vendor_offsets, holder)
+        reading = await asyncio.to_thread(_nearest_vendor_reading, holder)
+        vendor_entry, offsets = (reading[0], reading[1:]) if reading else (None, None)
         log.info("economy: sale reading: %s (TOWN_COUNTER_YARDS=%d, core "
                  "interaction check about 5)",
-                 item_plan.sale_reading(holder, standing, offsets, refused_age),
+                 item_plan.sale_reading(holder, standing, offsets, refused_age,
+                                         vendor_entry=vendor_entry),
                  TOWN_COUNTER_YARDS)
     except Exception:
         log.exception("economy: the sale reading for %s failed", holder)
