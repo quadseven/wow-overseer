@@ -425,8 +425,9 @@ def _material_route(stack, people, kept, market, auction_open, busy, vault) -> R
 def _past_target_route(
     stack, people, kept, market, auction_open, busy, over, fair, short
 ) -> Route:
-    """GUILD to a short member, AUCTION at the live or fair price, then VENDOR,
-    for a material the guild holds past its reserve target. Never the vault."""
+    """GUILD to a short member, AUCTION at a known price or vendor floor, then
+    VENDOR for a material the guild holds past its reserve target. Never the
+    vault."""
     if stack.guid in kept:
         return Route(stack, KEEP, why="another pass owns %s" % stack.name)
     takers = [p for p in people if p.name in short and not p.family]
@@ -436,6 +437,8 @@ def _past_target_route(
             stack, GUILD, person.name, "%s, and its current rung is short of it" % need
         )
     price = (market or {}).get(stack.entry) or fair
+    if not price and stack.sell_price > 0:
+        price = stack.sell_price * disposition.AUCTION_BEATS_VENDOR_BY
     listed = _listed(stack, {stack.entry: price} if price else {}, auction_open)
     if listed is not None:
         return Route(
