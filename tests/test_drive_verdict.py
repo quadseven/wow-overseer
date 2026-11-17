@@ -179,6 +179,31 @@ class GrugsSeal(unittest.TestCase):
         verdict, _why = equipscore.drive_verdict(SEAL, grug(), both, BOOK)
         self.assertEqual(verdict, equipscore.DRIVE_UNDECIDED)
 
+    def test_a_trinket_is_worn_once(self):
+        # mod-overseer: the drive refuses a second copy of a worn trinket
+        # (wow-overseer#2358); a pair of the same ring stays legitimate.
+        heart = ring("Heart of Noxxion", 17744, 3, slot=12, level=51, req=45,
+                     stats=((STA, 10),), item_flags=0, inventory_type=12)
+        copy = dict(heart, equipment_slot=None, item_guid=4)
+        verdict, why = equipscore.drive_verdict(copy, grug(), [heart], BOOK)
+        self.assertEqual(verdict, equipscore.DRIVE_REFUSED, why)
+        self.assertIn("trinket", why)
+
+    def test_a_different_trinket_is_still_worn(self):
+        heart = ring("Heart of Noxxion", 17744, 3, slot=12, level=51, req=45,
+                     stats=((STA, 10),), item_flags=0, inventory_type=12)
+        other = ring("Other Charm", 17745, 5, level=51, req=45,
+                     stats=((STA, 10),), item_flags=0, inventory_type=12)
+        verdict, why = equipscore.drive_verdict(other, grug(), [heart], BOOK)
+        self.assertEqual(verdict, equipscore.DRIVE_WEAR, why)
+
+    def test_a_pair_of_the_same_ring_is_still_allowed(self):
+        band = ring("Plain Band", 17746, 6, slot=10, level=51, req=45,
+                    stats=((STA, 10),), item_flags=0)
+        copy = dict(band, equipment_slot=None, item_guid=7)
+        verdict, why = equipscore.drive_verdict(copy, grug(), [band], BOOK)
+        self.assertEqual(verdict, equipscore.DRIVE_WEAR, why)
+
     def test_drive_verdicts_reads_the_pass_rows(self):
         rows = [ARCHAEDIC, NAGLERING, SEAL, SECOND_NAGLERING]
         verdicts = equipscore.drive_verdicts([GRUG], rows, ["Grug"], BOOK)
