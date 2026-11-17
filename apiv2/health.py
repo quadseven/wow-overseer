@@ -703,9 +703,26 @@ def family_reads(rd, families: dict) -> tuple[dict, list]:
     return streaks, [dict(e) for e in events]
 
 
+INCOMPLETE_REASON = "the realm has no such table or column, so it was read as empty"
+
+
+def incomplete(unread: list) -> list:
+    """The reads this answer was built without, one entry each, in order. An
+    empty `findings` beside an empty `incomplete` is a realm with no open
+    problem; beside entries, it is a check that could not look (#2246)."""
+    seen: list = []
+    for what in unread:
+        if what not in seen:
+            seen.append(what)
+    return [
+        {"read": ascii_text(what, 80), "reason": INCOMPLETE_REASON} for what in seen
+    ]
+
+
 def health(_query: dict, ctx) -> tuple[int, dict]:
     """GET /api/v2/health: the open problems, highest impact first."""
     rd = ctx.read
+    unread_before = len(rd.unavailable())
     now_at = int(rd.must(NOW_SQL)[0]["now_at"])
     guilds = sorted(_scope.guilds(ctx).values())
     marks = _scope.holes(len(guilds))
@@ -753,6 +770,7 @@ def health(_query: dict, ctx) -> tuple[int, dict]:
         deaths=[dict(r) for r in deaths],
         realm=realm_status.read_state(),
     )
+    payload["incomplete"] = incomplete(rd.unavailable()[unread_before:])
     return 200, payload
 
 
