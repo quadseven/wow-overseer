@@ -934,14 +934,49 @@ def _observe_log(lint, path, o):
         re.compile(lg["pattern"])
     except (re.error, TypeError) as exc:
         lint.err(f"{path}.log.pattern", "schema", f"bad regex: {exc}")
-    ex = lg["expect"]
-    ok = (
-        isinstance(ex, dict)
-        and set(ex) == {"count"}
-        and _is_int(ex["count"])
-        and ex["count"] >= 0
-    )
-    lint.ensure(ok, f"{path}.log.expect", "schema", "must be {count: <n>}")
+    problem = log_bound_problem(lg["expect"])
+    if problem:
+        lint.err(f"{path}.log.expect", "schema", problem)
+
+
+LOG_EXACT_KEYS = ("count", "exactly")
+LOG_RANGE_KEYS = ("at_least", "at_most")
+LOG_BOUND_FORM = (
+    "must be {count: <n>}, {exactly: <n>}, {at_least: <n>}, {at_most: <n>} "
+    "or {at_least: <n>, at_most: <m>}"
+)
+
+
+def log_bound_problem(ex):
+    """Why a log assertion's `expect` is not a bound, or None when it is one.
+
+    `count` and `exactly` both mean an exact number of matching lines and stand
+    alone. `at_least` requires a line, `at_most` caps one, and the two together
+    are a range. Every bound is a whole number, zero or more.
+    """
+    if not isinstance(ex, dict) or not ex:
+        return LOG_BOUND_FORM
+    unknown = sorted(str(k) for k in ex if k not in LOG_EXACT_KEYS + LOG_RANGE_KEYS)
+    if unknown:
+        return f"unknown bound {', '.join(unknown)}: {LOG_BOUND_FORM}"
+    for key, value in ex.items():
+        if not _is_int(value) or value < 0:
+            return f"{key} must be a whole number, zero or more"
+    if len(ex) > 1 and any(k in ex for k in LOG_EXACT_KEYS):
+        return "count and exactly stand alone: " + LOG_BOUND_FORM
+    if ex.get("at_least") == 0:
+        return "at_least: 0 always holds, so it checks nothing"
+    if "at_least" in ex and "at_most" in ex and ex["at_least"] > ex["at_most"]:
+        return "at_least is above at_most, so the check can never hold"
+    return None
+
+
+def log_bound_range(ex):
+    """(fewest, most) matching lines a linted log bound allows; most is None for no cap."""
+    for key in LOG_EXACT_KEYS:
+        if key in ex:
+            return ex[key], ex[key]
+    return ex.get("at_least", 0), ex.get("at_most")
 
 
 def _expect_ok(ex):
