@@ -280,7 +280,8 @@ All three read one settings file, never the repository: copy
 client-data claim and a world cap), the nodes that are never used, and the
 digest-pinned tools image. A missing or malformed file is an error.
 
-    python3 -m ephemeral submit [--arm both] [--node N] --control-worldserver REF --control-pin SHA data/decrees/<name>.yaml
+    python3 -m ephemeral submit [--arm both] [--node N] --control-worldserver REF --control-pin SHA
+        [--control-playerbots-prefix NAME] [--control-drop-keys A,B,C] data/decrees/<name>.yaml
     python3 -m ephemeral dispatch [--once]
     python3 -m ephemeral collect [--dry-run]
 
