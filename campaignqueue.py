@@ -820,23 +820,151 @@ def progress_line(rows: list, done: int | None) -> str:
     return ", then ".join(parts)
 
 
-def view(rows: list, done: int | None, family: str = "") -> dict:
-    """The queue as the site draws it: a line and its entries."""
-    line = progress_line(rows, done)
+# WHERE A FAMILY'S CAMPAIGN STANDS, READ ONCE (#2249).
+#
+# The console drew the campaign from the leader's counter and the queue from
+# its rows, each with its own idea of the state. The counter counts the ACTIVE
+# head only, so while a queued head waited to start (the bridge withholds a
+# start for bag room, a town errand or gear), the counter still held the
+# campaign before: one section read "the campaign is over ... no other run
+# will start" and the next read "(starting)". `campaign_state` is the one
+# reading both sections take, so they cannot disagree.
+STARTING = "starting"
+RUNNING = "running"
+OVER = "over"
+STOPPED = "stopped"
+NEVER_STARTED = "never started"
+# An entry behind the head.
+WAITING = "queued"
+
+
+def _entry_after(rows: list) -> dict | None:
+    if len(rows) < 2:
+        return None
     return {
-        "line": ("Queue: %s." % line) if line else "",
-        "done": done,
-        "entries": [
+        "place": _place(str(rows[1]["keyword"])),
+        "runs": int(rows[1]["runs_wanted"]),
+    }
+
+
+def _counted(counter: dict) -> int | None:
+    done = counter.get("done")
+    return None if done is None else int(done)
+
+
+def _state(kind: str, reason: str, **said) -> dict:
+    return {
+        "state": kind,
+        "place": said.get("place", ""),
+        "runs": int(said.get("runs") or 0),
+        "done": said.get("done"),
+        "next": said.get("after"),
+        "reason": reason,
+    }
+
+
+def _queue_state(rows: list, done: int | None) -> dict:
+    """The state the pending rows give: the head decides."""
+    head = rows[0]
+    place, runs = _place(str(head["keyword"])), int(head["runs_wanted"])
+    after = _entry_after(rows)
+    if str(head["status"]) != ACTIVE:
+        return _state(
+            STARTING,
+            "%s, %d run%s, is queued and has not started"
+            % (place, runs, "" if runs == 1 else "s"),
+            place=place,
+            runs=runs,
+            after=after,
+        )
+    if done is not None and done >= runs:
+        return _state(
+            OVER,
+            "every run wanted is done (%d of %d)" % (done, runs),
+            place=place,
+            runs=runs,
+            done=done,
+            after=after,
+        )
+    return _state(RUNNING, "", place=place, runs=runs, done=done, after=after)
+
+
+def campaign_state(rows: list, counter: dict | None) -> dict:
+    """Where one family's campaign stands, for every section that says it.
+
+    rows     the family's queue rows in order (only queued and active count)
+    counter  agenda.campaign's answer off the leader's row, or None
+
+    PENDING QUEUE ROWS DECIDE FIRST, because the queue owns the family's job
+    and cap while it holds any: a queued head is STARTING whatever the counter
+    still holds from the campaign before, and an active head is RUNNING until
+    the leader's count reaches its runs, then OVER (the next pass moves on to
+    `next`, or back to questing). With nothing pending the counter is all
+    there is: NEVER_STARTED with nobody to count for, STOPPED at a cap of 0,
+    OVER once the cap is reached, else RUNNING.
+    """
+    counter = counter or {}
+    done = _counted(counter)
+    pending = [r for r in rows or [] if str(r.get("status") or "") in PENDING]
+    if pending:
+        return _queue_state(pending, done)
+    wanted = int(counter.get("wanted") or 0)
+    if counter.get("recorded_by") is None:
+        return _state(NEVER_STARTED, "nobody is on the roster to count for")
+    if wanted == 0:
+        return _state(STOPPED, "the number of runs wanted is 0", done=done)
+    if (done or 0) >= wanted:
+        return _state(
+            OVER,
+            "every run wanted is done (%d of %d)" % (done or 0, wanted),
+            runs=wanted,
+            done=done,
+        )
+    return _state(RUNNING, "", runs=wanted, done=done)
+
+
+def _entry_state(index: int, state: dict) -> tuple:
+    """(state, why it ended) for the entry at `index` of the pending rows."""
+    if index:
+        return WAITING, ""
+    kind = str(state.get("state") or "")
+    return kind, str(state.get("reason") or "") if kind == OVER else ""
+
+
+def view(
+    rows: list, done: int | None, family: str = "", state: dict | None = None
+) -> dict:
+    """The queue as the site draws it: a line and its entries.
+
+    `state` is campaign_state's reading when the caller already took it (the
+    console hands the same one to its campaign section); without it the rows
+    and `done` give it. Each entry carries its own `state`: the head's is the
+    campaign's, so a head whose runs are all done is marked over with the
+    reason in `ended`, never left reading as starting or queued (#2249).
+    """
+    line = progress_line(rows, done)
+    if state is None:
+        state = campaign_state(rows, {"done": done}) if rows else {}
+    entries = []
+    for i, r in enumerate(rows or []):
+        kind, ended = _entry_state(i, state)
+        entries.append(
             {
                 "keyword": str(r["keyword"]),
                 "place": _place(str(r["keyword"])),
                 "runs": int(r["runs_wanted"]),
                 "status": str(r["status"]),
+                "state": kind,
+                "ended": ended,
                 "by": chooser(r),
                 "goal_item": int(r.get("goal_item") or 0),
             }
-            for r in rows or []
-        ],
+        )
+    return {
+        "line": ("Queue: %s." % line) if line else "",
+        "done": done,
+        "state": str(state.get("state") or ""),
+        "entries": entries,
         "family": family,
     }
 

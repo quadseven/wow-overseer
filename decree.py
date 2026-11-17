@@ -357,13 +357,71 @@ def unwired_modes() -> tuple:
 CAMPAIGN_STOP = 0
 
 
-def campaign_view(counter: dict) -> dict:
+def _runs_said(count: int) -> str:
+    return "%d run%s" % (count, "" if count == 1 else "s")
+
+
+_STOPPED_MEANS = (
+    "The number of runs wanted is 0, which stops the campaign outright: no run "
+    "begins at all."
+)
+
+
+def _starting_means(state: dict) -> str:
+    """A queued head waits for its start: the counter is the campaign before."""
+    return (
+        "That count is the campaign before. The queue starts %s next, %s, and "
+        "the count begins again when it does."
+        % (
+            state.get("place") or "its next entry",
+            _runs_said(int(state.get("runs") or 0)),
+        )
+    )
+
+
+def _over_means(state: dict) -> str:
+    after = state.get("next")
+    if after:
+        return (
+            "The campaign is over: every run wanted is done. The queue moves "
+            "on to %s, %s." % (after["place"], _runs_said(int(after["runs"])))
+        )
+    return (
+        "The campaign is over: every run wanted is done, and no other run will start."
+    )
+
+
+def _left_means(counter: dict, state: dict) -> str:
+    left = int(counter.get("wanted") or 0) - int(counter.get("done") or 0)
+    if left <= 0:
+        left = int(state.get("runs") or 0) - int(state.get("done") or 0)
+    return "%s left in this campaign." % _runs_said(left)
+
+
+def _campaign_means(counter: dict, state: dict) -> str:
+    """What the counter means, by the one reading of the campaign's state
+    (campaignqueue.campaign_state), so it cannot contradict the queue."""
+    kind = state.get("state")
+    if kind == campaignqueue.STARTING:
+        return _starting_means(state)
+    if kind in (campaignqueue.STOPPED, campaignqueue.NEVER_STARTED):
+        return _STOPPED_MEANS
+    if kind == campaignqueue.OVER:
+        return _over_means(state)
+    return _left_means(counter, state)
+
+
+def campaign_view(counter: dict, state: dict | None = None) -> dict:
     """The campaign counter as a console should read it.
 
     `counter` is agenda.campaign's answer and every judgement in it stays
     agenda's: the leader's row governs because that is the row LoadCampaignCap
     reads, and a higher count elsewhere on the roster is a DISAGREEMENT rather
     than a better number. This adds only the sentences.
+
+    `state` is campaignqueue.campaign_state's reading for the same family,
+    the one the queue section is drawn from too (#2249); left out, the counter
+    alone gives it, which is right only for a family with nothing queued.
 
     THE DISAGREEMENT IS NOT DECORATION. Leadership is reassigned in world and
     the counter does not travel with the crown, so a campaign can appear to
@@ -383,22 +441,10 @@ def campaign_view(counter: dict) -> dict:
             wanted,
             by,
         )
-    if wanted == CAMPAIGN_STOP:
-        means = (
-            "The number of runs wanted is 0, which stops the campaign "
-            "outright: no run begins at all."
-        )
-    elif counter.get("over"):
-        means = (
-            "The campaign is over: every run wanted is done, and no other "
-            "run will start."
-        )
-    else:
-        left = wanted - done
-        means = "%d run%s left in this campaign." % (
-            left,
-            "" if left == 1 else "s",
-        )
+    if state is None:
+        state = campaignqueue.campaign_state([], counter)
+    kind = state.get("state")
+    means = _campaign_means(counter, state)
     warning = ""
     if disagrees:
         warning = (
@@ -413,8 +459,9 @@ def campaign_view(counter: dict) -> dict:
         "done": done,
         "wanted": wanted,
         "recorded_by": by,
-        "over": bool(counter.get("over")),
-        "stopped": wanted == CAMPAIGN_STOP,
+        "state": kind,
+        "over": kind in (campaignqueue.OVER, campaignqueue.STOPPED),
+        "stopped": kind in (campaignqueue.STOPPED, campaignqueue.NEVER_STARTED),
         "disagrees": list(disagrees),
         "line": line,
         "means": means,
@@ -1831,8 +1878,12 @@ def family_views(roster_rows: list, queue_rows: list | None = None) -> list:
     for key in family_keys(roster_rows):
         standing = agenda.standing_orders(_rows_of(roster_rows, key))
         split = standing["job_split"]
+        # ONE READING FOR BOTH SECTIONS (#2249): the campaign line and the
+        # queue line are said off the same campaign_state.
+        state = campaignqueue.campaign_state(queued.get(key, []), standing["campaign"])
+        campaign = campaign_view(standing["campaign"], state)
         queue = campaignqueue.view(
-            queued.get(key, []), standing["campaign"].get("done"), key
+            queued.get(key, []), standing["campaign"].get("done"), key, state
         )
         out.append(
             {
@@ -1850,9 +1901,8 @@ def family_views(roster_rows: list, queue_rows: list | None = None) -> list:
                     "split_line": agenda.split_sentence(split) if split else "",
                 },
                 "campaign": dict(
-                    campaign_view(standing["campaign"]),
-                    line="%s: %s"
-                    % (family_label(key), campaign_view(standing["campaign"])["line"]),
+                    campaign,
+                    line="%s: %s" % (family_label(key), campaign["line"]),
                 ),
                 "queue": dict(
                     queue,
@@ -1862,6 +1912,17 @@ def family_views(roster_rows: list, queue_rows: list | None = None) -> list:
             }
         )
     return out
+
+
+def _leader_campaign_state(roster_rows: list, standing: dict, queue_rows) -> dict:
+    """campaign_state for the family of the leader the console's own campaign
+    section counts for, off that family's queue rows (#2249)."""
+    leader = standing["campaign"].get("recorded_by")
+    key = next(
+        (_family_key(r) for r in roster_rows if str(r.get("name")) == leader), ""
+    )
+    queued = campaignqueue.pending_by_family(queue_rows or [])
+    return campaignqueue.campaign_state(queued.get(key, []), standing["campaign"])
 
 
 # --- the whole console -------------------------------------------------------
@@ -1931,7 +1992,10 @@ def build_console(
             "submit": JOB_SUBMIT,
         },
         "campaign": dict(
-            campaign_view(standing["campaign"]),
+            campaign_view(
+                standing["campaign"],
+                _leader_campaign_state(roster_rows, standing, queue_rows),
+            ),
             section=CAMPAIGN,
             submit=CAMPAIGN_SUBMIT,
             restart_label=CAMPAIGN_RESTART_LABEL,
