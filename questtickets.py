@@ -242,6 +242,10 @@ def _world_rows(info) -> list[str]:
             source.append("creature entries " + ", ".join(map(str, item["droppers"])))
         if item["rewards"]:
             source.append("rewarded by quests " + ", ".join(map(str, item["rewards"])))
+        if item.get("objects"):
+            source.append(
+                "gameobject loot entries " + ", ".join(map(str, item["objects"]))
+            )
         if item["vendors"]:
             source.append(
                 "sold by vendor entries " + ", ".join(map(str, item["vendors"]))
