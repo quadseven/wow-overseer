@@ -161,6 +161,16 @@ class RouteAndClusterReads(unittest.TestCase):
         self.assertIn("module_commit", absent["unmeasured"])
         self.assertIn("realm", absent["unmeasured"])
 
+    def test_banner_with_naive_db_datetimes_and_aware_clock(self):
+        naive = NOW.replace(tzinfo=None)
+        rows = _banner_rows()
+        for row in rows:
+            row["reported_at"] = naive
+        ctx = _ctx(build_rows=rows)
+        got = wl.read_realm(ctx, read_status=lambda now=None: _realm_status(), now=NOW)
+        self.assertEqual(got["module_commit"], MOD_PIN)
+        self.assertNotIn("banner", got["unmeasured"])
+
 
 class CommitGraphAndLiveProof(unittest.TestCase):
     def test_pr_states_from_fixture_commit_graph_and_proof_markers(self):
