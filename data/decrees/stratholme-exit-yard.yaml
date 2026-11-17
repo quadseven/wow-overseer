@@ -1,0 +1,58 @@
+# A family run ends in the Stratholme exit yard and gets out of it: the door, the button or the hearth is
+# used and the party is seen outside the yard (mod-overseer issue 645), the yard drive runs for a family held
+# by bag pressure with no yard ceiling warning (issue 1221). The yard hearth line (issue 1276) is log text and not asserted: see Scope. The family starts inside the yard beside the button, with the Stratholme job set.
+# Zero free bag slots is not seeded: the template state decides, and the precondition witnesses it.
+# Issue 1221 (the bag-pressure yard drive) is removed from proves: the full-bag town-trip episode cannot be
+# arranged or witnessed by a decree, so a no-warning check could pass without the drive ever polling. It waits for
+# wow-overseer#2767 and an arrangeable episode. The log lines of the way out (645) and the yard hearth line (1276) are text a decree can only forbid,
+# so they are not asserted and issue 1276 is dropped from proves; the way-out event row is read instead. The yard
+# Outside the yard is read as more than 60 yards from the button, for ALL FIVE members, and an arranged instance needs the
+# core's credited encounter.
+# Fixes: mod-overseer pulls 1164 (way out), 1324 (bag pressure) and 1280 (hearth line); commit is 1324.
+decree: v1
+id: stratholme-exit-yard
+proves:
+  - {repo: quadseven/mod-overseer, issue: 645, criterion: "after a real run the way out is recorded and all five of the family are outside the yard (the log lines are not asserted here)"}
+fix: {repo: quadseven/mod-overseer, commit: "e72f892e7f9d90f5348eea691b8b27bc8071189f"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 1h
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, at: {captured: stratholme-exit-yard-button}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+  - instance: {map: "Stratholme", as: strat, bind: family:grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:stratholme-live"}
+observe:
+  - name: family-starts-by-the-yard-button
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND map_id IN (0, 329)
+    expect: {scalar: "= 5"}
+  # The judge needs the core's own credited-encounter record when an instance is arranged.
+  - name: encounter-credited
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM log_encounter
+      WHERE map = 329 AND time >= @t0
+    expect: {scalar: ">= 1"}
+  - name: all-five-ended-outside-the-yard
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot s JOIN acore_world.gameobject go ON go.guid = 45625
+      WHERE s.guid IN (@cast) AND s.map_id = 0 AND s.zone_id = 139
+        AND POW(s.pos_x - go.position_x, 2) + POW(s.pos_y - go.position_y, 2) > 3600
+    expect: {scalar: "= 5"}
+  - name: a-yard-way-out-was-recorded
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run_event WHERE family = 'Grug' AND created_at >= @t0 AND detail LIKE '%stratholme exit%'
+    expect: {scalar: ">= 1"}
