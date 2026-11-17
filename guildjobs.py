@@ -879,6 +879,10 @@ class JobsPlan:
     # yields to levelling (class_asking); the bridge logs a line when its key
     # changes.
     ask_yields: tuple = ()
+    # One line per member listed in a death loop that got no escape step this
+    # pass, and why (#2152). Its own field: plan.notes is logged five lines a
+    # pass, which hid every one of these.
+    loop_lines: tuple = ()
     # guild -> {skill: name} of each trade's guinea pig (guineapig.pick).
     pigs: dict = field(default_factory=dict)
     # name -> the (skill, skill) each approved raid seat should hold
@@ -4971,6 +4975,7 @@ class _PlannerState:
     ask_yields: list = field(default_factory=list)
     gear_holds: list = field(default_factory=list)
     class_holds: dict = field(default_factory=dict)
+    refused: dict = field(default_factory=dict)
 
 
 def _plan_counters():
@@ -5042,6 +5047,8 @@ def _plan_ordered_member(member, inputs, state):
     if member.role == BANKER:
         _plan_banker_member(member, inputs, state)
         return
+    if member.role == UNASSIGNED and _plan_unassigned_escape(member, inputs, state):
+        return
     if member.role == UNASSIGNED and inputs.classes is not None:
         why = _plan_class_only_member(
             member,
@@ -5091,6 +5098,38 @@ def _plan_ordered_member(member, inputs, state):
         return
     if member.role in (MAINTENANCE, SUMMONER, RAIDER):
         _plan_roster_member(member, inputs, state)
+
+
+def _plan_unassigned_escape(member, inputs, state) -> bool:
+    """True when a member outside the lineup was issued its death loop's escape.
+
+    A seat the lineup did not place was offered a class step only, so a looper
+    among them never saw the escape (#2152). The hearth and the walk out are
+    the only rungs it is offered here; anything else stays class-only."""
+    loop = _offer_for(inputs.loops, member.name)
+    if loop is None:
+        return False
+    found = death_loop_first(
+        member,
+        loop,
+        inputs.leveling,
+        inputs.recent,
+        inputs.cap,
+        inputs.campaign,
+        _offer_for(inputs.supply, member.name),
+        inputs.kept,
+        inputs.classes,
+        mates=inputs.members,
+        looping=_member_map_keys(inputs.loops),
+    )
+    if found is None or found[0] is None or found[0].action not in _ESCAPE_ACTIONS:
+        return False
+    step, doing, note, _extra = found
+    if note:
+        state.notes.append(note)
+    state.lines[member.name] = doing
+    _commit_roster_step(member, step, inputs, state)
+    return True
 
 
 def _plan_roster_member(member, inputs, state):
@@ -5239,6 +5278,7 @@ def _commit_roster_step(member, step, inputs, state):
     )
     if why:
         state.notes.append(why)
+        state.refused[member.name] = why
         if step.action == classquest.ACTION:
             state.class_holds[member.name] = _class_hold_reason(member.name, why)
         _release_slots(member.name, state.far, inputs.hunts)
@@ -5314,9 +5354,49 @@ def _finish_plan(inputs, state):
         released=released,
         yields=class_yields(all_members, inputs.classes, inputs.recent),
         ask_yields=tuple(state.ask_yields),
+        loop_lines=_loop_lines(inputs, state, all_members),
         pigs=inputs.pigs,
         assigned=state.assigned,
     )
+
+
+_ESCAPE_ACTIONS = ("hearth", guildlevel.ACTION)
+
+
+def _loop_lines(inputs, state, all_members) -> tuple:
+    """One line per member listed in a death loop that got no escape step.
+
+    The box of #2152: every member the stuck list shows in a death loop has an
+    escape step or a logged reason in the same pass. A member whose escape
+    started is named by that step's own line; every other listed member is
+    named here, with the branch that issued nothing: not placed, a roster
+    family member, already out of the zone, a refusal of the step the pass
+    made, or the escape's own reason (_death_loop_reason)."""
+    escaped = {s.holder for s in state.steps if s.action in _ESCAPE_ACTIONS}
+    seen = {m.name: m for m in all_members}
+    seen.update({m.name: m for m in inputs.family_members or ()})
+    out = []
+    for name, loop in sorted((inputs.loops or {}).items()):
+        if name in escaped:
+            continue
+        m = seen.get(name)
+        out.append(
+            "%s gets no death-loop escape from %s: %s"
+            % (name, loop.place, _loop_line_reason(m, loop, inputs, state))
+        )
+    return tuple(out)
+
+
+def _loop_line_reason(m, loop, inputs, state) -> str:
+    if m is None:
+        return "not placed this pass"
+    if m.role == FAMILY:
+        return "roster member (the family route walks it)"
+    if m.name in state.refused:
+        return "the step was refused: %s" % state.refused[m.name]
+    if not _in_loop_zone(m, loop):
+        return "already out of the zone"
+    return _death_loop_reason(m, loop, inputs.leveling, inputs.recent, inputs.campaign)
 
 
 def _plan_family_class_member(

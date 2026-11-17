@@ -19890,12 +19890,15 @@ class Bridge(discord.Client):
             _log_capped("healer respec", notes)
             return
         now = time.monotonic()
-        recent = healerrespec.recent_walkers(await asyncio.to_thread(_respec_walk_rows))
+        respec_rows = await asyncio.to_thread(_respec_walk_rows)
+        recent = healerrespec.recent_walkers(respec_rows)
+        stranded = healerrespec.stranded(respec_rows)
         busy = self._guild_walkers_busy(now)
         row_walks = now >= self._mail_walk_unsupported_until
         walkers = await asyncio.to_thread(
             _route_walkers, [c.name for c in cands], names, row_walks)
-        walks, plan_notes = healerrespec.plan(cands, walkers, recent, busy)
+        walks, plan_notes = healerrespec.plan(
+            cands, walkers, recent, busy, stranded=stranded)
         _log_capped("healer respec", notes + plan_notes)
         started = 0
         for walk in walks:
@@ -20579,6 +20582,9 @@ class Bridge(discord.Client):
             members, facts, busy, cap, spawn_walks, cohort)
         self._log_guild_job_plan(members, plan)
         _log_capped("guild jobs", plan.notes)
+        # The death loop's reasons are never capped (#2152): every listed
+        # member that got no escape step is named, whatever else the pass says.
+        _log_loop_lines(plan.loop_lines)
         # A class quest that yields to levelling is named every pass, uncapped.
         for line in plan.yields:
             log.info("guild jobs: %s", line)
@@ -22702,6 +22708,13 @@ class Bridge(discord.Client):
                 )
         leader_at_hub = townerrand.in_range(
             hub, positions.get(leader), townerrand.HUB_YARDS)
+        if (state.phase == townerrand.GO and not leader_at_hub and not in_run):
+            # THE ARRIVAL IS SEEN, NOT SAMPLED (wow-dev 2026-11-17): see
+            # `_town_errand_watch_arrival`.
+            # Looked up: the adapter tests stub the family.
+            watch = getattr(self, "_town_errand_watch_arrival", None)
+            if watch is not None:
+                leader_at_hub = await watch(hub, leader)
         gathered = all(
             townerrand.in_range(hub, positions.get(n), townerrand.GATHER_YARDS)
             for n in names)
@@ -22759,6 +22772,30 @@ class Bridge(discord.Client):
         if new.phase == townerrand.DONE:
             await self._town_errand_release(names, leader, slot, label)
         _TOWN_ERRANDS[key] = new
+
+    async def _town_errand_watch_arrival(self, hub, leader) -> bool:
+        """Whether the leader is seen at the hub, watched closely when near it.
+
+        The worldserver ends the walk on arrival and returns the leader to its
+        quest drive within seconds, and the pass reads positions every 30
+        seconds after a 6 second settle, so the arrival fell between reads: the
+        errand stayed in GO until its 1,200 second bound, wrote no sale, and
+        the family's bag hold never lifted. A leader inside
+        `townerrand.ARRIVAL_WATCH_YARDS` is read every few seconds for the rest
+        of the pass; any read inside the hub's range is the arrival. Bounded:
+        it only runs near the hub, for one pass's length.
+        """
+        waited = 0.0
+        while True:
+            seen = (await asyncio.to_thread(
+                _fetch_fresh_positions, [leader])).get(leader)
+            if townerrand.in_range(hub, seen, townerrand.HUB_YARDS):
+                return True
+            if (not townerrand.watching_arrival(hub, seen)
+                    or waited >= townerrand.ARRIVAL_WATCH_SECONDS):
+                return False
+            await asyncio.sleep(townerrand.ARRIVAL_POLL_SECONDS)
+            waited += townerrand.ARRIVAL_POLL_SECONDS
 
     async def _aim_stranded_bag_pressure_members(
         self, names: list, leader: str, positions: dict,
@@ -23012,8 +23049,13 @@ class Bridge(discord.Client):
             bankers_of = globals().get("_fetch_errand_banker_stops")
             bank_reads = globals().get("_bank_first_reads")
             if bankers_of and bank_reads and why == townerrand.BAG_PRESSURE_WHY:
+                # ONLY THE MEMBERS WITH THE LEADER CHOOSE THE COUNTER: a
+                # follower thousands of yards off cannot reach it, and its
+                # stacks kept the family on a vendor aim that sold nothing.
+                here = townerrand.with_leader(
+                    names, positions, leader, everyone=bool(hearth_reaches))
                 sellable, bank_routed = await asyncio.to_thread(
-                    bank_reads, list(names))
+                    bank_reads, list(names), here)
                 if townerrand.bank_first(why, sellable, bank_routed):
                     banker_stops = townerrand.vendor_stops(
                         await asyncio.to_thread(bankers_of, leader, standing),
@@ -36207,6 +36249,15 @@ def _log_capped(prefix: str, notes) -> None:
         log.info("%s: and %d more like it", prefix, len(notes) - GUILD_ROUTE_NOTE_LINES)
 
 
+def _log_loop_lines(lines) -> None:
+    """One INFO line per listed death looper that got no escape step (#2152).
+
+    Uncapped on purpose: the cap of _log_capped hid every one of these on the
+    dev realm, with ninety other notes ahead of them in the same pass."""
+    for line in lines or ():
+        log.info("guild jobs: %s", line)
+
+
 # THE LINES A PASS REPEATS UNCHANGED (#1142). Measured read-only on the dev
 # realm bridge 2026-10-18 03:00-06:00 UTC: the bank forecast logged about 250
 # lines a pass, six passes an hour, with 4 to 11 of them changed; the bank
@@ -36857,14 +36908,18 @@ def _fetch_respec_rows(guild: str) -> list:
 
 
 def _respec_walk_rows() -> list:
-    """The talent reset walks of the last day, for healerrespec."""
+    """The talent reset walks of the last day, for healerrespec, and the older
+    refusals for having no trainer on the map (who is stranded, #2864)."""
     with _connect() as conn, conn.cursor() as cur:
         return _corps_read(
             cur, "healer respec walks",
-            "SELECT target_name, source, "
+            "SELECT target_name, source, status, detail, result, "
             "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
-            "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY",
-            (healerrespec.SOURCE + ":%",))
+            "WHERE source LIKE %s AND (created_at > NOW() - INTERVAL 1 DAY "
+            "OR (status = 'error' AND created_at > NOW() - INTERVAL %s DAY "
+            "AND result LIKE %s))",
+            (healerrespec.SOURCE + ":%", classtrain.STRANDED_READ_DAYS,
+             "%" + classtrain.NO_TRAINER_REASON + "%"))
 
 
 def _guild_train_rows() -> list:
@@ -41046,15 +41101,17 @@ def _fetch_errand_banker_stops(leader: str, standing) -> list:
             raise
 
 
-def _bank_first_reads(names: list) -> tuple:
+def _bank_first_reads(names: list, here=None) -> tuple:
     """({member: stacks a vendor would buy or None}, stacks the item plan routes
     to the bank), for the errand's choice of counter. Blocking.
 
     The sale counts are the vendor pass's own, after the loot policy's filter,
     and a member it has not read stays None. The route count is the bank
     pass's: the plan's GUILD_BANK and BANK_PERSONAL moves."""
-    sellable = {name: _VENDOR_SELLABLE.get(name) for name in names}
-    return sellable, len(_itemplan_bank_routes(list(names)).moves)
+    here = list(names) if here is None else list(here)
+    sellable = {name: _VENDOR_SELLABLE.get(name) for name in here}
+    moves = _itemplan_bank_routes(list(names)).moves
+    return sellable, sum(1 for m in moves if m.character in here)
 
 
 # THE HOME TOWN: the mailbox spawn nearest the head's hearthstone point, on its
