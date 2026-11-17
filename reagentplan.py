@@ -103,6 +103,13 @@ class Plan:
     judged: bool = False
     casts: int = 0
     shorts: tuple = ()
+    # THIN REAGENTS (#2502). A reagent the bags hold for at least one cast but
+    # fewer than `craft_rhythm.SHORT_CASTS` casts: the craft rhythm already
+    # calls the crafter short of it, yet it is no `Short`. Same shape as one,
+    # with `reagent.per_cast` set to the amount SHORT_CASTS casts eat, so the
+    # gap is `reagent.per_cast - have.bags`. Nothing but the profession loop's
+    # gather job reads it; `shorts` and everything built on them are unchanged.
+    thin: tuple = ()
 
     @property
     def fed(self) -> bool:
@@ -238,6 +245,7 @@ def plan(
     )
     casts = None
     shorts = []
+    thin = []
     for reagent in eaten:
         if reagent.entry in weave_feeds:
             if short_bolts == 0 or bolt_stored:
@@ -250,6 +258,13 @@ def plan(
         if reagent.entry not in weave_feeds:
             casts = have.bags // per if casts is None else min(casts, have.bags // per)
         if have.bags >= per:
+            enough = per * craft_rhythm.SHORT_CASTS
+            if reagent.entry not in weave_feeds and have.bags < enough:
+                full = Reagent(reagent.entry, reagent.label, enough, reagent.vendor)
+                src, who, why = _source(
+                    name, spell, full, have, enough - have.bags, kinds, skills
+                )
+                thin.append(Short(full, have, src, who, why))
             continue
         if reagent.entry == bolt_entry and not bolt_stored and weave_feeds:
             continue
@@ -264,7 +279,7 @@ def plan(
         if empty:
             why = _house_none(have, reagent.label, per - have.bags)
         shorts.append(Short(reagent, have, source, who, why, empty))
-    return Plan(name, int(spell), True, casts or 0, tuple(shorts))
+    return Plan(name, int(spell), True, casts or 0, tuple(shorts), tuple(thin))
 
 
 def line(p: Plan) -> str:

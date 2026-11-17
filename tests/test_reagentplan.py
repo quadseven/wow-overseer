@@ -447,5 +447,52 @@ class TheHouseListsNone(unittest.TestCase):
         )
 
 
+class ThinReagentTest(unittest.TestCase):
+    """A reagent held for fewer than SHORT_CASTS casts is thin (#2502).
+
+    Read live 2026-11-17: Og held 11 Silk Cloth against 4 per cast (2 casts).
+    The craft rhythm called that short of the 3 casts worth sitting down for,
+    but `Plan.shorts` only names a reagent the bags hold less than ONE cast
+    of, so the loop's gather job never saw it and chose mining.
+    """
+
+    SILK_BOLT_SPELL = 3839
+
+    def plan(self, bags, **places):
+        return reagentplan.plan(
+            "Og",
+            self.SILK_BOLT_SPELL,
+            {SILK_CLOTH: reagentplan.Stock(bags, **places)},
+            KINDS,
+            {"Og": {"tailoring": 157}},
+        )
+
+    def test_two_casts_of_silk_is_thin_and_not_short(self):
+        p = self.plan(11)
+        self.assertEqual((), p.shorts)
+        self.assertEqual(2, p.casts)
+        self.assertEqual([SILK_CLOTH], [t.reagent.entry for t in p.thin])
+        # the amount it still needs is the gap to SHORT_CASTS casts
+        self.assertEqual(4 * 3, p.thin[0].reagent.per_cast)
+        self.assertEqual(reagentplan.GATHER, p.thin[0].source)
+
+    def test_three_casts_is_not_thin(self):
+        self.assertEqual((), self.plan(12).thin)
+
+    def test_a_reagent_short_of_a_whole_cast_is_short_not_thin(self):
+        p = self.plan(3)
+        self.assertEqual([SILK_CLOTH], [s.reagent.entry for s in p.shorts])
+        self.assertEqual((), p.thin)
+
+    def test_a_thin_reagent_the_bank_covers_names_the_bank(self):
+        p = self.plan(11, bank=1)
+        self.assertEqual(reagentplan.BANK, p.thin[0].source)
+
+    def test_thin_does_not_change_fed_or_the_shorts_other_passes_read(self):
+        p = self.plan(11)
+        self.assertTrue(p.fed)
+        self.assertEqual({}, reagentplan.bank_wants([p]))
+
+
 if __name__ == "__main__":
     unittest.main()
