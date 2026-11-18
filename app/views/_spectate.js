@@ -128,7 +128,8 @@ export function stage(spRead, runs, opRead, idle) {
   const way = !arrived && sp.character && sp.target && sp.state === "moving" ? html`<p class="muted sp-note">The Watcher is on its way to ${sp.target}. Until it arrives the picture shows wherever it is now.</p>` : "";
   // The director's latest word, which is the reason when the Watcher is not
   // moving (no target yet, or its moves are held).
-  const why = !sp.note ? "" : !sp.target ? html`<p class="muted sp-note">Waiting: ${sp.note}</p>` : html`<p class="muted sp-note">Latest from the camera: ${sp.note}</p>`;
+  const reach = !arrived && (sp.state === "failed" || sp.state === "refused") && sp.reason ? html`<p class="muted sp-note">Could not reach ${on}: ${sp.reason}</p>` : "";
+  const why = reach ? "" : !sp.note ? "" : !sp.target ? html`<p class="muted sp-note">Waiting: ${sp.note}</p>` : html`<p class="muted sp-note">Latest from the camera: ${sp.note}</p>`;
   const stop = operatorOn(opRead) ? html`<button type="button" class="btn btn-secondary sp-btn sp-stop" data-spectate-stop><i class="ph ph-stop" aria-hidden="true"></i>Stop watching</button>` : "";
   // Not the wall's `data-stream`: Now's wall moves a family picture into every
   // slot carrying that, and one in here covered the whole page.
@@ -137,7 +138,7 @@ export function stage(spRead, runs, opRead, idle) {
     : html`<p class="muted sp-note">The camera has no stream address yet.</p>`;
   return html`<div class="sp-region">${status}<div class="card sp-stage" aria-live="polite">
 <span class="g-name"><i class="ph-fill ph-video-camera" aria-hidden="true"></i> ${head} ${on}.${arrived ? who : ""}</span>
-${way}${why}${picture}${stop}
+${way}${reach}${why}${picture}${stop}
 <span class="muted sp-note">This is the camera's view, an invisible observer that follows the target. The interface on screen belongs to the camera, not to any of them.${wait(sp)}</span>
 </div></div>`;
 }
