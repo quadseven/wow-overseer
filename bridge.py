@@ -6245,11 +6245,11 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
 
     The states are the module's member-state words (MemberStateWord):
     "dead", and the holds with no errand of the member's own choosing at
-    the end of them. The safety holds ("held off a walk that kept killing
-    it", "held where it stands, too far to walk back") are not judged:
-    they name their reason, and the module's fetch and regroup intents are
-    their recovery while a run is merely slow. In a wedge they end with
-    the run like everything else; they do not trigger it.
+    the end of them. A member held too far to walk back is included too:
+    unlike a member held off a walk that kept killing it, the module has
+    already refused both walking and flight for this catch-up. If that state
+    persists for the party-hold bound, another identical catch-up is not a
+    recovery.
     """
     now = time.monotonic()
     seen = {}
@@ -6259,6 +6259,7 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
         if member.state == "dead" or member.state in (
             "on an errand of its own",
             "held still",
+            dungeonstall.CATCH_UP_UNREACHABLE_STATE,
         ):
             seen[(leader, member.name, member.state)] = member
     for key in [k for k in _DOOR_HOLD_SINCE if k[0] == leader and k not in seen]:
