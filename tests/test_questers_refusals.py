@@ -32,6 +32,20 @@ def full_hunt(age=2, name="Mirra"):
 
 
 class ARefusedTakeIsNotBrokenForGood(unittest.TestCase):
+    def test_quest_264_s_eligibility_refusal_does_not_hold_the_ledger(self):
+        # Fixture from the ticket's Mortane row. The world gives no narrower
+        # cause than its combined eligibility message, so keep the refusal
+        # transient instead of attributing it to one eligibility gate.
+        reason = questers.REFUSED_TAKE + ": " + NOT_ELIGIBLE
+        ledger = {
+            ("Mortane", 264): questers.ledger_state("broken", reason),
+        }
+        self.assertEqual(questers.known_broken("Mortane", {}, ledger), frozenset())
+        self.assertEqual(
+            questers.retry_take_refusals("Mortane", {264: reason}, ()),
+            {264},
+        )
+
     def test_a_ledger_row_broken_by_a_refused_take_is_not_held(self):
         reason = questers.REFUSED_TAKE + ": " + NOT_ELIGIBLE
         state = questers.ledger_state("broken", reason)
