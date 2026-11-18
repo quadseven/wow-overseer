@@ -92,7 +92,7 @@ STREAK_LIMIT = 9
 
 class RefusalStreaks:
     """Per (member, quest): how many times in a row the module refused the use
-    with the same reason, and the reason last given."""
+    with the same reason."""
 
     def __init__(self):
         self._by: dict = {}
@@ -108,9 +108,6 @@ class RefusalStreaks:
 
     def done(self, name, quest) -> None:
         self._by.pop((name, int(quest)), None)
-
-    def last_reason(self, name, quest) -> str:
-        return self._by.get((name, int(quest)), ("", 0))[0]
 
 
 @dataclass(frozen=True)

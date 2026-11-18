@@ -160,8 +160,8 @@ def ask(
 
 
 class ARepeatedRefusalOutranksADeathLoop(unittest.TestCase):
-    """Saevor read as a death loop for 24 hours while every Runeforge cast was
-    refused: the deaths were a symptom, so the class quest is the cause."""
+    """A member read as a death loop while every class-quest use was refused:
+    the deaths were a symptom, so the class quest is the cause."""
 
     def test_a_class_quest_run_beside_a_loop_names_the_class_quest(self):
         loop = types.SimpleNamespace(
