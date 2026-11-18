@@ -221,6 +221,56 @@ class TheQuestEndpoint(Base):
             ],
         )
 
+    def test_thunderbrew_lager_explains_the_stored_stall_reason(self):
+        # Quest 117's broken rows in the brief carry the questers' stall
+        # reason (questers.STALLED): one quester's objectives not moving.
+        # A stall is that quester's attempt, not a finding about the quest
+        # (questers.ledger_state reads a stall row as stalled, not broken),
+        # so the attempt's reason must say so instead of reading as proof
+        # the quest cannot be finished.
+        row = quest(117, 15, 40) | {"title": "Thunderbrew Lager", "min_level": 12}
+        attempts = [
+            entry(
+                117,
+                7,
+                "Durga",
+                "broken",
+                "its objectives did not move for 2 hours of play",
+            ),
+            entry(
+                117,
+                8,
+                "Mirra",
+                "broken",
+                "its objectives did not move for 2 hours of play",
+            ),
+        ]
+        code, body = self.get(
+            "/api/v2/quests/117",
+            **{
+                qc.QUESTS_SQL: [row],
+                qc.GIVERS_SQL: [
+                    {"quest": 117, "role": role, "map_id": 0}
+                    for role in ("start", "end")
+                ],
+                v2quests.QUEST_LEDGER_SQL: attempts,
+            },
+        )
+        self.assertEqual(code, 200)
+        self.assertEqual(body["quest"]["status"], "broken")
+        self.assertEqual(
+            [(a["character"], a["reason"]) for a in body["attempts"]],
+            [
+                (
+                    name,
+                    "Its objectives did not move for 2 hours of play for this "
+                    "quester. A stall is one quester's attempt, not a finding "
+                    "that the quest cannot be finished.",
+                )
+                for name in ("Durga", "Mirra")
+            ],
+        )
+
     def test_one_quest_with_every_attempt(self):
         code, body = self.get("/api/v2/quests/1")
         self.assertEqual(code, 200)
