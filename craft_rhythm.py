@@ -52,6 +52,7 @@ from dataclasses import asdict, dataclass, replace
 
 import craft
 import craft_supply
+import gatherband
 import guildcorps
 import jobs
 import professions
@@ -106,6 +107,7 @@ SHORT = "short"
 BETWEEN = "between"
 STOCKED = "stocked"
 UNJUDGED = "unjudged"
+ROUTED = "routed"
 
 
 @dataclass(frozen=True)
@@ -528,6 +530,7 @@ class Stand:
     casts: int = 0
     thinnest: str = ""
     why: str = ""
+    thinnest_entry: int = 0
 
 
 @dataclass(frozen=True)
@@ -1310,6 +1313,7 @@ def stand(name: str, craft_spell: int, held: dict) -> Stand:
             thinnest=bag[0].label,
             why="%s holds %d %s, enough for %d bag(s) for the guild (spell %d)"
             % (name, bolts, bag[0].label, casts, spell),
+            thinnest_entry=bag[0].entry,
         )
 
     fed = DISENCHANT_FED.get(spell)
@@ -1341,6 +1345,7 @@ def stand(name: str, craft_spell: int, held: dict) -> Stand:
                 else "disenchanting, not a gathering trip, fills it, so this "
                 "argues for neither",
             ),
+            thinnest_entry=thin.entry,
         )
 
     reagents = GATHERED.get(spell)
@@ -1392,6 +1397,7 @@ def stand(name: str, craft_spell: int, held: dict) -> Stand:
         casts=casts,
         thinnest=thin.label,
         why=why,
+        thinnest_entry=thin.entry,
     )
 
 
@@ -1485,8 +1491,17 @@ def rhythm(stands, standing: str) -> Rhythm:
             stands=stands,
         )
 
-    judged = [s for s in stands if s.verdict != UNJUDGED]
+    routed = [s for s in stands if s.verdict == ROUTED]
+    judged = [s for s in stands if s.verdict not in (UNJUDGED, ROUTED)]
     if not judged:
+        if routed:
+            return Rhythm(
+                mode=MODE_CRAFT,
+                changed=standing != MODE_CRAFT,
+                why="Every actionable reagent shortage has a buy route, so "
+                "the family crafts while those routes are supplied.",
+                stands=stands,
+            )
         return Rhythm(
             why="Nobody in the family holds a recipe whose reagents a "
             "gathering trip produces, so there is no reason here to change "
@@ -1501,6 +1516,12 @@ def rhythm(stands, standing: str) -> Rhythm:
             "%s cannot cast: %s. One walk restocks all of them at once, so "
             "the family gathers."
             % (", ".join(s.name for s in short), "; ".join(s.why for s in short))
+        )
+    elif routed and all(s.verdict == STOCKED for s in judged):
+        wanted = MODE_CRAFT
+        why = (
+            "Every gatherable reagent is stocked; remaining shortages have "
+            "buy routes, so the family crafts while those routes are supplied."
         )
     elif all(s.verdict == STOCKED for s in judged):
         wanted = MODE_CRAFT
@@ -1542,6 +1563,9 @@ def report(plan: Rhythm) -> str:
     unjudged = [s for s in plan.stands if s.verdict == UNJUDGED]
     if unjudged:
         said += " No opinion formed about: " + "; ".join(s.why for s in unjudged)
+    routed = [s for s in plan.stands if s.verdict == ROUTED]
+    if routed:
+        said += " Routed to buy: " + "; ".join(s.why for s in routed)
     if plan.mode and not plan.changed:
         said += " Already on job=%s, so nothing is written." % plan.mode
     return said
@@ -1691,11 +1715,41 @@ def _request_key(request: MaterialRequest) -> str:
     return "%s:%d" % (request.character, request.entry)
 
 
-def route_request(request: MaterialRequest, kind, skills: dict) -> tuple:
+def zone_minimums(lock_ids, skinning_levels=()) -> dict:
+    """Minimum gathering skill that can work any source measured in a zone.
+
+    `lock_ids` are the zone's node locks. `skinning_levels` are the levels of
+    its creatures with a skinning loot table. A missing trade means no source
+    of that trade was measured in the zone, not that its minimum is zero.
+    """
+    locks = {int(lock) for lock in lock_ids or ()}
+    out = {}
+    for trade, bands in gatherband.BANDS.items():
+        required = [int(bands[lock]) for lock in locks if lock in bands]
+        if required:
+            out[trade] = min(required)
+
+    skinning = []
+    for value in skinning_levels or ():
+        level = int(value)
+        if level <= 0:
+            continue
+        required = (level - 10) * 10 if level <= 20 else level * 5
+        skinning.append(max(0, required))
+    if skinning:
+        out["skinning"] = min(skinning)
+    return out
+
+
+def route_request(
+    request: MaterialRequest, kind, skills: dict, zone_minimums=None
+) -> tuple:
     """(how, who, why) for one request.
 
     `kind` is the reagent's (item class, subclass), None when unread; `skills`
-    is {name: {trade: value}} for the family. The requester is asked first.
+    is {name: {trade: value}} for the family. When `zone_minimums` is present,
+    a gatherer must meet the current zone's minimum source requirement. The
+    requester is asked first among members who can actually gather there.
     """
     label = request.label or "item %d" % request.entry
     if kind is None:
@@ -1717,6 +1771,43 @@ def route_request(request: MaterialRequest, kind, skills: dict) -> tuple:
             ROUTE_BUY,
             request.character,
             "%s comes from no gathering trade, so it is bought" % label,
+        )
+    if zone_minimums is not None:
+        minimum = (zone_minimums or {}).get(trade)
+        if minimum is None:
+            return (
+                ROUTE_BUY,
+                request.character,
+                "no %s source was measured in the current zone, so %s is bought"
+                % (trade, label),
+            )
+        minimum = int(minimum)
+        holders = sorted(
+            (
+                (name, int(held.get(trade, 0)))
+                for name, held in skills.items()
+                if int(held.get(trade, 0)) > 0
+                and int(held.get(trade, 0)) >= minimum
+            ),
+            key=lambda row: (row[0] != request.character, row[0].casefold()),
+        )
+        if holders:
+            who, value = holders[0]
+            return (
+                ROUTE_GATHER,
+                who,
+                "%s skill %d meets the current-zone minimum %d, so %s gathers "
+                "on the way"
+                % (trade, value, minimum, label),
+            )
+        highest = max(
+            (int(held.get(trade, 0)) for held in skills.values()), default=0
+        )
+        return (
+            ROUTE_BUY,
+            request.character,
+            "the highest %s skill is %d, below the current-zone minimum %d, "
+            "so %s is bought" % (trade, highest, minimum, label),
         )
     holders = sorted(
         (name for name, held in skills.items() if int(held.get(trade, 0)) > 0),
@@ -1781,7 +1872,13 @@ def _refresh(pending, requests, now: float) -> None:
 
 
 def take_requests(
-    pending, requests, kinds: dict, skills: dict, held: dict, now: float
+    pending,
+    requests,
+    kinds: dict,
+    skills: dict,
+    held: dict,
+    now: float,
+    zone_minimums=None,
 ) -> list:
     """Route every request not already acted on; return the new routes.
 
@@ -1800,7 +1897,9 @@ def take_requests(
             continue
         if int(held.get((request.character, request.entry), 0)) >= request.need:
             continue
-        how, who, why = route_request(request, kinds.get(request.entry), skills)
+        how, who, why = route_request(
+            request, kinds.get(request.entry), skills, zone_minimums
+        )
         base = (
             int(held.get((who, request.entry), 0))
             if how == ROUTE_GATHER and who != request.character
@@ -1889,30 +1988,39 @@ def open_routes(pending, how: str = "") -> list:
 
 
 def requested_stands(stands, routes) -> tuple:
-    """`stands` with each open gather route's gatherer SHORT on its request."""
-    asks = {r.who: r for r in routes or () if r.how == ROUTE_GATHER and not r.closed}
+    """Apply open material routes to the stand that can answer each one."""
+    routes = tuple(routes or ())
+    asks = {r.who: r for r in routes if r.how == ROUTE_GATHER and not r.closed}
+    buys = {
+        (r.request.character, r.request.entry): r
+        for r in routes
+        if r.how == ROUTE_BUY and not r.closed
+    }
     out = []
     for item in stands or ():
         route = asks.get(item.name)
-        if route is None or item.verdict == SHORT:
-            out.append(item)
-            continue
-        request = route.request
-        out.append(
-            replace(
+        if route is not None and item.verdict != SHORT:
+            request = route.request
+            item = replace(
                 item,
                 verdict=SHORT,
                 thinnest=request.label,
-                why="%s answers %s's material-request: %s short %dx %s"
-                % (
-                    item.name,
-                    request.character,
-                    request.character,
-                    request.short,
-                    request.label,
-                ),
+                thinnest_entry=request.entry,
+                why="%s gathers %s's material-request: %s short %dx %s"
+                % (item.name, request.character, request.character,
+                   request.short, request.label),
             )
-        )
+        if item.verdict == SHORT:
+            route = buys.get((item.name, item.thinnest_entry))
+            if route is not None:
+                request = route.request
+                item = replace(
+                    item,
+                    verdict=ROUTED,
+                    why="%s short %dx %s is routed to buy: %s"
+                    % (item.name, request.short, request.label, route.why),
+                )
+        out.append(item)
     return tuple(out)
 
 
