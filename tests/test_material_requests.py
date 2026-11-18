@@ -98,6 +98,7 @@ class EachRequestGoesToOneErrand(unittest.TestCase):
         self.assertIn("item_template", why)
 
     def test_a_miner_below_the_zone_node_floor_buys_the_reagent(self):
+        """A trade skill below this zone's source floor cannot gather."""
         request = _request(
             name="Miner",
             entry=ROUGH_STONE,
@@ -115,6 +116,7 @@ class EachRequestGoesToOneErrand(unittest.TestCase):
         self.assertIn("175", why)
 
     def test_a_miner_at_the_zone_node_floor_can_gather(self):
+        """A member meeting the zone floor remains eligible to gather."""
         request = _request(
             name="Miner",
             entry=ROUGH_STONE,
@@ -133,12 +135,14 @@ class EachRequestGoesToOneErrand(unittest.TestCase):
 
 class ZoneGatheringRequirements(unittest.TestCase):
     def test_the_lowest_measured_node_and_beast_set_the_zone_floor(self):
+        """The easiest measured source sets each gathering trade's floor."""
         self.assertEqual(
             cr.zone_minimums((379, 380), skinning_levels=(45, 55)),
             {"mining": 175, "skinning": 225},
         )
 
     def test_a_zero_skill_node_floor_is_preserved(self):
+        """A real zero-skill node floor is distinct from missing sources."""
         self.assertEqual(cr.zone_minimums((38,)), {"mining": 0})
 
 
@@ -312,6 +316,7 @@ class GatherRoutesSendTheFamilyOut(unittest.TestCase):
         self.assertEqual(cr.requested_stands(stands, cr.open_routes(pending)), stands)
 
     def test_a_buy_routed_shortage_does_not_keep_the_family_gathering(self):
+        """A shortage routed to buying no longer votes for gathering."""
         request = _request(
             name="Miner",
             recipe=3918,
@@ -396,6 +401,7 @@ class TheBridgeRoutesTheRequests(unittest.TestCase):
         self.assertIn("auction.requested_needs(", self._body("_auction_shortfall"))
 
     def test_material_routes_use_current_zone_gathering_floors(self):
+        """The bridge supplies the live zone's node and skinning facts."""
         body = self._body("_material_routes")
         self.assertIn("_fetch_zone_gathering_minimums, leader", body)
         self.assertIn("zone_minimums))", body)

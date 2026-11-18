@@ -1493,21 +1493,9 @@ def rhythm(stands, standing: str) -> Rhythm:
 
     routed = [s for s in stands if s.verdict == ROUTED]
     judged = [s for s in stands if s.verdict not in (UNJUDGED, ROUTED)]
-    if not judged:
-        if routed:
-            return Rhythm(
-                mode=MODE_CRAFT,
-                changed=standing != MODE_CRAFT,
-                why="Every actionable reagent shortage has a buy route, so "
-                "the family crafts while those routes are supplied.",
-                stands=stands,
-            )
-        return Rhythm(
-            why="Nobody in the family holds a recipe whose reagents a "
-            "gathering trip produces, so there is no reason here to change "
-            "job=%s." % standing,
-            stands=stands,
-        )
+    routed_plan = _route_rhythm_plan(stands, standing, routed, judged)
+    if routed_plan is not None:
+        return routed_plan
 
     short = [s for s in judged if s.verdict == SHORT]
     if short:
@@ -1516,12 +1504,6 @@ def rhythm(stands, standing: str) -> Rhythm:
             "%s cannot cast: %s. One walk restocks all of them at once, so "
             "the family gathers."
             % (", ".join(s.name for s in short), "; ".join(s.why for s in short))
-        )
-    elif routed and all(s.verdict == STOCKED for s in judged):
-        wanted = MODE_CRAFT
-        why = (
-            "Every gatherable reagent is stocked; remaining shortages have "
-            "buy routes, so the family crafts while those routes are supplied."
         )
     elif all(s.verdict == STOCKED for s in judged):
         wanted = MODE_CRAFT
@@ -1545,6 +1527,35 @@ def rhythm(stands, standing: str) -> Rhythm:
         )
 
     return Rhythm(mode=wanted, changed=wanted != standing, why=why, stands=stands)
+
+
+def _route_rhythm_plan(stands, standing, routed, judged):
+    """Handle routed shortages before the normal gather-versus-craft vote."""
+    if not judged:
+        if routed:
+            return Rhythm(
+                mode=MODE_CRAFT,
+                changed=standing != MODE_CRAFT,
+                why="Every actionable reagent shortage has a buy route, so "
+                "the family crafts while those routes are supplied.",
+                stands=stands,
+            )
+        return Rhythm(
+            why="Nobody in the family holds a recipe whose reagents a "
+            "gathering trip produces, so there is no reason here to change "
+            "job=%s." % standing,
+            stands=stands,
+        )
+    if routed and all(s.verdict == STOCKED for s in judged):
+        return Rhythm(
+            mode=MODE_CRAFT,
+            changed=standing != MODE_CRAFT,
+            why="Every gatherable reagent is stocked; remaining shortages "
+            "have buy routes, so the family crafts while those routes are "
+            "supplied.",
+            stands=stands,
+        )
+    return None
 
 
 def report(plan: Rhythm) -> str:
@@ -1773,42 +1784,7 @@ def route_request(
             "%s comes from no gathering trade, so it is bought" % label,
         )
     if zone_minimums is not None:
-        minimum = (zone_minimums or {}).get(trade)
-        if minimum is None:
-            return (
-                ROUTE_BUY,
-                request.character,
-                "no %s source was measured in the current zone, so %s is bought"
-                % (trade, label),
-            )
-        minimum = int(minimum)
-        holders = sorted(
-            (
-                (name, int(held.get(trade, 0)))
-                for name, held in skills.items()
-                if int(held.get(trade, 0)) > 0
-                and int(held.get(trade, 0)) >= minimum
-            ),
-            key=lambda row: (row[0] != request.character, row[0].casefold()),
-        )
-        if holders:
-            who, value = holders[0]
-            return (
-                ROUTE_GATHER,
-                who,
-                "%s skill %d meets the current-zone minimum %d, so %s gathers "
-                "on the way"
-                % (trade, value, minimum, label),
-            )
-        highest = max(
-            (int(held.get(trade, 0)) for held in skills.values()), default=0
-        )
-        return (
-            ROUTE_BUY,
-            request.character,
-            "the highest %s skill is %d, below the current-zone minimum %d, "
-            "so %s is bought" % (trade, highest, minimum, label),
-        )
+        return _route_zone_source(request, label, trade, skills, zone_minimums)
     holders = sorted(
         (name for name, held in skills.items() if int(held.get(trade, 0)) > 0),
         key=lambda name: (name != request.character, name.casefold()),
@@ -1823,6 +1799,42 @@ def route_request(
         ROUTE_BUY,
         request.character,
         "nobody in the family holds %s for %s, so it is bought" % (trade, label),
+    )
+
+
+def _route_zone_source(request, label, trade, skills, zone_minimums):
+    """Gather only when a family member meets a measured zone source floor."""
+    minimum = (zone_minimums or {}).get(trade)
+    if minimum is None:
+        return (
+            ROUTE_BUY,
+            request.character,
+            "no %s source was measured in the current zone, so %s is bought"
+            % (trade, label),
+        )
+    minimum = int(minimum)
+    holders = sorted(
+        (
+            (name, int(held.get(trade, 0)))
+            for name, held in skills.items()
+            if int(held.get(trade, 0)) > 0 and int(held.get(trade, 0)) >= minimum
+        ),
+        key=lambda row: (row[0] != request.character, row[0].casefold()),
+    )
+    if holders:
+        who, value = holders[0]
+        return (
+            ROUTE_GATHER,
+            who,
+            "%s skill %d meets the current-zone minimum %d, so %s gathers "
+            "on the way" % (trade, value, minimum, label),
+        )
+    highest = max((int(held.get(trade, 0)) for held in skills.values()), default=0)
+    return (
+        ROUTE_BUY,
+        request.character,
+        "the highest %s skill is %d, below the current-zone minimum %d, "
+        "so %s is bought" % (trade, highest, minimum, label),
     )
 
 
@@ -2007,8 +2019,13 @@ def requested_stands(stands, routes) -> tuple:
                 thinnest=request.label,
                 thinnest_entry=request.entry,
                 why="%s gathers %s's material-request: %s short %dx %s"
-                % (item.name, request.character, request.character,
-                   request.short, request.label),
+                % (
+                    item.name,
+                    request.character,
+                    request.character,
+                    request.short,
+                    request.label,
+                ),
             )
         if item.verdict == SHORT:
             route = buys.get((item.name, item.thinnest_entry))

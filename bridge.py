@@ -38614,37 +38614,36 @@ def _fetch_zone_gathering_minimums(leader: str) -> dict:
     """
     if not leader:
         return {}
-    positions = _fetch_positions([leader])
-    position = positions.get(leader)
-    if not position:
+    position = _fetch_positions([leader]).get(leader)
+    if not position or position.get("map_id") is None:
         return {}
-    if position.get("map_id") is None or position.get("zone_id") is None:
+    zone = position.get("zone_id")
+    if zone is None or int(zone) <= 0:
         return {}
-    map_id = int(position["map_id"])
-    zone_id = int(position["zone_id"])
-    if zone_id <= 0:
-        return {}
+    map_id, zone_id = int(position["map_id"]), int(zone)
 
     locks = sorted({lock for bands in gatherband.BANDS.values() for lock in bands})
-    lock_ids = []
-    skinning_levels = []
     with _connect() as conn, conn.cursor() as cur:
+        lock_ids = []
         if locks:
             sql = _ZONE_GATHER_NODE_SQL.format(
                 placeholders=",".join(["%s"] * len(locks)))
-            try:
-                cur.execute(sql, (map_id, zone_id, travel.CHEST_GO_TYPE, *locks))
-                lock_ids = [int(row["lock_id"]) for row in cur.fetchall()]
-            except pymysql.err.MySQLError as exc:
-                if not exc.args or exc.args[0] not in (1054, 1146, 1265):
-                    raise
-        try:
-            cur.execute(_ZONE_SKINNING_LEVEL_SQL, (map_id, zone_id))
-            skinning_levels = [int(row["level"]) for row in cur.fetchall()]
-        except pymysql.err.MySQLError as exc:
-            if not exc.args or exc.args[0] not in (1054, 1146, 1265):
-                raise
+            lock_ids = _fetch_zone_source_values(
+                cur, sql, (map_id, zone_id, travel.CHEST_GO_TYPE, *locks), "lock_id")
+        skinning_levels = _fetch_zone_source_values(
+            cur, _ZONE_SKINNING_LEVEL_SQL, (map_id, zone_id), "level")
     return craft_rhythm.zone_minimums(lock_ids, skinning_levels)
+
+
+def _fetch_zone_source_values(cur, sql: str, params: tuple, field: str) -> list:
+    """Read one zone source list, treating absent world columns as no source."""
+    try:
+        cur.execute(sql, params)
+        return [row[field] for row in cur.fetchall()]
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146, 1265):
+            return []
+        raise
 
 
 # The gather nodes of one farming task's material in its zone (#1833): node
