@@ -346,9 +346,7 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
             {travel.FORGE_FOCUS_ID, craft.BLACK_FORGE_FOCUS_ID},
         )
         self.assertEqual(craft.FOCUS_AIMS[travel.FORGE_FOCUS_ID], "forge")
-        self.assertEqual(
-            craft.FOCUS_AIMS[craft.BLACK_FORGE_FOCUS_ID], "black-forge"
-        )
+        self.assertEqual(craft.FOCUS_AIMS[craft.BLACK_FORGE_FOCUS_ID], "black-forge")
         anvil = [
             recipe.spell_id
             for recipe in craft.RECIPES[goals.SKILL_IDS["engineering"]]
@@ -358,6 +356,7 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         for spell in anvil:
             with self.subTest(spell=spell):
                 self.assertNotIn(craft.focus_for(spell), craft.FOCUS_AIMS)
+
     def test_it_goes_through_the_one_sanctioned_writer(self):
         """`_write_trade_errand` is the only thing in this process that writes
         `travel_npc`, and its guard is what keeps an economy aim from blanking
