@@ -9018,6 +9018,10 @@ class Bridge(discord.Client):
         # store (#817): a deploy would otherwise count a trip stuck for most
         # of its bound from zero, and with deploys closer together than the
         # bound the give-up never fired.
+        # Leader -> when the module first said a vendor errand was done with
+        # nothing queued (bag_pressure.counter_done_step). In memory only: a
+        # restart restarts the clock, which costs one more bounded wait.
+        self._counter_done_since: dict[str, float] = {}
         self._vendor_movement: dict[str, vendor_stall.Movement] = _ClockMemo(
             "vendor_move", "vendor trip stall", vendor_stall.movement_memo,
             vendor_stall.movement_from_memo, _trip_clock, TRIP_CLOCK_MEMO_SECONDS)
@@ -14921,8 +14925,12 @@ class Bridge(discord.Client):
         pressure = bag_pressure.family_town_run_needed(free_slots)
         current_aim = await asyncio.to_thread(_current_travel_npc, leader)
         stall = None
+        module_done = False
         if current_aim == "vendor":
             intent = (await asyncio.to_thread(_fetch_family_intents)).get(leader, {})
+            # The module's own record that it has finished the walk: its intent
+            # row no longer holds the leader for the economy errand.
+            module_done = str(intent.get("current_kind") or "") != "economy"
             bag_wait_seconds = max(0.0, float(intent.get("current_for") or 0))
             observed = await asyncio.to_thread(_fetch_vendor_position, leader)
             stall = vendor_stall.progress(
@@ -14991,6 +14999,31 @@ class Bridge(discord.Client):
             pressure=pressure,
             sale_counts=_vendor_sale_counts(names),
         )
+        # THE BOUND ON THE PRESSURE HOLD. The module calls the errand done on
+        # arrival and may not clear the column; the bridge holds the aim under
+        # bag pressure; so a leader at a counter with nothing queued would hold
+        # the one travel column, and have the module read it as a new walk every
+        # poll, for ever. See bag_pressure.COUNTER_DONE_RELEASE_SECONDS.
+        done_since, done_release = bag_pressure.counter_done_step(
+            self._counter_done_since.get(leader), time.monotonic(),
+            bool(leader_town.vendor) and current_aim == "vendor", outstanding,
+            module_done,
+        )
+        if done_since is None:
+            self._counter_done_since.pop(leader, None)
+        else:
+            self._counter_done_since[leader] = done_since
+        if done_release and step == bag_pressure.VENDOR_ERRAND_HOLD:
+            # The release below is the pass's one release; this only turns the
+            # hold into it once the bound has run.
+            log.info(
+                "economy: leader=%s has stood at a vendor %ds with nothing "
+                "queued since the module called the errand done, so the "
+                "errand is handed back and the travel column is free",
+                leader, int(bag_pressure.COUNTER_DONE_RELEASE_SECONDS),
+            )
+            self._counter_done_since.pop(leader, None)
+            step = bag_pressure.VENDOR_ERRAND_RELEASE
         if (step == bag_pressure.VENDOR_ERRAND_HOLD
                 and outstanding == 0
                 and bag_pressure.family_town_run_needed(free_slots)):

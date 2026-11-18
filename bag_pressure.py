@@ -1108,6 +1108,43 @@ def vendor_errand_step(
     return stranded_errand_step(sales_outstanding)
 
 
+# HOW LONG A LEADER MAY STAND AT A COUNTER, WITH NOTHING QUEUED, AFTER THE
+# MODULE HAS SAID THE ERRAND IS DONE, BEFORE THE BRIDGE HANDS THE COLUMN BACK.
+# The module declares "reached vendor, errand done" the moment the leader is in
+# range and is fenced from clearing a column it did not write, so the aim stays
+# and the module reads the standing aim as a new walk every poll (dev realm,
+# 2026-11-18: the errand finished in 0s again and again, and the watch counted
+# each as a restart). Under bag pressure `vendor_errand_step` holds, because the
+# followers' sales may not be written yet; this is the bound on that hold, the
+# same shape as the 120 second lease (infra#3703): an errand that cannot finish
+# must not hold the one travel column for ever.
+COUNTER_DONE_RELEASE_SECONDS = 120.0
+
+
+def counter_done_step(
+    since: float | None,
+    now: float,
+    at_counter: bool,
+    sales_outstanding: int,
+    module_done: bool,
+) -> tuple[float | None, bool]:
+    """(clock, release) for a vendor errand the module says is done.
+
+    The clock starts when the leader is at the counter, nothing is queued
+    against it and the module has reported the errand finished, and it is
+    kept through a flicker of the module's own report (the walk re-armed and
+    finished again). Any queued sale, an unreadable queue (-1) or a leader off
+    the counter clears it. RELEASE only once the clock has run
+    COUNTER_DONE_RELEASE_SECONDS. Never on one reading: nothing in this
+    function releases for LOOKING finished.
+    """
+    if not at_counter or sales_outstanding != 0:
+        return None, False
+    if since is None:
+        return (now if module_done else None), False
+    return since, (now - since) >= COUNTER_DONE_RELEASE_SECONDS
+
+
 def _position_map(position: dict | None) -> int | None:
     """Map id from a settled snapshot row, or None when it cannot be read."""
     if not position:
