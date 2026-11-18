@@ -950,8 +950,8 @@ def _walk_restarts(steps, now_at, window=900) -> int:
     A restart is the same walk begun again. Different walks taking the leader
     in turn (a vendor trip, then an errand leg, then the quest drive) are
     hand-overs that each finished, and summing them read a healthy family as
-    "the walk has ended and restarted 7 times" (dev realm, 2026-11-18). The
-    dungeon stall breaker keeps the sum in `restart_count`: its steps are one
+    "the walk has ended and restarted" with a count that was a sum of
+    separate walks. The dungeon stall breaker keeps the sum in `restart_count`: its steps are one
     walk already.
     """
     per_walk: dict = {}
