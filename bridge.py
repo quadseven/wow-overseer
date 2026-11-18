@@ -17131,33 +17131,7 @@ class Bridge(discord.Client):
             index = indexes.get(holder, 0)
             indexes[holder] = index + 1
             row_by_key[(holder, 1, int(source["entry"]), index)] = source
-        candidates = []
-        for decision in report.plan.decisions:
-            stack = by_key.get(decision.key)
-            source = row_by_key.get(decision.key)
-            quote = (extras.market or {}).get(decision.entry)
-            # A RECIPE NOBODY CAN LEARN IS LISTED WITH NO MARKET (#2605): the
-            # house is empty by design, so the price is the plan_sales floor,
-            # four times the vendor price, never a generated one.
-            price = (int(quote[0]) if quote else
-                     stack.sell * 4 if (decision.target
-                                        == itemplan.LIST_AT_VENDOR_QUOTE
-                                        and stack is not None) else 0)
-            if (decision.route != itemplan.AUCTION or stack is None
-                    or source is None or not stack.tradable or not price):
-                continue
-            candidates.append({
-                "holder": decision.holder,
-                "item_guid": int(source["item_guid"]),
-                "entry": decision.entry,
-                "label": decision.name,
-                "quality": stack.quality,
-                "binding": "none",
-                "quest_item": False,
-                "sell_price": stack.sell,
-                "market_price": price,
-                "count": decision.count,
-            })
+        candidates = _auction_candidates(report, by_key, row_by_key, extras)
         holder_house = await self._auction_holder_houses(candidates, names)
         # A HOLDER AWAY FROM A COUNTER IS WALKED TO ONE (#2605). The rows below
         # are written only for a holder already standing at an auctioneer, and
@@ -23331,6 +23305,39 @@ class Bridge(discord.Client):
                              if route else "the vendor aim stands", route_line)
                     if route:
                         hub = spot
+            # A FAMILY WHOSE ROOM IS IN LISTING GOES TO AN AUCTIONEER (#1261):
+            # a vendor buys nothing of what it carries, and the recipes
+            # nobody can learn are the plan's AUCTION decisions. Only when no
+            # bank route was chosen, with the same death and town slot guards.
+            auction_stops_of = globals().get("_auction_stops_for_errand")
+            auction_reads = globals().get("_auction_first_reads")
+            if (not route and auction_stops_of and auction_reads
+                    and townerrand.room_errand(why)):
+                with_me = townerrand.with_leader(
+                    names, positions, leader, everyone=bool(hearth_reaches))
+                sellable_a, listed = await asyncio.to_thread(
+                    auction_reads, list(names), with_me)
+                if townerrand.auction_first(why, sellable_a, listed):
+                    side_a = (
+                        situation.ALLIANCE_MASK if teams.get(leader) == "alliance"
+                        else situation.HORDE_MASK
+                        if teams.get(leader) == "horde" else 0)
+                    counters = townerrand.vendor_stops(
+                        await asyncio.to_thread(
+                            auction_stops_of, leader, standing),
+                        side_a, kind="auctioneer")
+                    route, spot_a, route_line_a = townerrand.auction_route(
+                        why, sellable_a, listed, counters,
+                        positions.get(leader), released, now, deaths=deaths,
+                        walled=walled)
+                    log.info("town errand: %s%s has %d listing(s) for an "
+                             "auctioneer and nothing a vendor would buy; %s (%s)",
+                             why, label, listed,
+                             "aims at %s" % spot_a.get("place", "the auctioneer")
+                             if route else "the vendor aim stands",
+                             route_line_a)
+                    if route:
+                        hub = spot_a
             chosen = hub if route else townerrand.choose_aim(
                 hub, stops, standing, why, released, now, deaths=deaths,
                 hearth_reaches=hearth_reaches, walled=walled)
@@ -23441,6 +23448,20 @@ class Bridge(discord.Client):
                 await self._vendor_once(cohort)
                 marks[step] = now
             return ran_for >= TOWN_ERRAND_SETTLE_SECONDS
+        if step == townerrand.AUCTION:
+            # THE ECONOMY PASS LISTS AT THE COUNTER (#1261): the leader is aimed
+            # at the auctioneer, nothing is planned until it is read standing
+            # in reach, and the pass then queues the plan's listings, a few per
+            # pass, so it is asked again every 40 seconds until the step ends.
+            await self._town_errand_aim(leader, _hub_aim(state.hub), cohort)
+            if not await asyncio.to_thread(_fetch_auctioneer, leader):
+                return False
+            if step not in marks or now - marks[step + ":run"] >= 40.0:
+                if step not in marks:
+                    marks[step] = now
+                marks[step + ":run"] = now
+                await self._vendor_once(cohort)
+            return ran_for >= townerrand.STEP_SECONDS[townerrand.AUCTION] - 60.0
         if step == townerrand.VENDOR:
             return await self._town_errand_vendor(
                 state, names, leader, positions, cohort, now, marks)
@@ -33902,6 +33923,42 @@ async def _run_itemplan_auction(itemplan_auction, names, family, rows,
                                worn_rows, cohort)
 
 
+def _auction_candidates(report, by_key: dict, row_by_key: dict, extras) -> list:
+    """The listings the item plan's AUCTION decisions would make, as sale rows.
+
+    One reading for the executor and for the errand's choice of counter (#1261),
+    so the walk is never taken for a listing the executor would refuse.
+    """
+    candidates = []
+    for decision in report.plan.decisions:
+        stack = by_key.get(decision.key)
+        source = row_by_key.get(decision.key)
+        quote = (extras.market or {}).get(decision.entry)
+        # A RECIPE NOBODY CAN LEARN IS LISTED WITH NO MARKET (#2605): the
+        # house is empty by design, so the price is the plan_sales floor,
+        # four times the vendor price, never a generated one.
+        price = (int(quote[0]) if quote else
+                 stack.sell * 4 if (decision.target
+                                    == itemplan.LIST_AT_VENDOR_QUOTE
+                                    and stack is not None) else 0)
+        if (decision.route != itemplan.AUCTION or stack is None
+                or source is None or not stack.tradable or not price):
+            continue
+        candidates.append({
+            "holder": decision.holder,
+            "item_guid": int(source["item_guid"]),
+            "entry": decision.entry,
+            "label": decision.name,
+            "quality": stack.quality,
+            "binding": "none",
+            "quest_item": False,
+            "sell_price": stack.sell,
+            "market_price": price,
+            "count": decision.count,
+        })
+    return candidates
+
+
 def _shadow_itemplan(*args, **facts) -> None:
     """The economy pass's one call into the item plan shadow (#1972).
 
@@ -41678,6 +41735,66 @@ def _bank_first_reads(names: list, here=None) -> tuple:
     sellable = {name: _VENDOR_SELLABLE.get(name) for name in here}
     moves = _itemplan_bank_routes(list(names)).moves
     return sellable, sum(1 for m in moves if m.character in here)
+
+
+def _auction_first_reads(names: list, here=None) -> tuple:
+    """({member: stacks a vendor would buy or None}, listings the item plan
+    would make now), for the errand's choice of counter (#1261). Blocking.
+
+    The listing count is the executor's own (`_auction_candidates`, then
+    `auction.plan_sales`), so no walk is taken for a listing the executor would
+    refuse. Zero when ITEMPLAN_AUCTION is off or the plan could not be read:
+    the vendor stands on a guess."""
+    here = list(names) if here is None else list(here)
+    sellable = {name: _VENDOR_SELLABLE.get(name) for name in here}
+    if not itemplan_shadow.auction_enabled():
+        return sellable, 0
+    try:
+        rows = _fetch_vendor_items(list(names))
+        free_slots = _fetch_free_slots(list(names))
+        gear_rows = _fetch_surplus_gear(list(names))
+        worn_rows = _fetch_family_equipped(list(names))
+        extras = _itemplan_reads(
+            list(names), sorted(names)[0], rows, gear_rows, worn_rows)
+        report = itemplan_shadow.shadow(
+            list(names), sorted(names)[0], rows, free_slots,
+            gear_rows=gear_rows, worn_rows=worn_rows, extras=extras)
+        if report is None:
+            return sellable, 0
+        stacks = itemplan_shadow.build_stacks(
+            rows, gear_rows, extras.templates, extras.instance_soulbound)
+        by_key = {stack.key: stack for stack in stacks}
+        row_by_key, indexes = {}, {}
+        for source in rows:
+            holder = str(source["holder"])
+            index = indexes.get(holder, 0)
+            indexes[holder] = index + 1
+            row_by_key[(holder, 1, int(source["entry"]), index)] = source
+        candidates = [c for c in _auction_candidates(
+            report, by_key, row_by_key, extras) if c["holder"] in here]
+        return sellable, len(auction.plan_sales(candidates, max_items=50))
+    except (pymysql.err.MySQLError, OSError, KeyError, ValueError):
+        log.exception("town errand: the listings the plan would make could "
+                      "not be counted; the vendor stands")
+        return sellable, 0
+
+
+def _auction_stops_for_errand(leader: str, standing) -> list:
+    """Auctioneer creature rows nearest `standing` on its map, nearest first,
+    or []: the vendor stop read with the auctioneer flag (#1261)."""
+    try:
+        at = (float(standing["pos_x"]), float(standing["pos_y"]),
+              int(standing["map_id"]))
+    except (KeyError, TypeError, ValueError):
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_ERRAND_VENDORS_SQL, (*at, NPC_FLAG_AUCTIONEER))
+            return [dict(r) for r in cur.fetchall()]
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
 
 
 # THE HOME TOWN: the mailbox spawn nearest the head's hearthstone point, on its
