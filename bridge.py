@@ -14947,6 +14947,7 @@ class Bridge(discord.Client):
         pressure = bag_pressure.family_town_run_needed(free_slots)
         current_aim = await asyncio.to_thread(_current_travel_npc, leader)
         stall = None
+        intent: dict = {}
         if current_aim == "vendor":
             intent = (await asyncio.to_thread(_fetch_family_intents)).get(leader, {})
             bag_wait_seconds = max(0.0, float(intent.get("current_for") or 0))
@@ -15016,6 +15017,10 @@ class Bridge(discord.Client):
             bool(leader_town.vendor), outstanding,
             pressure=pressure,
             sale_counts=_vendor_sale_counts(names),
+        )
+        step = bag_pressure.bound_pressure_hold(
+            step, leader, time.monotonic(), leader_town.vendor, current_aim,
+            outstanding, intent,
         )
         if (step == bag_pressure.VENDOR_ERRAND_HOLD
                 and outstanding == 0
