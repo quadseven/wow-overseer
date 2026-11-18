@@ -447,6 +447,7 @@ body is read.
 
 - Query: none
 - Answers: the stuck members only, longest stuck first, and their digest.
+- A measured over-bound member may also include its persisted stuck kind, last refusal reason, first-seen time and last report time.
 - Example: `overseer get /api/v2/stuck`
 
 ## `GET /api/v2/training`

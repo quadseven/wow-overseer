@@ -31,7 +31,10 @@ import urllib.request
 
 import discord
 import pymysql
+from apiv2 import activity as v2_activity
+from apiv2 import members as v2_members
 from apiv2 import presence as v2_presence
+from apiv2 import ragnaros as v2_ragnaros
 
 import achievements
 import armory
@@ -121,6 +124,7 @@ import guildranks
 import guildrun
 import familyclass
 import familyseat
+import roadtoragnaros
 import guildpug
 import seatmeter
 import guildsocial
@@ -3419,6 +3423,79 @@ def _memo_delete(kind: str, subject: str) -> None:
                         (kind, subject))
     except pymysql.err.MySQLError:
         log.exception("bridge memo: could not delete %s memo for %s", kind, subject)
+
+
+STUCK_NOTE_MEMO_SECONDS = 30 * 24 * 3600
+READINESS_REPORT_MEMO_KIND = "mc_readiness_report"
+READINESS_REPORT_MEMO_SECONDS = 2 * 24 * 3600
+STUCK_REPORT_CYCLE_SECONDS = 5 * 60.0
+
+
+def _stuck_reporting_once(now=None) -> None:
+    """Log over-bound holds and the daily guild readiness from their API builders."""
+    now = time.time() if now is None else float(now)
+    readiness_memos = _memo_read(READINESS_REPORT_MEMO_KIND)
+    import map_server
+
+    with realmread.Session(_connect) as rd:
+        ctx = map_server._v2_context(rd)
+        _, stuck = v2_members.stuck({}, ctx)
+        over_bound = v2_members.over_bound_rows(
+            stuck.get("members"), stuck.get("checked_at")
+        )
+        note_memos = {
+            row["name"]: (row["note"], 0.0)
+            for row in stuck.get("members") or ()
+            if row.get("note")
+        }
+        refusals = {}
+        for row in over_bound:
+            name = row["name"]
+            found = rd.rows(
+                v2_activity.LATEST_REFUSAL_SQL,
+                (name,),
+                what="overseer_command",
+            )
+            refusals[name] = v2_activity.latest_refusal_reason(found)
+
+        notes, lines = v2_members.stuck_watch_updates(
+            stuck.get("members"),
+            stuck.get("checked_at"),
+            refusals,
+            note_memos,
+            now,
+        )
+        for name, note in notes.items():
+            _memo_upsert(
+                v2_members.STUCK_NOTE_MEMO_KIND,
+                name,
+                note,
+                now,
+                now + STUCK_NOTE_MEMO_SECONDS,
+            )
+        for line in lines:
+            log.warning("%s", line)
+
+        for guild in raidteams.GROUPS:
+            saved = readiness_memos.get(guild, ({}, 0.0))[0]
+            if not roadtoragnaros.readiness_line_due(saved, now):
+                continue
+            try:
+                report = v2_ragnaros.build(ctx, guild)
+            except Exception:
+                log.exception(
+                    "Molten Core readiness: guild %s read failed; retrying next pass",
+                    guild,
+                )
+                continue
+            log.info("%s", roadtoragnaros.readiness_line(guild, report))
+            _memo_upsert(
+                READINESS_REPORT_MEMO_KIND,
+                guild,
+                {"day": int(now // 86400)},
+                now,
+                now + READINESS_REPORT_MEMO_SECONDS,
+            )
 
 
 # The owed clock restarts only when the member's mark changes, so a member can
@@ -8915,6 +8992,7 @@ PASSES = (
     _Pass("_family_intent_loop"),
     _Pass("_now_loop"),
     _Pass("_watch_loop"),
+    _Pass("_stuck_reporting_loop"),
     _Pass("_quest_ledger_loop"),
     _Pass("_quest_tickets_loop"),
     _Pass("_corps_tickets_loop"),
@@ -29256,6 +29334,17 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("stray followers: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
+
+    async def _stuck_reporting_loop(self) -> None:
+        """Keep the over-bound notes and daily raid readiness visible."""
+        await self.wait_until_ready()
+        await asyncio.sleep(min(STUCK_REPORT_CYCLE_SECONDS, 60.0))
+        while not self.is_closed():
+            try:
+                await asyncio.to_thread(_stuck_reporting_once)
+            except Exception:
+                log.exception("stuck reporting: pass failed; retrying next cycle")
+            await asyncio.sleep(STUCK_REPORT_CYCLE_SECONDS)
 
     async def _watch_loop(self) -> None:
         """Keep the Watcher beside whoever the operator's order names."""
