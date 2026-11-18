@@ -589,7 +589,7 @@ class TheBridgePass(unittest.TestCase):
         self.sources = []
 
         ns = _load(
-            ["_plan_campaigns", "_plan_campaign"],
+            ["_plan_campaigns", "_plan_campaign", "_planner_due"],
             {
                 "asyncio": asyncio,
                 "time": __import__("time"),
@@ -612,7 +612,9 @@ class TheBridgePass(unittest.TestCase):
             picks={"dungeon": jev_pick} if jev_pick else {}, confidence=confidence
         )
         me = types.SimpleNamespace(
-            _jev=jev.Client(key, transport=fake), _planner_said={}
+            _jev=jev.Client(key, transport=fake),
+            _planner_said={},
+            _planner_loot_read={},
         )
         me._plan_campaign = types.MethodType(ns["_plan_campaign"], me)
 
@@ -947,7 +949,7 @@ class TheBridgeReadsTheLootForADoorPastItsCeiling(unittest.TestCase):
             return upgrades, None
 
         ns = _load(
-            ["_plan_campaign"],
+            ["_plan_campaign", "_planner_due"],
             {
                 "asyncio": asyncio,
                 "time": __import__("time"),
