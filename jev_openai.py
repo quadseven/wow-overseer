@@ -60,15 +60,18 @@ class Price(NamedTuple):
 
 
 PRICES: dict = {
-    # The cheapest model on the page by input and output price, with structured
-    # outputs. The page marks it deprecated, so a retirement shows up as an
-    # error and the heuristic keeps acting; JEV_OPENAI_MODEL moves a kind off
-    # it with no code change.
+    # Priced, but POST /v1/decisions answers 404 model_not_found for it
+    # (probed 2026-11-17), so it is never a default.
     "gpt-5-nano": Price(0.05, 0.005, 0.40, 0.05, 0.005, 0.40),
-    # The step up for a kind that misses the bar on the cheap model.
     "gpt-6-luna": Price(0.10, 0.01, 0.50, 0.20, 0.02, 0.75),
 }
-DEFAULT_MODEL = "gpt-5-nano"
+# The models POST /v1/decisions accepts, per the Decisions guide and a live
+# probe on 2026-11-17. Any other model answers 404 model_not_found.
+DECISIONS_MODELS = ("gpt-6-luna",)
+DEFAULT_MODEL = "gpt-6-luna"
+# The reasoning effort sent by default: none. /v1/decisions has no `reasoning`
+# parameter and answers 400 unknown_parameter when one is sent.
+DEFAULT_REASONING = ""
 # The hard ceiling: JEV_OPENAI_CAP_USD may lower it, never raise it.
 CAP_USD = 90.0
 CREDIT_USD = 100.0
