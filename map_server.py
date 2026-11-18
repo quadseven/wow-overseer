@@ -3906,7 +3906,7 @@ _RUN_CLIPS_SQL = (
 # The ledger rows of these loot events, for the story links. Only the two
 # states a story says something about.
 _LOOT_CLIPS_SQL = (
-    "SELECT event_key, kind, state, file_name FROM overseer_clip"
+    "SELECT event_key, kind, state, file_name, detail FROM overseer_clip"
     " WHERE event_key IN ({holes}) AND state IN ('ready', 'no_view')"
 )
 
@@ -4569,6 +4569,15 @@ def _clip_view_read(name: str, path: str = "") -> str:
     )
 
 
+def _clip_view_live(name: str, path: str) -> bool:
+    """Is this streamed view live, by the cutter's last poll of its path and
+    the age of its newest segment? The rule is clipledger.view_live."""
+    with _VIEW_SEEN_LOCK:
+        seen = _VIEW_SEEN.get(path)
+        segment = _VIEW_SEGMENT.get(path)
+    return clipledger.view_live(seen, segment, time.time())
+
+
 def _clip_who() -> tuple:
     """(roster names across the families, family guild names, the families)."""
     families = FAMILIES.families()
@@ -4758,6 +4767,7 @@ def scan_clips() -> dict:
             runs=list(found["run_rows"]) + list(found.get("open_run_rows", [])),
             families=families,
             late_horizon=horizon,
+            live_of=_clip_view_live,
         )
         for row in planned:
             if row["state"] == "no_view":
