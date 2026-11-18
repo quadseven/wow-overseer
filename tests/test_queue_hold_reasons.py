@@ -72,8 +72,7 @@ class BridgeNamesEveryHoldTest(unittest.TestCase):
         self.assertIn('_say_queue_hold(key, "mid-run"', body)
 
     def test_the_helper_uses_the_rate_limit(self):
-        body = self._body("def _say_queue_hold(", "
-_LENT_HOLD_SAID")
+        body = self._body("def _say_queue_hold(", "\n_LENT_HOLD_SAID")
         self.assertIn("campaignqueue.HoldLog", self.text)
         self.assertIn(".due(", body)
         self.assertIn("log.info(", body)
