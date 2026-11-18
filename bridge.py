@@ -22104,6 +22104,20 @@ class Bridge(discord.Client):
         finally:
             await self._class_party_close(run, formed, done)
 
+    def _class_party_meet_retry_log(self, run, waited, held_rounds, meeting, held):
+        """Write one retry line after a party's new meeting round."""
+        if waited is None:
+            return
+        result = ("met" if meeting.met else
+                  "held again" if held else
+                  "not met: " + meeting.why)
+        log.info(CLASS_PARTY_MEET_RETRY_LINE, run.leader, run.title,
+                 ", ".join(waited[0]), waited[1], held_rounds,
+                 classparty.MEET_HELD_RETRIES, result)
+        if meeting.met:
+            log.info(CLASS_PARTY_MEET_RETRY_MET_LINE, run.leader,
+                     run.title, held_rounds, classparty.MEET_HELD_RETRIES)
+
     async def _class_party_meet(self, run) -> bool:
         """Walk the leader and every helper to the objective spawn and see them
         stand together there (classparty.judge_meeting); True when the party
@@ -22126,16 +22140,10 @@ class Bridge(discord.Client):
             arrived = await self._class_party_meet_walks(run)
             meeting = await self._class_party_meet_seen(run, arrived)
             held = classparty.meeting_held(run)
-            if waited is not None:
-                result = ("met" if meeting.met else
-                          "held again" if held else
-                          "not met: " + meeting.why)
-                log.info(CLASS_PARTY_MEET_RETRY_LINE, run.leader, run.title,
-                         ", ".join(waited[0]), waited[1], held_rounds,
-                         classparty.MEET_HELD_RETRIES, result)
-                if meeting.met:
-                    log.info(CLASS_PARTY_MEET_RETRY_MET_LINE, run.leader,
-                             run.title, held_rounds, classparty.MEET_HELD_RETRIES)
+            refused_roads = classparty.refused_road_members(run)
+            if refused_roads:
+                board.refuse_road(run, refused_roads)
+            self._class_party_meet_retry_log(run, waited, held_rounds, meeting, held)
             if (not meeting.met and held
                     and held_rounds < classparty.MEET_HELD_RETRIES):
                 held_rounds += 1
@@ -22158,7 +22166,6 @@ class Bridge(discord.Client):
                     # cannot open it, so the ask is given up now instead of
                     # walking two more helpers across the map to wait for it.
                     board.give_up(run.ask_id)
-                    board.refuse_road(run)
                 log.info("class party: the meeting for %s's %s fails: %s", run.leader,
                          run.title, meeting.why)
                 return False
@@ -33408,10 +33415,11 @@ def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
     known = {m.name for m in mates}
     quest_mates = list(mates) + [m for m in answered if m.name not in known]
     own = classparty.ask_held({**pug_held, **held}, board)
+    refused_helper_roads = board.road_refused_helpers(quest_mates)
     quest_pass = classask.plan_pass(
         helps, quest_mates, own, asks, answers, now, partied=board.partied_asks(),
         refused=board.refused(), cooling=board.cooling(clock),
-        seats=board.seats(clock))
+        seats=board.seats(clock), road_refused_helpers=refused_helper_roads)
     escalation = classask.plan_escalation(
         quest_pass, helps, quest_mates, own, asks, answers, now,
         calls=facts.get("pug_calls", {}), pugs=pugs,
