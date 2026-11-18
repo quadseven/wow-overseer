@@ -1,0 +1,65 @@
+# A ground move longer than the navmesh's point limit is not flown as a straight spline (issue 2937).
+# On the dev realm a family leader ran a ruler-straight line to a trainer 3000 yards away, 186 yards over
+# the ground, because MovementAction::MoveTo launches the two-point path PathGenerator gives a player when
+# the navmesh cannot carry the move (a route past 74 points is PATHFIND_SHORT, an off-mesh end is
+# NOT_USING_PATH). This reproduces it with the playerbots `go x;y` command, which hands MoveTo a point with
+# no distance bound: Uzza stands at the Kargath flight master and is sent 350 yards along the very bearing
+# of the live line (toward Stonard), past the 296-yard point limit, so any route there is SHORT.
+# Control: MoveTo launches the straight line and Uzza is carried onto the point. Treatment: MoveTo refuses
+# it (mod-overseer patch 0029, the build's 0053), so she is never put there by that move.
+# The command is re-sent every minute so an AI move that displaces the spline does not end the control
+# early. Uzza is put on job 'rest' so no errand of the module's walks her there by road instead.
+# Scope: what is asserted is the end position against the commanded point, not the height of the line
+# on the way (the ground under a moving character is not in any table); the airborne guard's own line is
+# not asserted, because the control image has no guard and a check must fail there for the same reason.
+# Fix: mod-overseer pull 1630.
+decree: v1
+id: ground-move-is-not-flown-in-a-straight-line
+proves:
+  - {repo: quadseven/wow-overseer, issue: 2937, criterion: "a ground move past the navmesh point limit is refused rather than launched as a straight spline, so the character is not carried onto the commanded point"}
+fix: {repo: quadseven/mod-overseer, commit: "741933967b2d2ddebec7c23891745d357029644b"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 6m
+cast:
+  - who: Uzza
+    set: {alive: true, health_pct: 100, at: {creature: "Gorrik"}}
+    ceiling: "nothing granted but position"
+act:
+  - at: 0s
+    roster: {who: Uzza, job: "rest"}
+  - at: 30s
+    command: {who: Uzza, kind: bot, text: "go -6968.6;-2274.1"}
+  - at: 90s
+    command: {who: Uzza, kind: bot, text: "go -6968.6;-2274.1"}
+  - at: 150s
+    command: {who: Uzza, kind: bot, text: "go -6968.6;-2274.1"}
+  - at: 210s
+    command: {who: Uzza, kind: bot, text: "go -6968.6;-2274.1"}
+observe:
+  - name: uzza-starts-at-kargath
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid = @Uzza AND map_id = 0
+        AND SQRT(POW(pos_x + 6632.0, 2) + POW(pos_y + 2178.0, 2)) < 60
+    expect: {scalar: "= 1"}
+  - name: the-go-rows-reached-the-bot
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Uzza' AND kind = 'bot' AND command LIKE 'go %' AND created_at >= @t0 AND status IN ('applied', 'delivered', 'unchanged')
+    expect: {scalar: ">= 1"}
+  - name: uzza-was-not-carried-onto-the-point
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid = @Uzza AND map_id = 0
+        AND SQRT(POW(pos_x + 6968.6, 2) + POW(pos_y + 2274.1, 2)) < 40
+    expect: {scalar: "= 0"}
+  - name: uzza-did-not-die
+    role: check
+    when: end
+    sql: |
+      SELECT character_name, created_at FROM overseer_death WHERE created_at >= @t0 AND character_name = 'Uzza'
+    expect: {rows: 0}
