@@ -17454,16 +17454,38 @@ class Bridge(discord.Client):
         watch = self.__dict__.setdefault("_strand_watch", {})
         now = time.monotonic()
         wanted = {}
+        inside = set()
         leads = await asyncio.to_thread(_roster_leads)
+        live = {}
         for leader, row in intents.items():
             # ONLY A LIVE LEADER'S ROW: the table keeps the rows of members
             # that led once, and they list the real leader as a straggler.
             if not strandhearth.fresh_leader_row(leader, row, leads):
                 continue
             states = strandhearth.parse_members_state(row.get("members_state"))
+            live[leader] = states
             for name in strandhearth.observe(watch, leader, states, now):
                 if name not in leads:
                     wanted[name] = (leader, states[name][1])
+        # A MEMBER LEFT ALONE INSIDE A DUNGEON (strandhearth.observe_inside):
+        # read by the map it stands on, because the row gives it no distance.
+        scan = sorted(
+            {n for st in live.values() for n in st if n not in leads} | set(live))
+        where = await asyncio.to_thread(_fetch_positions, scan) if live else {}
+        lent = await asyncio.to_thread(_guild_run_members_out) if live else set()
+        dungeon_maps = (
+            set(dungeonpath.PORTAL_MAPS.values()) | set(raidrun.MAPS.values()))
+        maps = {n: int(r["map_id"]) for n, r in where.items()
+                if r.get("map_id") is not None}
+        for leader, states in live.items():
+            leader_map = maps.get(leader)
+            members = {n: s for n, s in states.items() if n not in leads}
+            for name in strandhearth.observe_inside(
+                    watch, leader, members, maps, leader_map, dungeon_maps, now,
+                    lent=lent):
+                if name not in wanted:
+                    wanted[name] = (leader, None)
+                    inside.add(name)
         if not wanted:
             return 0
         names = sorted(set(wanted) | {leader for leader, _ in wanted.values()})
@@ -17480,6 +17502,22 @@ class Bridge(discord.Client):
                 facts):
             leader, yards = wanted[member.name]
             if member.name in held or member.name in reads["hearthed"]:
+                continue
+            if member.name in inside:
+                why = strandhearth.why_not_inside(member, positions.get(leader))
+                if why:
+                    log.info("strand hearth: %s has stood inside a dungeon apart "
+                             "from %s for %d seconds, but its stone is no way "
+                             "out (%s)", member.name, leader,
+                             strandhearth.INSIDE_SECONDS, why)
+                    continue
+                await asyncio.to_thread(_insert_hearth, member.name,
+                                        strandhearth.SOURCE)
+                watch.pop(("inside", leader, member.name), None)
+                sent += 1
+                log.info("strand hearth: %s has stood inside a dungeon apart from "
+                         "%s for %d seconds; it uses its own hearthstone",
+                         member.name, leader, strandhearth.INSIDE_SECONDS)
                 continue
             why = strandhearth.why_not(member, positions.get(leader), yards)
             if why:
