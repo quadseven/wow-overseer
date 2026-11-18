@@ -323,6 +323,19 @@ owner's dispatcher is refused. Never `pkill`, `killall` or any
 kill by command-line pattern ("dl.sh", "ephemeral"): it can take down another
 agent's dispatcher.
 
+`dispatch --standby` is for a second dispatcher that should wait in the wings, such
+as one running as a Deployment inside the cluster. When another dispatcher holds
+the Lease it logs the holder once, checks every `--interval` seconds, and takes the
+Lease by itself when the holder releases it or stops renewing it (after
+`lease_seconds`). It starts nothing while it waits. `--once` ignores `--standby`
+and still exits 3 on a held Lease. A dispatcher that ends cleanly (an interrupt or
+SIGTERM) hands the Lease back, so a successor does not wait out its duration; a
+killed process cannot, and its Lease simply expires. Inside a pod, leave
+`kubeconfig` empty in the config: kubectl then uses the pod's ServiceAccount.
+Handover from one dispatcher to another is: start the standby, then have the
+current dispatcher's owner stop it (`dispatch --stop --owner NAME`). To go back,
+stop the standby first, so its Lease is released, then start the other.
+
 `collect` copies result ConfigMaps to the results directory, decides each batch
 and posts. A decree with any run count other than 3 control and 3 treatment can
 still post evidence (outcome `underpowered`, decided before any other outcome, so a

@@ -138,6 +138,7 @@ class Dispatcher:
         self.holder = f"{owner}@{who}" if owner else who
         self.claim_node = {n.claim: n for n in cfg.nodes.values()}
         self._stats = {}
+        self._holding = False
 
     def log(self, msg):
         self.out(msg)
@@ -164,6 +165,7 @@ class Dispatcher:
             if cur is None:
                 spec["acquireTime"] = _micro(now)
                 self.kube.create(body)
+                self._holding = True
                 return
             old = cur.get("spec", {})
             alive = (
@@ -183,8 +185,31 @@ class Dispatcher:
                 else _micro(now)
             )
             self.kube.replace(body)
+            self._holding = True
         except KubeError as exc:
             raise LeaseHeld(f"could not take the dispatcher lease: {exc}") from exc
+
+    def release(self):
+        """Hand the lease back so the next dispatcher need not wait out its duration.
+
+        Only a lease this process took is touched, and only while it still names
+        this holder. A failure is logged, never raised: the lease then simply
+        expires after `lease_seconds`, as it always did."""
+        if not self._holding:
+            return
+        self._holding = False
+        try:
+            cur = self.kube.get(
+                "leases.coordination.k8s.io", runids.LEASE_NAME, missing_ok=True
+            )
+            if cur is None or cur.get("spec", {}).get("holderIdentity") != self.holder:
+                return
+            cur["spec"]["holderIdentity"] = ""
+            cur["spec"]["renewTime"] = _micro(self.clock())
+            self.kube.replace(cur)
+            self.log(f"released the dispatcher lease held as {self.holder}")
+        except KubeError as exc:
+            self.log(f"could not release the dispatcher lease: {exc}")
 
     # -- cluster reads --
     def _node_disk(self, node):
@@ -395,10 +420,27 @@ class Dispatcher:
         return True, "", False
 
     # -- the loop --
-    def run(self, interval=15, once=False, sleep=time.sleep):
+    def run(self, interval=15, once=False, sleep=time.sleep, standby=False):
+        """Tick until stopped. With `standby`, a lease held by someone else is
+        not fatal: wait and take it when it is released or expires, which lets a
+        second dispatcher wait in the wings and take over by itself. `once`
+        keeps the strict answer (the lease is held, so raise)."""
+        waiting = None
         try:
             while True:
-                self.tick()
+                try:
+                    self.tick()
+                except LeaseHeld as exc:
+                    if not standby or once:
+                        raise
+                    if str(exc) != waiting:
+                        waiting = str(exc)
+                        self.log(f"standby: {exc}; checking every {interval}s")
+                    sleep(interval)
+                    continue
+                if waiting is not None:
+                    waiting = None
+                    self.log(f"standby over: this dispatcher now holds the lease as {self.holder}")
                 if self.on_tick:
                     self.on_tick()
                 if once:
@@ -406,3 +448,5 @@ class Dispatcher:
                 sleep(interval)
         except KeyboardInterrupt:
             return 0
+        finally:
+            self.release()

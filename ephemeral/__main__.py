@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import pathlib
+import signal
 import sys
 
 from . import acts, anchors as anchors_mod, dbschema, lint
@@ -122,6 +123,10 @@ def _submit(args):
     return 0
 
 
+def _stop_signal(signum, frame):
+    raise KeyboardInterrupt
+
+
 def _dispatch(args):
     from . import dispatch, dispatchlock
 
@@ -135,7 +140,9 @@ def _dispatch(args):
         d = dispatch.Dispatcher(
             cfg, k, owner=owner, on_tick=lambda: dispatchlock.renew(path)
         )
-        return d.run(interval=args.interval, once=args.once)
+        # A stop signal ends the loop cleanly so the lease is handed back at once.
+        signal.signal(signal.SIGTERM, _stop_signal)
+        return d.run(interval=args.interval, once=args.once, standby=args.standby)
     finally:
         dispatchlock.release(path)
 
@@ -251,6 +258,12 @@ def main(argv=None):
     dp.add_argument("--config", help=cfg_help)
     dp.add_argument("--once", action="store_true", help="one pass, then exit")
     dp.add_argument("--interval", type=int, default=15)
+    dp.add_argument(
+        "--standby",
+        action="store_true",
+        help="when another dispatcher holds the lease, wait and take over when it is "
+        "released or expires instead of exiting 3 (ignored with --once)",
+    )
     dp.add_argument(
         "--owner",
         help="who owns this dispatcher (default: $EPH_OWNER, else the parent pid)",

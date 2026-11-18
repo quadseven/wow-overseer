@@ -28,6 +28,35 @@ class CliTest(unittest.TestCase):
             self.assertEqual(code, 2, argv)
             self.assertIn("no runner config", out)
 
+    def test_dispatch_standby_flag_reaches_the_loop_and_sigterm_ends_it_cleanly(self):
+        import signal
+        from unittest import mock
+
+        seen = {}
+
+        class FakeDispatcher:
+            def __init__(self, cfg, k, owner=None, on_tick=None):
+                pass
+
+            def run(self, interval=15, once=False, standby=False):
+                seen.update(interval=interval, once=once, standby=standby)
+                try:
+                    cli._stop_signal(signal.SIGTERM, None)
+                except KeyboardInterrupt:
+                    return 0
+
+        with (
+            mock.patch("ephemeral.__main__._runner", lambda a: (None, None, None)),
+            mock.patch("ephemeral.dispatch.Dispatcher", FakeDispatcher),
+            mock.patch("ephemeral.dispatchlock.acquire"),
+            mock.patch("ephemeral.dispatchlock.release"),
+            mock.patch("signal.signal") as sig,
+        ):
+            code, _ = self.run_cli("dispatch", "--standby", "--owner", "x", "--interval", "7")
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, {"interval": 7, "once": False, "standby": True})
+        sig.assert_called_once_with(signal.SIGTERM, cli._stop_signal)
+
     def test_submit_passes_the_bridge_images_through(self):
         from unittest import mock
 
