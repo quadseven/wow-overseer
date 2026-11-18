@@ -134,6 +134,14 @@ class EachRequestGoesToOneErrand(unittest.TestCase):
 
 
 class ZoneGatheringRequirements(unittest.TestCase):
+    def test_skinning_skill_floor_inverts_the_creature_level_curve(self):
+        """The helper returns the minimum skinning skill at each level band."""
+        levels = (15, 20, 21, 45)
+        self.assertEqual(
+            [cr.skinning_skill_floor(level) for level in levels],
+            [50, 100, 105, 225],
+        )
+
     def test_the_lowest_measured_node_and_beast_set_the_zone_floor(self):
         """The easiest measured source sets each gathering trade's floor."""
         self.assertEqual(
