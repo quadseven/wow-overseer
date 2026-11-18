@@ -201,6 +201,32 @@ class StopTest(unittest.TestCase):
         self.assertEqual(self.stop("agent-a", alive=lambda p: True), 0)
         self.assertEqual(self.killed, [])
 
+    def test_stop_does_not_unlink_a_new_owners_lock(self):
+        self.write("agent-a", 111)
+        swapped = []
+
+        def terminate(pid):
+            dispatchlock._replace(
+                self.path, {"owner": "agent-c", "pid": 333, "started": 2.0, "renewed": 2.0}
+            )
+            swapped.append(pid)
+
+        states = iter([True, False])
+        code = dispatchlock.stop(
+            self.path, "agent-a", alive=lambda p: next(states, False),
+            terminate=terminate, wait=lambda: None, log=self.out.append,
+        )  # fmt: skip
+        self.assertEqual(code, 3)
+        self.assertTrue(self.path.exists())
+        self.assertEqual(json.loads(self.path.read_text())["owner"], "agent-c")
+
+    def test_release_reports_a_failed_unlink_instead_of_hiding_it(self):
+        self.write("agent-a", 111)
+        with mock.patch.object(dispatchlock.os, "unlink", side_effect=PermissionError("denied")):
+            dispatchlock.release(self.path, pid=111, log=self.out.append)
+        self.assertTrue(any("could not release" in m and "denied" in m for m in self.out))
+        self.assertTrue(self.path.exists())
+
     def test_a_dead_holder_is_cleared_without_a_signal(self):
         self.write("agent-a", 111)
         self.assertEqual(self.stop("agent-a", alive=lambda p: False), 0)

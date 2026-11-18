@@ -193,14 +193,16 @@ def renew(path, pid=None, now=None):
         pass  # best effort: the next pass renews again, well inside max_age
 
 
-def release(path, pid=None):
+def release(path, pid=None, log=print):
     pid = os.getpid() if pid is None else pid
     try:
         cur = _read(path)
         if cur and cur["pid"] == pid:
             os.unlink(path)
-    except OSError:
-        pass
+    except OSError as exc:
+        # Runs from a finally block, so it must not raise over the real result,
+        # but a lock left behind has to be visible to the operator.
+        log(f"dispatch lock: could not release {path}: {exc}")
 
 
 def _wait():
@@ -232,8 +234,21 @@ def stop(path, owner, alive=pid_alive, terminate=terminate, wait=_wait, log=prin
         log(f"stopped dispatcher pid {pid} of owner {owner!r}")
     else:
         log(f"dispatcher pid {pid} was already gone; clearing its lock")
+    # Serialised with takeover, and only the record we judged is removed: if the
+    # dead owner's lock was taken over meanwhile, the new owner's lock stays.
     try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
+        with _takeover_guard(path, time.time()):
+            now_rec = _read(path)
+            if now_rec is not None and (
+                now_rec["pid"] != pid or now_rec.get("owner") != owner
+            ):
+                log(
+                    f"the lock changed hands (now owner {now_rec.get('owner')!r}, "
+                    f"pid {now_rec['pid']}); leaving it in place"
+                )
+                return EXIT_HELD
+            pathlib.Path(path).unlink(missing_ok=True)
+    except LockHeld as exc:
+        log(f"could not clear the lock: {exc}")
+        return EXIT_FAILED
     return 0
