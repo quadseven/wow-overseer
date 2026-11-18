@@ -2939,6 +2939,8 @@ def inside_runs(reader) -> dict:
     deaths after the run they happen in."""
     out: dict = {}
     for r in _runs(reader, "state = 'inside'", (), 200):
+        if not r.get("id"):
+            continue
         for m in _member_list(r.get("members")):
             out.setdefault(m["name"], int(r["id"]))
     return out

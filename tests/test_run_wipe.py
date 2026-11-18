@@ -161,6 +161,10 @@ class TheRunsAMemberIsInside(unittest.TestCase):
         self.assertIn("'inside'", reader.sql)
         self.assertNotIn("'queued'", reader.sql)
 
+    def test_a_row_with_no_id_names_no_run(self):
+        reader = FakeReader([{"members": "Gronk:tank:warrior:60"}])
+        self.assertEqual(guildrun.inside_runs(reader), {})
+
 
 if __name__ == "__main__":
     unittest.main()
