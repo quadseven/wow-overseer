@@ -17457,10 +17457,16 @@ class Bridge(discord.Client):
         watch = self.__dict__.setdefault("_strand_watch", {})
         now = time.monotonic()
         wanted = {}
+        leads = await asyncio.to_thread(_roster_leads)
         for leader, row in intents.items():
+            # ONLY A LIVE LEADER'S ROW: the table keeps the rows of members
+            # that led once, and they list the real leader as a straggler.
+            if not strandhearth.fresh_leader_row(leader, row, leads):
+                continue
             states = strandhearth.parse_members_state(row.get("members_state"))
             for name in strandhearth.observe(watch, leader, states, now):
-                wanted[name] = (leader, states[name][1])
+                if name not in leads:
+                    wanted[name] = (leader, states[name][1])
         if not wanted:
             return 0
         names = sorted(set(wanted) | {leader for leader, _ in wanted.values()})
