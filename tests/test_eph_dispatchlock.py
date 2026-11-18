@@ -207,7 +207,8 @@ class StopTest(unittest.TestCase):
 
         def terminate(pid):
             dispatchlock._replace(
-                self.path, {"owner": "agent-c", "pid": 333, "started": 2.0, "renewed": 2.0}
+                self.path,
+                {"owner": "agent-c", "pid": 333, "started": 2.0, "renewed": 2.0},
             )
             swapped.append(pid)
 
@@ -222,9 +223,13 @@ class StopTest(unittest.TestCase):
 
     def test_release_reports_a_failed_unlink_instead_of_hiding_it(self):
         self.write("agent-a", 111)
-        with mock.patch.object(dispatchlock.os, "unlink", side_effect=PermissionError("denied")):
+        with mock.patch.object(
+            dispatchlock.os, "unlink", side_effect=PermissionError("denied")
+        ):
             dispatchlock.release(self.path, pid=111, log=self.out.append)
-        self.assertTrue(any("could not release" in m and "denied" in m for m in self.out))
+        self.assertTrue(
+            any("could not release" in m and "denied" in m for m in self.out)
+        )
         self.assertTrue(self.path.exists())
 
     def test_a_dead_holder_is_cleared_without_a_signal(self):
