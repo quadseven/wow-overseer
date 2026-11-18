@@ -17,6 +17,8 @@ import pathlib
 import unittest
 from unittest import mock
 
+import goals
+import guildshare
 import raidsupply
 import workorders
 import workorderstore
@@ -136,6 +138,47 @@ class ShortfallTest(unittest.TestCase):
     def test_a_night_with_no_fire_potion_line_completes_it_too(self):
         self._run([_line(96, 0)])
         self.assertEqual(self._run([]), [])
+
+    def test_an_assigned_fire_potion_order_logs_both_transitions(self):
+        (requested,) = self._run([_line(96, 0)])
+        roster = [
+            guildshare.Member(
+                name="Ugga",
+                level=58,
+                skills={goals.SKILL_IDS["alchemy"]: 200},
+                online=True,
+            )
+        ]
+        with (
+            mock.patch.object(self.bridge, "_connect", self._connect),
+            self.assertLogs(self.bridge.log, "INFO") as assigned,
+        ):
+            self.bridge._log_work_orders(roster)
+        assigned_lines = [record.getMessage() for record in assigned.records]
+        self.assertIn(
+            "workorders: assigned 96 Greater Fire Protection Potion to Ugga",
+            assigned_lines,
+        )
+        self.assertEqual(
+            workorderstore.get(self.cur, requested.order_id).status,
+            workorders.ASSIGNED,
+        )
+
+        with (
+            mock.patch.object(self.bridge, "_connect", self._connect),
+            self.assertLogs(self.bridge.log, "INFO") as completed,
+        ):
+            self.bridge._request_fire_potion_order([_line(96, 96)])
+        completed_lines = [record.getMessage() for record in completed.records]
+        self.assertIn(
+            "workorders: completed Greater Fire Protection Potion order "
+            "as its shortfall cleared",
+            completed_lines,
+        )
+        self.assertEqual(
+            workorderstore.get(self.cur, requested.order_id).status,
+            workorders.COMPLETE,
+        )
 
     def test_a_store_outage_is_logged_and_does_not_escape(self):
         def down():
