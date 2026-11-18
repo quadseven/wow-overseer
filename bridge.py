@@ -25629,11 +25629,14 @@ class Bridge(discord.Client):
         # #784): the campaign never pulls it from a run in progress.
         lent_hold = getattr(self, "_family_lent_hold", None)
         if lent_hold is not None and await lent_hold(key, fam):
+            globals().get("_say_queue_hold", lambda *a: None)(key, "lent to a guild run")
             return
         holds = getattr(self, "_queue_holds", None)
         if holds is not None and await holds(key, rows, fam):
+            globals().get("_say_queue_hold", lambda *a: None)(key, "queue hold")
             return
         if key in held:
+            globals().get("_say_queue_hold", lambda *a: None)(key, "family held")
             return
         target = int(rows[0].get("goal_item") or 0) if rows else 0
         if target:
@@ -26204,6 +26207,7 @@ class Bridge(discord.Client):
         if breaker is not None:
             try:
                 if await breaker(key, rows, fam):
+                    globals().get("_say_queue_hold", lambda *a: None)(key, "stall breaker")
                     return True
             except Exception:
                 log.exception("stall: the pass for %s failed; the queue steps as "
@@ -26212,12 +26216,16 @@ class Bridge(discord.Client):
         if pace is not None:
             try:
                 if await pace(key, rows, fam):
+                    globals().get("_say_queue_hold", lambda *a: None)(key, "dungeon pace")
                     return True
             except Exception:
                 log.exception("pace: the pass for %s failed; the queue steps as "
                               "before", campaignqueue._family(key))
         gear_hold = getattr(self, "_queue_gear_hold", None)
-        return gear_hold is not None and await gear_hold(rows[0], fam)
+        if gear_hold is not None and await gear_hold(rows[0], fam):
+            globals().get("_say_queue_hold", lambda *a: None)(key, "gear hold")
+            return True
+        return False
 
     async def _stall_breaker(self, key: str, rows: list, fam: dict) -> bool:
         """Leave the head door when the family stalled at it twice running.
@@ -26430,7 +26438,14 @@ class Bridge(discord.Client):
         decides; Jev picks among the easier doors past its floor.
         """
         names = list(fam["names"])
-        if raidrun.is_raid(str(rows[0].get("keyword") or "")) or await self._mid_run(names):
+        if raidrun.is_raid(str(rows[0].get("keyword") or "")):
+            return False
+        if await self._mid_run(names):
+            # NOT A HOLD ON THE STEP, BUT THE PACE PASS NEVER RUNS, so the
+            # family's first pace pass never completes. Said so, because a
+            # member left inside a dungeon map reads as a run in progress.
+            globals().get("_say_queue_hold", lambda *a: None)(key, "mid-run",
+                                 "a member is on a dungeon map, so the pace pass is skipped")
             return False
         facts, reads = await self._pace_facts(key, rows, fam)
         if facts is None:
@@ -32492,6 +32507,17 @@ def _fetch_seat_meter_runs() -> list:
 
 
 # family -> the last familyseat.hold_line said for it, only while it waits.
+_QUEUE_HOLD_LOG = campaignqueue.HoldLog()
+
+def _say_queue_hold(key: str, hold: str, why: str = "") -> None:
+    """Say which hold kept this family's queue step from running, once per
+    family per hold per campaignqueue.HOLD_LOG_SECONDS. A module function, not a
+    method: the queue tests load the queue methods on a bare object."""
+    if _QUEUE_HOLD_LOG.due(key, hold, time.monotonic()):
+        log.info("queue: %s's step waits on the %s hold%s",
+                 campaignqueue._family(key), hold, (": " + why) if why else "")
+
+
 _LENT_HOLD_SAID: dict = {}
 
 
