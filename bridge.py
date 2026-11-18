@@ -20987,6 +20987,10 @@ class Bridge(discord.Client):
         # The death loop's reasons are never capped (#2152): every listed
         # member that got no escape step is named, whatever else the pass says.
         _log_loop_lines(plan.loop_lines)
+        # A member left in the starting lands with no level step is named with
+        # its reason (#2400): uncapped, said when the line is new or changed.
+        _log_changed("guild jobs", plan.isle_lines,
+                     ("isle", _cohort_key(cohort)), capped=False)
         # A class quest that yields to levelling is named every pass, uncapped.
         for line in plan.yields:
             log.info("guild jobs: %s", line)
