@@ -2,6 +2,7 @@
 and a quest that stops progressing is broken with its reason."""
 
 import unittest
+from unittest import mock
 
 import classhunt
 import classquest
@@ -815,6 +816,22 @@ class Broken(unittest.TestCase):
         )
         self.assertEqual((p.move.kind, p.move.quest), (classquest.ABANDON, 1))
         self.assertIn(questers.STALLED, p.move.said)
+
+    def test_a_quest_with_no_required_objectives_explains_why_it_stalls(self):
+        row = quest(273, ELWYNN, 15, prev=302, title="Resupplying the Excavation")
+        row["npc_count1"] = 0
+        cat = world(extra_quests=[row])
+        world_quest = cat.quest(273)
+        with mock.patch.object(questers, "_ender_missing", return_value=""):
+            reason = questers._broken_reason(
+                world_quest,
+                cat.facts[273],
+                questers.STATUS_INCOMPLETE,
+                questers.STALL_SECONDS,
+                frozenset(),
+                {},
+            )
+        self.assertEqual(reason, questers.NO_OBJECTIVES)
 
     def test_a_stalled_remote_quest_names_its_refused_objective_crossing(self):
         cat = world()
@@ -2060,7 +2077,7 @@ class ASummonedObjectEnder(unittest.TestCase):
                 cat, mirra(quest_log={40: 3}), clock, minute * 60.0, last_quest=40
             )
             reasons += [b.reason for b in p.broken if b.quest == 40]
-        self.assertTrue(reasons and reasons[-1].startswith(questers.STALLED))
+        self.assertEqual(reasons[-1], questers.NO_OBJECTIVES)
 
     def test_log_rows_keep_each_creature_objective_counter(self):
         self.assertIn("q.RequiredNpcOrGo1 AS npc1", questers.LOG_SQL)
