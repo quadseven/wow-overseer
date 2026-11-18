@@ -58,6 +58,7 @@ online.
 
 from __future__ import annotations
 
+import json
 import re
 
 import agenda
@@ -837,6 +838,12 @@ def build(
 # Nobody stays stuck longer than this (#868): the digest counts who is past
 # it, so a tick reads the breach without doing the sum.
 STUCK_BOUND_SECONDS = 2 * 3600
+STUCK_REPORT_INTERVAL_SECONDS = 3600
+STUCK_NOTE_MEMO_KIND = "stuck_watch"
+STUCK_NOTE_SQL = (
+    "SELECT subject AS name, value FROM overseer_bridge_memo "
+    "WHERE kind = %s AND expires > UNIX_TIMESTAMP()"
+)
 # A follower's blocker ends with its leader's: the leader's hold is the cause.
 LEADER_HOLD = "'s own hold: "
 _DIGITS = re.compile(r"\d+")
@@ -861,6 +868,58 @@ def _waited(row: dict, checked_at: int | None) -> int | None:
     if row["since"] is None or not checked_at:
         return None
     return max(0, int(checked_at) - int(row["since"]))
+
+
+def over_bound_rows(rows: list, checked_at: int | None) -> list:
+    """Measured stuck rows strictly past the bound used by the digest."""
+    return [
+        row
+        for row in rows or ()
+        if (waited := _waited(row, checked_at)) is not None
+        and waited > STUCK_BOUND_SECONDS
+    ]
+
+
+def stuck_watch_updates(
+    rows: list,
+    checked_at: int | None,
+    refusals: dict,
+    previous: dict,
+    now: int | float,
+) -> tuple[dict, list[str]]:
+    """Return durable note values and the hourly lines for over-bound rows."""
+    notes = {}
+    lines = []
+    for row in over_bound_rows(rows, checked_at):
+        name = str(row.get("name") or "")
+        if not name:
+            continue
+        saved = previous.get(name)
+        old = saved[0] if saved else {}
+        since = int(row["since"])
+        same_episode = int(old.get("since") or 0) == since
+        last_logged = old.get("last_logged_at") if same_episode else None
+        log_due = (
+            last_logged is None
+            or now - float(last_logged) >= STUCK_REPORT_INTERVAL_SECONDS
+        )
+        refusal = re.sub(r"\s+", " ", str(refusals.get(name) or "")).strip()
+        refusal = refusal or "no refusal reason recorded"
+        kind = re.sub(r"\s+", " ", str(row.get("kind") or "unknown")).strip()
+        note = {
+            "kind": kind,
+            "last_refusal": refusal,
+            "since": since,
+            "observed_at": int(now),
+            "last_logged_at": int(now) if log_due else int(last_logged),
+        }
+        notes[name] = note
+        if log_due:
+            lines.append(
+                "stuck guard: member=%s kind=%s last_refusal=%s"
+                % (re.sub(r"\s+", " ", name).strip(), kind, refusal)
+            )
+    return notes, lines
 
 
 def stuck_digest(rows: list, checked_at: int | None) -> dict:
@@ -910,7 +969,26 @@ def stuck_digest(rows: list, checked_at: int | None) -> dict:
     }
 
 
-def stuck_view(roster: dict) -> dict:
+def _stuck_notes(ctx) -> dict:
+    # Notes are optional decoration; a context without memo reads still serves
+    # the roster's stuck members.
+    if ctx.read is None:
+        return {}
+    rows = ctx.read.rows(
+        STUCK_NOTE_SQL, (STUCK_NOTE_MEMO_KIND,), what="overseer_bridge_memo"
+    )
+    out = {}
+    for row in rows or ():
+        try:
+            value = json.loads(row["value"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if isinstance(value, dict):
+            out[str(row.get("name") or "")] = value
+    return out
+
+
+def stuck_view(roster: dict, notes: dict | None = None) -> dict:
     """The /api/v2/stuck shape: the stuck members only, longest first, and
     their digest (stuck_digest)."""
     stuck = [m for m in roster["members"] if m["stuck"]]
@@ -926,6 +1004,17 @@ def stuck_view(roster: dict) -> dict:
         }
         for m in stuck
     ]
+    saved = notes or {}
+    for row in rows:
+        note = saved.get(row["name"])
+        waited = _waited(row, roster["checked_at"])
+        if (
+            note
+            and waited is not None
+            and waited > STUCK_BOUND_SECONDS
+            and int(note.get("since") or 0) == int(row["since"])
+        ):
+            row["note"] = note
     return {
         "members": rows,
         "digest": stuck_digest(rows, roster["checked_at"]),
@@ -975,8 +1064,10 @@ def roster(_query: dict, ctx) -> tuple[int, dict]:
 
 
 def stuck(_query: dict, ctx) -> tuple[int, dict]:
-    """GET /api/v2/stuck: the stuck members only, longest stuck first, and their digest."""
-    return 200, stuck_view(_roster_payload(ctx))
+    """GET /api/v2/stuck: the stuck members only, longest first, and their
+    digest; measured over-bound rows may also include persisted kind, last
+    refusal, first-seen time and last report time."""
+    return 200, stuck_view(_roster_payload(ctx), _stuck_notes(ctx))
 
 
 ROUTES = {"/api/v2/roster": roster, "/api/v2/stuck": stuck}
