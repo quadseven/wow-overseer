@@ -106,6 +106,7 @@ class Wiring(unittest.TestCase):
         self.assertIn("townerrand.auction_first(", bridge)
         self.assertIn("step == townerrand.AUCTION", bridge)
         self.assertIn("_auction_stops_for_errand", bridge)
+        self.assertIn("unplaced = [n for n in names if n not in positions]", bridge)
 
 
 if __name__ == "__main__":

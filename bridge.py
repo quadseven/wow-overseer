@@ -23315,8 +23315,11 @@ class Bridge(discord.Client):
                     and townerrand.room_errand(why)):
                 with_me = townerrand.with_leader(
                     names, positions, leader, everyone=bool(hearth_reaches))
+                # A MEMBER WITH NO POSITION READ IS COUNTED TOO: it is in
+                # nobody's range, and an unread count keeps the vendor.
+                unplaced = [n for n in names if n not in positions]
                 sellable_a, listed = await asyncio.to_thread(
-                    auction_reads, list(names), with_me)
+                    auction_reads, list(names), list(with_me) + unplaced)
                 if townerrand.auction_first(why, sellable_a, listed):
                     side_a = (
                         situation.ALLIANCE_MASK if teams.get(leader) == "alliance"
