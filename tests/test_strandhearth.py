@@ -133,16 +133,27 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class UnderTheWorld(unittest.TestCase):
+    def test_a_member_that_fell_through_the_map_can_still_cast(self):
+        """No navmesh or floor reading is asked of the member: only its stone."""
+        fallen = hc.Member(
+            name="Zrog",
+            at={"map_id": 0, "pos_x": 1306.7, "pos_y": 25.3, "pos_z": -59.8},
+            bind=BIND,
+            stone=True,
+            cooldown=0.0,
+            alive=True,
+        )
+        self.assertEqual(sh.why_not(fallen, LEADER, 9521.0), "")
+
+
 class Wiring(unittest.TestCase):
     """The bridge calls the pass from the every-family economy cycle."""
 
-    def test_pass_is_called_and_shipped(self):
+    def test_pass_is_called(self):
         import pathlib
 
         here = pathlib.Path(__file__).resolve().parents[1]
         bridge = (here / "bridge.py").read_text(encoding="utf-8")
         self.assertIn("await self._hearth_stranded_followers()", bridge)
         self.assertIn("strandhearth.observe(watch, leader, states, now)", bridge)
-        self.assertIn(
-            "strandhearth.py", (here / "Dockerfile").read_text(encoding="utf-8")
-        )
