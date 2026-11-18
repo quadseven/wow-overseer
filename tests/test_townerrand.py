@@ -21,6 +21,7 @@ import guildbank
 import guildwork
 import hearthcast
 import hearthcast_data
+import learnaim
 import mailrun
 import professions
 import situation
@@ -558,6 +559,7 @@ class TheAdapter(unittest.TestCase):
             "_TOWN_ERRAND_FUNDED": {},
             "_TOWN_ERRAND_BOUGHT": {},
             "gearup": gearup,
+            "learnaim": learnaim,
             "guildwork": guildwork,
             "guildbank": guildbank,
             "_fetch_guild_bank_setup": lambda names: self.setup,
@@ -593,6 +595,8 @@ class TheAdapter(unittest.TestCase):
                 "binds": self.binds,
                 "hearthed": self.hearthed,
             },
+            "_current_travel_npc": lambda name: "",
+            "_release_learn_aim": lambda name: False,
             "_queue_stall_floor": lambda names: self.stall,
             "_campaign_waiting": lambda names: False,
             "bag_pressure": bag_pressure,
@@ -615,6 +619,7 @@ class TheAdapter(unittest.TestCase):
             body=_functions(
                 "_town_errand_once",
                 "_town_errand_start",
+                "_town_errand_release_trainer",
                 "_town_errand_aim",
                 "_town_errand_step",
                 "_town_errand_mail",
@@ -630,6 +635,9 @@ class TheAdapter(unittest.TestCase):
         self.ns = ns
         self.fam = Family(self)
         self.fam._town_errand_start = lambda *a: ns["_town_errand_start"](self.fam, *a)
+        self.fam._town_errand_release_trainer = lambda *a: ns[
+            "_town_errand_release_trainer"
+        ](self.fam, *a)
         self.fam._town_errand_aim = lambda *a: ns["_town_errand_aim"](self.fam, *a)
         self.fam._town_errand_step = lambda *a: ns["_town_errand_step"](self.fam, *a)
         self.fam._town_errand_mail = lambda *a: ns["_town_errand_mail"](self.fam, *a)
@@ -1052,6 +1060,96 @@ class TheAdapter(unittest.TestCase):
         self.ns["_fetch_free_slots"] = lambda names: {"Bork": 4, "Grug": 7}
         self.assertEqual(te.DONE, self.tick().phase)
         self.assertEqual([(["Bork", "Grug"], "Grug")], released)
+
+    def test_a_bag_room_errand_hands_back_a_trainer_walk_before_aiming(self):
+        """A held campaign cannot reach its vendor while learning owns the
+        leader's travel column. Leave the learn pending and let the bounded
+        bag-room errand take the column first."""
+        key = ("Bork", "Grug")
+        self.ns["_TOWN_ERRANDS"][key] = te.start(
+            self.now - 60.0, HUB, te.BAG_PRESSURE_WHY
+        )
+        self.ns["_campaign_waiting"] = lambda names: True
+        self.ns["_fetch_free_slots"] = lambda names: {"Bork": 0, "Grug": 0}
+        self.ns["_bag_hold_stuck"] = lambda *a, **k: False
+        self.fam._aim_stranded_bag_pressure_members = lambda *a, **k: asyncio.sleep(
+            0, result=0
+        )
+
+        current = {"Grug": learnaim.TRAINER_ROLE}
+        events = []
+
+        def release(character):
+            events.append(("release", character))
+            current[character] = ""
+            return True
+
+        async def claim(claimant, character, aim, **kwargs):
+            events.append(("claim", claimant, character, aim, current[character]))
+            return current[character] == ""
+
+        self.ns.update(
+            learnaim=learnaim,
+            _current_travel_npc=lambda name: current.get(name, ""),
+            _release_learn_aim=release,
+        )
+        self.fam._claim_town_slot = claim
+        self.tick()
+
+        self.assertEqual(
+            [
+                ("release", "Grug"),
+                ("claim", "town errand", "Grug", "at:0:100,100,10", ""),
+            ],
+            events,
+        )
+
+    def test_a_profession_loop_room_errand_also_hands_back_the_trainer(self):
+        current = learnaim.TRAINER_ROLE
+        released = []
+
+        self.ns.update(
+            learnaim=learnaim,
+            _current_travel_npc=lambda name: current,
+            _release_learn_aim=lambda name: released.append(name) or True,
+        )
+        state = te.State(
+            phase=te.GO,
+            why=te.LOOP_WHY + "Oz below the room target",
+        )
+
+        self.assertTrue(
+            asyncio.run(self.fam._town_errand_release_trainer(state, "Grug", False, ""))
+        )
+        self.assertEqual(["Grug"], released)
+
+    def test_an_ordinary_town_errand_does_not_release_a_trainer_walk(self):
+        released = []
+        self.ns.update(
+            learnaim=learnaim,
+            _current_travel_npc=lambda name: learnaim.TRAINER_ROLE,
+            _release_learn_aim=lambda name: released.append(name) or True,
+        )
+        state = te.State(phase=te.GO, why="gear waits in the mailbox")
+
+        self.assertFalse(
+            asyncio.run(self.fam._town_errand_release_trainer(state, "Grug", False, ""))
+        )
+        self.assertEqual([], released)
+
+    def test_a_town_errand_does_not_release_a_trainer_walk_inside_a_run(self):
+        released = []
+        self.ns.update(
+            learnaim=learnaim,
+            _current_travel_npc=lambda name: learnaim.TRAINER_ROLE,
+            _release_learn_aim=lambda name: released.append(name) or True,
+        )
+        state = te.State(phase=te.GO, why=te.BAG_PRESSURE_WHY)
+
+        self.assertFalse(
+            asyncio.run(self.fam._town_errand_release_trainer(state, "Grug", True, ""))
+        )
+        self.assertEqual([], released)
 
     def test_a_run_seen_after_an_errand_clears_its_cooldown_for_bag_room(self):
         """#2116: the run's ticks mark the idle state, and the bag-room errand
