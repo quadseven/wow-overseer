@@ -1,10 +1,4 @@
-"""A crossing the module cannot route is a wall (#678).
-
-On the dev realm three Night Elf members were refused `cross-to-map map:0` 27 to
-30 times a day each (every 35 to 45 minutes), because the module's refusal text
-in the result is a per-ship diagnostic list, not the literal CROSS_WALLS holds,
-so no wall ever stood. Two death knights on map 609 were asked the same way.
-"""
+"""A crossing the module cannot route is a wall, so it is not asked again (#678)."""
 
 import unittest
 
