@@ -513,8 +513,44 @@ def note_state(note: str, target: str) -> str:
     return "waiting"
 
 
-def spectate_state(row: Mapping | None) -> dict:
-    """What the page draws its "now watching" state from."""
+_NOTE_REASON = re.compile(
+    r"^[^:]*:\s*(?:failed,\s*the world refused the move:\s*|refuse,\s*|hold,\s*)(.*)$"
+)
+
+
+def note_reason(note: str) -> str:
+    """The why in a failed, refused or held note, or '' for any other."""
+    m = _NOTE_REASON.match(note or "")
+    return m.group(1).strip() if m else ""
+
+
+def _arrival_check(spots: Sequence[Spot] | None, target: str) -> str:
+    """'' when the Watcher's LIVE spot is on the target's map and instance within
+    follow range, else the reason it is not. The note the loop wrote says what the
+    director saw once; this says where the Watcher is now."""
+    if spots is None:
+        return "the Watcher's position could not be read"
+    watcher = next((s for s in spots if is_watcher(s.name)), None)
+    there = next(
+        (s for s in spots if s.name == target and not is_watcher(s.name)), None
+    )
+    if watcher is None:
+        return "the Watcher is not in the world"
+    if there is None:
+        return f"{target} is not in the world"
+    if watcher.place != there.place:
+        return f"the Watcher is not on {target}'s map and instance"
+    if watcher.distance(there) > FOLLOW_RANGE:
+        return f"the Watcher is not within {FOLLOW_RANGE:g} yards of {target}"
+    return ""
+
+
+def spectate_state(row: Mapping | None, spots: Sequence[Spot] | None = None) -> dict:
+    """What the page draws its "now watching" state from.
+
+    `arrived` is true only when the note says follow AND `spots` (the live
+    snapshot) puts the Watcher on the target's map and instance within follow
+    range. Without `spots` it cannot be confirmed, so it is not true."""
     if not mandate_active(row):
         return {
             "active": False,
@@ -527,10 +563,18 @@ def spectate_state(row: Mapping | None) -> dict:
             "switch_in": 0,
             "state": "",
             "arrived": False,
+            "reason": "",
         }
     spec = str(row.get("spec") or "")
     wait = max(0, math.ceil(SPECTATE_DWELL - _order_age(row)))
-    state = note_state(str(row.get("note") or ""), str(row.get("target") or ""))
+    note = str(row.get("note") or "")
+    target = str(row.get("target") or "")
+    state = note_state(note, target)
+    reason = note_reason(note)
+    if state == "arrived":
+        missing = _arrival_check(spots, target)
+        if missing:
+            state, reason = "moving", missing
     return {
         "active": True,
         "run": order_run(spec),
@@ -542,6 +586,7 @@ def spectate_state(row: Mapping | None) -> dict:
         "switch_in": wait,
         "state": state,
         "arrived": state == "arrived",
+        "reason": reason,
     }
 
 

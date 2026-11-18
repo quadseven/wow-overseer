@@ -118,9 +118,12 @@ class TheBudgetSaysWhenItRefills(unittest.TestCase):
         self.assertEqual(d.budget_refill_in(full, 100.0), 510)
 
 
+BESIDE = [spot("Crag", RFK, 4, 10.0), spot(W, RFK, 4, 12.0)]
+
+
 class TheStateTheCardDraws(unittest.TestCase):
     def test_follow_is_arrived(self):
-        s = d.spectate_state(row("Crag: follow, within 35 yards of Crag"))
+        s = d.spectate_state(row("Crag: follow, within 35 yards of Crag"), BESIDE)
         self.assertEqual(s["state"], "arrived")
 
     def test_a_move_in_flight_is_moving(self):
@@ -163,7 +166,9 @@ class TheStateTheCardDraws(unittest.TestCase):
 
     def test_only_arrived_sets_the_flag(self):
         self.assertTrue(
-            d.spectate_state(row("Crag: follow, within 35 yards of Crag"))["arrived"]
+            d.spectate_state(row("Crag: follow, within 35 yards of Crag"), BESIDE)[
+                "arrived"
+            ]
         )
         self.assertFalse(d.spectate_state(row("Crag: appear, into x"))["arrived"])
         self.assertFalse(d.spectate_state(row("ordered", target=""))["arrived"])
@@ -187,7 +192,10 @@ class OrderToArrival(unittest.TestCase):
         done = d.decide(there, crag, now=124.0, booted_at=100.0)
         self.assertEqual(done.action, d.FOLLOW)
         self.assertEqual(
-            d.spectate_state(row("Crag: follow, " + done.reason))["state"], "arrived"
+            d.spectate_state(row("Crag: follow, " + done.reason), [crag, there])[
+                "state"
+            ],
+            "arrived",
         )
 
     def test_on_the_right_map_but_another_copy_is_not_arrived(self):
@@ -195,6 +203,65 @@ class OrderToArrival(unittest.TestCase):
         other = spot(W, RFK, 9, 2205.0, 1633.0, 85.0)
         got = d.decide(other, crag, now=120.0, booted_at=100.0, new_target=True)
         self.assertEqual(got.action, d.HOP)
+
+
+class ARunWatchIsOnlyArrivedWhereTheWatcherStands(unittest.TestCase):
+    """The run order (a guild group's Jump in) has no target of its own: the
+    director picks a member. Arrival is the Watcher's live place, not a note."""
+
+    RUN = "run 6257"
+    WORLD = dict(map_id=289, inst=12, x=100.0, y=100.0, z=50.0)
+
+    def run_row(self, note):
+        return row(note, spec=self.RUN, target="Gronk")
+
+    def test_refused_moves_on_a_run_watch_are_failed_with_the_reason(self):
+        note = "Gronk: failed, the world refused the move: kind='gm' is retired"
+        s = d.spectate_state(self.run_row(note), [spot(W, 0, 0, 1676.0, 1678.0, 121.0)])
+        self.assertEqual((s["state"], s["arrived"]), ("failed", False))
+        self.assertEqual(s["reason"], "kind='gm' is retired")
+        self.assertEqual(s["run"], 6257)
+
+    def test_a_refusal_on_a_run_watch_carries_its_reason(self):
+        s = d.spectate_state(self.run_row("Gronk: refuse, the Watcher is offline"), [])
+        self.assertEqual((s["state"], s["arrived"]), ("refused", False))
+        self.assertEqual(s["reason"], "the Watcher is offline")
+
+    def test_a_stale_follow_note_is_not_arrival_when_the_watcher_is_elsewhere(self):
+        note = "Gronk: follow, within 35 yards of Gronk"
+        gronk = spot("Gronk", **self.WORLD)
+        home = spot(W, 0, 0, 1676.0, 1678.0, 121.0)
+        s = d.spectate_state(self.run_row(note), [home, gronk])
+        self.assertFalse(s["arrived"])
+        self.assertNotEqual(s["state"], "arrived")
+        self.assertTrue(s["reason"])
+
+    def test_a_stale_follow_note_is_not_arrival_in_another_copy(self):
+        note = "Gronk: follow, within 35 yards of Gronk"
+        gronk = spot("Gronk", **self.WORLD)
+        other = spot(W, 289, 99, 100.0, 100.0, 50.0)
+        self.assertFalse(
+            d.spectate_state(self.run_row(note), [other, gronk])["arrived"]
+        )
+
+    def test_a_missing_watcher_or_target_is_not_arrival(self):
+        note = "Gronk: follow, within 35 yards of Gronk"
+        gronk = spot("Gronk", **self.WORLD)
+        self.assertFalse(d.spectate_state(self.run_row(note), [gronk])["arrived"])
+        self.assertFalse(d.spectate_state(self.run_row(note), [])["arrived"])
+
+    def test_standing_beside_the_member_is_arrival(self):
+        note = "Gronk: follow, within 35 yards of Gronk"
+        gronk = spot("Gronk", **self.WORLD)
+        near = spot(W, 289, 12, 110.0, 100.0, 50.0)
+        s = d.spectate_state(self.run_row(note), [near, gronk])
+        self.assertEqual((s["state"], s["arrived"]), ("arrived", True))
+
+    def test_too_far_on_the_same_copy_is_not_arrival(self):
+        note = "Gronk: follow, within 35 yards of Gronk"
+        gronk = spot("Gronk", **self.WORLD)
+        far = spot(W, 289, 12, 400.0, 100.0, 50.0)
+        self.assertFalse(d.spectate_state(self.run_row(note), [far, gronk])["arrived"])
 
 
 if __name__ == "__main__":
@@ -269,3 +336,21 @@ class TheCardOnlySaysWatchingOnceItIsThere(unittest.TestCase):
         )
         self.assertIn("Now watching Cave", m)
         self.assertIn("Following Crag", m)
+
+
+@needs_node
+class TheCardNamesTheRunAndTheReason(unittest.TestCase):
+    def test_a_refused_run_watch_reads_could_not_reach_with_the_reason(self):
+        m = card(
+            run=6257,
+            character="",
+            spec="run 6257",
+            target="Gronk",
+            note="Gronk: failed, the world refused the move: kind='gm' is retired",
+            state="failed",
+            arrived=False,
+            reason="kind='gm' is retired",
+        )
+        self.assertNotIn("Now watching", m)
+        self.assertIn("Could not reach", m)
+        self.assertIn("is retired", m)

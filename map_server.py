@@ -2204,6 +2204,22 @@ def _ensure_stream_store() -> None:
             cur.execute(sql)
 
 
+def _fetch_watch_spots() -> list | None:
+    """The live spots a Watcher arrival is checked against; None when unreadable,
+    which reads as not arrived."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT name, map_id, instance_id, pos_x, pos_y, pos_z, in_combat, "
+                "group_leader FROM overseer_snapshot "
+                "WHERE updated_at > NOW() - INTERVAL 60 SECOND"
+            )
+            return [director.spot_from_row(r) for r in cur.fetchall()]
+    except pymysql.err.MySQLError:
+        log.exception("spectate: the live spots could not be read")
+        return None
+
+
 def _read_watch_order() -> dict | None:
     """The Watcher's one order row, or None. A missing `overseer_watch`
     (1146) is None too: the bridge creates it at start-up, never the site."""
@@ -7342,6 +7358,9 @@ class Handler(BaseHTTPRequestHandler):
         """
         row = _read_watch_order()
         state = director.spectate_state(row)
+        if state["arrived"]:
+            # The note says follow; only the Watcher's live spot can say it is there.
+            state = director.spectate_state(row, _fetch_watch_spots())
         state["watcher"] = director.WATCHER_NAME
         state["stream"] = family.broadcast_url(director.WATCHER_NAME) or ""
         return 200, state
