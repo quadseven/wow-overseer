@@ -19,6 +19,7 @@ from test_jev_items import FakeJev
 
 import campaignplan  # noqa: E402
 import campaignqueue  # noqa: E402
+import preraid  # noqa: E402
 import dungeonpath  # noqa: E402
 import jev  # noqa: E402
 import jev_choices  # noqa: E402
@@ -345,6 +346,57 @@ class WhichOne(unittest.TestCase):
             facts(ALLIANCE, KALIMDOR, done={"dire-maul-east-east": 4}, keys=CRESCENT)
         )
         self.assertEqual(campaignplan.heuristic(opts).keyword, "dire-maul-west-north")
+
+    # The bosses' levels as read for these doors, by map: Sunken Temple
+    # tops out five under a capped family's weakest member, the Spire is
+    # its band.
+    CAP_BOSSES = {109: (50, 55), 229: (56, 60), 230: (52, 58), 289: (57, 60)}
+
+    def test_at_the_cap_a_run_below_the_band_loses_to_one_in_it(self):
+        """A capped family with empty slots scores a loot-dense low dungeon
+        highest on raw expected gain, because an empty slot counts any drop
+        as all gain. While a level-appropriate run is unfinished the pick
+        is in the family's band; the low run stays offered, because its
+        loot still upgrades somebody (#2715)."""
+        upgrades = {
+            "sunken-temple": (preraid.Gain("Grug", 3, 0.6, 30.0, "a helm"),),
+            "lower-blackrock-spire": (preraid.Gain("Grug", 1, 0.2, 10.0, "a helm"),),
+        }
+        opts = campaignplan.options(
+            facts(
+                ALLIANCE,
+                EASTERN_KINGDOMS,
+                keys=SHADOWFORGE,
+                bosses=self.CAP_BOSSES,
+                upgrades=upgrades,
+            )
+        )
+        self.assertIn("sunken-temple", keywords(opts))
+        pick = campaignplan.heuristic(opts)
+        self.assertEqual(pick.keyword, "lower-blackrock-spire")
+
+    def test_at_the_cap_a_fire_piece_still_wins_from_below_the_band(self):
+        """The band rule excepts a fire-resistance need: a low run that
+        drops a planned fire piece for a tank is still the pick (#2715)."""
+        upgrades = {
+            "sunken-temple": (
+                preraid.Gain(
+                    "Grug", 3, 0.6, 30.0, "a helm", 10.0, "Emberplate Armguards"
+                ),
+            ),
+            "lower-blackrock-spire": (preraid.Gain("Grug", 1, 0.2, 10.0, "a helm"),),
+        }
+        opts = campaignplan.options(
+            facts(
+                ALLIANCE,
+                EASTERN_KINGDOMS,
+                keys=SHADOWFORGE,
+                bosses=self.CAP_BOSSES,
+                upgrades=upgrades,
+            )
+        )
+        pick = campaignplan.heuristic(opts)
+        self.assertEqual(pick.keyword, "sunken-temple")
 
     def test_nothing_to_choose_is_none(self):
         self.assertIsNone(campaignplan.heuristic([]))
