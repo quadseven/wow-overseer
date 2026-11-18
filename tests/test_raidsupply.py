@@ -1660,13 +1660,14 @@ class TopRecipesTracking(unittest.TestCase):
         card = rs.card(
             [],
             {},
-            {17574: ["Ugga"]},
+            {17574: ["Ugga", "Uzza"]},
             carriers={13519: ["Grug"]},
         )
         top = {r["entry"]: r for r in card["top_recipes"]}
         self.assertEqual(set(top), {13494, 13519, 13521, 13520})
         self.assertTrue(top[13494]["acquired"])
         self.assertIn("Ugga", top[13494]["line"])
+        self.assertIn("Uzza", top[13494]["line"])
         self.assertTrue(top[13519]["acquired"])
         self.assertIn("Grug", top[13519]["line"])
         self.assertFalse(top[13521]["acquired"])
