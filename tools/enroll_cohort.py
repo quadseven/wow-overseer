@@ -252,6 +252,12 @@ def main(argv: list[str] | None = None) -> int:
         "--cohort", required=True, help="the `family` value the new rows carry"
     )
     parser.add_argument(
+        "--faction",
+        choices=("horde", "alliance"),
+        default="horde",
+        help="the faction the cohort is enrolled as (default horde)",
+    )
+    parser.add_argument(
         "--name", action="append", default=[], help="a character to enrol; repeatable"
     )
     parser.add_argument(
@@ -317,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
             has_family_column=family_column,
             module_reads_family=args.module_is_cohort_aware,
             limit=args.limit,
+            faction=args.faction,
         )
         written = apply(cur, plan_) if args.apply else 0
 
