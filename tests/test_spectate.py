@@ -201,5 +201,51 @@ class ThePost(unittest.TestCase):
         self.assertEqual(handler.sent[-1][0], 503)
 
 
+class TheArrivalCard(unittest.TestCase):
+    """#2948: the Watcher and the target on map 209, instance 6, 0 yards apart,
+    both rows fresh in overseer_snapshot, and the card still said moving."""
+
+    def card(self, rows, note="Dug: follow"):
+        fetched = [d.spot_from_row(r) for r in rows]
+        order = row("character Dug", target="Dug", note=note)
+        with mock.patch.object(map_server, "_fetch_watch_spots", return_value=fetched):
+            return map_server._spectate_card(order)
+
+    @staticmethod
+    def snap(name):
+        return {
+            "name": name,
+            "map_id": 209,
+            "instance_id": 6,
+            "pos_x": 1851.2,
+            "pos_y": 727.0,
+            "pos_z": 18.7,
+            "in_combat": 0,
+            "group_leader": 0,
+        }
+
+    def test_both_rows_present_and_together_read_arrived(self):
+        got = self.card([self.snap("Dug"), self.snap(d.WATCHER_NAME)])
+        self.assertEqual((got["state"], got["arrived"]), ("arrived", True))
+
+    def test_a_watcher_on_another_instance_is_still_moving(self):
+        far = dict(self.snap(d.WATCHER_NAME), instance_id=7)
+        got = self.card([self.snap("Dug"), far])
+        self.assertEqual((got["state"], got["arrived"]), ("moving", False))
+
+    def test_an_unreadable_snapshot_is_not_arrived(self):
+        order = row("character Dug", target="Dug", note="Dug: follow")
+        with mock.patch.object(map_server, "_fetch_watch_spots", return_value=None):
+            got = map_server._spectate_card(order)
+        self.assertFalse(got["arrived"])
+
+    def test_a_note_that_is_not_following_never_reads_the_snapshot(self):
+        order = row("character Dug", target="Dug", note="Dug: appear")
+        with mock.patch.object(map_server, "_fetch_watch_spots") as fetch:
+            got = map_server._spectate_card(order)
+        fetch.assert_not_called()
+        self.assertEqual(got["state"], "moving")
+
+
 if __name__ == "__main__":
     unittest.main()
