@@ -71,7 +71,9 @@ class CounterDoneStep(unittest.TestCase):
 
     def test_the_bridge_asks_before_it_holds(self):
         with open(
-            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bridge.py"),
+            os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bridge.py"
+            ),
             encoding="utf-8",
         ) as fh:
             source = fh.read()
