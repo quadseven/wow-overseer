@@ -1078,11 +1078,16 @@ class Memory:
             self.fail_until = now + FAIL_BACKOFF
             return failure
         answered = {
-            int(r["id"]) for r in rows if str(r.get("status") or "") not in ("pending", "claimed")
+            int(r["id"])
+            for r in rows
+            if str(r.get("status") or "") not in ("pending", "claimed")
         }
         self.sent_ids = [i for i in self.sent_ids if i not in answered]
-        if answered and not self.sent_ids:
+        if answered:
+            # A row answered without an error means the world is taking the
+            # lines again, so an older refusal no longer holds the director.
             self.failure = ""
+            self.fail_until = 0.0
         return ""
 
     def backing_off(self, now: float) -> bool:
