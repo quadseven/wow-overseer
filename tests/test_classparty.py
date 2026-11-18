@@ -614,6 +614,7 @@ class _Bridge:
 
 for _name in (
     "_run_class_party",
+    "_class_party_meet_retry_log",
     "_class_party_meet",
     "_class_party_meet_walks",
     "_class_party_meet_walk",
