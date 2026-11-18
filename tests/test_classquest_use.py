@@ -1014,6 +1014,7 @@ class TheBridgeRestartsTheClockOnADoneUse(unittest.TestCase):
             {
                 "_await_corps_answer": staticmethod(answer),
                 "_class_hunts": hunts,
+                "_class_use_streaks": classuse.RefusalStreaks(),
                 "_class_use_unsupported_until": 0.0,
             },
         )()
