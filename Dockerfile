@@ -16,6 +16,9 @@
 # watcher and its dependency are copied separately below.
 FROM python:3.12-slim
 
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir discord.py==2.4.0 PyMySQL==1.1.1
 
 WORKDIR /app

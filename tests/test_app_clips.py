@@ -33,6 +33,9 @@ CLIPS = [
         "subject": "Test Blade",
         "at": "2026-11-09T10:00:00",
         "url": "/clips/clip-1-loot.mp4",
+        "poster": "/clips/clip-1-loot.jpg",
+        "context": "BRD run 1898123",
+        "item": {"entry": 123, "name": "Test Blade", "quality": 4, "icon": "sword"},
     },
 ]
 
@@ -65,6 +68,12 @@ class TheShelf(unittest.TestCase):
         self.assertLess(m.index("Otherchar"), m.index("Testchar"))
         self.assertIn("Boss kill", m)
         self.assertIn('data-clip="/clips/clip-1-loot.mp4"', m)
+
+    def test_loot_card_uses_poster_item_data_and_run_context(self):
+        m = self.draw({"data": {"clips": CLIPS, "missed": []}, "loading": False})
+        self.assertIn('src="/m/clips/clip-1-loot.jpg"', m)
+        self.assertIn('class="item q4"', m)
+        self.assertIn("BRD run 1898123", m)
 
     def test_a_card_shows_the_boss_or_the_item_and_none_when_unnamed(self):
         m = self.draw({"data": {"clips": CLIPS, "empty": "none"}, "loading": False})

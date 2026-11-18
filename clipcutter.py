@@ -16,6 +16,7 @@ import hmac
 import os
 import re
 import stat
+import subprocess
 import tempfile
 import threading
 import time
@@ -476,6 +477,19 @@ def _store(connect, raw_id, rfile, length, root, note, clock, bound, stream_path
                 return _err(409, _EXISTS)
             try:
                 os.link(tmp, target)
+                poster = target[:-4] + ".jpg"
+                try:
+                    subprocess.run(
+                        ["ffmpeg", "-nostdin", "-loglevel", "error", "-ss", "2", "-i", tmp,
+                         "-frames:v", "1", "-vf", "scale=640:-2", "-y", poster],
+                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        timeout=30,
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    log.exception("clip poster generation failed for row %s", row["id"])
+                    _discard(target)
+                    _discard(poster)
+                    return _err(500, "The clip poster could not be generated.")
             except FileExistsError:
                 return _err(409, _EXISTS)
             try:
@@ -483,9 +497,11 @@ def _store(connect, raw_id, rfile, length, root, note, clock, bound, stream_path
                 landed = cur.rowcount
             except BaseException:
                 _discard(target)
+                _discard(poster)
                 raise
             if not landed:
                 _discard(target)
+                _discard(poster)
                 return _moved(_lookup(cur, row["id"]) or row)
             return 200, _public(_lookup(cur, row["id"]), *_COLUMNS.split(", "))
     finally:

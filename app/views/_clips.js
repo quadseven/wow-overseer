@@ -6,7 +6,7 @@
 // when no live view was up. This only draws them. A clip plays in place in the
 // browser's own video element; nothing is fetched but its metadata until Play.
 
-import { html, state, pendingRead } from "../ui.js";
+import { html, state, pendingRead, item } from "../ui.js";
 import { u } from "../api.js";
 import { since } from "../models/time.js";
 
@@ -47,8 +47,9 @@ export function clipLinks(entry) {
 function card(c) {
   const body = kept.has(c.url)
     ? html`<div class="clip-slot" data-clip-slot="${c.url}"></div>`
-    : html`<button type="button" class="btn clip-play" data-clip="${c.url}"><i class="ph-fill ph-play" aria-hidden="true"></i>Play</button>`;
-  return html`<article class="card clip-card"><div class="clip-head"><span class="tag tag-outline">${kindWord(c.kind)}</span><span class="clip-who">${c.character}</span>${c.subject ? html`<span class="clip-subject">${c.subject}</span>` : ""}<span class="muted g-when">${since(c.at)}</span></div>${body}</article>`;
+    : html`<button type="button" class="clip-poster" data-clip="${c.url}" aria-label="Play clip: ${c.subject || kindWord(c.kind)}">${c.poster ? html`<img src="${u(c.poster)}" alt="" loading="lazy" decoding="async">` : ""}<span><i class="ph-fill ph-play" aria-hidden="true"></i>Play</span></button>`;
+  const subject = c.item ? item(c.item) : c.subject;
+  return html`<article class="card clip-card"><div class="clip-head"><span class="tag tag-outline">${kindWord(c.kind)}</span><span class="clip-who">${c.character}</span><span class="muted g-when">${since(c.at)}</span></div>${subject ? html`<div class="clip-subject">${subject}</div>` : ""}${c.context ? html`<div class="clip-context">${c.context}</div>` : ""}${body}</article>`;
 }
 
 // The shelf section's body, from the /api/clips read.
@@ -62,8 +63,9 @@ export function shelf(read) {
       kept.delete(url);
     }
   }
-  if (!clips.length) return state("empty", "No clips yet", (read.data && read.data.empty) || "No clips have been saved yet.");
-  return html`<div class="clip-grid">${clips.map(card)}</div>`;
+  if (!clips.length && !(read.data && read.data.missed && read.data.missed.length)) return state("empty", "No clips yet", (read.data && read.data.empty) || "No clips have been saved yet.");
+  const missed = (read.data && read.data.missed) || [];
+  return html`${clips.length ? html`<div class="clip-grid">${clips.map(card)}</div>` : ""}${missed.map((d) => html`<p class="clip-missed"><strong>${d.count} moments missed ${d.day}</strong>: ${d.reasons.join(", ")}</p>`)}`;
 }
 
 // Run after every draw. A slot gets back the kept element of its clip; a Play

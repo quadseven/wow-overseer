@@ -4659,9 +4659,11 @@ def _ready_clip_path(name: str):
     root = os.path.realpath(CLIPS_DIR) if CLIPS_DIR else ""
     if not root or not os.path.isdir(root):
         return ""
+    is_poster = name.endswith(".jpg")
+    ledger_name = name[:-4] + ".mp4" if is_poster else name
     try:
         with realmread.Session(_connect) as rd:
-            rows = rd.rows(_CLIP_FILE_SQL, (name,), what="a clip file")
+            rows = rd.rows(_CLIP_FILE_SQL, (ledger_name,), what="a clip file")
     except (pymysql.err.MySQLError, OSError):
         # What a ledger read raises: the driver's errors (the same class the
         # rest of this file catches) and a refused or dropped connection. A
@@ -4671,7 +4673,7 @@ def _ready_clip_path(name: str):
     stored = (rows[0].get("file_name") or "") if rows else ""
     if not stored or stored != os.path.basename(stored) or stored.startswith("."):
         return ""
-    full = os.path.realpath(os.path.join(root, stored))
+    full = os.path.realpath(os.path.join(root, stored[:-4] + ".jpg" if is_poster else stored))
     return full if full.startswith(root + os.sep) and os.path.isfile(full) else ""
 
 
@@ -7617,7 +7619,10 @@ class Handler(BaseHTTPRequestHandler):
         """
         rows = ctx.read.rows(_CLIP_SHELF_SQL, (clipledger.SHELF_LIMIT,),
                              what="the clip shelf")
-        return 200, clipledger.shelf(rows)
+        payload = clipledger.shelf(rows)
+        for clip in payload["clips"]:
+            clip["poster"] = clip["url"].rsplit(".", 1)[0] + ".jpg"
+        return 200, payload
 
     def _cutter_refused(self) -> bool:
         """True after answering a cutter call that lacks the cutter token."""
