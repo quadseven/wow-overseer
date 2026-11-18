@@ -2484,6 +2484,29 @@ def _individual_family(cohort=None) -> str | None:
         return None
 
 
+def _aim_members_alone(names, target) -> int:
+    """Aim each of `names` at `target` on its own; how many rows changed (#2406).
+
+    The write is `travel.aim_only_statements`: it lands only in an empty
+    `travel_npc` and names only these members, so a member already walking
+    somewhere keeps that walk and no other member's aim is touched. A zero is
+    another writer holding the column, and the pass asks again next cycle.
+    """
+    landed = 0
+    with _connect() as conn, conn.cursor() as cur:
+        for sql, params in travel.aim_only_statements(names, target):
+            try:
+                cur.execute(sql, params)
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    log.warning("overseer_roster has no travel_npc column - "
+                                "no member can be aimed on this realm")
+                    return landed
+                raise
+            landed += cur.rowcount
+    return landed
+
+
 def _standing_jobs(family: str | None = None) -> dict:
     """name -> `job` for every enabled roster row (infra#3696).
 
@@ -17586,15 +17609,23 @@ class Bridge(discord.Client):
                      "a learn errand needs its own character to walk"
                      if lead != cohort.key else "no learn errand is left")
             rows = tradechoice.led_by(rows, lead)
-        learn_plan = learnaim.plan(rows)
+        # INDIVIDUAL MODE (#2406): every member with an unwalked learn
+        # errand is aimed at a trainer of its own, not the leader alone.
+        # Looked up: the adapter tests load this pass in isolation.
+        alone = getattr(self, "_town_pass_alone", None)
+        learn_plan = learnaim.plan(rows, individual=bool(
+            alone and await alone([r.character for r in rows], cohort)))
         if not (learn_plan.clear or learn_plan.aim or learn_plan.waiting
-                or learn_plan.learn):
+                or learn_plan.learn or learn_plan.aims):
             return
         landed = 0
-        if learn_plan.clear or learn_plan.aim or learn_plan.learn:
+        if (learn_plan.clear or learn_plan.aim or learn_plan.learn
+                or learn_plan.aims):
             landed = await asyncio.to_thread(
                 _run_learn_aim_plan, learnaim.statements(learn_plan))
-        if learn_plan.aim and landed:
+        # A member's own walk is not the family's traveller, so the town
+        # slot adopts nothing for an individual plan.
+        if learn_plan.aim and landed and not learn_plan.aims:
             self._cohort_town_slot(cohort.key).adopt(
                 claimant="trades", character=learn_plan.aim,
                 aim=learnaim.TRAINER_ROLE, now=now)
@@ -18252,16 +18283,24 @@ class Bridge(discord.Client):
         for holder in dict.fromkeys(holders):
             mover_town = await asyncio.to_thread(_fetch_town, holder)
             at_the_counter[holder] = bool(mover_town.banker)
-        await self._settle_bank_errand(names, leader,
-                                       _bank_trip_wanted(names, unasked,
-                                                         bag_steps),
-                                       cohort=_cohort_key(cohort),
-                                       waiting=sum(1 for h in holders
-                                                   if not at_the_counter[h]),
-                                       party=[leader] + [
-                                           h for h in dict.fromkeys(holders)
-                                           if h != leader],
-                                       planned={h: holders.count(h) for h in set(holders)})
+        # INDIVIDUAL MODE (#2406): each member with bank work walks to a
+        # banker itself, and the leader's trip for the family is not taken.
+        # Looked up: the adapter tests load this pass in isolation.
+        alone = getattr(self, "_town_pass_alone", None)
+        if alone and await alone(names, cohort):
+            await self._bank_member_errands(names, holders, at_the_counter,
+                                            cohort)
+        else:
+            await self._settle_bank_errand(names, leader,
+                                           _bank_trip_wanted(names, unasked,
+                                                             bag_steps),
+                                           cohort=_cohort_key(cohort),
+                                           waiting=sum(1 for h in holders
+                                                       if not at_the_counter[h]),
+                                           party=[leader] + [
+                                               h for h in dict.fromkeys(holders)
+                                               if h != leader],
+                                           planned={h: holders.count(h) for h in set(holders)})
         # Below the settling, so the aim still precedes the row, and above the
         # `no moves` return, so a family that walked here for a bag step alone
         # has it written on the cycle it arrives.
@@ -18307,6 +18346,78 @@ class Bridge(discord.Client):
             log.info("bank: %s", line)
         log.info("bank: queued %d/%d move(s), leader=%s%s",
                  len(fresh), len(bank_plan.moves), leader, _family_label(cohort))
+
+    async def _town_pass_alone(self, names: list, cohort=None) -> bool:
+        """Whether a town pass aims this family's members one by one (#2406).
+
+        True only for a family in individual mode (individual.py, #2395) that
+        nothing re-links: its campaign queue does not own its job and it is in
+        no run. Both are asked before any per-member aim is written. Anything
+        else, a linked or unnamed family included, is walked as on main: one
+        traveller, the leader. With the setting empty this reads nothing.
+        """
+        family = await asyncio.to_thread(_individual_family, cohort)
+        if not family:
+            return False
+        rows = await asyncio.to_thread(_standing_jobs, _cohort_key(cohort))
+        if not individual.active(rows, family):
+            return False
+        return not (await asyncio.to_thread(_queue_owns_job, family)
+                    or await self._mid_run(sorted(names)))
+
+    async def _aimable_alone(self, claimant: str, names, aim: str) -> list:
+        """`names` less the members whose own walk to `aim` is refused (#2406).
+
+        The two checks the town slot makes for the family's traveller, asked
+        per member: a recalled member or one inside an instance takes no
+        economy errand (#2323), and a walk that crosses a death disc from
+        where the member stands is not written (#2457).
+        """
+        kept = list(await asyncio.to_thread(
+            _economy_aimable, claimant, list(names)))
+        refused = (await asyncio.to_thread(
+            _member_death_disc_refusals, kept, aim) if kept else {})
+        for who, why in sorted(refused.items()):
+            log.warning("%s (individual): %s is not sent: %s", claimant, who, why)
+        return [name for name in kept if name not in refused]
+
+    async def _bank_member_errands(self, names: list, holders: list,
+                                   at_the_counter: dict, cohort=None) -> None:
+        """Aim, hold or hand back each member's own `banker` errand (#2406).
+
+        THE INDIVIDUAL HALF OF `_settle_bank_errand`. There the leader walks
+        and the family arrives behind it; here a member with bank work walks
+        to a banker itself while the others keep their own jobs.
+        `bank.member_errand_steps` judges each member on its own arrival, its
+        own unanswered rows and its own unasked work. An aim is written by
+        `travel.aim_only_statements`, into an empty column only, and a
+        finished errand is handed back by naming that member and the `banker`
+        value, so no write here can clear another member's aim. A member
+        sitting out to craft is left out, as the family's trip leaves it out.
+        """
+        members = _standin_running(names)
+        outstanding = {
+            name: await asyncio.to_thread(_outstanding_bank_moves, [name])
+            for name in members
+        }
+        steps = bank.member_errand_steps(
+            members, holders, at_the_counter, outstanding)
+        for name in sorted(n for n, s in steps.items()
+                           if s == bank.BANK_ERRAND_RELEASE):
+            if await asyncio.to_thread(_release_trade_errand, name, "banker"):
+                log.info("bank (individual): %s has nothing left to ask a "
+                         "banker for, so its own errand is handed back%s",
+                         name, _family_label(cohort))
+        walkers = await self._aimable_alone(
+            "bank", sorted(n for n, s in steps.items()
+                           if s == bank.BANK_ERRAND_AIM), "banker")
+        if not walkers:
+            return
+        landed = await asyncio.to_thread(_aim_members_alone, walkers, "banker")
+        log.info("bank (individual): %s each walk to a banker for their own "
+                 "bank work - %d aim(s) written, into an empty column only, "
+                 "and nobody else's aim is touched%s",
+                 ", ".join(walkers), landed, _family_label(cohort))
 
     async def _bank_at_the_counter(self, planned, seen: set) -> tuple:
         """Write the moves of every mover standing at a banker right now.
@@ -22361,6 +22472,13 @@ class Bridge(discord.Client):
             log.info("mail: %d letter(s) are waiting and none of them can be "
                      "collected this pass", len(letters))
             return
+        # INDIVIDUAL MODE (#2406): each taker walks to its own nearest
+        # mailbox, and the leader's walk for the family is not taken.
+        # Looked up: the adapter tests load this pass in isolation.
+        alone = getattr(self, "_town_pass_alone", None)
+        if alone and await alone(names, cohort):
+            await self._mail_member_walks(mail_plan.takes, seen, cohort)
+            return
 
         # `_head_now()` RATHER THAN bonds.head_of_family(), the defect infra#3553
         # found in the vendor pass and infra#3554 fixed: `_head_now` names the
@@ -22485,6 +22603,48 @@ class Bridge(discord.Client):
                  len(fresh), len(mail_plan.takes), len(letters), leader, post.aim,
                  _family_label(cohort))
         self._mail_urgency_spent(cohort, urgent, aimed, fresh)
+
+    async def _mail_member_walks(self, takes, seen: set, cohort=None) -> None:
+        """Aim each taker at its own nearest mailbox, then collect (#2406).
+
+        THE INDIVIDUAL HALF OF `_mail_once`. A taker with a take this pass
+        has not asked for, and no mailbox within reach of where it stands, is
+        aimed at the nearest mailbox on its own map by
+        `travel.aim_only_statements`: into an empty column only, naming that
+        member alone. The rows are then written per holder at a box
+        (`_mail_in_passing`), the gate the family's pass uses. Nothing is
+        handed back here, because the world clears a ground aim on arrival.
+        """
+        takers = sorted({t.character for t in takes
+                         if (t.character, mailrun.command(t)) not in seen})
+        positions = await asyncio.to_thread(_fetch_positions, takers)
+        walking = []
+        at_a_box = False
+        for name in takers:
+            where = positions.get(name)
+            spawn = await asyncio.to_thread(_nearest_mailbox, name)
+            if travel.spawn_in_reach(spawn, where, TOWN_COUNTER_YARDS):
+                at_a_box = True
+                continue
+            post = travel.mailbox_aim(
+                spawn, where.get("map_id") if where else None)
+            if not post.aim:
+                log.info("mail (individual): %s cannot be sent to a mailbox - "
+                         "%s", name, post.refused)
+                continue
+            if not await self._aimable_alone("mail", [name], post.aim):
+                continue
+            landed = await asyncio.to_thread(
+                _aim_members_alone, [name], post.aim)
+            walking.append("%s at %s (%d written)" % (name, post.aim, landed))
+        if walking:
+            log.info("mail (individual): each taker walks to its own mailbox, "
+                     "into an empty column only - %s%s", "; ".join(walking),
+                     _family_label(cohort))
+        # The settle read sleeps, so it runs only when some taker stands at
+        # a box by the first read (#1141, as in the family's pass).
+        if at_a_box:
+            await self._mail_in_passing(takes, seen, cohort)
 
     async def _settled_positions(self, names: list) -> dict:
         """Two position reads one snapshot interval apart; `travel.settled`
@@ -29368,21 +29528,28 @@ class Bridge(discord.Client):
         """
         try:
             rows = await asyncio.to_thread(_learn_aim_rows)
-            learn_plan = learnaim.plan(rows)
+            # INDIVIDUAL MODE (#2406): every member with an unwalked learn
+            # errand is aimed at a trainer of its own, not the leader alone.
+            # Looked up: the adapter tests load this pass in isolation.
+            alone = getattr(self, "_town_pass_alone", None)
+            learn_plan = learnaim.plan(rows, individual=bool(
+                alone and await alone([r.character for r in rows])))
             if not (learn_plan.clear or learn_plan.aim or learn_plan.waiting
-                    or learn_plan.learn):
+                    or learn_plan.learn or learn_plan.aims):
                 return
-            if (learn_plan.aim or learn_plan.learn) and self._town_slot.learn_waits:
+            if ((learn_plan.aim or learn_plan.learn or learn_plan.aims)
+                    and self._town_slot.learn_waits):
                 # A staging campaign keeps its leader (#227), and so does one
                 # held in town for bag room (#297). A rank errand is not
                 # written either: it would fence the character's travel while
                 # the campaign owns it.
                 log.info("learn-aim: %s's trainer walk waits - the campaign "
                          "owns the traveller (%s)",
-                         learn_plan.aim or learn_plan.learn[0],
+                         learn_plan.aim or ", ".join(learn_plan.aims)
+                         or learn_plan.learn[0],
                          self._town_slot.learn_waits)
                 learn_plan = dataclasses.replace(
-                    learn_plan, aim="", skill=0, learn=())
+                    learn_plan, aim="", skill=0, learn=(), aims=())
             landed = await asyncio.to_thread(
                 _run_learn_aim_plan, learnaim.statements(learn_plan)
             )
@@ -29394,7 +29561,8 @@ class Bridge(discord.Client):
             # narrowed (quadseven/mod-overseer#453). A wait is the ordinary
             # one-traveller queue, and at warning it would be the loudest line
             # in the log while being the least urgent.
-            say = log.warning if (learn_plan.clear or learn_plan.aim) else log.info
+            say = log.warning if (
+                learn_plan.clear or learn_plan.aim or learn_plan.aims) else log.info
             say("%s (%d row(s) changed)", learnaim.report(learn_plan), landed)
         except Exception:
             log.exception(

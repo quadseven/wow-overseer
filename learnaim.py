@@ -184,6 +184,9 @@ class Plan:
     # (character, skill) of a rank errand to write onto an empty
     # `learn_skill`, or () for none. See `rank_errand`.
     learn: tuple = ()
+    # Individual mode only (#2406): every member aimed this cycle, each at
+    # its own trainer. `aim` is then the leader when it is one of them.
+    aims: tuple = ()
 
 
 def finished(row) -> str:
@@ -332,8 +335,14 @@ def traveller(rows: Sequence) -> str:
     return ready[0] if ready else ""
 
 
-def plan(rows: Sequence) -> Plan:
-    """The clears, and the one aim, for this family this cycle."""
+def plan(rows: Sequence, individual: bool = False) -> Plan:
+    """The clears, and the one aim, for this family this cycle.
+
+    `individual` is asked by the caller for a family in individual mode
+    (individual.py, #2406), where the module lets a member walk its own
+    errand: every member with an unwalked errand is aimed, not the leader
+    alone, and nobody waits for the lead.
+    """
     rows = list(rows or ())
     clear = tuple(
         sorted(
@@ -363,6 +372,13 @@ def plan(rows: Sequence) -> Plan:
         return Plan(clear=clear, learn=rank_errand(rows))
 
     leading = [r for r in unwalked if r.leads]
+    if individual:
+        return Plan(
+            clear=clear,
+            aim=leading[0].character if leading else "",
+            skill=int(leading[0].learn_skill or 0) if leading else 0,
+            aims=tuple(str(r.character) for r in unwalked),
+        )
     if not leading:
         # Nobody who can actually walk has an errand this cycle. Said rather
         # than forced: the leadership borrow above is what fixes this, and it
@@ -419,7 +435,12 @@ def statements(learn_plan) -> list:
                 (int(learn[1]), str(learn[0])),
             )
         )
-    if getattr(learn_plan, "aim", ""):
+    aims = tuple(getattr(learn_plan, "aims", ()) or ())
+    if aims:
+        # INDIVIDUAL MODE (#2406): one write names every member aimed, lands
+        # only in an empty column, and touches nobody it does not name.
+        out.extend(travel.aim_only_statements(aims, TRAINER_ROLE))
+    elif getattr(learn_plan, "aim", ""):
         out.append(
             (
                 "UPDATE overseer_roster SET travel_npc = %s "
@@ -445,7 +466,16 @@ def report(learn_plan) -> str:
             "trainer clears it inside the worldserver - which needs a travel "
             "aim (infra#3686)" % (row.character, row.skill, row.why)
         )
-    if getattr(learn_plan, "aim", ""):
+    aims = tuple(getattr(learn_plan, "aims", ()) or ())
+    if aims:
+        said.append(
+            "individual: aimed %s at %s, each for its own learn errand that "
+            "was standing with no journey attached; only an empty column is "
+            "written and nobody else's aim is touched. Arriving is not "
+            "learning: only character_skills settles it"
+            % (", ".join(aims), travel.describe(TRAINER_ROLE))
+        )
+    elif getattr(learn_plan, "aim", ""):
         said.append(
             "aimed %s at %s for skill %d - the errand was standing with no "
             "journey attached, which is how a derived errand is born. "

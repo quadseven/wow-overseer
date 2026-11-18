@@ -499,7 +499,10 @@ def aim_only_statements(names, target):
     """
     if not target:
         raise ValueError("an aim needs a target")
-    resolved = resolve(target)
+    # A GROUND AIM IS A TARGET HERE TOO (#2406): a mailbox is a gameobject
+    # with no role keyword, so a member's own walk to one is an `at:` aim.
+    # `ground_aim` built it, and `resolve` knows keywords and entries only.
+    resolved = str(target) if is_ground_aim(target) else resolve(target)
     if resolved is None:
         raise ValueError("not a travel target: %r" % (target,))
     if len(resolved) > COLUMN_WIDTH:
