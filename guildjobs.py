@@ -886,6 +886,10 @@ class JobsPlan:
     # pass, and why (#2152). Its own field: plan.notes is logged five lines a
     # pass, which hid every one of these.
     loop_lines: tuple = ()
+    # One line per online member standing in the starting lands of map 530,
+    # past where it stands, that got no level step this pass, and why (#2400).
+    # Its own field for the same reason as loop_lines.
+    isle_lines: tuple = ()
     # guild -> {skill: name} of each trade's guinea pig (guineapig.pick).
     pigs: dict = field(default_factory=dict)
     # name -> the (skill, skill) each approved raid seat should hold
@@ -5485,6 +5489,7 @@ def _finish_plan(inputs, state):
         yields=class_yields(all_members, inputs.classes, inputs.recent),
         ask_yields=tuple(state.ask_yields),
         loop_lines=_loop_lines(inputs, state, all_members),
+        isle_lines=_isle_lines(inputs, state, all_members),
         pigs=inputs.pigs,
         assigned=state.assigned,
     )
@@ -5527,6 +5532,83 @@ def _loop_line_reason(m, loop, inputs, state) -> str:
     if not _in_loop_zone(m, loop):
         return "already out of the zone"
     return _death_loop_reason(m, loop, inputs.leveling, inputs.recent, inputs.campaign)
+
+
+# A MEMBER LEFT IN THE STARTING LANDS IS NAMED, WITH THE REASON (#2400). Read
+# on the dev realm on 2026-11-13: two Draenei at 23 and 25 stood on map 530 past
+# their zone's quests and wrote no command row in 24 hours, and nothing in the
+# log said why. The boat rung (isle_crossing_first) reads level_step and
+# returns nothing for every branch that issues no crossing, and four of
+# level_step's branches say nothing themselves: blocked (fighting, a roster
+# member, the cap), already at the flight master, the walk's cooldown, and not
+# outgrown. Each of those is quiet for good reason on a continent, where most
+# members are in one of them every pass. In the starting lands a member past
+# its zone has one way on, so there the reason is said: _level_decision names
+# the quiet branch, and this is the line for it.
+def _isle_lines(inputs, state, all_members) -> tuple:
+    """One line per online member standing in the starting lands of map 530
+    (classic.is_starting_land) that has outgrown where it stands
+    (_level_outgrown) and got no level step this pass.
+
+    A member whose level step started (its boat, its orb, or a walk to a hub
+    still on map 530) is named by that step's own line. Every other one is
+    named here with the branch that issued nothing (_isle_line_reason). An
+    offline member is not listed: nothing is asked of it anywhere. Nothing is
+    listed while the level world is unread, when no member can be judged."""
+    world = inputs.leveling
+    if world is None:
+        return ()
+    levelled = {s.holder for s in state.steps if s.action == guildlevel.ACTION}
+    out = []
+    for m in sorted(all_members, key=lambda m: m.name):
+        if m.name in levelled or not m.online:
+            continue
+        if not classic.is_starting_land(m.map_id, m.zone_id):
+            continue
+        loop = _offer_for(inputs.loops, m.name)
+        why = _level_outgrown(m, world, loop)[0]
+        if not why:
+            continue
+        reason = _isle_line_reason(m, inputs, state)
+        # A held crossing's own line already says why the zone is outgrown.
+        where = "" if why in reason else ", where %s" % why
+        out.append(
+            "%s at level %d gets no level step off map %d%s: %s"
+            % (m.name, int(m.level), int(m.map_id), where, reason)
+        )
+    return tuple(out)
+
+
+def _isle_line_reason(m, inputs, state) -> str:
+    """Why a member _isle_lines lists got no level step: its seat takes none
+    in this pass, the level step's own reason (its note, its quiet branch, or
+    the crossing or orb it is held on), or what the pass did with the step it
+    planned (refused, behind another step, or not started)."""
+    if m.role == BANKER:
+        return "it is a banker and stays beside its vault"
+    if m.role == FAMILY:
+        return "roster member (the family route walks it)"
+    if m.role == UNASSIGNED:
+        return "it holds no seat in the lineup, which is offered a class step only"
+    step, doing, note, quiet = _level_decision(
+        m,
+        inputs.leveling,
+        inputs.recent,
+        inputs.cap,
+        _offer_for(inputs.loops, m.name),
+        inputs.campaign,
+        avoid_zones=_member_value(inputs.avoided, m.name, ()),
+    )
+    if step is None:
+        return note or quiet or "it is held on the way it has started: %s" % doing
+    if m.name in state.refused:
+        return "the step was refused: %s" % state.refused[m.name]
+    first = [s for s in state.steps if s.holder == m.name]
+    if first:
+        return "another step came first this pass: %s" % first[0].said
+    return "its level step was planned and not started: %s" % (
+        state.lines.get(m.name) or doing
+    )
 
 
 def _plan_family_class_member(
@@ -6640,21 +6722,27 @@ def _join_once(*parts) -> str:
     return "; ".join(said)
 
 
-def _level_blocked(m, world, campaign, loop) -> bool:
-    """The level walk starts nowhere: no world read, a member offline or
-    fighting, a member at the level cap, or a roster family member whose
-    family holds a campaign or who is not standing in its death loop's
+def _level_blocked_why(m, world, campaign, loop) -> str:
+    """Why the level walk starts nowhere, or "": no world read, a member
+    offline or fighting, a member at the level cap, or a roster family member
+    whose family holds a campaign or who is not standing in its death loop's
     zone (levelroute walks roster members; the loop's escape is the one
     exception, #1620, and a campaign holds it off, #1873)."""
     # EVERY MEMBER, NATURAL OR NOT (2026-10-05). The natural reset gates what
     # a member contributes, not where it walks: on the dev realm 1 of Cave's
     # 60 and none of Bonkers' 56 held a reset, so a step gated on it walked
     # nobody, and Cave's level 14-15 priests stayed in their starting zones.
-    if world is None or not m.online or m.in_combat:
-        return True
+    if world is None:
+        return "the level world is unread"
+    if not m.online:
+        return "it is offline"
+    if m.in_combat:
+        return "it is fighting"
     if m.level >= guildlevel.LEVEL_CAP and not _in_loop_zone(m, loop):
-        return True
-    return bool(m.name in world.roster and (campaign or not _in_loop_zone(m, loop)))
+        return "it is at the level cap"
+    if m.name in world.roster and (campaign or not _in_loop_zone(m, loop)):
+        return "it is a roster family member, walked by the family route"
+    return ""
 
 
 def _level_avoid(loop, avoid_zones):
@@ -6691,11 +6779,12 @@ def level_step(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
     from it. levelroute keeps the member, as it keeps every roster member
     outside a death loop.
     """
-    # The opening refusals (no world, offline or fighting, at the cap, and
-    # the roster refusal with the death loop's escape ahead of it) are
-    # _level_blocked's read.
-    if _level_blocked(m, world, campaign, loop):
-        return None, "", ""
+    return _level_decision(m, world, recent, cap, loop, campaign, avoid_zones)[:3]
+
+
+def _level_outgrown(m, world, loop):
+    """(why the member has outgrown where it stands or "", its side's bands,
+    its open quests or None) as the level step reads them."""
     bands = world.bands.get(guildlevel.side_of(m.race), {})
     # A ZONE IS LEFT WHEN ITS QUESTS RUN OUT (2026-10-10): its open quests for
     # this member (guildlevel.open_quests), once its rewarded quests are read.
@@ -6708,14 +6797,31 @@ def level_step(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
     why = guildlevel.outgrown(
         m.level, m.race, m.map_id, m.zone_id, bands, opens
     ) or _loop_why(m, loop)
+    return why, bands, opens
+
+
+def _level_decision(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
+    """level_step's (step or None, what it does, a note), and fourth the
+    reason of a branch that returns none of the three: blocked
+    (_level_blocked_why), not outgrown, already at the flight master, or the
+    walk's cooldown. level_step keeps those quiet, as most members are in one
+    of them every pass; _isle_lines names them for a member that waits on its
+    crossing off the starting lands (#2400)."""
+    # The opening refusals (no world, offline or fighting, at the cap, and
+    # the roster refusal with the death loop's escape ahead of it) are
+    # _level_blocked_why's read.
+    blocked = _level_blocked_why(m, world, campaign, loop)
+    if blocked:
+        return None, "", "", blocked
+    why, bands, opens = _level_outgrown(m, world, loop)
     if not why:
-        return None, "", ""
+        return None, "", "", "it has not outgrown where it stands"
     # A GHOST IS WALKED NOWHERE (2026-10-09). On the dev realm 45 of 207 level
     # walks in a day went to a dead member: each was refused "character is
     # dead" and started the walk's two hour cooldown, so the member stood in
     # its outgrown zone up to two hours longer once it was alive again.
     if not m.alive:
-        return None, "", _held_note(m, 0)
+        return None, "", _held_note(m, 0), ""
     choice = guildlevel.choose(
         m.level,
         m.race,
@@ -6729,19 +6835,20 @@ def level_step(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
         avoid=_level_avoid(loop, avoid_zones),
     )
     if choice.refused:
-        return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
+        return None, "", guildlevel.refused_note(m.name, m.level, why, choice), ""
     if choice.orb is not None:
-        return level_orb_step(m, choice, why, recent, cap)
+        return (*level_orb_step(m, choice, why, recent, cap), "")
     if choice.crosses:
-        return level_cross_step(m, choice, why, recent)
+        return (*level_cross_step(m, choice, why, recent), "")
     master = choice.master
+    place = choice.place or master.name
     if guildlevel.there(m.map_id, m.x, m.y, master):
-        return None, "", ""
+        return None, "", "", "it already stands at the flight master at %s" % place
     deadly = deadly_hub_note(m, master, choice, recent)
     if deadly:
-        return None, "", deadly
+        return None, "", deadly, ""
     if _cooling(m, guildlevel.ACTION, recent):
-        return None, "", ""
+        return None, "", "", "its last level walk to %s is still cooling down" % place
     said = guildlevel.said(m.name, m.level, why, choice)
     spot = Spot(
         kind="creature",
@@ -6752,7 +6859,7 @@ def level_step(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
         name=master.name or choice.place,
         why=why,
     )
-    return _spot_step(m, spot, guildlevel.ACTION, cap, said), said, ""
+    return _spot_step(m, spot, guildlevel.ACTION, cap, said), said, "", ""
 
 
 def _loop_why(m, loop) -> str:
