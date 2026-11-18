@@ -318,22 +318,52 @@ class TheSentenceNamesTheWork(unittest.TestCase):
         # none was the same walk failing. The sum (7) read as a walk that
         # "has ended and restarted" and flagged a healthy family as stalled.
         legs = [
-            step("Grug", "the errand walk took over: walking to Stormwind City on a town errand",
-                 kind="intent", times=2, first=700, last=200),
-            step("Grug", "the town trip took over: walking to the vendor on a town errand",
-                 kind="intent", times=2, first=800, last=300),
-            step("Grug", "the quest drive took over: working its quests",
-                 kind="intent", times=2, first=600, last=100),
+            step(
+                "Grug",
+                "the errand walk took over: walking to Stormwind City on a town errand",
+                kind="intent",
+                times=2,
+                first=700,
+                last=200,
+            ),
+            step(
+                "Grug",
+                "the town trip took over: walking to the vendor on a town errand",
+                kind="intent",
+                times=2,
+                first=800,
+                last=300,
+            ),
+            step(
+                "Grug",
+                "the quest drive took over: working its quests",
+                kind="intent",
+                times=2,
+                first=600,
+                last=100,
+            ),
         ]
         got = line_of("Grug", legs)
         self.assertNotIn("restarted", got["line"])
 
     def test_one_walk_restarted_three_times_still_says_so(self):
         legs = [
-            step("Grug", "the errand walk took over: walking to Stormwind City on a town errand",
-                 kind="intent", times=3, first=700, last=200),
-            step("Grug", "the quest drive took over: working its quests",
-                 kind="intent", times=1, first=600, last=100),
+            step(
+                "Grug",
+                "the errand walk took over: walking to Stormwind City on a town errand",
+                kind="intent",
+                times=3,
+                first=700,
+                last=200,
+            ),
+            step(
+                "Grug",
+                "the quest drive took over: working its quests",
+                kind="intent",
+                times=1,
+                first=600,
+                last=100,
+            ),
         ]
         got = line_of("Grug", legs)
         self.assertIn("restarted 3 times", got["line"])
