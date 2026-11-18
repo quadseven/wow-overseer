@@ -230,6 +230,7 @@ import towntrip
 import deathcells
 import hearthcast
 import hearthcast_data
+import strandhearth
 import townerrand
 import townslot
 import claims
@@ -17433,6 +17434,62 @@ class Bridge(discord.Client):
                 except Exception:
                     log.exception("economy: %s pass failed for family %s; "
                                   "retrying next cycle", what, cohort.key)
+        try:
+            await self._hearth_stranded_followers()
+        except Exception:
+            log.exception("strand hearth: pass failed; retrying next cycle")
+
+    async def _hearth_stranded_followers(self) -> int:
+        """Send a follower that cannot close on its held leader home by its stone.
+
+        THE LEADER IS HELD FOR A MEMBER THAT NEVER ARRIVES (#1261). The module
+        holds a leader still while a member walks back, and that hold outranks
+        the leader's errand, so a member in a pocket it cannot leave, or refused
+        every bearing, stops the family's errands for as long as it stays. A
+        member with no 5-yard improvement in `strandhearth.STRAND_SECONDS` is
+        hearthed, once an hour at most, only where its own bind lands on the
+        leader's map and not much farther from the leader than it stands. The
+        stone is the member's own item; nothing is granted.
+        """
+        intents = await asyncio.to_thread(_fetch_family_intents)
+        watch = self.__dict__.setdefault("_strand_watch", {})
+        now = time.monotonic()
+        wanted = {}
+        for leader, row in intents.items():
+            states = strandhearth.parse_members_state(row.get("members_state"))
+            for name in strandhearth.observe(watch, leader, states, now):
+                wanted[name] = (leader, states[name][1])
+        if not wanted:
+            return 0
+        names = sorted(set(wanted) | {leader for leader, _ in wanted.values()})
+        positions = await asyncio.to_thread(_fetch_positions, names)
+        reads = await asyncio.to_thread(_movement_reads, names)
+        facts = await asyncio.to_thread(
+            hearthcast_data.read_from, _connect, names, log)
+        held = await asyncio.to_thread(
+            _hearth_backed_off_names, sorted(wanted), strandhearth.SOURCE,
+            guildrun.REGROUP_MOVING_BACKOFF_SECONDS)
+        sent = 0
+        for member in hearthcast.members(
+                sorted(wanted), positions, reads["binds"], reads["hearthed"],
+                facts):
+            leader, yards = wanted[member.name]
+            if member.name in held or member.name in reads["hearthed"]:
+                continue
+            why = strandhearth.why_not(member, positions.get(leader), yards)
+            if why:
+                log.info("strand hearth: %s is %d yards from %s and not closing, "
+                         "but its stone is no way back (%s)", member.name,
+                         yards, leader, why)
+                continue
+            await asyncio.to_thread(_insert_hearth, member.name,
+                                    strandhearth.SOURCE)
+            watch.pop((leader, member.name), None)
+            sent += 1
+            log.info("strand hearth: %s is %d yards from the held leader %s and "
+                     "has not closed in %d seconds; it uses its own hearthstone",
+                     member.name, yards, leader, strandhearth.STRAND_SECONDS)
+        return sent
 
     async def _trades_for_every_family(self) -> None:
         """Choose, declare and walk to the professions of every other family (#211).
