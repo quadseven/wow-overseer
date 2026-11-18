@@ -88,6 +88,78 @@ class LockTest(unittest.TestCase):
         self.take("agent-a", 111, now=1500.0)
         self.assertEqual(json.loads(self.path.read_text())["pid"], 111)
 
+    def test_takeover_never_unlinks_the_lock_so_it_cannot_delete_a_fresh_one(self):
+        self.take("agent-a", 111)
+        real = os.unlink
+
+        def guarded(p, *a, **k):
+            self.assertNotEqual(pathlib.Path(p), self.path, "unlinked the lock")
+            return real(p, *a, **k)
+
+        with mock.patch("os.unlink", guarded):
+            self.take("agent-b", 222, now=1100.0, alive=lambda p: False)
+        self.assertEqual(json.loads(self.path.read_text())["owner"], "agent-b")
+        self.assertFalse(pathlib.Path(str(self.path) + ".takeover").exists())
+
+    def test_the_second_of_two_takeovers_sees_the_first_ones_fresh_lock(self):
+        self.take("agent-a", 111)
+        seen = []
+
+        def alive(pid):
+            # agent-a is dead; once agent-c holds the lock, it is alive
+            seen.append(pid)
+            return pid == 333
+
+        self.take("agent-c", 333, now=1100.0, alive=alive)
+        with self.assertRaises(dispatchlock.LockHeld) as cm:
+            self.take("agent-b", 222, now=1200.0, alive=alive)
+        self.assertIn("agent-c", str(cm.exception))
+
+    def test_a_takeover_in_progress_blocks_another_one(self):
+        self.take("agent-a", 111)
+        guard = pathlib.Path(str(self.path) + ".takeover")
+        guard.write_text("{}", encoding="utf-8")
+        with (
+            mock.patch.object(dispatchlock, "GUARD_TRIES", 2),
+            mock.patch.object(dispatchlock, "GUARD_WAIT", 0),
+            mock.patch.object(dispatchlock, "GUARD_STALE_SECONDS", 10**9),
+        ):
+            with self.assertRaises(dispatchlock.LockHeld):
+                self.take("agent-b", 222, alive=lambda p: False)
+        self.assertEqual(json.loads(self.path.read_text())["owner"], "agent-a")
+
+    def test_a_dead_takeovers_guard_is_cleared_when_old(self):
+        self.take("agent-a", 111)
+        guard = pathlib.Path(str(self.path) + ".takeover")
+        guard.write_text("{}", encoding="utf-8")
+        os.utime(guard, (0, 0))
+        self.take("agent-b", 222, now=time.time(), alive=lambda p: False)
+        self.assertEqual(json.loads(self.path.read_text())["owner"], "agent-b")
+
+    def test_renew_swaps_atomically_and_leaves_no_temp_file(self):
+        self.take("agent-a", 111, now=1000.0)
+        calls = []
+        real = os.replace
+
+        def spy(a, b):
+            calls.append((pathlib.Path(a).name, pathlib.Path(b)))
+            return real(a, b)
+
+        with mock.patch("os.replace", spy):
+            dispatchlock.renew(self.path, pid=111, now=2000.0)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1], self.path)
+        self.assertEqual(json.loads(self.path.read_text())["renewed"], 2000.0)
+        self.assertEqual([p.name for p in self.path.parent.iterdir()], [self.path.name])
+
+    def test_an_unreadable_lock_is_busy_not_stale(self):
+        self.take("agent-a", 111)
+        with mock.patch.object(
+            dispatchlock, "_read", side_effect=PermissionError("swapping")
+        ):
+            with self.assertRaises(dispatchlock.LockHeld):
+                self.take("agent-b", 222, alive=lambda p: False)
+
 
 class StopTest(unittest.TestCase):
     def setUp(self):
