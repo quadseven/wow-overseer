@@ -589,22 +589,29 @@ def delete_expired(cur, root: str) -> int:
     return done
 
 
+def _count(value) -> int:
+    """One tick count as a number. `time_out` answers its count per new state
+    ({"no_view": n, "failed": n}), and those add up; a missing count is 0."""
+    if isinstance(value, dict):
+        return sum(int(v or 0) for v in value.values())
+    return int(value or 0)
+
+
 def tick_line(scan, swept) -> str:
     """The one log line for a clip tick, or "" for a tick that did nothing.
 
     `scan` is what the scan answered (None when it failed) and `swept` what
     the sweeps answered. A count either side left out reads as zero, so the
     scan with no roster and a sweep with no clip folder need no special case.
+    Both sides carry `timed_out` as `time_out` answers it, a dict per state.
     """
     scan_counts = scan if isinstance(scan, dict) else {}
     swept = swept if isinstance(swept, dict) else {}
-    planned = int(scan_counts.get("written") or 0)
-    expired = int(scan_counts.get("expired") or 0)
-    timed_out = int(scan_counts.get("timed_out") or 0) + int(
-        swept.get("timed_out") or 0
-    )
-    deleted = int(swept.get("deleted") or 0)
-    partial = int(swept.get("partial") or 0)
+    planned = _count(scan_counts.get("written"))
+    expired = _count(scan_counts.get("expired"))
+    timed_out = _count(scan_counts.get("timed_out")) + _count(swept.get("timed_out"))
+    deleted = _count(swept.get("deleted"))
+    partial = _count(swept.get("partial"))
     if not (planned or expired or timed_out or deleted or partial):
         return ""
     tail = "timed out %d, files deleted %d, partial uploads removed %d" % (
