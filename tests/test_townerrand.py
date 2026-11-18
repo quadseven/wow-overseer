@@ -1119,11 +1119,7 @@ class TheAdapter(unittest.TestCase):
         )
 
         self.assertTrue(
-            asyncio.run(
-                self.fam._town_errand_release_trainer(
-                    state, "Grug", False, ""
-                )
-            )
+            asyncio.run(self.fam._town_errand_release_trainer(state, "Grug", False, ""))
         )
         self.assertEqual(["Grug"], released)
 
@@ -1137,11 +1133,7 @@ class TheAdapter(unittest.TestCase):
         state = te.State(phase=te.GO, why="gear waits in the mailbox")
 
         self.assertFalse(
-            asyncio.run(
-                self.fam._town_errand_release_trainer(
-                    state, "Grug", False, ""
-                )
-            )
+            asyncio.run(self.fam._town_errand_release_trainer(state, "Grug", False, ""))
         )
         self.assertEqual([], released)
 
@@ -1155,11 +1147,7 @@ class TheAdapter(unittest.TestCase):
         state = te.State(phase=te.GO, why=te.BAG_PRESSURE_WHY)
 
         self.assertFalse(
-            asyncio.run(
-                self.fam._town_errand_release_trainer(
-                    state, "Grug", True, ""
-                )
-            )
+            asyncio.run(self.fam._town_errand_release_trainer(state, "Grug", True, ""))
         )
         self.assertEqual([], released)
 
