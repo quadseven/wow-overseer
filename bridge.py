@@ -30509,12 +30509,22 @@ def _log_work_orders(roster: list) -> None:
                 [*orders, *workorders.STANDING_ORDERS],
                 workorders.members_from_roster(roster),
             )
-            workorderstore.save_plan(cur, plan)
+            stored = [a for a in plan.assignments if a.order.order_id]
+            saved = workorderstore.save_plan(cur, plan)
     except (pymysql.err.MySQLError, OSError):
         # Store errors only: a planner defect (a malformed roster skill, say)
         # surfaces to the guild pass, which logs it as a plan failure.
         log.exception("workorders: planning or store read/write failed; retrying next pass")
         return
+    if saved == len(stored):
+        for assignment in stored:
+            if assignment.order.kind == workorders.CONSUMABLE:
+                log.info(
+                    "workorders: assigned %d %s to %s",
+                    assignment.order.quantity,
+                    assignment.order.item,
+                    assignment.taker,
+                )
     log.info("workorders: %s", workorders.headline(plan))
     for line in workorders.lines(plan):
         log.info("workorders: %s", line)
@@ -30539,16 +30549,22 @@ def _request_fire_potion_order(lines) -> None:
         for line in lines or ()
         if line.entry == raidsupply.GREATER_FIRE_PROTECTION
     )
+    completed = 0
     try:
         with _connect() as conn, conn.cursor() as cur:
             if order is not None:
                 workorderstore.request(cur, order)
-            workorderstore.reconcile(
+            completed = workorderstore.reconcile(
                 cur, workorders.CONSUMABLE, _FIRE_POTION, short)
     except (pymysql.err.MySQLError, OSError):
         # Store errors only: a defect in building or requesting the order
         # surfaces to the raid supply pass instead of reading as an outage.
         log.exception("workorders: fire potion shortfall could not be stored")
+        return
+    if not short and completed:
+        log.info(
+            "workorders: completed %s order as its shortfall cleared", _FIRE_POTION
+        )
 
 
 def _fetch_guild_roster(names: list) -> list:
