@@ -628,7 +628,10 @@ def _stuck_entry(member: dict, run: list, now_at: int, loop=None) -> dict | None
         cause = ask_blocker(run, now_at)
         if cause is not None and not loop.run:
             cause["blocker"] += " Deaths meanwhile: " + found["blocker"]
-            cause["since"] = min(cause["since"] or found["since"], found["since"] or 0) or cause["since"]
+            cause["since"] = (
+                min(cause["since"] or found["since"], found["since"] or 0)
+                or cause["since"]
+            )
             return cause
         return found
     if member["life"] in ("dead", "ghost"):

@@ -37,7 +37,9 @@ class RefusalStreakTests(unittest.TestCase):
         s = classuse.RefusalStreaks()
         for _ in range(classuse.STREAK_LIMIT - 1):
             s.refused("Saevor", 12842, WHY)
-        self.assertFalse(s.refused("Saevor", 12842, "the main-hand spell is on cooldown"))
+        self.assertFalse(
+            s.refused("Saevor", 12842, "the main-hand spell is on cooldown")
+        )
 
     def test_members_and_quests_count_apart(self):
         s = classuse.RefusalStreaks()
