@@ -1726,6 +1726,15 @@ def _request_key(request: MaterialRequest) -> str:
     return "%s:%d" % (request.character, request.entry)
 
 
+def skinning_skill_floor(level) -> int:
+    """Invert `guildjobs.skinnable_level` for one creature level."""
+    level = int(level)
+    if level <= 0:
+        return 0
+    required = (level - 10) * 10 if level <= 20 else level * 5
+    return max(0, required)
+
+
 def zone_minimums(lock_ids, skinning_levels=()) -> dict:
     """Minimum gathering skill that can work any source measured in a zone.
 
@@ -1745,8 +1754,7 @@ def zone_minimums(lock_ids, skinning_levels=()) -> dict:
         level = int(value)
         if level <= 0:
             continue
-        required = (level - 10) * 10 if level <= 20 else level * 5
-        skinning.append(max(0, required))
+        skinning.append(skinning_skill_floor(level))
     if skinning:
         out["skinning"] = min(skinning)
     return out

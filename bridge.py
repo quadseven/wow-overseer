@@ -38597,6 +38597,9 @@ _ZONE_GATHER_NODE_SQL = (
     "AND gt.Data0 IN ({placeholders})"
 )
 
+# One round-trip for node sources per material-route pass; the finite lock set
+# and DISTINCT bound the returned rows to one per known gathering lock.
+
 _ZONE_SKINNING_LEVEL_SQL = (
     "SELECT DISTINCT ct.maxlevel AS level FROM acore_world.creature c "
     "JOIN acore_world.creature_template ct ON ct.entry = c.id "
@@ -38641,7 +38644,7 @@ def _fetch_zone_source_values(cur, sql: str, params: tuple, field: str) -> list:
         cur.execute(sql, params)
         return [row[field] for row in cur.fetchall()]
     except pymysql.err.MySQLError as exc:
-        if exc.args and exc.args[0] in (1054, 1146, 1265):
+        if exc.args and exc.args[0] in (1054, 1146):
             return []
         raise
 

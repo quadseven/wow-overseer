@@ -145,6 +145,10 @@ class ZoneGatheringRequirements(unittest.TestCase):
         """A real zero-skill node floor is distinct from missing sources."""
         self.assertEqual(cr.zone_minimums((38,)), {"mining": 0})
 
+    def test_low_level_skinning_floor_uses_the_same_skill_curve(self):
+        """Levels below 20 use ten skill per creature level above 10."""
+        self.assertEqual(cr.zone_minimums((), skinning_levels=(15,)), {"skinning": 50})
+
 
 class PendingRequestsAreActedOnOnce(unittest.TestCase):
     def setUp(self):
@@ -343,6 +347,37 @@ class GatherRoutesSendTheFamilyOut(unittest.TestCase):
         self.assertIn("Rough Stone", cr.report(plan))
         self.assertIn("bought", cr.report(plan))
 
+    def test_a_buy_route_does_not_hide_a_different_gatherable_shortage(self):
+        """A real gathering shortage still sends the family out to gather."""
+        pending = {}
+        cr.take_requests(
+            pending,
+            [
+                _request(
+                    name="Miner",
+                    recipe=3918,
+                    entry=ROUGH_STONE,
+                    detail="short 1x Rough Stone (needs 1, has 0)",
+                )
+            ],
+            {ROUGH_STONE: METAL},
+            {"Miner": {"mining": 5}},
+            {},
+            0.0,
+            zone_minimums={"mining": 175},
+        )
+        stands = (
+            cr.stand("Miner", 3918, {ROUGH_STONE: 0}),
+            cr.stand("Gatherer", 2330, {PEACEBLOOM: 0}),
+        )
+
+        plan = cr.rhythm(
+            cr.requested_stands(stands, cr.open_routes(pending)), cr.MODE_CRAFT
+        )
+
+        self.assertEqual(plan.mode, cr.MODE_GATHER)
+        self.assertIn("Gatherer", plan.why)
+
 
 class BuyRoutesBecomeAuctionNeeds(unittest.TestCase):
     def _buy(self):
@@ -387,6 +422,7 @@ class TheBridgeRoutesTheRequests(unittest.TestCase):
         self.assertTrue("kind = 'material-request'" in self.source)
 
     def test_the_rhythm_sends_the_family_out_for_a_gather_route(self):
+        """The craft rhythm applies a request gather route to its stand."""
         body = self._body("_craft_rhythm_once")
         self.assertIn(
             "names, leader = await asyncio.to_thread(_family_of, cohort)", body
@@ -395,6 +431,7 @@ class TheBridgeRoutesTheRequests(unittest.TestCase):
         self.assertIn("craft_rhythm.requested_stands(", body)
 
     def test_the_auction_pass_buys_for_a_buy_route(self):
+        """The auction pass receives buy routes from the material router."""
         body = self._body("_auction_once")
         self.assertIn("await self._material_routes(names, leader)", body)
         self.assertIn("craft_rhythm.ROUTE_BUY", body)
