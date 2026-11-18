@@ -12008,7 +12008,7 @@ class Bridge(discord.Client):
         never cancelled; and its job is written by `_set_family_job`, since
         `_set_job` answers only for this bridge's family.
         """
-        names = await asyncio.to_thread(_names_of, cohort)
+        names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names:
             return
         standing_jobs = await asyncio.to_thread(
@@ -12073,7 +12073,7 @@ class Bridge(discord.Client):
         # A MATERIAL REQUEST ROUTED TO GATHERING (#476) makes its gatherer
         # short, which sends the family out for it.
         stands = craft_rhythm.requested_stands(
-            stands, await self._material_routes(names))
+            stands, await self._material_routes(names, leader))
         # A FAMILY IN THE PROFESSION LOOP (#2419): the loop owns its job, so
         # this pass writes none, individual or not (#2498: the individual
         # path below is asked only AFTER the loop, or it wrote per-member jobs
@@ -12104,7 +12104,7 @@ class Bridge(discord.Client):
         log.info("craft_rhythm: %s", craft_rhythm.report(plan))
         await self._own_rhythm_moves(plan, names, skills)
 
-    async def _material_routes(self, names: list) -> list:
+    async def _material_routes(self, names: list, leader: str) -> list:
         """The open material-request routes of `names` (#476).
 
         Reads what DriveCraft has asked for, then lets craft_rhythm close the
@@ -12126,12 +12126,14 @@ class Bridge(discord.Client):
         kinds = await asyncio.to_thread(
             _fetch_item_kinds, sorted({r.entry for r in requests}))
         skills = await asyncio.to_thread(_fetch_trade_skills, names)
+        zone_minimums = await asyncio.to_thread(
+            _fetch_zone_gathering_minimums, leader)
         now = time.monotonic()
         _log_material_routes("forgotten", craft_rhythm.expire_requests(pending, now))
         _log_material_routes("answered", craft_rhythm.settle_requests(pending, held))
         _log_material_routes("moved", craft_rhythm.escalate_requests(pending, now))
         _log_material_routes("routed", craft_rhythm.take_requests(
-            pending, requests, kinds, skills, held, now))
+            pending, requests, kinds, skills, held, now, zone_minimums))
         return craft_rhythm.open_routes(
             {key: route for key, route in pending.items()
              if route.request.character in names})
@@ -12659,7 +12661,7 @@ class Bridge(discord.Client):
             if auction.supply_spell(spell_id)
         }
         # A MATERIAL REQUEST ROUTED TO THE HOUSE (#476) is bought here too.
-        buys = [route for route in await self._material_routes(names)
+        buys = [route for route in await self._material_routes(names, leader)
                 if route.how == craft_rhythm.ROUTE_BUY]
         if not shoppers and not buys:
             log.info("auction: nobody is on a craft errand this pass can supply")
@@ -38645,6 +38647,65 @@ _JOB_NODE_SQL = (
 )
 
 
+_ZONE_GATHER_NODE_SQL = (
+    "SELECT DISTINCT gt.Data0 AS lock_id FROM acore_world.gameobject g "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE g.map = %s AND g.zoneId = %s AND gt.type = %s "
+    "AND gt.Data0 IN ({placeholders})"
+)
+
+# One round-trip for node sources per material-route pass; the finite lock set
+# and DISTINCT bound the returned rows to one per known gathering lock.
+
+_ZONE_SKINNING_LEVEL_SQL = (
+    "SELECT DISTINCT ct.maxlevel AS level FROM acore_world.creature c "
+    "JOIN acore_world.creature_template ct ON ct.entry = c.id "
+    "WHERE c.map = %s AND c.zoneId = %s AND ct.skinloot > 0 "
+    "AND ct.`rank` = 0 AND (ct.type_flags & 768) = 0 AND ct.maxlevel > 0"
+)
+
+
+def _fetch_zone_gathering_minimums(leader: str) -> dict:
+    """Gathering skill floors for sources in the leader's current zone.
+
+    A missing snapshot or unavailable zone data returns no measured sources;
+    material requests then take the buy route instead of assuming a trip can
+    produce the reagent.
+    """
+    if not leader:
+        return {}
+    position = _fetch_positions([leader]).get(leader)
+    if not position or position.get("map_id") is None:
+        return {}
+    zone = position.get("zone_id")
+    if zone is None or int(zone) <= 0:
+        return {}
+    map_id, zone_id = int(position["map_id"]), int(zone)
+
+    locks = sorted({lock for bands in gatherband.BANDS.values() for lock in bands})
+    with _connect() as conn, conn.cursor() as cur:
+        lock_ids = []
+        if locks:
+            sql = _ZONE_GATHER_NODE_SQL.format(
+                placeholders=",".join(["%s"] * len(locks)))
+            lock_ids = _fetch_zone_source_values(
+                cur, sql, (map_id, zone_id, travel.CHEST_GO_TYPE, *locks), "lock_id")
+        skinning_levels = _fetch_zone_source_values(
+            cur, _ZONE_SKINNING_LEVEL_SQL, (map_id, zone_id), "level")
+    return craft_rhythm.zone_minimums(lock_ids, skinning_levels)
+
+
+def _fetch_zone_source_values(cur, sql: str, params: tuple, field: str) -> list:
+    """Read one zone source list, treating absent world columns as no source."""
+    try:
+        cur.execute(sql, params)
+        return [row[field] for row in cur.fetchall()]
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return []
+        raise
+
+
 # The gather nodes of one farming task's material in its zone (#1833): node
 # spawns by name, on the task's map, in the zone farmassign names by area id.
 _FARM_NODE_SQL = (
@@ -44174,7 +44235,8 @@ def _log_material_routes(what: str, routes) -> None:
     """One line per material request route that changed this pass."""
     for route in routes:
         request = route.request
-        log.info("material request: %s short %dx %s (item %d) for spell %d %s: "
+        log.info("craft_rhythm: material request: %s short %dx %s (item %d) "
+                 "for spell %d %s: "
                  "%s by %s - %s", request.character, request.short,
                  request.label, request.entry, request.recipe, what, route.how,
                  route.who, route.why)

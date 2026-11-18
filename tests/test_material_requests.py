@@ -23,6 +23,7 @@ BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 PEACEBLOOM = 2447
 LINEN_CLOTH = 2589
 COPPER_BAR = 2840
+ROUGH_STONE = 2835
 HERB, METAL, CLOTH = (7, 9), (7, 7), (7, 5)
 
 
@@ -95,6 +96,66 @@ class EachRequestGoesToOneErrand(unittest.TestCase):
         how, _who, why = cr.route_request(_request(), None, {"Bork": {"herbalism": 40}})
         self.assertEqual(how, cr.ROUTE_BUY)
         self.assertIn("item_template", why)
+
+    def test_a_miner_below_the_zone_node_floor_buys_the_reagent(self):
+        """A trade skill below this zone's source floor cannot gather."""
+        request = _request(
+            name="Miner",
+            entry=ROUGH_STONE,
+            detail="short 1x Rough Stone (needs 1, has 0)",
+        )
+        how, who, why = cr.route_request(
+            request,
+            METAL,
+            {"Miner": {"mining": 5}},
+            zone_minimums={"mining": 175},
+        )
+
+        self.assertEqual((how, who), (cr.ROUTE_BUY, "Miner"))
+        self.assertIn("highest mining skill is 5", why.lower())
+        self.assertIn("175", why)
+
+    def test_a_miner_at_the_zone_node_floor_can_gather(self):
+        """A member meeting the zone floor remains eligible to gather."""
+        request = _request(
+            name="Miner",
+            entry=ROUGH_STONE,
+            detail="short 1x Rough Stone (needs 1, has 0)",
+        )
+        how, who, why = cr.route_request(
+            request,
+            METAL,
+            {"Miner": {"mining": 175}},
+            zone_minimums={"mining": 175},
+        )
+
+        self.assertEqual((how, who), (cr.ROUTE_GATHER, "Miner"))
+        self.assertIn("gathers on the way", why)
+
+
+class ZoneGatheringRequirements(unittest.TestCase):
+    def test_skinning_skill_floor_inverts_the_creature_level_curve(self):
+        """The helper returns the minimum skinning skill at each level band."""
+        levels = (15, 20, 21, 45)
+        self.assertEqual(
+            [cr.skinning_skill_floor(level) for level in levels],
+            [50, 100, 105, 225],
+        )
+
+    def test_the_lowest_measured_node_and_beast_set_the_zone_floor(self):
+        """The easiest measured source sets each gathering trade's floor."""
+        self.assertEqual(
+            cr.zone_minimums((379, 380), skinning_levels=(45, 55)),
+            {"mining": 175, "skinning": 225},
+        )
+
+    def test_a_zero_skill_node_floor_is_preserved(self):
+        """A real zero-skill node floor is distinct from missing sources."""
+        self.assertEqual(cr.zone_minimums((38,)), {"mining": 0})
+
+    def test_low_level_skinning_floor_uses_the_same_skill_curve(self):
+        """Levels below 20 use ten skill per creature level above 10."""
+        self.assertEqual(cr.zone_minimums((), skinning_levels=(15,)), {"skinning": 50})
 
 
 class PendingRequestsAreActedOnOnce(unittest.TestCase):
@@ -266,6 +327,65 @@ class GatherRoutesSendTheFamilyOut(unittest.TestCase):
         )
         self.assertEqual(cr.requested_stands(stands, cr.open_routes(pending)), stands)
 
+    def test_a_buy_routed_shortage_does_not_keep_the_family_gathering(self):
+        """A shortage routed to buying no longer votes for gathering."""
+        request = _request(
+            name="Miner",
+            recipe=3918,
+            entry=ROUGH_STONE,
+            detail="short 1x Rough Stone (needs 1, has 0)",
+        )
+        pending = {}
+        cr.take_requests(
+            pending,
+            [request],
+            {ROUGH_STONE: METAL},
+            {"Miner": {"mining": 5}},
+            {},
+            0.0,
+            zone_minimums={"mining": 175},
+        )
+        stand = cr.stand("Miner", 3918, {ROUGH_STONE: 0})
+
+        plan = cr.rhythm(
+            cr.requested_stands((stand,), cr.open_routes(pending)), cr.MODE_GATHER
+        )
+
+        self.assertEqual(plan.mode, cr.MODE_CRAFT)
+        self.assertIn("Rough Stone", cr.report(plan))
+        self.assertIn("bought", cr.report(plan))
+
+    def test_a_buy_route_does_not_hide_a_different_gatherable_shortage(self):
+        """A real gathering shortage still sends the family out to gather."""
+        pending = {}
+        cr.take_requests(
+            pending,
+            [
+                _request(
+                    name="Miner",
+                    recipe=3918,
+                    entry=ROUGH_STONE,
+                    detail="short 1x Rough Stone (needs 1, has 0)",
+                )
+            ],
+            {ROUGH_STONE: METAL},
+            {"Miner": {"mining": 5}},
+            {},
+            0.0,
+            zone_minimums={"mining": 175},
+        )
+        stands = (
+            cr.stand("Miner", 3918, {ROUGH_STONE: 0}),
+            cr.stand("Gatherer", 2330, {PEACEBLOOM: 0}),
+        )
+
+        plan = cr.rhythm(
+            cr.requested_stands(stands, cr.open_routes(pending)), cr.MODE_CRAFT
+        )
+
+        self.assertEqual(plan.mode, cr.MODE_GATHER)
+        self.assertIn("Gatherer", plan.why)
+
 
 class BuyRoutesBecomeAuctionNeeds(unittest.TestCase):
     def _buy(self):
@@ -310,15 +430,31 @@ class TheBridgeRoutesTheRequests(unittest.TestCase):
         self.assertTrue("kind = 'material-request'" in self.source)
 
     def test_the_rhythm_sends_the_family_out_for_a_gather_route(self):
+        """The craft rhythm applies a request gather route to its stand."""
         body = self._body("_craft_rhythm_once")
-        self.assertIn("await self._material_routes(names)", body)
+        self.assertIn(
+            "names, leader = await asyncio.to_thread(_family_of, cohort)", body
+        )
+        self.assertIn("await self._material_routes(names, leader)", body)
         self.assertIn("craft_rhythm.requested_stands(", body)
 
     def test_the_auction_pass_buys_for_a_buy_route(self):
+        """The auction pass receives buy routes from the material router."""
         body = self._body("_auction_once")
-        self.assertIn("await self._material_routes(names)", body)
+        self.assertIn("await self._material_routes(names, leader)", body)
         self.assertIn("craft_rhythm.ROUTE_BUY", body)
         self.assertIn("auction.requested_needs(", self._body("_auction_shortfall"))
+
+    def test_material_routes_use_current_zone_gathering_floors(self):
+        """The bridge supplies the live zone's node and skinning facts."""
+        body = self._body("_material_routes")
+        self.assertIn("_fetch_zone_gathering_minimums, leader", body)
+        self.assertIn("zone_minimums))", body)
+        self.assertIn("g.zoneId = %s", self.source)
+        self.assertIn("c.zoneId = %s", self.source)
+        self.assertIn(
+            "craft_rhythm.zone_minimums(lock_ids, skinning_levels)", self.source
+        )
 
     def test_the_event_age_is_read_for_the_route_clock(self):
         self.assertIn("TIMESTAMPDIFF(SECOND, last_seen, NOW()) AS age", self.source)
