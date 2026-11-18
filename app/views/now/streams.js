@@ -5,8 +5,10 @@
 // markup every time a read answers, and rebuilding a <video> would tear down
 // its PeerConnection and re-buffer a stream that was playing fine. So the
 // view draws an empty slot (`data-stream="<name>"`) and mount() moves the
-// living picture into it. Leaving Now stops every picture; it never stops a
-// broadcast, which is not this page's to stop.
+// living picture into it. A slot that is still in the next body stays in the
+// page across the redraw (keepslots.js), so its picture is not moved at all.
+// Leaving Now stops every picture; it never stops a broadcast, which is not
+// this page's to stop.
 //
 // Full screen takes the living picture itself (its video, badge and the
 // control that brings it back), so the WHEP stream plays on untouched. While
@@ -134,6 +136,31 @@ export function disconnect(name) {
   t.player.stop();
   t.started = false;
   setState(t, "off", "");
+}
+
+// Let go of every picture not named in `names`: its connection stops, it
+// leaves the page and it is forgotten. A family that left the wall has no
+// slot any more, and its picture would otherwise play on unseen for as long
+// as Now is open.
+export function keepOnly(names) {
+  const want = new Set(names);
+  Array.from(tiles.keys()).forEach((name) => {
+    if (want.has(name)) return;
+    const t = tiles.get(name);
+    if (t.isFull && fullscreenElement(document) === t.pic) exitFullscreen(document);
+    t.isFull = false;
+    t.player.stop();
+    t.started = false;
+    setState(t, "off", "");
+    t.pic.remove();
+    if (heard === name) heard = null;
+    tiles.delete(name);
+  });
+}
+
+// The names of the pictures held, for a test to count.
+export function held() {
+  return Array.from(tiles.keys());
 }
 
 // The picture state of `name` ("live", "connecting", "dark", "off").
