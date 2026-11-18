@@ -6168,6 +6168,13 @@ _DOOR_STEPS_SQL = (
 )
 
 
+_COMPLETED_RUNS_SQL = (
+    "SELECT UNIX_TIMESTAMP(started_at) AS began, UNIX_TIMESTAMP(ended_at) AS ended "
+    "FROM overseer_dungeon_run WHERE leader_name = %s AND outcome = 'complete' "
+    "AND ended_at IS NOT NULL AND ended_at > NOW() - INTERVAL 2 HOUR"
+)
+
+
 def _door_wedge_evidence(leader: str, head_id: int) -> tuple:
     """(the restarts of the leader's walk for queue entry `head_id` in the
     watch's window, the members' states) for the door wedge. Reads only. An
@@ -6186,10 +6193,23 @@ def _door_wedge_evidence(leader: str, head_id: int) -> tuple:
     if steps:
         now_at = int(steps[0].get("now_at") or 0) or int(time.time())
         since_at = int(steps[0].get("since_at") or 0)
+        # THE WAY OUT OF A RUN THAT CLEARED ITS DOOR IS NOT THE DOOR REFUSING
+        # THE LEADER: walks that began inside a completed run are not counted.
+        completed = []
+        with _connect() as conn, conn.cursor() as cur:
+            try:
+                cur.execute(_COMPLETED_RUNS_SQL, (leader,))
+                completed = [(int(r["began"]), int(r["ended"]))
+                             for r in cur.fetchall()
+                             if r.get("began") and r.get("ended")]
+            except pymysql.err.MySQLError as exc:
+                if not (exc.args and exc.args[0] in (1054, 1146)):
+                    raise
         restarts = (
-            nowstatus.restart_count(steps, now_at, since_at),
+            nowstatus.restart_count(steps, now_at, since_at, completed=completed),
             nowstatus.restart_count(
-                steps, now_at, since_at, window=dungeonstall.DOOR_RESTART_WINDOW),
+                steps, now_at, since_at, window=dungeonstall.DOOR_RESTART_WINDOW,
+                completed=completed),
         )
     row = _fetch_family_intents().get(leader, {})
     members = jev_family_intent.parse_members(row.get("members_state"))

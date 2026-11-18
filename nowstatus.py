@@ -964,7 +964,7 @@ def _walk_restarts(steps, now_at, window=900) -> int:
     return max(per_walk.values(), default=0)
 
 
-def restart_count(steps, now_at, since_at=0, window=900) -> int:
+def restart_count(steps, now_at, since_at=0, window=900, completed=()) -> int:
     """The restart fold above for the dungeon run's own walk, for a caller
     outside this module: the bridge's stall breaker judges a door by it
     (#2151).
@@ -973,12 +973,23 @@ def restart_count(steps, now_at, since_at=0, window=900) -> int:
     after `since_at`, when the run being judged started. A town errand that
     keeps restarting is not this door refusing the leader, and a walk begun
     under an earlier run carries that run's restarts in its count.
+
+    `completed` is the (started, ended) unix times of the leader's runs that
+    ended `complete`. A walk that began inside one of those is the way OUT of a
+    run that cleared its door (the exit trigger could not be walked and the
+    exit hearth took over), and is not the door refusing the leader, so it is
+    not counted.
     """
+
+    def inside(first_at: int) -> bool:
+        return any(int(a) <= first_at <= int(b) for a, b in completed or ())
+
     own = [
         s
         for s in steps
         if str(s.get("doing") or "").endswith(_DUNGEON_WALK_TAIL)
         and int(s.get("first_at") or 0) >= int(since_at or 0)
+        and not inside(int(s.get("first_at") or 0))
     ]
     return _restarts(own, now_at, window)
 
