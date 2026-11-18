@@ -175,3 +175,28 @@ def why_not_inside(member: hearthcast.Member, leader_at: dict) -> str:
         or hearthcast._alive_reason(member)
         or ""
     )
+
+
+# HOW OFTEN THE PASS RUNS, on its own loop. It used to sit at the end of the
+# economy loop, behind a vendor, bag hand-over and purchase pass for every family.
+CYCLE_SECONDS = 60.0
+
+
+def summary_line(families: int, watching: int, sent: list, skipped: list) -> str:
+    """One line for one cycle: what the pass read, watched, did and skipped.
+
+    A pass with nothing to say and a pass that never ran read the same from
+    outside, so every cycle says this.
+    """
+    done = "hearthed %d" % len(sent)
+    if sent:
+        done += " (%s)" % ", ".join(sent)
+    line = "strand hearth: read %d famil%s, watching %d, %s" % (
+        families,
+        "y" if families == 1 else "ies",
+        watching,
+        done,
+    )
+    if skipped:
+        line += "; skipped " + ", ".join("%s (%s)" % (n, why) for n, why in skipped)
+    return line

@@ -8828,6 +8828,7 @@ PASSES = (
     _Pass("_move_materials_loop"),
     _Pass("_guild_share_loop"),
     _Pass("_vendor_loop"),
+    _Pass("_strand_hearth_loop"),
     _Pass("_bank_loop"),
     _Pass("_guild_bank_loop"),
     _Pass("_guild_dues_loop"),
@@ -17433,10 +17434,25 @@ class Bridge(discord.Client):
                 except Exception:
                     log.exception("economy: %s pass failed for family %s; "
                                   "retrying next cycle", what, cohort.key)
-        try:
-            await self._hearth_stranded_followers()
-        except Exception:
-            log.exception("strand hearth: pass failed; retrying next cycle")
+
+    async def _strand_hearth_loop(self) -> None:
+        """Run the strand hearth on its own clock, and say what it did each cycle.
+
+        It used to be the last step of `_economy_for_every_family`, behind a
+        vendor, a bag hand-over and a bag purchase for every family. Measured on
+        wow-dev 2026-11-18: in the 50 minutes after a restart it wrote no row
+        and logged no line while a hand run of the same pass named four members.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("STRAND_CYCLE_SECONDS",
+                                     strandhearth.CYCLE_SECONDS))
+        await asyncio.sleep(min(cycle, 120.0))
+        while not self.is_closed():
+            try:
+                await self._hearth_stranded_followers()
+            except Exception:
+                log.exception("strand hearth: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
 
     async def _hearth_stranded_followers(self) -> int:
         """Send a follower that cannot close on its held leader home by its stone.
@@ -17486,7 +17502,10 @@ class Bridge(discord.Client):
                 if name not in wanted:
                     wanted[name] = (leader, None)
                     inside.add(name)
+        skipped: list = []
+        watching = sum(1 for k in watch if k and (k[0] == "inside" or len(k) == 2))
         if not wanted:
+            log.info("%s", strandhearth.summary_line(len(live), watching, [], skipped))
             return 0
         names = sorted(set(wanted) | {leader for leader, _ in wanted.values()})
         positions = await asyncio.to_thread(_fetch_positions, names)
@@ -17497,11 +17516,16 @@ class Bridge(discord.Client):
             _hearth_backed_off_names, sorted(wanted), strandhearth.SOURCE,
             guildrun.REGROUP_MOVING_BACKOFF_SECONDS)
         sent = 0
+        sent_names: list = []
         for member in hearthcast.members(
                 sorted(wanted), positions, reads["binds"], reads["hearthed"],
                 facts):
             leader, yards = wanted[member.name]
-            if member.name in held or member.name in reads["hearthed"]:
+            if member.name in held:
+                skipped.append((member.name, "its last row was refused, backing off"))
+                continue
+            if member.name in reads["hearthed"]:
+                skipped.append((member.name, "hearthed within the last hour"))
                 continue
             if member.name in inside:
                 why = strandhearth.why_not_inside(member, positions.get(leader))
@@ -17510,11 +17534,13 @@ class Bridge(discord.Client):
                              "from %s for %d seconds, but its stone is no way "
                              "out (%s)", member.name, leader,
                              strandhearth.INSIDE_SECONDS, why)
+                    skipped.append((member.name, why))
                     continue
                 await asyncio.to_thread(_insert_hearth, member.name,
                                         strandhearth.SOURCE)
                 watch.pop(("inside", leader, member.name), None)
                 sent += 1
+                sent_names.append(member.name)
                 log.info("strand hearth: %s has stood inside a dungeon apart from "
                          "%s for %d seconds; it uses its own hearthstone",
                          member.name, leader, strandhearth.INSIDE_SECONDS)
@@ -17524,14 +17550,18 @@ class Bridge(discord.Client):
                 log.info("strand hearth: %s is %d yards from %s and not closing, "
                          "but its stone is no way back (%s)", member.name,
                          yards, leader, why)
+                skipped.append((member.name, why))
                 continue
             await asyncio.to_thread(_insert_hearth, member.name,
                                     strandhearth.SOURCE)
             watch.pop((leader, member.name), None)
             sent += 1
+            sent_names.append(member.name)
             log.info("strand hearth: %s is %d yards from the held leader %s and "
                      "has not closed in %d seconds; it uses its own hearthstone",
                      member.name, yards, leader, strandhearth.STRAND_SECONDS)
+        log.info("%s", strandhearth.summary_line(
+            len(live), watching, sent_names, skipped))
         return sent
 
     async def _trades_for_every_family(self) -> None:
