@@ -61,21 +61,17 @@ _NAME_RE = re.compile(r"^[A-Za-z]{2,12}$")
 MAX_SPEED = 6.0
 FLY_SPEED = 3.0
 
-# The state the Watcher is put in at every login. GM mode makes it unattackable
-# and bots and creatures ignore it; `visible off` hides it from every non-GM;
-# `chat off` drops the staff badge; `whispers off` stops anyone talking to it;
-# `fly on` lets it hover over anything; `cheat god on` is the belt to GM mode's
-# braces. All names checked against the live `command` table.
+# The state the Watcher is put in at every login: GM mode (which the core's
+# entry checks key on, and which makes it unattackable and ignored by bots) and
+# `visible off`. These are the only lines the module runs for the camera besides
+# its moves (mod-overseer, DoGmCommand): kind='gm' is retired for every other
+# character, and a line the module does not run comes back `error`, so asking for
+# more at every login would only fill the queue with refusals.
 # natural-only: the Watcher is the operator's camera; these commands only
 # queue through bridge._insert_gm, which is operator-only.
 BOOT_COMMANDS = (
     ".gm on",
     ".gm visible off",
-    ".gm chat off",
-    ".whispers off",
-    ".gm fly on",
-    ".cheat god on",
-    f".modify speed all {FLY_SPEED:g}",
 )
 
 # Where a hop out of an instance lands. Eastern Kingdoms, so never an instance.
@@ -218,6 +214,7 @@ R_NO_TARGET = "no_target"
 R_RATE = "rate_limited"
 R_SETTLING = "settling"
 R_AT_REST = "at_rest"
+R_FAILED = "move_failed"
 
 REFUSALS = {
     R_WATCHER_OFFLINE: "the Watcher is not in the world (its client is not logged in)",
@@ -233,6 +230,7 @@ REFUSALS = {
     R_RATE: "moves are rate limited",
     R_SETTLING: "the Watcher is still taking up its observer state",
     R_AT_REST: "the order has ended and the Watcher is out of every instance",
+    R_FAILED: "the world refused the move",
 }
 
 
@@ -486,6 +484,35 @@ def spectate_verdict(row: Mapping | None, spec_text: str) -> Verdict:
     )
 
 
+_NOTE_ACTION = re.compile(r"^[^:]*:\s*([a-z]+)\b")
+
+
+def note_state(note: str, target: str) -> str:
+    """What the director last did, as one word the card can draw.
+
+    arrived: it saw the Watcher on the target's map and instance within follow
+    range. moving: a move line is out and the Watcher has not been seen there.
+    held: the rate limit is holding it. failed: the world refused the move.
+    refused: the director would not move (offline, arena, no target). waiting:
+    nothing has been decided yet. Read from the note the loop writes, so no
+    schema change and no second source of truth for what the loop did."""
+    if not target:
+        return "waiting"
+    m = _NOTE_ACTION.match(note or "")
+    action = m.group(1) if m else ""
+    if action == FOLLOW:
+        return "arrived"
+    if action in (APPEAR, HOP, BOOT):
+        return "moving"
+    if action == FAILED:
+        return "failed"
+    if action == REFUSE:
+        return "refused"
+    if action == HOLD:
+        return "held" if "rate limited" in (note or "") else "moving"
+    return "waiting"
+
+
 def spectate_state(row: Mapping | None) -> dict:
     """What the page draws its "now watching" state from."""
     if not mandate_active(row):
@@ -498,9 +525,12 @@ def spectate_state(row: Mapping | None) -> dict:
             "note": str(row.get("note") or "") if row else "",
             "expires_in": 0,
             "switch_in": 0,
+            "state": "",
+            "arrived": False,
         }
     spec = str(row.get("spec") or "")
     wait = max(0, math.ceil(SPECTATE_DWELL - _order_age(row)))
+    state = note_state(str(row.get("note") or ""), str(row.get("target") or ""))
     return {
         "active": True,
         "run": order_run(spec),
@@ -510,6 +540,8 @@ def spectate_state(row: Mapping | None) -> dict:
         "note": str(row.get("note") or ""),
         "expires_in": int(row.get("ttl") or 0),
         "switch_in": wait,
+        "state": state,
+        "arrived": state == "arrived",
     }
 
 
@@ -776,6 +808,7 @@ def pick_target(
 
 # ----------------------------------------------------------------- the decision --
 
+FAILED = "failed"
 BOOT, HOLD, FOLLOW, HOP, APPEAR, REFUSE, RETREAT = (
     "boot",
     "hold",
@@ -805,6 +838,20 @@ def _budget_left(moves: Sequence[float], now: float) -> bool:
     return sum(1 for t in moves if now - t < window) < count
 
 
+def budget_refill_in(moves: Sequence[float], now: float) -> int:
+    """Whole seconds until the budget has room for one more move (0: it has).
+
+    The budget is a sliding window, so room comes back when the oldest move
+    inside it ages out, which is the figure the card tells the operator."""
+    count, window = APPEAR_BUDGET
+    live = sorted(t for t in moves if now - t < window)
+    if len(live) < count:
+        return 0
+    # Room opens when enough of the oldest moves have left the window.
+    frees = live[len(live) - count]
+    return max(1, math.ceil(frees + window - now))
+
+
 def _refuse(code: str) -> Decision:
     return Decision(REFUSE, reason=REFUSALS[code], code=code)
 
@@ -830,7 +877,12 @@ def _held(moves, now, new_target) -> Decision | None:
     if not new_target and last is not None and now - last < MIN_APPEAR_GAP:
         return Decision(HOLD, reason=REFUSALS[R_RATE], code=R_RATE)
     if not _budget_left(moves, now):
-        return Decision(HOLD, reason=REFUSALS[R_RATE] + " (budget spent)", code=R_RATE)
+        wait = budget_refill_in(moves, now)
+        return Decision(
+            HOLD,
+            reason=f"{REFUSALS[R_RATE]} (budget spent, refills in {wait} seconds)",
+            code=R_RATE,
+        )
     return None
 
 
@@ -935,6 +987,22 @@ def retreat(
     return Decision(HOLD, reason=REFUSALS[R_AT_REST], code=R_AT_REST)
 
 
+# After a move line is refused the director waits this long before sending it
+# again, so a refusal that will not change is not sent every fifteen seconds.
+FAIL_BACKOFF = 60.0
+
+
+def failure_in(rows: Iterable[Mapping]) -> str:
+    """The reason a queued line was refused, from its overseer_command rows.
+
+    `error` is the module's answer to a line it did not run; `detail` says why.
+    Pending, claimed, applied and verifying rows are not failures."""
+    for r in rows:
+        if str(r.get("status") or "") == "error":
+            return str(r.get("detail") or "").strip() or "the world refused the line"
+    return ""
+
+
 def commands_ok(commands: Iterable[str]) -> bool:
     return all(observer_allows(c) for c in commands)
 
@@ -988,6 +1056,37 @@ class Memory:
     at_rest: bool = False  # the order ended and the retreat is done
     unbound: bool = False  # the binds were dropped since the order ended
     rest_at: float = 0.0  # when an idle Watcher was last looked at
+    sent_ids: list[int] = field(default_factory=list)  # move rows not yet answered
+    sent_at: float = 0.0  # when those rows were queued
+    failure: str = ""  # the last refusal, shown until a move goes through
+    fail_until: float = 0.0
+
+    def on_results(self, rows: Sequence[Mapping], now: float) -> str:
+        """Read back what became of the lines last sent.
+
+        A refused line did not move the Watcher, so its move is returned to the
+        budget (counting it spent the whole budget in three minutes on lines
+        that never ran) and the director backs off. Unanswered rows are looked
+        at again next tick; answered ones are forgotten."""
+        if not self.sent_ids:
+            return ""
+        failure = failure_in(rows)
+        if failure:
+            self.moves = [t for t in self.moves if t != self.sent_at]
+            self.sent_ids = []
+            self.failure = failure
+            self.fail_until = now + FAIL_BACKOFF
+            return failure
+        answered = {
+            int(r["id"]) for r in rows if str(r.get("status") or "") not in ("pending", "claimed")
+        }
+        self.sent_ids = [i for i in self.sent_ids if i not in answered]
+        if answered and not self.sent_ids:
+            self.failure = ""
+        return ""
+
+    def backing_off(self, now: float) -> bool:
+        return now < self.fail_until
 
     def on_presence(self, present: bool) -> None:
         """A fresh login needs the observer lines again: the state is not

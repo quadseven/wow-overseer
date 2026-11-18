@@ -7,7 +7,14 @@ Moved from README.md on 2026-11-01 and not rechecked.
 `director.py` points one invisible, flying GM character at whoever the
 operator names, so its stream shows them. It queues moves as
 `overseer_command` rows of kind `gm` for that character, and its allow-list
-(`director.observer_allows`) holds only observer commands.
+(`director.observer_allows`) holds only observer commands. The worldserver
+module runs those lines only for a real client on a game master account (kind
+`gm` is retired for every other character), so the Watcher's account must be a
+game master's. The director reads each line's answer back: a refused line is
+named on the card ("Could not reach ...") and returned to the move budget, and
+the card says "Now watching" only once the Watcher stands on the target's map
+and instance within follow range. The budget (12 moves per 600 seconds) is a
+sliding window and the card says when it refills.
 
 Orders come from Discord (in the overseer channel, from an allowed user) or
 `POST /api/director {"watch": "<order>"}` with the `X-Director-Token` header
