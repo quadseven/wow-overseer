@@ -21935,6 +21935,9 @@ class Bridge(discord.Client):
             arrived = await self._class_party_meet_walks(run)
             meeting = await self._class_party_meet_seen(run, arrived)
             held = classparty.meeting_held(run)
+            refused_roads = classparty.refused_road_members(run)
+            if refused_roads:
+                board.refuse_road(run, refused_roads)
             if waited is not None:
                 result = ("met" if meeting.met else
                           "held again" if held else
@@ -21962,12 +21965,11 @@ class Bridge(discord.Client):
             if not meeting.met:
                 run.outcome = "the meeting failed: " + meeting.why
                 board.fail(run.ask_id)
-                if classparty.leader_road_refused(run):
+                if run.leader in refused_roads:
                     # THE ASKER'S OWN ROAD IS REFUSED FOR GOOD: another helper
                     # cannot open it, so the ask is given up now instead of
                     # walking two more helpers across the map to wait for it.
                     board.give_up(run.ask_id)
-                    board.refuse_road(run)
                 log.info("class party: the meeting for %s's %s fails: %s", run.leader,
                          run.title, meeting.why)
                 return False
@@ -33191,10 +33193,11 @@ def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
     known = {m.name for m in mates}
     quest_mates = list(mates) + [m for m in answered if m.name not in known]
     own = classparty.ask_held({**pug_held, **held}, board)
+    refused_helper_roads = board.road_refused_helpers(quest_mates)
     quest_pass = classask.plan_pass(
         helps, quest_mates, own, asks, answers, now, partied=board.partied_asks(),
         refused=board.refused(), cooling=board.cooling(clock),
-        seats=board.seats(clock))
+        seats=board.seats(clock), road_refused_helpers=refused_helper_roads)
     escalation = classask.plan_escalation(
         quest_pass, helps, quest_mates, own, asks, answers, now,
         calls=facts.get("pug_calls", {}), pugs=pugs,

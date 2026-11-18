@@ -205,6 +205,34 @@ class TheBoard(unittest.TestCase):
         board.refuse(1, "Chill")
         self.assertEqual(board.refused(), {1: frozenset({"Chill"})})
 
+    def test_a_helpers_permanent_meeting_road_is_held_until_the_road_changes(self):
+        run = self.run_(formed=False)
+        run.level, run.map_id = 20, 1
+        run.route_context = {"Chill": (19, 1)}
+        run.walks["Chill"] = "the way to the spawn crosses the other side's ground"
+        board = classparty.Board()
+        board.refuse_road(run, ("Chill",))
+
+        still_there = types.SimpleNamespace(
+            name="Chill", member=types.SimpleNamespace(level=19, map_id=1)
+        )
+        self.assertEqual(
+            board.road_refused_helpers([still_there]),
+            {2000: frozenset({"Chill"})},
+        )
+
+        new_level = types.SimpleNamespace(
+            name="Chill", member=types.SimpleNamespace(level=20, map_id=1)
+        )
+        self.assertEqual(board.road_refused_helpers([new_level]), {})
+
+        other_board = classparty.Board()
+        other_board.refuse_road(run, ("Chill",))
+        new_map = types.SimpleNamespace(
+            name="Chill", member=types.SimpleNamespace(level=19, map_id=2)
+        )
+        self.assertEqual(other_board.road_refused_helpers([new_map]), {})
+
     def test_what_is_kept_for_an_ask_that_is_over_is_forgotten(self):
         board = classparty.Board()
         board.refuse(1, "Chill")
@@ -1188,6 +1216,7 @@ class TheBridgeMeetsAtTheObjective(unittest.TestCase):
             0.0,
         )
         self.assertTrue(run.meeting)
+        self.assertEqual(run.route_context, {"Bigzug": (20, 1), "Far": (20, 1)})
         walking = {"Bigzug": THERE, "Far": at(800)}
         beside = {"Bigzug": THERE, "Far": at(40)}
         this = _Bridge(
@@ -1249,6 +1278,26 @@ class TheBridgeMeetsAtTheObjective(unittest.TestCase):
             refused=this._class_board.refused(),
         )
         self.assertNotIn("Chill", [r.member for r in again.replies])
+
+    def test_a_helpers_permanent_meeting_road_is_saved_for_later_asks(self):
+        refusal = guildroute.WalkAnswer(
+            guildroute.ENDED,
+            "Chill cannot walk to the Lizard: the way to the spawn crosses the "
+            "other side's ground",
+        )
+        this = _Bridge(
+            [FORMED, answer("applied", phase="ended")], meet={"Chill": refusal}
+        )
+        run = a_run(meeting=True)
+        run.route_context = {"Bigzug": (20, 1), "Chill": (19, 1), "Dread": (21, 1)}
+        drive(this, run)
+
+        self.assertIn("party-up Dread", [r[2] for r in this.rows])
+        chill = mates(("Chill", 19, CAVE, NEAR, 1))
+        self.assertEqual(
+            this._class_board.road_refused_helpers(chill),
+            {2000: frozenset({"Chill"})},
+        )
 
     def test_a_helper_the_clock_cuts_off_is_withdrawn_like_one_whose_walk_failed(self):
         this = _Bridge([FORMED, answer("applied", phase="ended")], meet={"Dread": HANG})
