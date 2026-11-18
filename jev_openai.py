@@ -87,6 +87,9 @@ UNKNOWN_CALL_USD = 0.25
 # when the free backend is out stays well inside it and a runaway does not
 # spend the month in a day.
 DAILY_CAP_USD = 1.0
+# What one call cleared but not yet recorded holds of the day: over a hundred
+# times a measured gpt-6-luna call (about 0.00007 USD), far under the day.
+DAILY_HOLD_USD = 0.01
 HOLD_SECONDS = 60.0
 # How long a read of the month's total from the store may be reused.
 REFRESH_SECONDS = 30.0
@@ -353,10 +356,14 @@ class Spend:
         month, usd = self._total(now)
         with self._lock:
             usd = round(usd + self._held_usd(now), 6)
-            # Holds are left out of the day: at UNKNOWN_CALL_USD each, a few
-            # calls in flight would fill a one-dollar day. The calls in flight
-            # can pass the day's line by their own cost, a fraction of a cent.
-            today = round(self._day_base + self._day_local, 6)
+            # Each call cleared and not yet recorded holds DAILY_HOLD_USD of
+            # the day, so concurrent asks cannot all pass just under the line.
+            # UNKNOWN_CALL_USD per hold, as the month uses, would let four
+            # calls in flight fill a one-dollar day.
+            today = round(
+                self._day_base + self._day_local + len(self._holds) * DAILY_HOLD_USD,
+                6,
+            )
             if round(usd + margin, 6) < cap and today < daily:
                 if hold:
                     self._holds.append(now + HOLD_SECONDS)

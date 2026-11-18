@@ -258,12 +258,23 @@ class DailyCap(unittest.TestCase):
         self.assertIsNone(fresh.refusal("m"))
         self.assertEqual(fresh.day_usd(), 0.0)
 
-    def test_calls_in_flight_do_not_fill_the_day(self):
-        # Four holds of UNKNOWN_CALL_USD are a dollar: they count against the
-        # month, never against the day.
+    def test_calls_in_flight_hold_a_small_share_of_the_day(self):
+        # Four holds of UNKNOWN_CALL_USD are a dollar, so the day counts each
+        # call in flight at DAILY_HOLD_USD instead.
         s = jo.Spend(jo.MemoryStore(), {}, lambda: NOV)
         passed = [s.refusal("gpt-6-luna", hold=True) is None for _ in range(8)]
         self.assertEqual(passed, [True] * 8)
+
+    def test_concurrent_asks_cannot_all_pass_just_under_the_day(self):
+        # 0.97 spent of a 1.00 day leaves room for three holds of 0.01.
+        clock = Clock(NOV)
+        flat = {"m": jo.Price(1.0, 1.0, 1.0, 1.0, 1.0, 1.0)}
+        s = jo.Spend(jo.MemoryStore(), {}, clock, flat)
+        s.record("k", "m", "answered", 1, jo.Usage(970_000, 0, 0))
+        passed = [s.refusal("m", hold=True) is None for _ in range(10)]
+        self.assertEqual(passed, [True] * 3 + [False] * 7)
+        s.release()
+        self.assertIsNone(s.refusal("m", hold=True))
 
     def test_the_sql_store_reads_the_day_from_its_month(self):
         seen = []
