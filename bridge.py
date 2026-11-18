@@ -23948,11 +23948,29 @@ class Bridge(discord.Client):
             smelters = await self._town_stop_demand(cohort)
         if not smelters:
             return
-        focus_id = travel.FORGE_FOCUS_ID
-        if fireplan.SMELT_SPELL in smelters.values():
-            focus_id = craft.BLACK_FORGE_FOCUS_ID
-        smelters = {name: spell for name, spell in smelters.items()
-                    if craft.focus_for(spell) == focus_id}
+        focus_groups = {}
+        for name, spell in smelters.items():
+            focus = craft.focus_for(spell)
+            if focus in craft.FOCUS_AIMS:
+                focus_groups.setdefault(focus, {})[name] = spell
+        focus_ids = sorted(focus_groups)
+        if not focus_ids:
+            return
+        family = _cohort_key(cohort)
+        focus_turns = getattr(self, "_forge_focus_turns", None)
+        if not isinstance(focus_turns, dict):
+            focus_turns = {}
+            self._forge_focus_turns = focus_turns
+        last_focus = focus_turns.get(family)
+        focus_id = next(
+            (focus for focus in focus_ids if last_focus is not None and focus > last_focus),
+            focus_ids[0],
+        )
+        if last_focus in focus_ids:
+            focus_id = last_focus
+        next_focus = focus_ids[(focus_ids.index(focus_id) + 1) % len(focus_ids)]
+        focus_turns[family] = focus_id
+        smelters = focus_groups[focus_id]
         names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or await self._mid_run(names):
             return
@@ -23964,6 +23982,7 @@ class Bridge(discord.Client):
                 "past %d yards of leader=%s",
                 ", ".join(sorted(smelters)), travel.TOWN_STATION_YARDS, leader,
             )
+            focus_turns[family] = next_focus
             return
         forge = travel.forge_aim(spawn, where.get("map_id") if where else None)
         if not forge.aim:
@@ -23976,6 +23995,7 @@ class Bridge(discord.Client):
                 ", ".join("%s=%d" % pair for pair in sorted(smelters.items())),
                 forge.refused,
             )
+            focus_turns[family] = next_focus
             return
         if travel.within_focus(spawn):
             # ALREADY THERE, SO THE COLUMN IS LEFT ALONE. Writing an aim for a
@@ -23993,6 +24013,7 @@ class Bridge(discord.Client):
                 where.get("map_id") if where else "?",
                 ", ".join(sorted(smelters)),
             )
+            focus_turns[family] = next_focus
             return
         # NOT EVERY FORGE IS A WALK (#2538): the nearest on the whole map can
         # be past a death disc, in hostile ground, or a split family's drag.
@@ -24003,6 +24024,7 @@ class Bridge(discord.Client):
         if why:
             log.info("forge: %s wait: leader=%s is not walked to a Forge: %s",
                      ", ".join(sorted(smelters)), leader, why)
+            focus_turns[family] = next_focus
             return
         aimed = await self._claim_town_slot("forge", leader, forge.aim,
                                              cohort=_cohort_key(cohort))
@@ -24017,6 +24039,7 @@ class Bridge(discord.Client):
                 "pass, so %s cannot smelt until the town slot comes round",
                 leader, forge.aim, ", ".join(sorted(smelters)),
             )
+            focus_turns[family] = next_focus
             return
         log.info(
             "forge: leader=%s aimed at %s (%d-yard focus) so %s can smelt - %s",

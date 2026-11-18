@@ -142,6 +142,8 @@ def _forge_once(refusal_stub, spawn, smelters, claim_calls, logs, town_stop=Fals
     async def town_demand(_cohort=None):
         return smelters
 
+    nearest_focuses = []
+
     class Log:
         def info(self, msg, *a):
             logs.append(msg % a)
@@ -158,7 +160,9 @@ def _forge_once(refusal_stub, spawn, smelters, claim_calls, logs, town_stop=Fals
         "_forge_errands": lambda key: {} if town_stop else smelters,
         "_family_of": lambda c: (["Grug", "Ugga"], "Grug"),
         "_fetch_positions": lambda names: {"Grug": {"map_id": 0}},
-        "_nearest_forge": lambda leader, focus_id: spawn,
+        "_nearest_forge": lambda leader, focus_id: (
+            nearest_focuses.append(focus_id) or spawn
+        ),
     }
     if refusal_stub is not None:
         ns["_forge_refusal"] = refusal_stub
@@ -167,6 +171,7 @@ def _forge_once(refusal_stub, spawn, smelters, claim_calls, logs, town_stop=Fals
         _mid_run=mid_run,
         _claim_town_slot=claim,
         _town_stop_demand=town_demand,
+        nearest_focuses=nearest_focuses,
     )
     return ns["_forge_once"], me
 
@@ -205,6 +210,36 @@ class TheForgePassWaits(unittest.TestCase):
         claims, logs = self.go("", spawn=far, town_stop=True, smelters={"Grog": 2657})
         self.assertEqual(claims, [])
         self.assertTrue([x for x in logs if "wait for a town stop" in x])
+
+    def test_mixed_focus_errands_are_served_in_stable_focus_groups(self):
+        smelters = {"Grug": 2657, "Grog": fireplan.SMELT_SPELL}
+        spawn = dict(FORGE)
+        fn, me = _forge_once(None, spawn, smelters, [], [])
+
+        asyncio.run(fn(me))
+        spawn["d2"] = 0
+        asyncio.run(fn(me))
+        asyncio.run(fn(me))
+        self.assertEqual(
+            [
+                travel.FORGE_FOCUS_ID,
+                travel.FORGE_FOCUS_ID,
+                craft.BLACK_FORGE_FOCUS_ID,
+            ],
+            me.nearest_focuses,
+        )
+
+        smelters.pop("Grug")
+        asyncio.run(fn(me))
+        self.assertEqual(
+            [
+                travel.FORGE_FOCUS_ID,
+                travel.FORGE_FOCUS_ID,
+                craft.BLACK_FORGE_FOCUS_ID,
+                craft.BLACK_FORGE_FOCUS_ID,
+            ],
+            me.nearest_focuses,
+        )
 
     def test_the_refusal_is_asked_after_the_walk_is_known_and_before_the_claim(self):
         body = BRIDGE.split("async def _forge_once", 1)[1].split(

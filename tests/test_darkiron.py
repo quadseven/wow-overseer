@@ -623,7 +623,8 @@ class BlackForgeLookupTests(unittest.TestCase):
         source = BRIDGE.read_text(encoding="utf-8", errors="replace")
         start = source.index("async def _forge_once(self")
         body = source[start : source.index("async def _forge_loop(self)")]
-        self.assertIn("fireplan.SMELT_SPELL in smelters.values()", body)
+        self.assertIn("focus = craft.focus_for(spell)", body)
+        self.assertIn("focus_groups.setdefault(focus, {})[name] = spell", body)
         self.assertIn("_nearest_forge, leader, focus_id", body)
 
 
