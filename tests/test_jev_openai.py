@@ -32,7 +32,11 @@ class Clock:
 
 
 def spend(clock=None, env=None, store=None):
-    return jo.Spend(store, env or {}, clock or Clock(), FLAT)
+    # The daily cap is raised to the monthly one unless a test sets it, so the
+    # monthly-cap tests can spend a month in one test day.
+    return jo.Spend(
+        store, env or {"JEV_OPENAI_DAILY_CAP_USD": "90"}, clock or Clock(), FLAT
+    )
 
 
 def run(coro):

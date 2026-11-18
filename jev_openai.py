@@ -10,7 +10,10 @@ calls all of them:
   through a store (overseer_jev_spend in the bridge, so a restart does not
   reset the month). `Spend.refusal` refuses a call once the month (UTC) is
   within a margin of the cap. The cap is CAP_USD (90 USD), or a lower
-  JEV_OPENAI_CAP_USD; a higher one is ignored. A model with no pinned price is
+  JEV_OPENAI_CAP_USD; a higher one is ignored. A daily cap (DAILY_CAP_USD, or
+  JEV_OPENAI_DAILY_CAP_USD, never above the monthly cap) refuses calls once
+  the UTC day's spend reaches it, read from the same store, so a day when the
+  free backend is out cannot spend the month. A model with no pinned price is
   refused, and a call whose usage cannot be read is charged UNKNOWN_CALL_USD,
   never zero, so a change in the usage shape cannot let calls run uncounted.
   The ledger design is the station's spend ledger (bus/openai_budget.py there),
@@ -79,6 +82,11 @@ CREDIT_USD = 100.0
 # flight when the line is reached still land under it.
 MARGIN_USD = 1.0
 UNKNOWN_CALL_USD = 0.25
+# The daily ceiling (JEV_OPENAI_DAILY_CAP_USD may set another, never above the
+# monthly cap): about twice a full day of every kind on gpt-6-luna, so a day
+# when the free backend is out stays well inside it and a runaway does not
+# spend the month in a day.
+DAILY_CAP_USD = 1.0
 HOLD_SECONDS = 60.0
 # How long a read of the month's total from the store may be reused.
 REFRESH_SECONDS = 30.0
@@ -158,6 +166,25 @@ def month_of(now: float) -> str:
     return time.strftime("%Y-%m", time.gmtime(now))
 
 
+def day_of(now: float) -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime(now))
+
+
+def daily_cap_usd(env: Mapping[str, str]) -> float:
+    """DAILY_CAP_USD, or JEV_OPENAI_DAILY_CAP_USD, never above the monthly cap.
+    ValueError when either does not parse."""
+    raw = str(env.get("JEV_OPENAI_DAILY_CAP_USD", "") or "").strip()
+    value = DAILY_CAP_USD
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            value = float("nan")
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("JEV_OPENAI_DAILY_CAP_USD is not a dollar amount")
+    return min(value, cap_usd(env))
+
+
 def cap_usd(env: Mapping[str, str]) -> float:
     """CAP_USD, or a lower JEV_OPENAI_CAP_USD. ValueError when it does not parse."""
     raw = str(env.get("JEV_OPENAI_CAP_USD", "") or "").strip()
@@ -217,6 +244,10 @@ class MemoryStore:
         mine = [r for r in self.rows if r.get("month") == month]
         return round(sum(r["cost_usd"] for r in mine), 6), len(mine)
 
+    def load_day(self, day: str) -> tuple:
+        mine = [r for r in self.rows if r.get("day") == day]
+        return round(sum(r["cost_usd"] for r in mine), 6), len(mine)
+
     def append(self, row: dict) -> None:
         self.rows.append(row)
 
@@ -245,6 +276,9 @@ class Spend:
         self._base = 0.0
         self._local = 0.0
         self._read_at = -math.inf
+        self._day = ""
+        self._day_base = 0.0
+        self._day_local = 0.0
         # Expiry times of calls cleared to go out whose cost is not recorded
         # yet; each counts UNKNOWN_CALL_USD against the cap so concurrent asks
         # cannot all pass the same check. An expiry means a leaked hold (a
@@ -265,19 +299,25 @@ class Spend:
         """(month, usd). The store's total is re-read at most every
         REFRESH_SECONDS, so two clients on one database agree, and what this
         client recorded since is added on top."""
-        month = month_of(now)
+        month, day = month_of(now), day_of(now)
         with self._lock:
-            if month != self._month or now - self._read_at >= REFRESH_SECONDS:
+            if (
+                month != self._month
+                or day != self._day
+                or now - self._read_at >= REFRESH_SECONDS
+            ):
                 try:
                     usd, _calls = self.store.load(month)
+                    day_usd, _calls = self.store.load_day(day)
                 except Exception:
-                    # An unreadable store never loosens the cap: the last total
+                    # An unreadable store never loosens the cap: the last totals
                     # and what this process added since stand.
                     log.exception("jev: spend total unreadable; the last one stands")
                 else:
                     # What was recorded since the last read is in the store now.
                     self._base, self._local = float(usd), 0.0
-                self._month = month
+                    self._day_base, self._day_local = float(day_usd), 0.0
+                self._month, self._day = month, day
                 self._read_at = now
             return month, round(self._base + self._local, 6)
 
@@ -285,6 +325,12 @@ class Spend:
         """The month's spend so far (an exported entry point, also what the
         tests read the ledger back through)."""
         return self._total(self._clock())[1]
+
+    def day_usd(self) -> float:
+        """The UTC day's spend so far."""
+        self._total(self._clock())
+        with self._lock:
+            return round(self._day_base + self._day_local, 6)
 
     def refusal(self, model: str, hold: bool = False) -> Optional[Refusal]:
         """Why a call must not go out now, or None when it may.
@@ -299,6 +345,7 @@ class Spend:
             return Refusal("unpriced", str(err))
         try:
             cap = cap_usd(self.env)
+            daily = daily_cap_usd(self.env)
         except ValueError as err:
             return Refusal("cap_unreadable", "%s; no OpenAI call goes out" % err)
         margin = margin_usd(self.env)
@@ -306,10 +353,20 @@ class Spend:
         month, usd = self._total(now)
         with self._lock:
             usd = round(usd + self._held_usd(now), 6)
-            if round(usd + margin, 6) < cap:
+            # Holds are left out of the day: at UNKNOWN_CALL_USD each, a few
+            # calls in flight would fill a one-dollar day. The calls in flight
+            # can pass the day's line by their own cost, a fraction of a cent.
+            today = round(self._day_base + self._day_local, 6)
+            if round(usd + margin, 6) < cap and today < daily:
                 if hold:
                     self._holds.append(now + HOLD_SECONDS)
                 return None
+        if round(usd + margin, 6) < cap:
+            return Refusal(
+                "daily_cap",
+                "OpenAI daily cap reached: $%.2f spent on %s UTC, cap $%.2f; "
+                "calls skipped until 00:00 UTC" % (today, self._day, daily),
+            )
         return Refusal(
             "cap",
             "OpenAI spend cap reached: $%.2f spent in %s, margin $%.2f, cap "
@@ -336,6 +393,8 @@ class Spend:
         now = self._clock()
         row = {
             "month": month_of(now),
+            # Not a column: the database reads the day from created_at.
+            "day": day_of(now),
             "kind": str(kind)[:32],
             "model": str(model)[:40],
             "status": str(status)[:16],
@@ -360,6 +419,8 @@ class Spend:
             row["cost_usd"], row["estimated"] = UNKNOWN_CALL_USD, 1
         with self._lock:
             self._local += row["cost_usd"]
+            if row["day"] == self._day:
+                self._day_local += row["cost_usd"]
             if self._holds:
                 self._holds.pop(0)
         if persist:
@@ -538,6 +599,13 @@ MONTH_SQL = (
     "SELECT COALESCE(SUM(cost_usd), 0) AS usd, COUNT(*) AS n "
     "FROM overseer_jev_spend WHERE month = %s"
 )
+# created_at and NOW() share the session time zone, so NOW() less the seconds
+# since UTC midnight is UTC midnight in that zone, whatever the zone is.
+DAY_SQL = (
+    "SELECT COALESCE(SUM(cost_usd), 0) AS usd, COUNT(*) AS n "
+    "FROM overseer_jev_spend WHERE month = %s AND created_at >= NOW() - "
+    "INTERVAL TIMESTAMPDIFF(SECOND, UTC_DATE(), UTC_TIMESTAMP()) SECOND"
+)
 CALLS_SQL = (
     "SELECT id, kind, status, latency_ms, cost_usd FROM overseer_jev_spend "
     "WHERE created_at > NOW() - INTERVAL %s DAY AND id < %s "
@@ -578,6 +646,14 @@ class SqlStore:
     def load(self, month: str) -> tuple:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(MONTH_SQL, (month,))
+            row = cur.fetchone() or {}
+        return float(row.get("usd") or 0), int(row.get("n") or 0)
+
+    def load_day(self, day: str) -> tuple:
+        """The spend since 00:00 UTC; `day` (YYYY-MM-DD) only narrows the
+        month, as created_at is compared with the server's own UTC midnight."""
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(DAY_SQL, (str(day)[:7],))
             row = cur.fetchone() or {}
         return float(row.get("usd") or 0), int(row.get("n") or 0)
 

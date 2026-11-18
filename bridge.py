@@ -336,6 +336,9 @@ JEV_RETENTION_DAYS = int(os.environ.get("JEV_RETENTION_DAYS", "30"))
 # The decision backend in use (#820): jev, clef or openai, from JEV_BACKEND.
 # Recorded on every judgment so backends can be compared row for row.
 JEV_ACTIVE_BACKEND = jev.backend_name()
+# JEV_ROUTE (#2899): the backends asked in order, first answer wins; empty when
+# one backend serves. JEV_ACTIVE_BACKEND is then the first of them.
+JEV_ROUTED = tuple(jev.route_names())
 # The OpenAI backend's bar (#2899): a kind set to act runs as compare until the
 # hourly report says it clears jev_openai.BAR. Nothing clears before the first
 # report, so a restart starts every kind in compare.
@@ -9092,7 +9095,8 @@ class Bridge(discord.Client):
         self._jev.compare_sink = _jev_compare_sink
         # The OpenAI spend ledger lives in the database, so a restart does not
         # reset the month (#2899). The comparison client shares the one table.
-        for _client in (self._jev, self._jev.shadow):
+        # So do the clients JEV_ROUTE falls back to.
+        for _client in (self._jev, self._jev.shadow, *self._jev.fallbacks):
             if _client is not None and _client.spend is not None:
                 _client.spend.store = jev_openai.SqlStore(_connect)
         # THE GUILD COORDINATOR (guildrun). The names of every member in a
@@ -31568,7 +31572,13 @@ def _insert_jev_judgment(judgment) -> None:
     acted = str(getattr(judgment, "acted", "") or "")
     # Only the activity choice carries its facts (#216); every other kind ''.
     facts = str(getattr(judgment, "facts", "") or "")
-    backend = str(getattr(judgment, "backend", "") or JEV_ACTIVE_BACKEND)
+    # Under JEV_ROUTE the answer may come from any routed backend: its model
+    # id says which (jev.answered_by), and a row with no answer names the first.
+    backend = str(
+        getattr(judgment, "backend", "")
+        or (JEV_ROUTED and jev.answered_by(judgment.model))
+        or JEV_ACTIVE_BACKEND
+    )
     jev.TALLY.agreement(judgment.kind, agree)
     jev.TALLY.maybe_log()
     _jev_report_tick()
@@ -31596,9 +31606,11 @@ def _jev_report_tick() -> None:
     """Once an hour: the OpenAI backend's per-kind report, logged and handed to
     the act gate (jev_openai.Reporter). Runs on the thread that just wrote a
     judgment; a database failure is logged and the gate keeps its last verdict."""
-    if JEV_ACTIVE_BACKEND != "openai" and jev.backend_name(
-        os.environ, "JEV_COMPARE_BACKEND"
-    ) != "openai":
+    if (
+        JEV_ACTIVE_BACKEND != "openai"
+        and "openai" not in JEV_ROUTED
+        and jev.backend_name(os.environ, "JEV_COMPARE_BACKEND") != "openai"
+    ):
         return
     if not _JEV_REPORTER.due():
         return

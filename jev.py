@@ -86,6 +86,23 @@ heuristic's, which acts) or `act`, and an `act` kind runs as compare until the
 hourly report says it clears the bar (jev_openai.BAR). Free text from the
 model is never logged: only a cleaned, capped error note.
 
+ROUTE (#2899). `JEV_ROUTE=jev,openai` asks the backends in that order, the
+way the spark gateway falls from free providers to a capped paid one: a call
+goes on to the next backend when this one asked nothing (no key, paused,
+capped, busy) or refused it with 401, 402 or 429, and the heuristic acts when
+the last one gives nothing. A timeout, a server error or an unreadable answer
+does not route: the next backend could not answer inside the same deadline.
+The refusing backend is backed off: 402 and 401 for `JEV_PAUSE_SECONDS`, 429
+for `JEV_BACKOFF_429_SECONDS` (60 by default). Each backend keeps its own key,
+cache, pause and spend ledger; the paid side (openai) holds a daily cap
+(`JEV_OPENAI_DAILY_CAP_USD`, see jev_openai) beside its monthly one.
+`Outcome.backend` and the INFO answer line name the backend that answered,
+and the judgment row reads it from the answering model (`answered_by`).
+`DAILY` counts each backend's calls and tokens per UTC day, logged with the
+hourly tally. JEV_ROUTE, when it names two known backends, takes the place of
+JEV_PROVIDER and JEV_BACKEND; compare mode is unchanged and compares the
+routed answer with the comparison backend's.
+
 A backend with no token (or, for strands, no URL) answers `no_key` and the
 heuristic acts. A strands service that is down or slow is an ordinary `error`
 or `timeout` outcome, counted in the tally and logged once an hour.
@@ -174,6 +191,9 @@ TALLY_SECONDS = 3600.0
 # How long a backend that answered 402 or 401 is left unasked (#1907).
 PAUSE_SECONDS = 3600.0
 PAUSE_HTTP = (401, 402)
+# How long a backend that answered 429 is left unasked (JEV_BACKOFF_429_SECONDS):
+# a rate limit clears in seconds to a minute, a payment refusal does not.
+BACKOFF_429_SECONDS = 60.0
 # How often a pass queued for a free slot looks again (see Client.ask's wait).
 SLOT_POLL_SECONDS = 0.05
 
@@ -207,6 +227,12 @@ INVALID = "invalid"
 PAUSED = "paused"
 # Asked nothing: the spend ledger refused the call (cap, unpriced model).
 CAPPED = "capped"
+# A routed call (JEV_ROUTE) goes on to the next backend after one of these,
+# or after an HTTP refusal in ROUTE_HTTP. A timeout, a server error or an
+# unreadable answer does not: the next backend could not answer inside the
+# same deadline, so the heuristic acts.
+ROUTE_STATUSES = (NO_KEY, PAUSED, CAPPED, BUSY)
+ROUTE_HTTP = (401, 402, 429)
 
 
 def mode(kind: str, environ=None, default: str = DEFAULT_MODE) -> str:
@@ -483,6 +509,16 @@ class Outcome:
     backend: str = ""
     # The backend's own reported latency, where it reports one (0 otherwise).
     service_ms: int = 0
+    # The HTTP status of a refused call (0 when there was no HTTP refusal).
+    http: int = 0
+
+
+def routes_on(outcome: Outcome) -> bool:
+    """True when a routed call goes on to the next backend: this one asked
+    nothing (no key, paused, capped, busy) or refused payment, auth or rate."""
+    if outcome.status in ROUTE_STATUSES:
+        return True
+    return outcome.status == ERROR and outcome.http in ROUTE_HTTP
 
 
 def _urllib_post(url: str, body: bytes, headers: dict, timeout: float) -> tuple:
@@ -725,6 +761,9 @@ def backend_name(environ=None, var: str = "JEV_BACKEND") -> str:
     env = os.environ if environ is None else environ
     raw = str(env.get(var, "") or "").strip().lower()
     if var == "JEV_BACKEND":
+        route = route_names(env)
+        if route:
+            return route[0]
         provider = str(env.get("JEV_PROVIDER", "") or "").strip().lower()
         if provider in BACKENDS:
             return provider
@@ -742,6 +781,85 @@ def backend_name(environ=None, var: str = "JEV_BACKEND") -> str:
         )
         return "jev" if var == "JEV_BACKEND" else ""
     return raw
+
+
+def route_names(environ=None) -> list:
+    """The backends JEV_ROUTE names, in order, known ones only and each once;
+    [] unless it names at least two (one backend is JEV_BACKEND's job)."""
+    env = os.environ if environ is None else environ
+    out: list = []
+    for part in str(env.get("JEV_ROUTE", "") or "").lower().split(","):
+        name = part.strip()
+        if name in BACKENDS and name not in out:
+            out.append(name)
+    return out if len(out) >= 2 else []
+
+
+# The model id an answer carries, by prefix, to the backend that gave it, so a
+# judgment row names the backend that answered when JEV_ROUTE has several.
+_MODEL_PREFIXES = (("jev", "jev"), ("gpt-", "openai"), ("strands", "strands"))
+
+
+def answered_by(model: str) -> str:
+    """The backend whose answer carried `model`, or "" when unknown."""
+    model = str(model or "").lower()
+    for prefix, name in _MODEL_PREFIXES:
+        if model.startswith(prefix):
+            return name
+    return "clef" if "clef" in model else ""
+
+
+def _tokens_of(data) -> int:
+    """Input plus output tokens a response reports, 0 when it reports none."""
+    try:
+        usage = jev_openai.Usage.from_openai(
+            _answers_of(data).get("usage") if isinstance(data, dict) else None
+        )
+    except jev_openai.UsageUnknown:
+        return 0
+    return usage.input + usage.cached + usage.output
+
+
+class Daily:
+    """Per backend, the calls sent and tokens used since 00:00 UTC. In memory,
+    so a restart starts the day's count again: the paid side's durable limit is
+    the spend ledger's daily and monthly caps (jev_openai.Spend)."""
+
+    def __init__(self, clock=time.time):
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._day = ""
+        self._counts: dict = {}
+
+    def _roll(self) -> None:
+        day = time.strftime("%Y-%m-%d", time.gmtime(self._clock()))
+        if day != self._day:
+            self._day, self._counts = day, {}
+
+    def count(self, backend: str, tokens: int = 0) -> None:
+        with self._lock:
+            self._roll()
+            c = self._counts.setdefault(backend, {"calls": 0, "tokens": 0})
+            c["calls"] += 1
+            c["tokens"] += max(0, int(tokens))
+
+    def snapshot(self) -> dict:
+        """{backend: {"calls", "tokens"}} for today (UTC)."""
+        with self._lock:
+            self._roll()
+            return {b: dict(c) for b, c in self._counts.items()}
+
+    def lines(self) -> list:
+        with self._lock:
+            self._roll()
+            return [
+                "jev: today backend=%s day=%s calls=%d tokens=%d"
+                % (b, self._day, c["calls"], c["tokens"])
+                for b, c in sorted(self._counts.items())
+            ]
+
+
+DAILY = Daily()
 
 
 def _read_secret(path: str) -> str:
@@ -918,7 +1036,9 @@ class Tally:
             return out
 
     def maybe_log(self) -> None:
-        for line in self.lines():
+        lines = self.lines()
+        # With the hourly lines, each backend's calls and tokens so far today.
+        for line in lines + (DAILY.lines() if lines else []):
             log.info("%s", line)
 
 
@@ -1095,8 +1215,14 @@ class Client:
         spend=None,
         models=None,
         cache_ttl: float = CACHE_TTL_SECONDS,
+        fallbacks=(),
+        backoff_429_seconds: float = BACKOFF_429_SECONDS,
     ):
         self.backend = backend or JEV_BACKEND
+        # JEV_ROUTE: the clients asked, in order, when this one routes a call
+        # on (see `routes_on`). Each keeps its own key, pause, cache and spend.
+        self.fallbacks = list(fallbacks or ())
+        self.backoff_429_seconds = max(0.0, float(backoff_429_seconds))
         # The spend ledger (jev_openai.Spend), or None for a backend that costs
         # the operator nothing per call; the model each kind asks, where it is
         # not the client's own; how long a cached answer may be served.
@@ -1143,12 +1269,39 @@ class Client:
     @classmethod
     def from_env(cls, environ=None, **kw) -> "Client":
         env = os.environ if environ is None else environ
+        # A fallback is built with its name given, and never routes on itself.
+        route = [] if kw.get("backend_name") else route_names(env)
+        if not kw.get("backend_name") and str(env.get("JEV_ROUTE", "") or "").strip():
+            log.log(
+                logging.INFO if route else logging.WARNING,
+                "jev: JEV_ROUTE=%r routes %s",
+                env.get("JEV_ROUTE"),
+                " then ".join(route + ["the heuristic"])
+                if route
+                else "nothing (it needs two known backends); JEV_BACKEND rules",
+            )
         name = kw.pop("backend_name", None) or backend_name(env)
         common = dict(
             timeout=float(env.get("JEV_TIMEOUT_SECONDS", TIMEOUT_SECONDS)),
             concurrency=int(env.get("JEV_CONCURRENCY", CONCURRENCY)),
             pause_seconds=float(env.get("JEV_PAUSE_SECONDS", PAUSE_SECONDS)),
+            backoff_429_seconds=float(
+                env.get("JEV_BACKOFF_429_SECONDS", BACKOFF_429_SECONDS)
+            ),
         )
+        if route:
+            kw.setdefault(
+                "fallbacks",
+                [
+                    cls.from_env(
+                        env,
+                        backend_name=other,
+                        shadow=None,
+                        transport=kw.get("transport"),
+                    )
+                    for other in route[1:]
+                ],
+            )
         settings = _settings(name, env)
         other = backend_name(env, "JEV_COMPARE_BACKEND")
         if other and other != name and "shadow" not in kw:
@@ -1273,6 +1426,13 @@ class Client:
         sink can record it in overseer_jev_outcome as the heuristic arm.
         """
         outcome = await self._ask_one(kind, state, questions, wait)
+        client = self
+        for nxt in self.fallbacks:
+            if not routes_on(outcome):
+                break
+            outcome, client = await nxt._ask_one(kind, state, questions, wait), nxt
+        if not outcome.backend:
+            outcome = dataclasses.replace(outcome, backend=client.backend.name)
         if self.shadow is not None and self.compare_sink is not None:
             self._start_compare(
                 kind, state, questions, outcome, heuristic, subject, before
@@ -1306,7 +1466,7 @@ class Client:
                 questions,
                 active,
                 other,
-                self.backend.name,
+                active.backend or self.backend.name,
                 self.shadow.backend.name,
                 heuristic,
             )
@@ -1406,6 +1566,7 @@ class Client:
         try:
             status, raw = await asyncio.wait_for(asyncio.shield(task), self.timeout)
         except asyncio.TimeoutError:
+            DAILY.count(self.backend.name)
             await self._spent(kind, model, TIMEOUT, elapsed(), charged=False)
             return self._said(kind, Outcome(TIMEOUT, elapsed()))
         except Exception as exc:  # the transport's own failure, of any kind
@@ -1414,17 +1575,23 @@ class Client:
                 kind, Outcome(ERROR, elapsed(), detail=type(exc).__name__)
             )
         if status != 200:
+            DAILY.count(self.backend.name)
             await self._spent(kind, model, ERROR, elapsed(), charged=False)
             note = self.backend.error_note(raw)
             detail = "http %s" % status + ((" " + note) if note else "")
+            refused = Outcome(ERROR, elapsed(), detail=detail, http=int(status))
             if status in PAUSE_HTTP:
-                return self._pause(kind, Outcome(ERROR, elapsed(), detail=detail))
-            return self._said(kind, Outcome(ERROR, elapsed(), detail=detail))
+                return self._pause(kind, refused)
+            if status == 429:
+                return self._pause(kind, refused, self.backoff_429_seconds)
+            return self._said(kind, refused)
         try:
             data = json.loads(raw)
         except (TypeError, ValueError):
+            DAILY.count(self.backend.name)
             await self._spent(kind, model, INVALID, elapsed())
             return self._said(kind, Outcome(INVALID, elapsed(), detail="not json"))
+        DAILY.count(self.backend.name, _tokens_of(data))
         answers, answered_by = self.backend.read(questions, data)
         if answers is None:
             await self._spent(kind, model, INVALID, elapsed(), data)
@@ -1466,25 +1633,34 @@ class Client:
         except Exception:
             log.exception("jev: spend for %s not recorded", kind)
 
-    def _pause(self, kind: str, outcome: Outcome) -> Outcome:
-        """A 402 or 401: ask this backend nothing until the window ends, and
-        say so once for the window (#1907)."""
-        if self.pause_seconds <= 0:
+    def _pause(self, kind: str, outcome: Outcome, seconds=None) -> Outcome:
+        """A 402 or 401 (or, for `seconds`, a 429): ask this backend nothing
+        until the window ends, and say so once for the window (#1907)."""
+        seconds = self.pause_seconds if seconds is None else float(seconds)
+        if seconds <= 0:
             return self._said(kind, outcome)
         outcome = self._tallied(kind, outcome)
         now = self._clock()
         if self._paused_until is not None and now < self._paused_until:
             # Another request in flight already opened this window.
             return outcome
-        self._paused_until = now + self.pause_seconds
+        self._paused_until = now + seconds
         self._paused_detail = outcome.detail
+        if outcome.http == 429:
+            # A rate limit comes and goes by the minute: said once an hour.
+            key = (self.backend.name, ERROR, outcome.detail)
+            if TALLY.first_failure(key) is None:
+                return outcome
         log.warning(
             "jev: backend=%s kind=%s answered %s; asking it nothing for %ds, "
-            "every judgment keeps the heuristic (%d skipped in the last window)",
+            "%s answers meanwhile (%d skipped in the last window)",
             self.backend.name,
             kind,
             outcome.detail,
-            int(self.pause_seconds),
+            int(seconds),
+            (self.fallbacks[0].backend.name + " or the heuristic")
+            if self.fallbacks
+            else "the heuristic",
             self._skipped,
         )
         self._skipped = 0
@@ -1526,7 +1702,8 @@ class Client:
             )
             return outcome
         log.info(
-            "jev: kind=%s status=%s latency_ms=%d model=%s%s%s",
+            "jev: backend=%s kind=%s status=%s latency_ms=%d model=%s%s%s",
+            self.backend.name,
             kind,
             outcome.status,
             outcome.latency_ms,
