@@ -129,6 +129,39 @@ class Exit(unittest.TestCase):
         self.assertEqual(sh.why_not(m, LEADER, 1180.0), hc.BOUND_ELSEWHERE)
 
 
+class HeldTooFar(unittest.TestCase):
+    """A member the module has given up walking back is the most stranded of all.
+
+    Measured on the dev realm: a family's fifth member stood 4,600 yards from its
+    leader for hours, and the family intent row read `held where it stands, too
+    far to walk back`. The strand hearth watched only `walking back to the
+    leader`, so the member the module had stopped trying to recover was never
+    counted.
+    """
+
+    STATE = "Jork|held where it stands, too far to walk back|4605\nOj|following|0"
+
+    def test_the_held_state_is_watched(self):
+        watch = {}
+        states = sh.parse_members_state(self.STATE)
+        self.assertEqual(sh.observe(watch, "Jug", states, 0.0), [])
+        self.assertIn(("Jug", "Jork"), watch)
+
+    def test_and_hearthed_after_the_window(self):
+        watch = {}
+        states = sh.parse_members_state(self.STATE)
+        sh.observe(watch, "Jug", states, 0.0)
+        self.assertEqual(sh.observe(watch, "Jug", states, sh.STRAND_SECONDS), ["Jork"])
+
+    def test_a_near_held_member_is_not_stranded(self):
+        watch = {}
+        states = sh.parse_members_state(
+            "Jork|held where it stands, too far to walk back|120"
+        )
+        sh.observe(watch, "Jug", states, 0.0)
+        self.assertEqual(sh.observe(watch, "Jug", states, 9999.0), [])
+
+
 if __name__ == "__main__":
     unittest.main()
 
