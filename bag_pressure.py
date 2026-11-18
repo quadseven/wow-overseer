@@ -1110,11 +1110,10 @@ def vendor_errand_step(
 
 # HOW LONG A LEADER MAY STAND AT A COUNTER, WITH NOTHING QUEUED, AFTER THE
 # MODULE HAS SAID THE ERRAND IS DONE, BEFORE THE BRIDGE HANDS THE COLUMN BACK.
-# The module declares "reached vendor, errand done" the moment the leader is in
-# range and is fenced from clearing a column it did not write, so the aim stays
-# and the module reads the standing aim as a new walk every poll (dev realm,
-# 2026-11-18: the errand finished in 0s again and again, and the watch counted
-# each as a restart). Under bag pressure `vendor_errand_step` holds, because the
+# The module declares the errand done the moment the leader is in range and is
+# fenced from clearing a column it did not write, so the aim stays and the
+# module reads the standing aim as a new walk every poll, the watch counting
+# each as a restart. Under bag pressure `vendor_errand_step` holds, because the
 # followers' sales may not be written yet; this is the bound on that hold, the
 # same shape as the 120 second lease (infra#3703): an errand that cannot finish
 # must not hold the one travel column for ever.
@@ -1169,12 +1168,20 @@ def bound_pressure_hold(
     run. The module's own record that it has finished the walk is its intent
     row no longer holding the leader for the economy errand.
     """
+    # A clock nobody has asked about for this long belongs to a leader that has
+    # gone, so the map cannot grow with leaders that come and go.
+    for name, started in list(_COUNTER_DONE_SINCE.items()):
+        if now - started > COUNTER_DONE_RELEASE_SECONDS * 10:
+            del _COUNTER_DONE_SINCE[name]
+    # An absent intent row is no word from the module, so it never starts the
+    # clock: "done" is a row that is present and no longer holds the economy
+    # errand.
     since, release = counter_done_step(
         _COUNTER_DONE_SINCE.get(leader),
         now,
         bool(vendor) and current_aim == "vendor",
         outstanding,
-        str(intent.get("current_kind") or "") != "economy",
+        bool(intent) and str(intent.get("current_kind") or "") != "economy",
     )
     if since is None:
         _COUNTER_DONE_SINCE.pop(leader, None)

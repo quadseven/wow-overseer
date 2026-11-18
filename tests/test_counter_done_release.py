@@ -1,9 +1,8 @@
 """A vendor errand the module calls done, and nothing queued, ends on a clock.
 
-Dev realm, 2026-11-18: the module logged "reached 'vendor' - errand done" in 0
-seconds, fifteen seconds apart, while the bridge held the aim under bag
-pressure with no sales outstanding. The module may not clear a column it did
-not write, so the aim stood and every poll read it as a new walk.
+The module declares the errand done on arrival and may not clear a column it
+did not write, so a standing aim is re-read as a new walk every poll while the
+bridge holds it under bag pressure.
 """
 
 import os
@@ -106,6 +105,26 @@ class BoundPressureHold(unittest.TestCase):
             self.ask(1000.0 + LIMIT * 3, intent=economy),
             bag_pressure.VENDOR_ERRAND_HOLD,
         )
+
+    def test_an_absent_intent_row_never_starts_the_clock(self):
+        self.assertEqual(self.ask(1000.0, intent={}), bag_pressure.VENDOR_ERRAND_HOLD)
+        self.assertEqual(
+            self.ask(1000.0 + LIMIT * 3, intent={}), bag_pressure.VENDOR_ERRAND_HOLD
+        )
+        self.assertEqual(bag_pressure._COUNTER_DONE_SINCE, {})
+
+    def test_a_clock_for_a_leader_who_left_is_dropped(self):
+        self.ask(1000.0)
+        bag_pressure.bound_pressure_hold(
+            bag_pressure.VENDOR_ERRAND_HOLD,
+            "Other",
+            1000.0 + LIMIT * 11,
+            True,
+            "vendor",
+            1,
+            {"current_kind": "quest"},
+        )
+        self.assertNotIn("Grug", bag_pressure._COUNTER_DONE_SINCE)
 
     def test_a_queued_sale_keeps_the_hold(self):
         self.ask(1000.0)
