@@ -103,3 +103,75 @@ def why_not(member: hearthcast.Member, leader_at: dict, yards: float) -> str:
     if away > yards + SLACK_YARDS:
         return NO_NEARER
     return ""
+
+
+# A MEMBER LEFT ALONE INSIDE AN INSTANCE. The walk-back rule above sees only a
+# member that is walking back with a distance; one on another map has neither
+# (the family intent row reads `following|another map`), so a member stranded
+# inside a dungeon after the family hearthed out was never seen. Here it is read
+# by where it is: on a dungeon map while the leader is on a different, ordinary
+# map, for as long as a stranded follower is given.
+INSIDE_SECONDS = 600.0
+
+
+def observe_inside(
+    watch: dict,
+    leader: str,
+    states: dict,
+    maps: dict,
+    leader_map,
+    dungeon_maps,
+    now: float,
+    lent=(),
+) -> list:
+    """The members that have stood inside a dungeon, apart from their leader,
+    for INSIDE_SECONDS.
+
+    `maps` is name -> the map each was last read on; a name not in it is not a
+    reading. A leader that is itself on a dungeon map means a run is on, or
+    about to be, and nobody is stranded. `lent` names members out in a guild
+    run, which are inside a dungeon on purpose. `watch` maps
+    ("inside", leader, name) -> since.
+    """
+    stranded = []
+    leader_inside = leader_map is None or leader_map in dungeon_maps
+    for name in sorted(states):
+        key = ("inside", leader, name)
+        mapped = maps.get(name)
+        if (
+            leader_inside
+            or name in lent
+            or mapped is None
+            or mapped not in dungeon_maps
+        ):
+            watch.pop(key, None)
+            continue
+        since = watch.setdefault(key, now)
+        if now - since >= INSIDE_SECONDS:
+            stranded.append(name)
+    for key in [
+        k for k in watch if k[0] == "inside" and k[1] == leader and k[2] not in states
+    ]:
+        watch.pop(key, None)
+    return stranded
+
+
+def why_not_inside(member: hearthcast.Member, leader_at: dict) -> str:
+    """Why this member's stone is no way out of the instance, or "".
+
+    The stone must land on the leader's own map, so the member comes out where
+    the family is. There is no distance rule: the member stands on another map,
+    so there is no distance to compare, and a stone is the way out of an
+    instance whatever it lands near.
+    """
+    bind = member.bind
+    if bind is None or bind.map != (leader_at or {}).get("map_id"):
+        return hearthcast.BOUND_ELSEWHERE
+    if member.alive is False:
+        return hearthcast.DEAD
+    return (
+        hearthcast._stone_reason(member)
+        or hearthcast._cooldown_reason(member)
+        or hearthcast._alive_reason(member)
+        or ""
+    )
