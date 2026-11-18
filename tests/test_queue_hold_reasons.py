@@ -9,7 +9,6 @@ pin that every silent return names its hold.
 """
 
 import pathlib
-import re
 import unittest
 
 import campaignqueue
@@ -61,19 +60,20 @@ class BridgeNamesEveryHoldTest(unittest.TestCase):
         body = self._body("    async def _campaign_queue_family_once(",
                           "    async def _family_lent_hold(")
         for hold in ("lent to a guild run", "queue hold", "family held"):
-            self.assertIn('self._say_queue_hold(key, "%s"' % hold, body, hold)
+            self.assertIn('_say_queue_hold(key, "%s"' % hold, body, hold)
 
     def test_each_queue_hold_names_itself(self):
         body = self._body("    async def _queue_holds(", "    async def _stall_breaker(")
         for hold in ("stall breaker", "dungeon pace", "gear hold"):
-            self.assertIn('self._say_queue_hold(key, "%s"' % hold, body, hold)
+            self.assertIn('_say_queue_hold(key, "%s"' % hold, body, hold)
 
     def test_pace_names_the_mid_run_return(self):
         body = self._body("    async def _dungeon_pace(", "    async def _leave_town_when_done(")
-        self.assertIn('self._say_queue_hold(key, "mid-run"', body)
+        self.assertIn('_say_queue_hold(key, "mid-run"', body)
 
     def test_the_helper_uses_the_rate_limit(self):
-        body = self._body("    def _say_queue_hold(", "\n    async def ")
+        body = self._body("def _say_queue_hold(", "
+_LENT_HOLD_SAID")
         self.assertIn("campaignqueue.HoldLog", self.text)
         self.assertIn(".due(", body)
         self.assertIn("log.info(", body)

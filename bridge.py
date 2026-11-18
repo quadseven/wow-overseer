@@ -25445,14 +25445,14 @@ class Bridge(discord.Client):
         # #784): the campaign never pulls it from a run in progress.
         lent_hold = getattr(self, "_family_lent_hold", None)
         if lent_hold is not None and await lent_hold(key, fam):
-            self._say_queue_hold(key, "lent to a guild run")
+            _say_queue_hold(key, "lent to a guild run")
             return
         holds = getattr(self, "_queue_holds", None)
         if holds is not None and await holds(key, rows, fam):
-            self._say_queue_hold(key, "queue hold")
+            _say_queue_hold(key, "queue hold")
             return
         if key in held:
-            self._say_queue_hold(key, "family held")
+            _say_queue_hold(key, "family held")
             return
         target = int(rows[0].get("goal_item") or 0) if rows else 0
         if target:
@@ -26008,17 +26008,6 @@ class Bridge(discord.Client):
             log.info("queue: %s %s", campaignqueue._family(key), said)
         return True
 
-    def _say_queue_hold(self, key: str, hold: str, why: str = "") -> None:
-        """Say which hold kept this family's queue step from running, once per
-        family per hold per campaignqueue.HOLD_LOG_SECONDS. Looked up lazily:
-        the queue tests load these methods on a bare object."""
-        book = getattr(self, "_queue_hold_log", None)
-        if book is None:
-            book = self._queue_hold_log = campaignqueue.HoldLog()
-        if book.due(key, hold, time.monotonic()):
-            log.info("queue: %s's step waits on the %s hold%s",
-                     campaignqueue._family(key), hold, (": " + why) if why else "")
-
     async def _queue_holds(self, key: str, rows: list, fam: dict) -> bool:
         """Whether the queue's step waits this pass: the stall breaker left
         the door (#1041), the ladder took it (mod-overseer#767), or the gear
@@ -26034,7 +26023,7 @@ class Bridge(discord.Client):
         if breaker is not None:
             try:
                 if await breaker(key, rows, fam):
-                    self._say_queue_hold(key, "stall breaker")
+                    _say_queue_hold(key, "stall breaker")
                     return True
             except Exception:
                 log.exception("stall: the pass for %s failed; the queue steps as "
@@ -26043,14 +26032,14 @@ class Bridge(discord.Client):
         if pace is not None:
             try:
                 if await pace(key, rows, fam):
-                    self._say_queue_hold(key, "dungeon pace")
+                    _say_queue_hold(key, "dungeon pace")
                     return True
             except Exception:
                 log.exception("pace: the pass for %s failed; the queue steps as "
                               "before", campaignqueue._family(key))
         gear_hold = getattr(self, "_queue_gear_hold", None)
         if gear_hold is not None and await gear_hold(rows[0], fam):
-            self._say_queue_hold(key, "gear hold")
+            _say_queue_hold(key, "gear hold")
             return True
         return False
 
@@ -26271,7 +26260,7 @@ class Bridge(discord.Client):
             # NOT A HOLD ON THE STEP, BUT THE PACE PASS NEVER RUNS, so the
             # family's first pace pass never completes. Said so, because a
             # member left inside a dungeon map reads as a run in progress.
-            self._say_queue_hold(key, "mid-run",
+            _say_queue_hold(key, "mid-run",
                                  "a member is on a dungeon map, so the pace pass is skipped")
             return False
         facts, reads = await self._pace_facts(key, rows, fam)
@@ -32326,6 +32315,17 @@ def _fetch_seat_meter_runs() -> list:
 
 
 # family -> the last familyseat.hold_line said for it, only while it waits.
+_QUEUE_HOLD_LOG = campaignqueue.HoldLog()
+
+def _say_queue_hold(key: str, hold: str, why: str = "") -> None:
+    """Say which hold kept this family's queue step from running, once per
+    family per hold per campaignqueue.HOLD_LOG_SECONDS. A module function, not a
+    method: the queue tests load the queue methods on a bare object."""
+    if _QUEUE_HOLD_LOG.due(key, hold, time.monotonic()):
+        log.info("queue: %s's step waits on the %s hold%s",
+                 campaignqueue._family(key), hold, (": " + why) if why else "")
+
+
 _LENT_HOLD_SAID: dict = {}
 
 
