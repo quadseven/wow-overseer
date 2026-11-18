@@ -268,6 +268,113 @@ class TheSubmodulePin(unittest.TestCase):
             text=True,
         )
 
+    def _run_gate_with_actions(self, checkout, github_actions):
+        env = dict(os.environ)
+        if github_actions is None:
+            env.pop("GITHUB_ACTIONS", None)
+        else:
+            env["GITHUB_ACTIONS"] = github_actions
+        return subprocess.run(
+            [sys.executable, str(PIN_CHECK), str(checkout)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    def _checkout_with_broken_origin(self, root):
+        """A checkout whose origin cannot be fetched from at all."""
+        checkout = root / "checkout"
+        self._git(root, "init", str(checkout))
+        self._git(checkout, "config", "user.name", "Test")
+        self._git(checkout, "config", "user.email", "test@example.com")
+        (checkout / "file").write_text("pin\n", encoding="utf-8")
+        self._git(checkout, "add", "file")
+        self._git(checkout, "commit", "-m", "pin")
+        self._git(checkout, "remote", "add", "origin", str(root / "missing.git"))
+        return checkout
+
+    def test_a_failed_fetch_warns_and_passes_outside_github_actions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout = self._checkout_with_broken_origin(pathlib.Path(temporary))
+            result = self._run_gate_with_actions(checkout, None)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        warnings = [
+            line
+            for line in result.stderr.splitlines()
+            if line.startswith("WARNING: mod-overseer pin not checked")
+        ]
+        self.assertEqual(1, len(warnings), result.stderr)
+        self.assertIn("fetch failed", warnings[0])
+
+    def test_a_failed_fetch_reason_hides_url_credentials(self):
+        """git can name a credential-bearing origin URL in a fetch error;
+        the warning built from it must not print the token."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("pin_check", PIN_CHECK)
+        pin_check = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pin_check)
+        fetched = subprocess.CompletedProcess(
+            ["git", "fetch"],
+            128,
+            stdout="",
+            stderr=(
+                "fatal: unable to access "
+                "'https://x-access-token:ghs_SECRET123@github.com/o/r.git/': "
+                "Could not resolve host: github.com\n"
+            ),
+        )
+        reason = pin_check._fetch_failure_reason(fetched)
+        self.assertNotIn("ghs_SECRET123", reason)
+        self.assertNotIn("x-access-token", reason)
+        self.assertIn("https://***@github.com/o/r.git/", reason)
+
+    def test_redact_leaves_text_without_url_credentials_unchanged(self):
+        """The redaction only touches the userinfo of a scheme URL: plain
+        words, a bare pipe, an address with no scheme and a URL with no
+        credentials come back exactly as they went in."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("pin_check", PIN_CHECK)
+        pin_check = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pin_check)
+        for text in (
+            "fatal: could not read from remote repository",
+            "a | b and x@y are not markup",
+            "git@github.com:o/r.git: Permission denied",
+            "fatal: unable to access 'https://github.com/o/r.git/': timeout",
+            "",
+        ):
+            self.assertEqual(text, pin_check._redact(text))
+
+    def test_a_failed_fetch_still_fails_in_github_actions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout = self._checkout_with_broken_origin(pathlib.Path(temporary))
+            result = self._run_gate_with_actions(checkout, "true")
+        self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("WARNING: mod-overseer pin not checked", result.stderr)
+
+    def test_a_pin_outside_main_fails_outside_github_actions(self):
+        """The warning covers a fetch that cannot happen, not a pin that
+        fetched fine and is off main: that still fails locally."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            remote, _shas = self._remote_with_history(root)
+            seed = root / "seed"
+            self._git(seed, "checkout", "--orphan", "off-main")
+            self._git(seed, "rm", "-rf", ".")
+            (seed / "file").write_text("off\n", encoding="utf-8")
+            self._git(seed, "add", "file")
+            self._git(seed, "commit", "-m", "off main")
+            off_main = self._git(seed, "rev-parse", "HEAD").stdout.strip()
+            self._git(seed, "push", "origin", "HEAD:off-main")
+            checkout = root / "checkout"
+            self._git(root, "clone", str(remote), str(checkout))
+            self._git(checkout, "checkout", off_main)
+            result = self._run_gate_with_actions(checkout, None)
+        self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("WARNING: mod-overseer pin not checked", result.stderr)
+
     def test_a_pin_on_main_passes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
