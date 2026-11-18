@@ -131,9 +131,11 @@ def job_disk(job):
 
 
 class Dispatcher:
-    def __init__(self, cfg, kube, clock=time.time, out=print):
+    def __init__(self, cfg, kube, clock=time.time, out=print, owner=None, on_tick=None):
         self.cfg, self.kube, self.clock, self.out = cfg, kube, clock, out
-        self.holder = f"{socket.gethostname()}-{os.getpid()}"
+        self.on_tick = on_tick
+        who = f"{socket.gethostname()}-{os.getpid()}"
+        self.holder = f"{owner}@{who}" if owner else who
         self.claim_node = {n.claim: n for n in cfg.nodes.values()}
         self._stats = {}
 
@@ -397,6 +399,8 @@ class Dispatcher:
         try:
             while True:
                 self.tick()
+                if self.on_tick:
+                    self.on_tick()
                 if once:
                     return 0
                 sleep(interval)

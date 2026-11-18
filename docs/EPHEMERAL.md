@@ -282,7 +282,8 @@ digest-pinned tools image. A missing or malformed file is an error.
 
     python3 -m ephemeral submit [--arm both] [--node N] --control-worldserver REF --control-dbimport REF --control-pin SHA
         [--control-playerbots-prefix NAME] [--control-drop-keys A,B,C] data/decrees/<name>.yaml
-    python3 -m ephemeral dispatch [--once]
+    python3 -m ephemeral dispatch [--once] [--owner NAME]
+    python3 -m ephemeral dispatch --stop --owner NAME
     python3 -m ephemeral collect [--dry-run]
 
 `submit` lints the decree, reads the Job skeleton ConfigMap and the base realm's
@@ -307,6 +308,20 @@ fit, but nothing skips a head that has waited 30 minutes. Runs after the first
 control and treatment pair start only if the pair was control FAIL then
 treatment PASS; any other first pair stops the batch and removes its waiting
 Jobs. A finished Job with no result gets an INVALID result recorded for it.
+
+Each dispatcher also takes a local owner lock (`~/.ephemeral/dispatch.lock`, or
+`EPH_LOCK`) recording the owner, pid and start time; the cluster Lease holder
+carries the owner name too. `--owner` defaults to `EPH_OWNER`, else the parent
+pid, so pass your own name. A second dispatcher is refused with exit code 3 and
+the holder's owner named. A lock whose pid is gone, or that a running dispatcher
+has not renewed for `--lock-max-hours` (default 6), is stale and is taken over
+with a log line.
+
+To stop your batch, run `python3 -m ephemeral dispatch --stop --owner NAME`. It
+signals only the pid in the lock, and only when the owner matches; another
+owner's dispatcher is refused. Never `pkill`, `killall` or any
+kill by command-line pattern ("dl.sh", "ephemeral"): it can take down another
+agent's dispatcher.
 
 `collect` copies result ConfigMaps to the results directory, decides each batch
 and posts. A decree with any run count other than 3 control and 3 treatment can

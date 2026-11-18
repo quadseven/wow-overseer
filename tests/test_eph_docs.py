@@ -14,6 +14,11 @@ class EphemeralDocsTest(unittest.TestCase):
         self.assertIn("## Requesting a proving run", PAGE)
         self.assertRegex(PAGE, r"## Runner: submit, dispatch, collect")
 
+    def test_says_to_stop_a_dispatcher_with_stop_never_a_pattern_kill(self):
+        self.assertIn("dispatch --stop", PAGE)
+        self.assertIn("--owner", PAGE)
+        self.assertRegex(PAGE, r"(?i)never `?pkill")
+
     def test_describes_the_judge_and_its_three_verdicts(self):
         self.assertIn("## Judge:", PAGE)
         for word in ("PASS", "FAIL", "INVALID", "eph-result-<run-id>"):
