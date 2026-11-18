@@ -115,6 +115,7 @@ STUCK_AREAS = {
     "hold": "gear",
     "ghost": "deaths",
     "death-loop": "deaths",
+    "run-wipe": "deaths",
 }
 
 NOW_SQL = "SELECT UNIX_TIMESTAMP() AS now_at"

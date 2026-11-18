@@ -50,7 +50,7 @@ seconds, measured by the database's own clock.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import levelroute
 
@@ -76,6 +76,10 @@ AVOID_SECONDS = 24 * 3600
 RISK_READ_SECONDS = WINDOW_SECONDS
 # The stuck reader's kind for the entry.
 KIND = "death-loop"
+# The stuck reader's kind for a loop whose member is inside a live guild run: a
+# whole party wiping on a run's trash is the run's cause, not one bot's habit,
+# and it is still counted as stuck, under its own kind and its own digest line.
+RUN_KIND = "run-wipe"
 
 SQL = (
     "SELECT character_name AS name, zone, map, level, killer_name AS killer, "
@@ -101,6 +105,7 @@ class Loop:
     first_age: int
     last_age: int
     slow: bool = False
+    run: int = 0
 
     @property
     def place(self) -> str:
@@ -108,14 +113,16 @@ class Loop:
 
     def reason(self) -> str:
         """'died 7 times in Redridge Mountains within an hour, mostly to Great
-        Goretusk, with no level gained'; a slow loop says 'in a day'."""
+        Goretusk, with no level gained'; a slow loop says 'in a day'. A member
+        inside a live guild run (`run`) says 'run wipe (run 6257): ' first."""
         killer = ", mostly to %s" % self.killer if self.killer else ""
-        return "died %d times in %s %s%s, with no level gained" % (
+        said = "died %d times in %s %s%s, with no level gained" % (
             self.deaths,
             self.place,
             "in a day" if self.slow else "within an hour",
             killer,
         )
+        return "run wipe (run %d): %s" % (self.run, said) if self.run else said
 
     def blocker(self) -> str:
         """The stuck reader's sentence: `reason`, capitalised, with a stop."""
@@ -427,3 +434,14 @@ def loops(rows, levels=None, slow=False) -> dict:
                 found, key=lambda lp: (lp.slow, lp.last_age, -lp.deaths, lp.zone)
             )
     return out
+
+
+def tag_runs(found, run_of) -> dict:
+    """`found` (name -> Loop) with each member inside a live guild run tagged
+    with that run's number (name -> run id in `run_of`). Never drops or adds a
+    loop: a wipe is still counted, only named. Pure."""
+    run_of = run_of or {}
+    return {
+        name: replace(loop, run=int(run_of[name])) if run_of.get(name) else loop
+        for name, loop in (found or {}).items()
+    }

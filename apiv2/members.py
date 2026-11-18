@@ -266,6 +266,7 @@ def _read(ctx, names: list) -> dict:
         },
         "deaths": deaths or [],
         "in_run": guildrun.active_names(rd),
+        "run_of": guildrun.inside_runs(rd),
         "leveled": {r["name"]: int(r["at"]) for r in leveled or () if r.get("at")},
         "now_at": now_at,
     }
@@ -465,7 +466,11 @@ def follower_blocker(leader: str, yards: str, lead: dict | None) -> dict | None:
 def _asking(entry: dict | None) -> bool:
     """A class quest ask or a death loop is the member's own blocker, follower
     or not."""
-    return entry is not None and entry["kind"] in ("class quest", deathloop.KIND)
+    return entry is not None and entry["kind"] in (
+        "class quest",
+        deathloop.KIND,
+        deathloop.RUN_KIND,
+    )
 
 
 def _resolve_followers(members: list, found: dict, follows: dict) -> None:
@@ -603,10 +608,14 @@ def loop_blocker(loop, now_at: int) -> dict | None:
     if loop is None:
         return None
     return {
-        "step": "Dying in " + loop.place,
+        "step": (
+            "Run wipe (run %d) in %s" % (loop.run, loop.place)
+            if loop.run
+            else "Dying in " + loop.place
+        ),
         "blocker": loop.blocker(),
         "since": (int(now_at) - int(loop.first_age)) if now_at else None,
-        "kind": deathloop.KIND,
+        "kind": deathloop.RUN_KIND if loop.run else deathloop.KIND,
     }
 
 
@@ -779,6 +788,7 @@ def build(
     deaths=None,
     in_run=None,
     leveled=None,
+    run_of=None,
 ) -> dict:
     """The roster: one row per member, family first, with its stuck reading.
 
@@ -795,7 +805,9 @@ def build(
     guild_of = {r["name"]: r for r in guild or ()}
     streaks = ask_streaks(asks)
     members, found, follows = [], {}, {}
-    loops = deathloop.loops(deaths, _levels(rows["chars"], guild_of), slow=True)
+    loops = deathloop.tag_runs(
+        deathloop.loops(deaths, _levels(rows["chars"], guild_of), slow=True), run_of
+    )
     for name in _order(families, guild_of):
         if name not in rows["chars"] and name not in guild_of:
             continue
@@ -892,6 +904,7 @@ def stuck_digest(rows: list, checked_at: int | None) -> dict:
         "member_hours": round(total / 3600, 2),
         "bound_s": STUCK_BOUND_SECONDS,
         "over_bound": over,
+        "run_wipes": sum(1 for row in rows if row["kind"] == deathloop.RUN_KIND),
         "unmeasured": unmeasured,
         "causes": causes,
     }
@@ -952,6 +965,7 @@ def _build_roster(ctx) -> dict:
         f.get("deaths"),
         f.get("in_run"),
         f.get("leveled"),
+        f.get("run_of"),
     )
 
 

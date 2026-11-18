@@ -2933,6 +2933,17 @@ def active_names(reader) -> set:
     return {m["name"] for r in rows for m in _member_list(r.get("members"))}
 
 
+def inside_runs(reader) -> dict:
+    """name -> the id of the run it is inside now (state 'inside', not queued),
+    the newest run when a name is in two. The stuck reader names a party's
+    deaths after the run they happen in."""
+    out: dict = {}
+    for r in _runs(reader, "state = 'inside'", (), 200):
+        for m in _member_list(r.get("members")):
+            out.setdefault(m["name"], int(r["id"]))
+    return out
+
+
 def recent(reader, guild: str | None = None, n: int = 30) -> list:
     """The newest `n` runs in any state, of one guild or of every guild, as
     rows newest first (page folds them; run_view shapes one)."""
