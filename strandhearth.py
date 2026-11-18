@@ -76,13 +76,17 @@ def why_not(member: hearthcast.Member, leader_at: dict, yards: float) -> str:
         return hearthcast.BOUND_ELSEWHERE
     if member.alive is False:
         return hearthcast.DEAD
-    reason = (hearthcast._stone_reason(member)
-              or hearthcast._cooldown_reason(member)
-              or hearthcast._alive_reason(member))
+    reason = (
+        hearthcast._stone_reason(member)
+        or hearthcast._cooldown_reason(member)
+        or hearthcast._alive_reason(member)
+    )
     if reason:
         return reason
-    away = math.hypot(float(bind.x) - float(leader_at["pos_x"]),
-                      float(bind.y) - float(leader_at["pos_y"]))
+    away = math.hypot(
+        float(bind.x) - float(leader_at["pos_x"]),
+        float(bind.y) - float(leader_at["pos_y"]),
+    )
     if away > yards + SLACK_YARDS:
         return NO_NEARER
     return ""
