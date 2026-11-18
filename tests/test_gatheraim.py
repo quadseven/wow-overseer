@@ -374,5 +374,37 @@ class TheReachIsTheLeaseNotAGuess(unittest.TestCase):
         )
 
 
+class HostileGuardGroundIsNotAField(unittest.TestCase):
+    """#1912: a field beside the other side's guards is never chosen."""
+
+    def _world(self):
+        lock = gatherband.reachable_locks("mining", 1)[0]
+        near = [spawn(10, lock, map_id=0, x=100.0, y=0.0)]
+        far = [spawn(20, lock, map_id=0, x=300.0, y=0.0)]
+        return near + far
+
+    def _choose(self, guarded):
+        return gatheraim.choose(
+            skills={"a": {"mining": 1}},
+            standing_on=0,
+            spawns=self._world(),
+            family_level=20,
+            zone_levels={10: 15, 20: 15},
+            origin=(0.0, 0.0),
+            guarded_zones=guarded,
+        )
+
+    def test_the_nearer_field_is_taken_when_unguarded(self):
+        self.assertEqual(self._choose(()).chosen.zone_id, 10)
+
+    def test_a_guarded_field_is_skipped_for_the_next(self):
+        self.assertEqual(self._choose({10}).chosen.zone_id, 20)
+
+    def test_every_field_guarded_is_a_refusal(self):
+        got = self._choose({10, 20})
+        self.assertIsNone(got.chosen)
+        self.assertIn("guards", got.refused)
+
+
 if __name__ == "__main__":
     unittest.main()

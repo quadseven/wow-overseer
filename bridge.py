@@ -6245,11 +6245,11 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
 
     The states are the module's member-state words (MemberStateWord):
     "dead", and the holds with no errand of the member's own choosing at
-    the end of them. The safety holds ("held off a walk that kept killing
-    it", "held where it stands, too far to walk back") are not judged:
-    they name their reason, and the module's fetch and regroup intents are
-    their recovery while a run is merely slow. In a wedge they end with
-    the run like everything else; they do not trigger it.
+    the end of them. A member held too far to walk back is included too:
+    unlike a member held off a walk that kept killing it, the module has
+    already refused both walking and flight for this catch-up. If that state
+    persists for the party-hold bound, another identical catch-up is not a
+    recovery.
     """
     now = time.monotonic()
     seen = {}
@@ -6259,6 +6259,7 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
         if member.state == "dead" or member.state in (
             "on an errand of its own",
             "held still",
+            dungeonstall.CATCH_UP_UNREACHABLE_STATE,
         ):
             seen[(leader, member.name, member.state)] = member
     for key in [k for k in _DOOR_HOLD_SINCE if k[0] == leader and k not in seen]:
@@ -20988,6 +20989,10 @@ class Bridge(discord.Client):
         # The death loop's reasons are never capped (#2152): every listed
         # member that got no escape step is named, whatever else the pass says.
         _log_loop_lines(plan.loop_lines)
+        # A member left in the starting lands with no level step is named with
+        # its reason (#2400): uncapped, said when the line is new or changed.
+        _log_changed("guild jobs", plan.isle_lines,
+                     ("isle", _cohort_key(cohort)), capped=False)
         # A class quest that yields to levelling is named every pass, uncapped.
         for line in plan.yields:
             log.info("guild jobs: %s", line)
@@ -21601,9 +21606,12 @@ class Bridge(discord.Client):
         candidates, _beyond = gatheraim.near_fields(
             spawns, skills, int(member.map_id), origin)
         zone_levels = await self._gathering_zone_levels(candidates)
+        guarded = await self._gathering_guarded_zones(
+            candidates, situation.side_mask([getattr(member, "race", 0)]))
         choice = gatheraim.choose(
             skills=skills, standing_on=int(member.map_id), spawns=spawns,
-            family_level=int(member.level), zone_levels=zone_levels, origin=origin)
+            family_level=int(member.level), zone_levels=zone_levels, origin=origin,
+            guarded_zones=guarded)
         spawn = getattr(choice, "chosen", None)
         spawn = getattr(spawn, "spawn", spawn)
         if spawn is None or not getattr(spawn, "guid", 0):
@@ -21626,6 +21634,18 @@ class Bridge(discord.Client):
             if danger is not None:
                 zone_levels[candidate.zone_id] = danger
         return zone_levels
+
+    async def _gathering_guarded_zones(self, candidates, side):
+        """The candidate zones with guards of the other side beside them (#1912)."""
+        out = set()
+        if not side:
+            return out
+        for candidate in candidates[:GATHER_DANGER_CANDIDATES]:
+            if await asyncio.to_thread(
+                    _hostile_guards_near, candidate.map_id, candidate.spawn.x,
+                    candidate.spawn.y, side):
+                out.add(candidate.zone_id)
+        return out
 
     async def _skinning_field(self, member, band=None):
         skin = member.skill(guildjobs.SKINNING)[0]
@@ -23733,7 +23753,7 @@ class Bridge(discord.Client):
         if step == townerrand.MAIL:
             await self._town_errand_aim(leader, _hub_aim(state.hub), cohort)
             return await self._town_errand_mail(state.hub, names, positions,
-                                                cohort)
+                                                cohort, marks)
         if step in (townerrand.EQUIP, townerrand.HANDDOWN):
             await self._town_errand_aim(leader, _hub_aim(state.hub), cohort)
             if step not in marks:
@@ -23851,11 +23871,22 @@ class Bridge(discord.Client):
         marks[step] = now
         return sent == 0
 
-    async def _town_errand_mail(self, hub, names, positions, cohort) -> bool:
+    async def _town_errand_mail(self, hub, names, positions, cohort,
+                                marks=None) -> bool:
         """Take mail for members at the hub; defer absent members to a later
-        mailbox visit so their inaccessible mail cannot hold this errand."""
-        letters = mailrun.letters_from_rows(
-            await asyncio.to_thread(_fetch_mail, names), names)
+        mailbox visit so their inaccessible mail cannot hold this errand.
+
+        A letter its holder's mailbox has not loaded (#2402) is not planned,
+        so it cannot hold the step either; it is named once per errand
+        (`marks` is this step's own, dropped when the step changes).
+        """
+        marks = {} if marks is None else marks
+        rows, unloaded = await asyncio.to_thread(_fetch_mail_split, names)
+        letters = mailrun.letters_from_rows(rows, names)
+        if unloaded and not marks.get("unloaded_said"):
+            marks["unloaded_said"] = True
+            log.info("town errand mail: %s%s", mailrun.errand_note(unloaded),
+                     _family_label(cohort))
         seen = await asyncio.to_thread(_recent_mail_keys, GIVE_RETRY_MINUTES)
         here = {name for name in names if townerrand.in_range(
             hub, positions.get(name), TOWN_COUNTER_YARDS)}
@@ -28382,9 +28413,12 @@ class Bridge(discord.Client):
             if top is not None:
                 zone_levels[cand.zone_id] = top
 
+        side = await asyncio.to_thread(_family_side, names)
+        guarded = await self._gathering_guarded_zones(candidates, side)
         return gatheraim.choose(skills=skills, standing_on=standing_on,
                                 spawns=spawns, family_level=level,
-                                zone_levels=zone_levels, origin=origin)
+                                zone_levels=zone_levels, origin=origin,
+                                guarded_zones=guarded)
 
     async def _yield_gather_aim(self, why: str, cohort=None) -> bool:
         """Hand back a gathering walk this pass holds, and say why (#170).
@@ -42247,8 +42281,18 @@ def _fetch_mail(names: list) -> list:
     image without the mail schema has nothing to collect, and taking the loop
     down over it would hide every other pass's log behind a traceback.
     """
+    return _fetch_mail_split(names)[0]
+
+
+def _fetch_mail_split(names: list) -> tuple:
+    """`_fetch_mail`'s rows, and the letters it left out of them.
+
+    The second is the (holder, mail id) of each letter still in a mailbox
+    that its holder has not loaded (mailrun.unloaded_held): one read, so the
+    town errand can name what it leaves behind without asking twice.
+    """
     if not names:
-        return []
+        return [], frozenset()
     marks = ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
         try:
@@ -42256,7 +42300,7 @@ def _fetch_mail(names: list) -> list:
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("mail: this world image has no mail tables to read")
-                return []
+                return [], frozenset()
             raise
         rows = [dict(row) for row in cur.fetchall()]
         # A LETTER THE MAILBOX HAS NOT LOADED IS NOT WAITING (#2402): every
@@ -42266,7 +42310,8 @@ def _fetch_mail(names: list) -> list:
         unloaded = _unloaded_mail(cur, names, marks) if rows else frozenset()
     _log_changed("mail", [mailrun.unloaded_note(unloaded)] if unloaded else [],
                  key=("unloaded",) + tuple(sorted(names)), capped=False)
-    return mailrun.loaded_rows(rows, unloaded)
+    return (mailrun.loaded_rows(rows, unloaded),
+            mailrun.unloaded_held(rows, unloaded))
 
 
 _UNLOADED_MAIL_SQL = (
@@ -42686,6 +42731,49 @@ def _survey_gather_nodes(leader: str, lock_ids):
             x=float(row["x"]), y=float(row["y"]), z=float(row["z"]),
             lock_id=int(row["lock_id"]), name=str(row["name"] or ""))
             for row in cur.fetchall()]
+
+
+# GUARDS OF THE OTHER SIDE (#1912). A gathering field is judged for creature
+# level alone, and a guard is a low-level creature, so Horde characters were
+# walked to fields beside Alliance guard posts and killed by them. A guard is a
+# creature flagged as one or named as one whose faction attacks the walker's side.
+_HOSTILE_GUARD_SQL = (
+    "SELECT COUNT(*) AS n FROM acore_world.creature c "
+    "JOIN acore_world.creature_template ct ON ct.entry = c.id "
+    "JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
+    "WHERE c.map = %s AND (ft.EnemyGroup & %s) <> 0 "
+    "AND ((ct.flags_extra & 32768) <> 0 OR ct.name REGEXP "
+    "'Guard|Sentry|Defender|Sentinel|Protector|Watchman|Guardian') "
+    "AND POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2) < POW(%s, 2)"
+)
+GATHER_GUARD_YARDS = 300
+
+
+def _hostile_guards_near(map_id: int, x: float, y: float, side: int) -> bool:
+    """Whether guards that attack `side` stand within GATHER_GUARD_YARDS of a
+    point. A table this world image lacks reads as no guards, as the danger read
+    does for its own."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_HOSTILE_GUARD_SQL, (
+                int(map_id), int(side), float(x), float(y), GATHER_GUARD_YARDS))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return False
+            raise
+        row = cur.fetchone()
+    return bool(row and int(row.get("n") or 0))
+
+
+def _family_side(names) -> int:
+    """The FactionGroup bit of these characters' side, 0 when mixed or unread."""
+    names = [n for n in names or () if n]
+    if not names:
+        return 0
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT race FROM characters WHERE name IN (%s)"
+                    % ",".join(["%s"] * len(names)), tuple(names))
+        return situation.side_mask([r.get("race") for r in cur.fetchall()])
 
 
 def _gather_danger(map_id: int, x: float, y: float):
