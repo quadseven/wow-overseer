@@ -31,6 +31,19 @@ SLACK_YARDS = 300.0
 NO_NEARER = "bind_farther"
 
 
+# A module row older than this is a leader that no longer leads.
+ROW_FRESH_SECONDS = 600
+
+
+def fresh_leader_row(leader: str, row: dict, leads) -> bool:
+    """Is this intent row a live leader's? The table keeps rows of members that
+    led once; they list the real leader as a straggler and must never act."""
+    if leader not in (leads or ()):
+        return False
+    age = row.get("module_age")
+    return age is not None and int(age) <= ROW_FRESH_SECONDS
+
+
 def parse_members_state(text) -> dict:
     """`Name|state|yards` lines -> {name: (state, yards or None)}."""
     out = {}

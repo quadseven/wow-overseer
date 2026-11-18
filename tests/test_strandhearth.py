@@ -133,6 +133,16 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class Leaders(unittest.TestCase):
+    def test_only_a_roster_lead_with_a_fresh_row_counts(self):
+        leads = {"Zug", "Grug"}
+        self.assertTrue(sh.fresh_leader_row("Zug", {"module_age": 30}, leads))
+        self.assertFalse(sh.fresh_leader_row("Zrog", {"module_age": 30}, leads))
+        self.assertFalse(sh.fresh_leader_row("Zug", {"module_age": 99999}, leads))
+        self.assertFalse(sh.fresh_leader_row("Zug", {}, leads))
+        self.assertFalse(sh.fresh_leader_row("Zug", {"module_age": 1}, None))
+
+
 class UnderTheWorld(unittest.TestCase):
     def test_a_member_that_fell_through_the_map_can_still_cast(self):
         """No navmesh or floor reading is asked of the member: only its stone."""
@@ -157,3 +167,5 @@ class Wiring(unittest.TestCase):
         bridge = (here / "bridge.py").read_text(encoding="utf-8")
         self.assertIn("await self._hearth_stranded_followers()", bridge)
         self.assertIn("strandhearth.observe(watch, leader, states, now)", bridge)
+        self.assertIn("strandhearth.fresh_leader_row(leader, row, leads)", bridge)
+        self.assertIn("if name not in leads:", bridge)
