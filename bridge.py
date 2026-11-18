@@ -21600,9 +21600,12 @@ class Bridge(discord.Client):
         candidates, _beyond = gatheraim.near_fields(
             spawns, skills, int(member.map_id), origin)
         zone_levels = await self._gathering_zone_levels(candidates)
+        guarded = await self._gathering_guarded_zones(
+            candidates, situation.side_mask([getattr(member, "race", 0)]))
         choice = gatheraim.choose(
             skills=skills, standing_on=int(member.map_id), spawns=spawns,
-            family_level=int(member.level), zone_levels=zone_levels, origin=origin)
+            family_level=int(member.level), zone_levels=zone_levels, origin=origin,
+            guarded_zones=guarded)
         spawn = getattr(choice, "chosen", None)
         spawn = getattr(spawn, "spawn", spawn)
         if spawn is None or not getattr(spawn, "guid", 0):
@@ -21625,6 +21628,18 @@ class Bridge(discord.Client):
             if danger is not None:
                 zone_levels[candidate.zone_id] = danger
         return zone_levels
+
+    async def _gathering_guarded_zones(self, candidates, side):
+        """The candidate zones with guards of the other side beside them (#1912)."""
+        out = set()
+        if not side:
+            return out
+        for candidate in candidates[:GATHER_DANGER_CANDIDATES]:
+            if await asyncio.to_thread(
+                    _hostile_guards_near, candidate.map_id, candidate.spawn.x,
+                    candidate.spawn.y, side):
+                out.add(candidate.zone_id)
+        return out
 
     async def _skinning_field(self, member, band=None):
         skin = member.skill(guildjobs.SKINNING)[0]
@@ -28369,9 +28384,12 @@ class Bridge(discord.Client):
             if top is not None:
                 zone_levels[cand.zone_id] = top
 
+        side = await asyncio.to_thread(_family_side, names)
+        guarded = await self._gathering_guarded_zones(candidates, side)
         return gatheraim.choose(skills=skills, standing_on=standing_on,
                                 spawns=spawns, family_level=level,
-                                zone_levels=zone_levels, origin=origin)
+                                zone_levels=zone_levels, origin=origin,
+                                guarded_zones=guarded)
 
     async def _yield_gather_aim(self, why: str, cohort=None) -> bool:
         """Hand back a gathering walk this pass holds, and say why (#170).
@@ -42673,6 +42691,49 @@ def _survey_gather_nodes(leader: str, lock_ids):
             x=float(row["x"]), y=float(row["y"]), z=float(row["z"]),
             lock_id=int(row["lock_id"]), name=str(row["name"] or ""))
             for row in cur.fetchall()]
+
+
+# GUARDS OF THE OTHER SIDE (#1912). A gathering field is judged for creature
+# level alone, and a guard is a low-level creature, so Horde characters were
+# walked to fields beside Alliance guard posts and killed by them. A guard is a
+# creature flagged as one or named as one whose faction attacks the walker's side.
+_HOSTILE_GUARD_SQL = (
+    "SELECT COUNT(*) AS n FROM acore_world.creature c "
+    "JOIN acore_world.creature_template ct ON ct.entry = c.id "
+    "JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
+    "WHERE c.map = %s AND (ft.EnemyGroup & %s) <> 0 "
+    "AND ((ct.flags_extra & 32768) <> 0 OR ct.name REGEXP "
+    "'Guard|Sentry|Defender|Sentinel|Protector|Watchman|Guardian') "
+    "AND POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2) < POW(%s, 2)"
+)
+GATHER_GUARD_YARDS = 300
+
+
+def _hostile_guards_near(map_id: int, x: float, y: float, side: int) -> bool:
+    """Whether guards that attack `side` stand within GATHER_GUARD_YARDS of a
+    point. A table this world image lacks reads as no guards, as the danger read
+    does for its own."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_HOSTILE_GUARD_SQL, (
+                int(map_id), int(side), float(x), float(y), GATHER_GUARD_YARDS))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return False
+            raise
+        row = cur.fetchone()
+    return bool(row and int(row.get("n") or 0))
+
+
+def _family_side(names) -> int:
+    """The FactionGroup bit of these characters' side, 0 when mixed or unread."""
+    names = [n for n in names or () if n]
+    if not names:
+        return 0
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT race FROM characters WHERE name IN (%s)"
+                    % ",".join(["%s"] * len(names)), tuple(names))
+        return situation.side_mask([r.get("race") for r in cur.fetchall()])
 
 
 def _gather_danger(map_id: int, x: float, y: float):

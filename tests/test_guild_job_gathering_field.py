@@ -67,6 +67,9 @@ class _Pass:
         self.danger_asked.extend(candidates)
         return {c.zone_id: 10 for c in candidates}
 
+    async def _gathering_guarded_zones(self, candidates, side):
+        return getattr(self, "guarded", set())
+
 
 class GatheringFieldTest(unittest.TestCase):
     def test_a_members_own_skills_choose_a_field_instead_of_raising(self):
@@ -99,6 +102,18 @@ class GatheringFieldTest(unittest.TestCase):
         self.assertEqual(spot.spawn, 4242)
         self.assertEqual(spot.kind, "gameobject")
         self.assertTrue(this.danger_asked)
+
+    def test_a_field_beside_hostile_guards_is_not_chosen(self):
+        m = miner()
+        skills = bridge._guild_gathering_skills(m)
+        lock = gatherband.reachable_locks("mining", 1)[0]
+        node = gatheraim.Spawn(map_id=1, zone_id=14, x=1100.0, y=-4000.0,
+                               z=10.0, lock_id=lock, name="Copper Vein", guid=4242)
+        this = _Pass()
+        this.guarded = {14}
+        with mock.patch.object(bridge, "_survey_job_nodes", lambda a, b: [node]):
+            spot = asyncio.run(bridge.Bridge._gathering_field(this, m, skills, {}))
+        self.assertIsNone(spot)
 
 
 if __name__ == "__main__":
