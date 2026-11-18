@@ -164,6 +164,34 @@ class EveryRaiseCarriesAReason(unittest.TestCase):
         )
 
 
+class TheCommandLine(unittest.TestCase):
+    def test_it_prints_every_number_and_exits_zero_on_the_repository(self):
+        import contextlib
+        import io
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(0, app_budget.main())
+        for name in limits():
+            self.assertIn(name, out.getvalue())
+
+    def test_it_exits_one_and_names_an_unexplained_raise(self):
+        import contextlib
+        import io
+        from unittest import mock
+
+        budget = app_budget.load(str(HERE))
+        budget["boot"]["limits"]["boot_modules"] += 1
+        err = io.StringIO()
+        with (
+            mock.patch.object(app_budget, "load", return_value=budget),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(err),
+        ):
+            self.assertEqual(1, app_budget.main())
+        self.assertIn("boot_modules", err.getvalue())
+
+
 class TheServerSendsWhatIsMeasured(unittest.TestCase):
     """The measure gzips as map_server._gzipped does for a static file."""
 

@@ -11,7 +11,8 @@ Raising a limit is a visible act: the budget file lists every setting of a
 limit under "raises" with its reason, and `unexplained` names a limit whose
 newest entry there does not match it.
 
-    python3 scripts/app_budget.py    # the measured numbers next to the limits
+    python3 scripts/app_budget.py    # the numbers next to the limits; exit 1
+                                     # on any problem check or unexplained finds
 """
 
 from __future__ import annotations
@@ -178,10 +179,15 @@ def load(root: str) -> dict:
 
 def main() -> int:
     root = str(ROOT)
-    limits = load(root)["boot"]["limits"]
-    for name, value in measure(root).items():
+    boot = load(root)["boot"]
+    limits = boot["limits"]
+    measured = measure(root)
+    for name, value in measured.items():
         print("%-18s %8s  (limit %s)" % (name, value, limits.get(name, "none")))
-    return 0
+    problems = check(measured, limits, root) + unexplained(boot)
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":
