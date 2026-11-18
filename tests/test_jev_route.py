@@ -157,7 +157,7 @@ class Routing(unittest.TestCase):
         self.assertEqual(ask(client).backend, "openai")
         self.assertEqual(first.calls, [])
 
-    def test_a_timeout_or_server_error_does_not_route(self):
+    def test_a_server_error_does_not_route(self):
         for result in ((500, b"{}"), (503, b"{}")):
             with self.subTest(result=result):
                 client, _, second, _ = routed(result)

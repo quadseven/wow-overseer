@@ -147,6 +147,20 @@ class Ledger(unittest.TestCase):
         clock.now += jo.HOLD_SECONDS + 1
         self.assertIsNone(s.refusal("flat-model"))
 
+    def test_the_daily_cap_refuses_persists_and_resets_at_midnight_utc(self):
+        store, clock = jo.MemoryStore(), Clock()
+        env = {"JEV_OPENAI_DAILY_CAP_USD": "1"}
+        first = spend(clock, env=env, store=store)
+        self.assertIsNone(first.refusal("flat-model"))
+        first.record("k", "flat-model", "answered", 1, jo.Usage(0, 0, 1_000_000))
+        self.assertEqual(first.refusal("flat-model").code, "daily_cap")
+        # A new Spend on the same store still sees the day's spend.
+        again = spend(clock, env=env, store=store)
+        self.assertEqual(again.refusal("flat-model").code, "daily_cap")
+        # 00:00 UTC the next day lifts it.
+        clock.now = calendar.timegm((2026, 11, 16, 0, 0, 0))
+        self.assertIsNone(again.refusal("flat-model"))
+
     def test_the_month_rolls_over_and_the_cap_lifts(self):
         clock = Clock()
         s = spend(clock)
