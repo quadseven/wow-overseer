@@ -85,6 +85,31 @@ class AuctionRoute(unittest.TestCase):
         self.assertEqual((route, spot), ("", {}))
 
 
+class VendorWaitChangesRoute(unittest.TestCase):
+    """A vendor wait that cannot end moves to another route (#1261).
+
+    A family whose members hold nothing a vendor will buy waits on a vendor
+    counter for sales that never queue. The route changes to an auctioneer,
+    and when none is reachable the vendor aim stands with a reason said.
+    """
+
+    def test_a_vendor_that_will_buy_nothing_gives_way_to_an_auctioneer(self):
+        route, spot, line = te.auction_route(
+            WHY, {"Oz": 0, "Zug": 0, "Uzza": 0}, 12, [NEAR], HERE
+        )
+        self.assertEqual(route, te.ROUTE_AUCTION)
+        self.assertTrue(line)
+
+    def test_with_no_reachable_counter_the_reason_is_said(self):
+        route, spot, line = te.auction_route(WHY, {"Oz": 0}, 12, [OTHER_MAP], HERE)
+        self.assertEqual(route, "")
+        self.assertIn("no auctioneer is reachable", line)
+
+    def test_a_vendor_that_will_buy_enough_keeps_the_vendor_route(self):
+        route, _spot, _line = te.auction_route(WHY, {"Oz": 9}, 12, [NEAR], HERE)
+        self.assertEqual(route, "")
+
+
 class Steps(unittest.TestCase):
     def test_the_auction_step_comes_first_on_its_route(self):
         steps = te.steps_for(WHY, te.ROUTE_AUCTION)
