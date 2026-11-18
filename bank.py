@@ -1572,6 +1572,29 @@ def errand_step(
     return BANK_ERRAND_HOLD if at_counter else BANK_ERRAND_AIM
 
 
+def member_errand_steps(names, wanting, at_counter, outstanding) -> dict:
+    """{member: step} for a family whose members each walk to a banker (#2406).
+
+    Individual mode (individual.py): a member with bank work walks to a
+    banker itself, so each is judged on its own facts by `errand_step`: its
+    own arrival, its own unanswered rows, and whether it has a move this pass
+    has not asked for. The family split rule is left out, because nobody
+    waits for anybody here. `wanting` is the members with unasked work,
+    `at_counter` is name -> whether a banker is in reach, and `outstanding`
+    is name -> unanswered bank rows (negative for an unread queue, which
+    holds). A member missing from either map reads as away with nothing owed.
+    """
+    wants = set(wanting or ())
+    return {
+        str(name): errand_step(
+            bool((at_counter or {}).get(name)),
+            int((outstanding or {}).get(name, 0)),
+            name in wants,
+        )
+        for name in names or ()
+    }
+
+
 def lines(moves):
     """One log line per move, for a person reading the pass afterwards.
 
