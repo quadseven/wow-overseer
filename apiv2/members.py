@@ -1064,7 +1064,9 @@ def roster(_query: dict, ctx) -> tuple[int, dict]:
 
 
 def stuck(_query: dict, ctx) -> tuple[int, dict]:
-    """GET /api/v2/stuck: the stuck members only, longest stuck first, and their digest."""
+    """GET /api/v2/stuck: the stuck members only, longest first, and their
+    digest; measured over-bound rows may also include persisted kind, last
+    refusal, first-seen time and last report time."""
     return 200, stuck_view(_roster_payload(ctx), _stuck_notes(ctx))
 
 
