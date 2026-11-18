@@ -46,7 +46,8 @@ COMMAND_SQL = (
 )
 COMMAND_SOURCE = "eph-judge"
 COMMAND_KINDS = tuple(k for k in gamedata.COMMAND_KINDS if k != "gm")
-_SAFE_COMMAND_TEXT = re.compile(r"^[A-Za-z0-9 _.,:\-]{1,250}$")
+# The semicolon is the playerbots `go x;y` separator; the row is bound as a parameter, never spliced.
+_SAFE_COMMAND_TEXT = re.compile(r"^[A-Za-z0-9 _.,:;\-]{1,250}$")
 
 
 class GuardError(SeedError):
