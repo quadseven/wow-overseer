@@ -329,6 +329,24 @@ class TheSubmodulePin(unittest.TestCase):
         self.assertNotIn("x-access-token", reason)
         self.assertIn("https://***@github.com/o/r.git/", reason)
 
+    def test_redact_leaves_text_without_url_credentials_unchanged(self):
+        """The redaction only touches the userinfo of a scheme URL: plain
+        words, a bare pipe, an address with no scheme and a URL with no
+        credentials come back exactly as they went in."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("pin_check", PIN_CHECK)
+        pin_check = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pin_check)
+        for text in (
+            "fatal: could not read from remote repository",
+            "a | b and x@y are not markup",
+            "git@github.com:o/r.git: Permission denied",
+            "fatal: unable to access 'https://github.com/o/r.git/': timeout",
+            "",
+        ):
+            self.assertEqual(text, pin_check._redact(text))
+
     def test_a_failed_fetch_still_fails_in_github_actions(self):
         with tempfile.TemporaryDirectory() as temporary:
             checkout = self._checkout_with_broken_origin(pathlib.Path(temporary))
