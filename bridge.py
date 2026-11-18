@@ -28413,9 +28413,18 @@ class Bridge(discord.Client):
             self._farm_state.pop(key or "", None)
             return None
         if len(set(standing.values())) > 1:
-            log.info("farm: %s is split across jobs %s, so no farm walk is taken "
-                     "until every member holds the same order", who,
-                     ", ".join(sorted(set(standing.values()))))
+            held_by = ""
+            if not solo:
+                looped_by = globals().get("_prof_loop_family")
+                loop_key = (await asyncio.to_thread(looped_by, key)
+                            if looped_by is not None else "")
+                phase = (_PROF_LOOPS.get(loop_key, profloop.State()).phase
+                         if loop_key else "")
+                fam = await asyncio.to_thread(_individual_family, cohort)
+                if phase != profloop.GATHER and individual.active(standing, fam):
+                    held_by = phase
+            log.info("%s", individual.split_line(
+                who, sorted(set(standing.values())), held_by))
             return None
         state = self._farm_state.get(key or "")
         if state is not None and state.get("job") == farming[0] and state.get("ended"):
