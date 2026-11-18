@@ -175,7 +175,9 @@ function draw(keepPlace) {
     drawShell();
     return;
   }
-  main.innerHTML = body;
+  // A view may swap its own body in, to keep what a plain swap would take out
+  // of the document: Now keeps the wall's playing pictures (keepslots.js).
+  if (!(module.swap && module.swap(main, body))) main.innerHTML = body;
   if (hadSkeleton && !main.querySelector(".skeleton")) easeIn();
   if (module.after) module.after(main, ctx);
   placeStrips(main, strips);
