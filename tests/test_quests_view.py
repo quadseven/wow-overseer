@@ -452,6 +452,34 @@ class TheQuestsView(unittest.TestCase):
         self.assertIn("This quest was not found", got)
         self.assertIn("no such quest", got)
 
+    def test_delivering_daffodils_explains_the_recorded_eligibility_refusal(self):
+        # questers.BROKEN_SQL inserts a NULL first_taken for a refused take.
+        # The reason joins the take failure with the module's QuestErrandRefusal.
+        reason = (
+            "the quest giver would not give it: not eligible "
+            "(level, race, class, prerequisite or exclusive group)"
+        )
+        refusal = dict(
+            attempt("Bromli", ql.BROKEN, reason), quest=131, first_taken=None
+        )
+        payload = v2quests.build_quest(
+            catalogue_quest(131, "Delivering Daffodils", qc.ALLIANCE, 44, 15),
+            [refusal],
+        )
+        html = run(
+            "views/quests.js",
+            "const c = ctx({id: '131'}, {}, {'/api/v2/quests/131': %s});\n"
+            "console.log(JSON.stringify(V.render(c).s));" % json.dumps(payload),
+            "#/quests/131",
+        )
+        self.assertIn(reason, html)
+        self.assertIn(
+            "The worldserver refused this attempt before adding the quest", html
+        )
+        self.assertIn(
+            "The ledger does not identify which eligibility check failed", html
+        )
+
     def test_the_controls_narrow_the_list_and_bind_once_after_a_redraw(self):
         # The view's handlers look up their elements on `main`, not on the
         # global document, so this `main` answers with stand-in elements. A

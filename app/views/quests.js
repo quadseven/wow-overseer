@@ -251,10 +251,17 @@ ${select("qs-faction", "Faction", f.faction, SIDES)}${select("qs-zone", "Zone", 
 
 // ---- one quest ------------------------------------------------------------------------
 
-function attempt(a) {
+// This is the combined refusal saved by the quester for a failed take (#1869).
+const DAFFODILS_ELIGIBILITY_REFUSAL = "the quest giver would not give it: not eligible (level, race, class, prerequisite or exclusive group)";
+
+function attempt(a, questId) {
   const when = a.finished ? "finished " + since(a.finished) : a.first_taken ? "taken " + since(a.first_taken) : "";
+  const explainRefusal = questId === 131 && a.state === "broken" && a.reason === DAFFODILS_ELIGIBILITY_REFUSAL;
+  const reason = explainRefusal
+    ? `${a.reason}. The worldserver refused this attempt before adding the quest to the log. The ledger does not identify which eligibility check failed.`
+    : a.reason;
   return html`<li class="card qs-attempt"><span class="row qs-between"><span>${a.character ? html`<a class="mname" href="${memberHref(a.character, "quests")}">${a.character}</a>` : notMeasured("quester not measured")}${a.guild ? html` <span class="dim qs-s">${a.guild}</span>` : ""}</span>${statusTag(a.state)}</span>
-${when ? html`<span class="dim qs-s">${when}</span>` : ""}${a.reason ? html`<p class="qs-reason">${a.reason}</p>` : a.state === "broken" ? html`<p class="qs-reason">${notMeasured("no reason recorded")}</p>` : ""}</li>`;
+${when ? html`<span class="dim qs-s">${when}</span>` : ""}${reason ? html`<p class="qs-reason">${reason}</p>` : a.state === "broken" ? html`<p class="qs-reason">${notMeasured("no reason recorded")}</p>` : ""}</li>`;
 }
 
 // A ticket renders only as an object with an https url: the link comes from a
@@ -278,7 +285,7 @@ function questPage(ctx) {
   const x = read.data.quest || {};
   const list = read.data.attempts || [];
   const line = html`${statusTag(x.status)} <span class="dim">L${levelText(x)} | ${zoneOf(x) || "zone not measured"} | ${x.faction ? sideName(x.faction) : "faction not measured"}</span>${ticketLink(x.ticket)}`;
-  return html`${back}${pageHead(x.title || "Quest " + ctx.params.id, line)}${sectionHead("", "Attempts", plural(list.length, "attempt"))}${list.length ? html`<ol class="qs-attempts">${list.map(attempt)}</ol>` : state("empty", "No attempts yet", "No quester has tried this quest.")}`;
+  return html`${back}${pageHead(x.title || "Quest " + ctx.params.id, line)}${sectionHead("", "Attempts", plural(list.length, "attempt"))}${list.length ? html`<ol class="qs-attempts">${list.map((a) => attempt(a, x.id))}</ol>` : state("empty", "No attempts yet", "No quester has tried this quest.")}`;
 }
 
 // ---- the page ---------------------------------------------------------------------------
