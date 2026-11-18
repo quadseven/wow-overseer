@@ -2220,6 +2220,18 @@ def _fetch_watch_spots() -> list | None:
         return None
 
 
+def _spectate_card(row: dict | None) -> dict:
+    """The /api/spectate state for `row`. When the director's note says it is
+    following, the Watcher's live spot is read from overseer_snapshot to confirm
+    it: spectate_state with no spots always downgrades an arrival, so the spots
+    must be passed in the one call that decides, not fetched after it."""
+    note = str((row or {}).get("note") or "")
+    target = str((row or {}).get("target") or "")
+    if director.mandate_active(row) and director.note_state(note, target) == "arrived":
+        return director.spectate_state(row, _fetch_watch_spots())
+    return director.spectate_state(row)
+
+
 def _read_watch_order() -> dict | None:
     """The Watcher's one order row, or None. A missing `overseer_watch`
     (1146) is None too: the bridge creates it at start-up, never the site."""
@@ -7356,11 +7368,7 @@ class Handler(BaseHTTPRequestHandler):
         different group may take it, and `stream` the observer's broadcast
         address, which is empty until the observer character is in the world.
         """
-        row = _read_watch_order()
-        state = director.spectate_state(row)
-        if state["arrived"]:
-            # The note says follow; only the Watcher's live spot can say it is there.
-            state = director.spectate_state(row, _fetch_watch_spots())
+        state = _spectate_card(_read_watch_order())
         state["watcher"] = director.WATCHER_NAME
         state["stream"] = family.broadcast_url(director.WATCHER_NAME) or ""
         return 200, state
