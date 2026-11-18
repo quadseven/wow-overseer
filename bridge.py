@@ -31,7 +31,10 @@ import urllib.request
 
 import discord
 import pymysql
+from apiv2 import activity as v2_activity
+from apiv2 import members as v2_members
 from apiv2 import presence as v2_presence
+from apiv2 import ragnaros as v2_ragnaros
 
 import achievements
 import armory
@@ -121,6 +124,7 @@ import guildranks
 import guildrun
 import familyclass
 import familyseat
+import roadtoragnaros
 import guildpug
 import seatmeter
 import guildsocial
@@ -3421,6 +3425,79 @@ def _memo_delete(kind: str, subject: str) -> None:
         log.exception("bridge memo: could not delete %s memo for %s", kind, subject)
 
 
+STUCK_NOTE_MEMO_SECONDS = 30 * 24 * 3600
+READINESS_REPORT_MEMO_KIND = "mc_readiness_report"
+READINESS_REPORT_MEMO_SECONDS = 2 * 24 * 3600
+STUCK_REPORT_CYCLE_SECONDS = 5 * 60.0
+
+
+def _stuck_reporting_once(now=None) -> None:
+    """Log over-bound holds and the daily guild readiness from their API builders."""
+    now = time.time() if now is None else float(now)
+    readiness_memos = _memo_read(READINESS_REPORT_MEMO_KIND)
+    import map_server
+
+    with realmread.Session(_connect) as rd:
+        ctx = map_server._v2_context(rd)
+        _, stuck = v2_members.stuck({}, ctx)
+        over_bound = v2_members.over_bound_rows(
+            stuck.get("members"), stuck.get("checked_at")
+        )
+        note_memos = {
+            row["name"]: (row["note"], 0.0)
+            for row in stuck.get("members") or ()
+            if row.get("note")
+        }
+        refusals = {}
+        for row in over_bound:
+            name = row["name"]
+            found = rd.rows(
+                v2_activity.LATEST_REFUSAL_SQL,
+                (name,),
+                what="overseer_command",
+            )
+            refusals[name] = v2_activity.latest_refusal_reason(found)
+
+        notes, lines = v2_members.stuck_watch_updates(
+            stuck.get("members"),
+            stuck.get("checked_at"),
+            refusals,
+            note_memos,
+            now,
+        )
+        for name, note in notes.items():
+            _memo_upsert(
+                v2_members.STUCK_NOTE_MEMO_KIND,
+                name,
+                note,
+                now,
+                now + STUCK_NOTE_MEMO_SECONDS,
+            )
+        for line in lines:
+            log.warning("%s", line)
+
+        for guild in raidteams.GROUPS:
+            saved = readiness_memos.get(guild, ({}, 0.0))[0]
+            if not roadtoragnaros.readiness_line_due(saved, now):
+                continue
+            try:
+                report = v2_ragnaros.build(ctx, guild)
+            except Exception:
+                log.exception(
+                    "Molten Core readiness: guild %s read failed; retrying next pass",
+                    guild,
+                )
+                continue
+            log.info("%s", roadtoragnaros.readiness_line(guild, report))
+            _memo_upsert(
+                READINESS_REPORT_MEMO_KIND,
+                guild,
+                {"day": int(now // 86400)},
+                now,
+                now + READINESS_REPORT_MEMO_SECONDS,
+            )
+
+
 # The owed clock restarts only when the member's mark changes, so a member can
 # owe with no progress for far longer than OWED_HOURS. A short memo expiry would
 # drop that member's clock and the next restart would hold it all over again;
@@ -6245,11 +6322,11 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
 
     The states are the module's member-state words (MemberStateWord):
     "dead", and the holds with no errand of the member's own choosing at
-    the end of them. The safety holds ("held off a walk that kept killing
-    it", "held where it stands, too far to walk back") are not judged:
-    they name their reason, and the module's fetch and regroup intents are
-    their recovery while a run is merely slow. In a wedge they end with
-    the run like everything else; they do not trigger it.
+    the end of them. A member held too far to walk back is included too:
+    unlike a member held off a walk that kept killing it, the module has
+    already refused both walking and flight for this catch-up. If that state
+    persists for the party-hold bound, another identical catch-up is not a
+    recovery.
     """
     now = time.monotonic()
     seen = {}
@@ -6259,6 +6336,7 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
         if member.state == "dead" or member.state in (
             "on an errand of its own",
             "held still",
+            dungeonstall.CATCH_UP_UNREACHABLE_STATE,
         ):
             seen[(leader, member.name, member.state)] = member
     for key in [k for k in _DOOR_HOLD_SINCE if k[0] == leader and k not in seen]:
@@ -8915,6 +8993,7 @@ PASSES = (
     _Pass("_family_intent_loop"),
     _Pass("_now_loop"),
     _Pass("_watch_loop"),
+    _Pass("_stuck_reporting_loop"),
     _Pass("_quest_ledger_loop"),
     _Pass("_quest_tickets_loop"),
     _Pass("_corps_tickets_loop"),
@@ -20987,6 +21066,10 @@ class Bridge(discord.Client):
         # The death loop's reasons are never capped (#2152): every listed
         # member that got no escape step is named, whatever else the pass says.
         _log_loop_lines(plan.loop_lines)
+        # A member left in the starting lands with no level step is named with
+        # its reason (#2400): uncapped, said when the line is new or changed.
+        _log_changed("guild jobs", plan.isle_lines,
+                     ("isle", _cohort_key(cohort)), capped=False)
         # A class quest that yields to levelling is named every pass, uncapped.
         for line in plan.yields:
             log.info("guild jobs: %s", line)
@@ -23764,7 +23847,7 @@ class Bridge(discord.Client):
         if step == townerrand.MAIL:
             await self._town_errand_aim(leader, _hub_aim(state.hub), cohort)
             return await self._town_errand_mail(state.hub, names, positions,
-                                                cohort)
+                                                cohort, marks)
         if step in (townerrand.EQUIP, townerrand.HANDDOWN):
             await self._town_errand_aim(leader, _hub_aim(state.hub), cohort)
             if step not in marks:
@@ -23882,11 +23965,22 @@ class Bridge(discord.Client):
         marks[step] = now
         return sent == 0
 
-    async def _town_errand_mail(self, hub, names, positions, cohort) -> bool:
+    async def _town_errand_mail(self, hub, names, positions, cohort,
+                                marks=None) -> bool:
         """Take mail for members at the hub; defer absent members to a later
-        mailbox visit so their inaccessible mail cannot hold this errand."""
-        letters = mailrun.letters_from_rows(
-            await asyncio.to_thread(_fetch_mail, names), names)
+        mailbox visit so their inaccessible mail cannot hold this errand.
+
+        A letter its holder's mailbox has not loaded (#2402) is not planned,
+        so it cannot hold the step either; it is named once per errand
+        (`marks` is this step's own, dropped when the step changes).
+        """
+        marks = {} if marks is None else marks
+        rows, unloaded = await asyncio.to_thread(_fetch_mail_split, names)
+        letters = mailrun.letters_from_rows(rows, names)
+        if unloaded and not marks.get("unloaded_said"):
+            marks["unloaded_said"] = True
+            log.info("town errand mail: %s%s", mailrun.errand_note(unloaded),
+                     _family_label(cohort))
         seen = await asyncio.to_thread(_recent_mail_keys, GIVE_RETRY_MINUTES)
         here = {name for name in names if townerrand.in_range(
             hub, positions.get(name), TOWN_COUNTER_YARDS)}
@@ -29285,6 +29379,17 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("stray followers: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
+
+    async def _stuck_reporting_loop(self) -> None:
+        """Keep the over-bound notes and daily raid readiness visible."""
+        await self.wait_until_ready()
+        await asyncio.sleep(min(STUCK_REPORT_CYCLE_SECONDS, 60.0))
+        while not self.is_closed():
+            try:
+                await asyncio.to_thread(_stuck_reporting_once)
+            except Exception:
+                log.exception("stuck reporting: pass failed; retrying next cycle")
+            await asyncio.sleep(STUCK_REPORT_CYCLE_SECONDS)
 
     async def _watch_loop(self) -> None:
         """Keep the Watcher beside whoever the operator's order names."""
@@ -42281,8 +42386,18 @@ def _fetch_mail(names: list) -> list:
     image without the mail schema has nothing to collect, and taking the loop
     down over it would hide every other pass's log behind a traceback.
     """
+    return _fetch_mail_split(names)[0]
+
+
+def _fetch_mail_split(names: list) -> tuple:
+    """`_fetch_mail`'s rows, and the letters it left out of them.
+
+    The second is the (holder, mail id) of each letter still in a mailbox
+    that its holder has not loaded (mailrun.unloaded_held): one read, so the
+    town errand can name what it leaves behind without asking twice.
+    """
     if not names:
-        return []
+        return [], frozenset()
     marks = ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
         try:
@@ -42290,7 +42405,7 @@ def _fetch_mail(names: list) -> list:
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("mail: this world image has no mail tables to read")
-                return []
+                return [], frozenset()
             raise
         rows = [dict(row) for row in cur.fetchall()]
         # A LETTER THE MAILBOX HAS NOT LOADED IS NOT WAITING (#2402): every
@@ -42300,7 +42415,8 @@ def _fetch_mail(names: list) -> list:
         unloaded = _unloaded_mail(cur, names, marks) if rows else frozenset()
     _log_changed("mail", [mailrun.unloaded_note(unloaded)] if unloaded else [],
                  key=("unloaded",) + tuple(sorted(names)), capped=False)
-    return mailrun.loaded_rows(rows, unloaded)
+    return (mailrun.loaded_rows(rows, unloaded),
+            mailrun.unloaded_held(rows, unloaded))
 
 
 _UNLOADED_MAIL_SQL = (

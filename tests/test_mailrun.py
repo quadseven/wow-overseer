@@ -683,3 +683,21 @@ class ALetterTheMailboxHasNotLoaded(unittest.TestCase):
             "for its next login: Uzza mail 900004, Zork mail 900008",
         )
         self.assertEqual(mailrun.unloaded_note(frozenset()), "")
+
+    def test_only_a_letter_still_in_a_mailbox_is_held(self):
+        """A refusal is read 30 days back, so it can outlive its letter."""
+        rows = [
+            {"holder": "Uzza", "mail_id": 900004},
+            {"holder": "Uzza", "mail_id": 12},
+        ]
+        unloaded = frozenset({("Uzza", 900004), ("Zork", 900008)})
+        self.assertEqual(
+            mailrun.unloaded_held(rows, unloaded), frozenset({("Uzza", 900004)})
+        )
+        self.assertEqual(mailrun.unloaded_held([], unloaded), frozenset())
+
+    def test_the_errand_line_names_each_letter_and_says_it_does_not_wait(self):
+        line = mailrun.errand_note(frozenset({("Zork", 900008), ("Uzza", 900004)}))
+        self.assertIn("Uzza mail 900004, Zork mail 900008", line)
+        self.assertIn("the mail step does not wait for them", line)
+        self.assertEqual(mailrun.errand_note(frozenset()), "")

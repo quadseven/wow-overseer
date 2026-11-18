@@ -608,6 +608,61 @@ class TheSuppressionLog(unittest.TestCase):
             scan(FakeStore(), Realm(loot=[loot_row()]))
 
 
+class TheLiveViewRule(unittest.TestCase):
+    """The scan passes over a streamed view the cutter's clocks call down."""
+
+    OPEN_RUN = {
+        "id": 1,
+        "leader_name": "Alder",
+        "map_id": 33,
+        "state": "active",
+        "started_at": NOW - timedelta(minutes=40),
+        "ended_at": None,
+    }
+
+    def scan_with(self, seen, segment):
+        row = dict(loot_row(), character_name="Birch", map=33)
+        store = FakeStore()
+        realm = Realm(loot=[row], open_runs=[self.OPEN_RUN])
+        with (
+            mock.patch.object(map_server, "_VIEW_SEEN", seen),
+            mock.patch.object(map_server, "_VIEW_SEGMENT", segment),
+        ):
+            scan(store, realm, roster=("Alder", "Birch"))
+        (write,) = store.writes()
+        return write[1]
+
+    def test_a_stale_subject_view_gives_way_to_the_live_leader_view(self):
+        now = map_server.time.time()
+        # Both recorders were polled a moment ago; the subject's newest
+        # segment is minutes old (a stale, flat picture), the leader's fresh.
+        params = self.scan_with(
+            {"wdBirch": now, "wdAlder": now},
+            {"wdBirch": now - 600, "wdAlder": now - 4},
+        )
+        self.assertIn("wdAlder", params)
+        self.assertNotIn("wdBirch", params)
+        self.assertIn("pending", params)
+        self.assertIn("view: Alder (leader)", params[-1])
+
+    def test_a_live_subject_view_is_kept(self):
+        now = map_server.time.time()
+        params = self.scan_with(
+            {"wdBirch": now, "wdAlder": now},
+            {"wdBirch": now - 4, "wdAlder": now - 4},
+        )
+        self.assertIn("wdBirch", params)
+        self.assertNotIn("view:", params[-1])
+
+    def test_with_empty_clocks_the_subject_view_is_still_asked(self):
+        params = self.scan_with({}, {})
+        self.assertIn("wdBirch", params)
+        self.assertIn("pending", params)
+
+    def test_the_loot_story_read_carries_the_detail_that_names_the_view(self):
+        self.assertIn(" detail ", map_server._LOOT_CLIPS_SQL)
+
+
 class TheSql(unittest.TestCase):
     def test_the_loot_interval_is_a_bound_parameter_not_formatted_in(self):
         self.assertIn("INTERVAL %s MINUTE", map_server._CLIP_LOOT_SQL)

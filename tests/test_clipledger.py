@@ -827,5 +827,157 @@ class SuppressionLineTests(unittest.TestCase):
         self.assertIn("leader Alder: not streamed (poll never, segment unknown)", line)
 
 
+def live(*names):
+    """A live_of that reads just the named characters' views as live."""
+    return lambda name, path: name in names
+
+
+class LiveViewFallbackTests(unittest.TestCase):
+    """A streamed view that is not live is passed over for a live one in the
+    same run, in tier order, and the row names the tier it used."""
+
+    def family_plan(self, live_of, extra=(), who="Cedar", path_of=None):
+        return plan(
+            loot_rows=[in_dungeon(loot(7, who=who))] + list(extra),
+            runs=[run()],
+            roster=FAMILY,
+            path_of=path_of or streamed,
+            live_of=live_of,
+        )
+
+    def test_a_subject_view_that_is_down_falls_to_the_live_leader_view(self):
+        (row,) = self.family_plan(live("Alder"))
+        self.assertEqual("pending", row["state"])
+        self.assertEqual("Cedar", row["character"])
+        self.assertEqual("wdalder", row["stream_path"])
+        self.assertIn("view: Alder (leader)", row["detail"])
+
+    def test_subject_and_leader_down_falls_to_a_live_party_member(self):
+        present = [seen_in("Dogwood", event_id=501), seen_in("Birch", event_id=502)]
+        (row,) = self.family_plan(live("Dogwood"), extra=present)
+        self.assertEqual("pending", row["state"])
+        self.assertEqual("wddogwood", row["stream_path"])
+        self.assertIn("view: Dogwood (party member)", row["detail"])
+
+    def test_a_live_subject_view_is_kept_ahead_of_a_live_leader_view(self):
+        (row,) = self.family_plan(live("Cedar", "Alder"))
+        self.assertEqual("wdcedar", row["stream_path"])
+        self.assertEqual("Test Blade", row["detail"])
+
+    def test_a_live_view_outside_the_run_is_not_borrowed(self):
+        # Birch is live but did nothing inside the run, so is not a tier.
+        (row,) = self.family_plan(live("Birch"))
+        self.assertEqual("wdcedar", row["stream_path"])
+        self.assertEqual("Test Blade", row["detail"])
+
+    def test_with_no_live_view_the_first_streamed_tier_is_still_asked(self):
+        # Nothing reads live (a restart empties the clocks): the row stays
+        # pending on the first streamed tier and the cutter has the last word.
+        (row,) = self.family_plan(live())
+        self.assertEqual("pending", row["state"])
+        self.assertEqual("wdcedar", row["stream_path"])
+        self.assertEqual("Test Blade", row["detail"])
+
+    def test_a_tier_that_is_not_streamed_is_never_asked_whether_it_is_live(self):
+        asked = []
+
+        def live_of(name, path):
+            asked.append((name, path))
+            return True
+
+        (row,) = self.family_plan(live_of, path_of=only("Alder"))
+        self.assertEqual([("Alder", "wdalder")], asked)
+        self.assertEqual("wdalder", row["stream_path"])
+
+    def test_a_clear_whose_leader_view_is_down_uses_a_live_party_member(self):
+        clear = {
+            "map_id": MAP,
+            "dungeon": "Test Mines",
+            "leader": "Alder",
+            "members": ["Alder", "Birch"],
+            "at": NOW - timedelta(minutes=3),
+        }
+        (row,) = plan(
+            cleared_runs=[clear],
+            roster=FAMILY,
+            path_of=streamed,
+            live_of=live("Birch"),
+        )
+        self.assertEqual("pending", row["state"])
+        self.assertEqual("Alder", row["character"])
+        self.assertEqual("wdbirch", row["stream_path"])
+        self.assertIn("view: Birch (party member)", row["detail"])
+        self.assertIn("Test Mines", row["detail"])
+
+
+class ViewLiveTests(unittest.TestCase):
+    """The liveness rule: the newest segment clock when the view has one, else
+    the cutter's last poll, inside VIEW_LIVE_SECONDS."""
+
+    def test_a_fresh_segment_is_live(self):
+        self.assertTrue(clipledger.view_live(1000.0, 996.0, 1000.0))
+
+    def test_a_stale_segment_is_not_live_however_fresh_the_poll(self):
+        self.assertFalse(clipledger.view_live(1000.0, 900.0, 1000.0))
+
+    def test_a_fresh_poll_with_no_segment_clock_is_live(self):
+        self.assertTrue(clipledger.view_live(990.0, None, 1000.0))
+
+    def test_a_stale_poll_is_not_live(self):
+        self.assertFalse(clipledger.view_live(900.0, None, 1000.0))
+
+    def test_a_view_the_cutter_never_named_is_not_live(self):
+        self.assertFalse(clipledger.view_live(None, None, 1000.0))
+
+    def test_the_bound_is_the_one_the_eye_calls_stale(self):
+        import eye
+
+        self.assertEqual(eye.STALE_AFTER_SECONDS, clipledger.VIEW_LIVE_SECONDS)
+        edge = 1000.0 - clipledger.VIEW_LIVE_SECONDS
+        self.assertTrue(clipledger.view_live(None, edge, 1000.0))
+        self.assertFalse(clipledger.view_live(None, edge - 1, 1000.0))
+
+
+class StoryViewNoteTests(unittest.TestCase):
+    """A saved clip filmed from another member's view says whose, and which
+    tier that member was."""
+
+    def ready(self, detail):
+        return {
+            "kind": "clear",
+            "character": "Alder",
+            "state": "ready",
+            "file_name": "clip-4-clear.mp4",
+            "detail": detail,
+        }
+
+    def test_a_clip_from_the_leaders_view_names_the_leader_tier(self):
+        clip = clipledger.link(self.ready("Test Blade; view: Birch (leader)"))["clip"]
+        self.assertEqual("/clips/clip-4-clear.mp4", clip["url"])
+        self.assertIn("Birch", clip["view_note"])
+        self.assertIn("leader", clip["view_note"])
+
+    def test_a_clip_from_a_party_members_view_names_that_tier(self):
+        clip = clipledger.link(
+            self.ready("Test Mines; view: Cedar (party member); cut ok")
+        )["clip"]
+        self.assertIn("Cedar", clip["view_note"])
+        self.assertIn("party member", clip["view_note"])
+
+    def test_a_clip_from_the_subjects_own_view_adds_nothing(self):
+        self.assertEqual(
+            {"clip": {"url": "/clips/clip-4-clear.mp4", "kind": "clear"}},
+            clipledger.link(self.ready("Test Mines")),
+        )
+        self.assertEqual(
+            {"clip": {"url": "/clips/clip-4-clear.mp4", "kind": "clear"}},
+            clipledger.link(self.ready(None)),
+        )
+
+    def test_a_cutter_note_that_only_mentions_a_view_is_not_the_tier(self):
+        clip = clipledger.link(self.ready("Test Mines; saw view: Birch (leader)"))
+        self.assertNotIn("view_note", clip["clip"])
+
+
 if __name__ == "__main__":
     unittest.main()
