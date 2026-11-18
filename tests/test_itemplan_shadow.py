@@ -111,7 +111,13 @@ class AdapterTest(unittest.TestCase):
         end = BRIDGE.index("    async def _clearance_plan(", start)
         executor = BRIDGE[start:end]
         self.assertIn("itemplan_shadow.auction_enabled()", executor)
-        self.assertIn("decision.route != itemplan.AUCTION", executor)
+        # The decisions are read by one helper shared with the errand's choice
+        # of counter (#1261), which the executor calls.
+        self.assertIn(
+            "_auction_candidates(report, by_key, row_by_key, extras)", executor
+        )
+        helper = BRIDGE[BRIDGE.index("def _auction_candidates(") :]
+        self.assertIn("decision.route != itemplan.AUCTION", helper[:2500])
         self.assertIn("auction.plan_sales", executor)
         self.assertIn("_auction_holder_houses", executor)
         self.assertIn("_insert_auction", executor)
