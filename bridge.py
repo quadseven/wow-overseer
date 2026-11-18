@@ -23735,7 +23735,7 @@ class Bridge(discord.Client):
         if step == townerrand.MAIL:
             await self._town_errand_aim(leader, _hub_aim(state.hub), cohort)
             return await self._town_errand_mail(state.hub, names, positions,
-                                                cohort)
+                                                cohort, marks)
         if step in (townerrand.EQUIP, townerrand.HANDDOWN):
             await self._town_errand_aim(leader, _hub_aim(state.hub), cohort)
             if step not in marks:
@@ -23853,11 +23853,22 @@ class Bridge(discord.Client):
         marks[step] = now
         return sent == 0
 
-    async def _town_errand_mail(self, hub, names, positions, cohort) -> bool:
+    async def _town_errand_mail(self, hub, names, positions, cohort,
+                                marks=None) -> bool:
         """Take mail for members at the hub; defer absent members to a later
-        mailbox visit so their inaccessible mail cannot hold this errand."""
-        letters = mailrun.letters_from_rows(
-            await asyncio.to_thread(_fetch_mail, names), names)
+        mailbox visit so their inaccessible mail cannot hold this errand.
+
+        A letter its holder's mailbox has not loaded (#2402) is not planned,
+        so it cannot hold the step either; it is named once per errand
+        (`marks` is this step's own, dropped when the step changes).
+        """
+        marks = {} if marks is None else marks
+        rows, unloaded = await asyncio.to_thread(_fetch_mail_split, names)
+        letters = mailrun.letters_from_rows(rows, names)
+        if unloaded and not marks.get("unloaded_said"):
+            marks["unloaded_said"] = True
+            log.info("town errand mail: %s%s", mailrun.errand_note(unloaded),
+                     _family_label(cohort))
         seen = await asyncio.to_thread(_recent_mail_keys, GIVE_RETRY_MINUTES)
         here = {name for name in names if townerrand.in_range(
             hub, positions.get(name), TOWN_COUNTER_YARDS)}
@@ -42252,8 +42263,18 @@ def _fetch_mail(names: list) -> list:
     image without the mail schema has nothing to collect, and taking the loop
     down over it would hide every other pass's log behind a traceback.
     """
+    return _fetch_mail_split(names)[0]
+
+
+def _fetch_mail_split(names: list) -> tuple:
+    """`_fetch_mail`'s rows, and the letters it left out of them.
+
+    The second is the (holder, mail id) of each letter still in a mailbox
+    that its holder has not loaded (mailrun.unloaded_held): one read, so the
+    town errand can name what it leaves behind without asking twice.
+    """
     if not names:
-        return []
+        return [], frozenset()
     marks = ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
         try:
@@ -42261,7 +42282,7 @@ def _fetch_mail(names: list) -> list:
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("mail: this world image has no mail tables to read")
-                return []
+                return [], frozenset()
             raise
         rows = [dict(row) for row in cur.fetchall()]
         # A LETTER THE MAILBOX HAS NOT LOADED IS NOT WAITING (#2402): every
@@ -42271,7 +42292,8 @@ def _fetch_mail(names: list) -> list:
         unloaded = _unloaded_mail(cur, names, marks) if rows else frozenset()
     _log_changed("mail", [mailrun.unloaded_note(unloaded)] if unloaded else [],
                  key=("unloaded",) + tuple(sorted(names)), capped=False)
-    return mailrun.loaded_rows(rows, unloaded)
+    return (mailrun.loaded_rows(rows, unloaded),
+            mailrun.unloaded_held(rows, unloaded))
 
 
 _UNLOADED_MAIL_SQL = (
