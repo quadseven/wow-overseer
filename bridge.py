@@ -10775,7 +10775,8 @@ class Bridge(discord.Client):
                     if who == name}
             chosen_by[name] = craft_rhythm.errand(
                 name, skills.get(name, {}), held, primaries.get(name),
-                bags_wanted, floor, known=known.get(name))
+                bags_wanted, floor, known=known.get(name),
+                dark_iron_enabled=fireplan.dark_iron_enabled())
         # THE REAGENTS ARE PLANNED BEFORE THE ERRAND IS CALLED FED (#774).
         # An errand with nothing in the bags casts nothing; the plan says
         # where each short reagent comes from, and the bank and guild bank
@@ -23885,8 +23886,8 @@ class Bridge(discord.Client):
         nearest spawn out of `acore_world.gameobject` and handing its surveyed
         position to `travel.ground_aim`, producing the `at:<map>:<x>,<y>,<z>`
         form `ResolveTravelTarget` answers with ground before it ever builds the
-        creature-only `_travelSpawns` index. This pass is that pass with
-        `gt.type = 8 AND gt.Data0 = 3`.
+        creature-only `_travelSpawns` index. This pass filters the same query
+        by the focus id required by the active smelt.
 
         AND SMELTING IS THE ONE CASE THAT NEEDS ONLY THE WALK. infra#3617's
         other half is the Blacksmith Hammer: every Anvil-gated recipe also needs
@@ -23947,11 +23948,16 @@ class Bridge(discord.Client):
             smelters = await self._town_stop_demand(cohort)
         if not smelters:
             return
+        focus_id = travel.FORGE_FOCUS_ID
+        if fireplan.SMELT_SPELL in smelters.values():
+            focus_id = craft.BLACK_FORGE_FOCUS_ID
+        smelters = {name: spell for name, spell in smelters.items()
+                    if craft.focus_for(spell) == focus_id}
         names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or await self._mid_run(names):
             return
         where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
-        spawn = await asyncio.to_thread(_nearest_forge, leader)
+        spawn = await asyncio.to_thread(_nearest_forge, leader, focus_id)
         if town_stop and spawn and not travel.station_in_town(spawn):
             log.info(
                 "forge: %s wait for a town stop with a Forge: the nearest is "
@@ -42491,8 +42497,8 @@ _FORGE_SQL = (
 )
 
 
-def _nearest_forge(name: str):
-    """The nearest usable Forge spawn row on `name`'s own map, or None.
+def _nearest_forge(name: str, focus_id: int = travel.FORGE_FOCUS_ID):
+    """The nearest usable focus spawn row on `name`'s own map, or None.
 
     A ROW OUT OF THE SPAWN TABLE, NOT A COORDINATE THIS PROCESS INVENTED - the
     identical guarantee `_nearest_vault` gives, against the identical tables.
@@ -42510,7 +42516,7 @@ def _nearest_forge(name: str):
             cur.execute(_FORGE_SQL, (
                 name,
                 travel.SPELL_FOCUS_GO_TYPE,
-                travel.FORGE_FOCUS_ID,
+                focus_id,
                 travel.ARRIVED_POSITION_YARDS,
             ))
         except pymysql.err.MySQLError as exc:
@@ -42634,7 +42640,7 @@ def _forge_errands(family: str | None = None) -> dict:
             raise
         return {row["name"]: int(row["craft_spell"] or 0)
                 for row in cur.fetchall()
-                if craft.focus_for(row["craft_spell"]) == travel.FORGE_FOCUS_ID}
+                if craft.focus_for(row["craft_spell"]) in craft.FOCUS_AIMS}
 
 
 def _town_stop_errands(family: str | None = None) -> dict:

@@ -166,24 +166,10 @@ class Recipe:
     a claim that lives only in free prose is a claim nothing checks, and
     infra#3738 was filed proposing to add exactly such a recipe on the
     strength of a spell id that turned out to name a different spell. So the
-    number moved into the dataclass, where
-    `test_no_recipe_requires_a_spell_focus` holds the WHOLE table to
-    `focus == 0` on every pull request.
-
-    The value is a `SpellFocusObject.dbc` id rather than a boolean, because
-    the eventual fix is per-object rather than a flag: 1 is Anvil, 2 is Loom,
-    3 is Forge (read out of the running worldserver's own
-    SpellFocusObject.dbc, see the SMELTING comment below).
-
-    THAT "UNTIL THEN" HAS ARRIVED FOR EXACTLY ONE OF THE THREE (infra#3748).
-    `bridge._forge_once` now walks the leader to the nearest spawned Forge
-    before a smelt is cast, so `focus = 3` is a value this system can honour
-    and the Mining entries below carry it. Anvil and Loom still have no walk,
-    so `focus = 1` or `focus = 2` remains exactly as refusable as every
-    non-zero value used to be - see `FOCUS_AIMS` directly below, which is the
-    machine-readable list of which focus ids something actually stands a
-    character at, and the test that holds this field to it. Zero still means
-    "castable anywhere", which is every entry but Mining's.
+    The value is a `SpellFocusObject.dbc` id rather than a boolean.
+    `FOCUS_AIMS` lists bridge routes for Forge (3) and Black Forge (543).
+    Other focus ids remain unsupported. Zero means the recipe can be cast
+    anywhere; Mining's smelts are the focus-gated exceptions.
 
     `tool` IS THE ITEM ENTRY OF A BAG TOOL THE CAST NEEDS (the module ticket),
     0 FOR NONE. The worn Blacksmithing recipes carry RequiresSpellFocus 1
@@ -224,12 +210,13 @@ class Recipe:
 # (tests/test_craft.py's SpellFocusTests). A focus id can only be added here by
 # the change that adds its walk, which is what stops this becoming a list of
 # intentions.
+BLACK_FORGE_FOCUS_ID = 543
+
 FOCUS_AIMS = {
-    # 3 = Forge. `bridge._forge_once` reads the nearest spawned forge on the
-    # smelter's own map out of `acore_world.gameobject` and writes its surveyed
-    # position to `travel_npc` as `travel.forge_aim`'s `at:<map>:<x>,<y>,<z>`,
-    # through the one sanctioned writer (`bridge._write_trade_errand`).
+    # 3 = Forge and 543 = Black Forge; `_forge_once` selects the requested
+    # focus before reading a nearby spawn and writing its surveyed position.
     3: "forge",
+    BLACK_FORGE_FOCUS_ID: "black-forge",
 }
 
 
@@ -1694,6 +1681,14 @@ RECIPES: dict = {
             "Blacksmithing recipes do not). AcquireMethod = 1: granted "
             "with Apprentice Mining, so no trainer visit is needed and "
             "no trainer_spell row exists for it",
+        ),
+        Recipe(
+            14891,
+            "Smelt Dark Iron",
+            230,
+            300,
+            "8x Dark Iron Ore (11370) -> 1x Dark Iron Bar (11371)",
+            focus=BLACK_FORGE_FOCUS_ID,
         ),
     ),
     # ALCHEMY 1-300 AGAINST THE REALM ITSELF (the operator, 2026-10-05). The

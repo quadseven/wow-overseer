@@ -331,7 +331,7 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         self.assertIn("craft.MODE", reader)
         self.assertIn("craft.focus_for(", reader)
 
-    def test_the_demand_read_asks_for_a_FORGE_and_not_for_any_focus(self):
+    def test_the_demand_read_only_accepts_a_focus_with_a_walk(self):
         """infra#3760 put a SECOND focus id into `craft.RECIPES`: the eleven
         Anvil-gated Engineering brackets now declare `focus=1`, because they
         always needed one and the old test could not see it. An anvil and a
@@ -344,7 +344,7 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         about."""
         reader = self.source[self.source.index("def _forge_errands(") :]
         reader = reader[: reader.index("def _current_travel_npc")]
-        self.assertIn("== travel.FORGE_FOCUS_ID", reader)
+        self.assertIn("in craft.FOCUS_AIMS", reader)
         # And the mapping the comparison relies on really does name the forge.
         self.assertEqual(craft.FOCUS_AIMS[travel.FORGE_FOCUS_ID], "forge")
         # Anvil-gated Engineering recipes exist in the table and must not match.
@@ -436,8 +436,11 @@ class TheFocusVocabularyCannotDriftFromTheWalk(unittest.TestCase):
     """`craft.FOCUS_AIMS` claims a walk exists for every id in it. These are
     what stop that being a claim."""
 
-    def test_the_forge_is_the_only_focus_anything_walks_to(self):
-        self.assertEqual(set(craft.FOCUS_AIMS), {travel.FORGE_FOCUS_ID})
+    def test_each_supported_focus_has_a_walk(self):
+        self.assertEqual(
+            set(craft.FOCUS_AIMS),
+            {travel.FORGE_FOCUS_ID, craft.BLACK_FORGE_FOCUS_ID},
+        )
 
     def test_the_named_pass_exists_and_uses_the_named_aim(self):
         source = BRIDGE.read_text(encoding="utf-8", errors="replace")

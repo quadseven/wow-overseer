@@ -30,6 +30,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import craft  # noqa: E402
 import fireplan  # noqa: E402
 import towntrip  # noqa: E402
 
@@ -596,6 +597,34 @@ class BridgeGuardTests(unittest.TestCase):
             _connect=lambda: _Conn(_Cursor(rows=[{"name": "A", "quest": 7722}])),
         )
         self.assertEqual(ns["_fetch_quest_rewarded"](["A"], [7722]), {("A", 7722)})
+
+
+class BlackForgeLookupTests(unittest.TestCase):
+    def test_lookup_uses_the_focus_required_by_the_dark_iron_recipe(self):
+        self.assertEqual(
+            craft.FOCUS_AIMS[craft.focus_for(fireplan.SMELT_SPELL)], "black-forge"
+        )
+        calls = []
+        cursor = _Cursor()
+        cursor.execute = lambda query, params: calls.append((query, params))
+        cursor.fetchone = lambda: None
+        ns = _exec(
+            [_module_fn("_nearest_forge")],
+            _FORGE_SQL="forge-query",
+            _connect=lambda: _Conn(cursor),
+            travel=types.SimpleNamespace(
+                SPELL_FOCUS_GO_TYPE=8,
+                FORGE_FOCUS_ID=3,
+                ARRIVED_POSITION_YARDS=5,
+            ),
+        )
+        ns["_nearest_forge"]("Smith", craft.focus_for(fireplan.SMELT_SPELL))
+        self.assertEqual(calls[0][1], ("Smith", 8, 543, 5))
+        source = BRIDGE.read_text(encoding="utf-8", errors="replace")
+        start = source.index("async def _forge_once(self")
+        body = source[start : source.index("async def _forge_loop(self)")]
+        self.assertIn("fireplan.SMELT_SPELL in smelters.values()", body)
+        self.assertIn("_nearest_forge, leader, focus_id", body)
 
 
 async def _to_thread(fn, *a, **k):
