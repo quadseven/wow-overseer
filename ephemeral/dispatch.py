@@ -440,7 +440,9 @@ class Dispatcher:
                     continue
                 if waiting is not None:
                     waiting = None
-                    self.log(f"standby over: this dispatcher now holds the lease as {self.holder}")
+                    self.log(
+                        f"standby over: this dispatcher now holds the lease as {self.holder}"
+                    )
                 if self.on_tick:
                     self.on_tick()
                 if once:

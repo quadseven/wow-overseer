@@ -52,7 +52,9 @@ class CliTest(unittest.TestCase):
             mock.patch("ephemeral.dispatchlock.release"),
             mock.patch("signal.signal") as sig,
         ):
-            code, _ = self.run_cli("dispatch", "--standby", "--owner", "x", "--interval", "7")
+            code, _ = self.run_cli(
+                "dispatch", "--standby", "--owner", "x", "--interval", "7"
+            )
         self.assertEqual(code, 0)
         self.assertEqual(seen, {"interval": 7, "once": False, "standby": True})
         sig.assert_called_once_with(signal.SIGTERM, cli._stop_signal)

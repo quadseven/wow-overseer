@@ -340,7 +340,9 @@ class StandbyTest(Base):
         d.holder = holder
         return d
 
-    def test_a_standby_dispatcher_waits_for_a_live_lease_then_takes_over_by_itself(self):
+    def test_a_standby_dispatcher_waits_for_a_live_lease_then_takes_over_by_itself(
+        self,
+    ):
         a = self.dispatcher("one", lambda: self.now)
         a.tick()
         clock = {"t": self.now + 10}
@@ -376,7 +378,9 @@ class StandbyTest(Base):
     def test_a_standby_never_starts_a_world_while_it_waits(self):
         self.add("aaaaaa-c1", "control")
         self.dispatcher("one", lambda: self.now).tick()
-        self.c.objs[("jobs", "wow-ephemeral", "eph-aaaaaa-c1")]["spec"]["suspend"] = True
+        self.c.objs[("jobs", "wow-ephemeral", "eph-aaaaaa-c1")]["spec"]["suspend"] = (
+            True
+        )
         b = self.dispatcher("two", lambda: self.now + 10)
         calls = []
 
@@ -388,7 +392,9 @@ class StandbyTest(Base):
         b.run(sleep=sleep, standby=True)
         self.assertTrue(self.suspended("aaaaaa-c1"))
 
-    def test_the_lease_is_released_when_the_loop_ends_so_a_successor_need_not_wait(self):
+    def test_the_lease_is_released_when_the_loop_ends_so_a_successor_need_not_wait(
+        self,
+    ):
         a = self.dispatcher("one", lambda: self.now)
         self.assertEqual(a.run(once=True, sleep=lambda s: None), 0)
         self.assertEqual(self.c.objs[self.LEASE]["spec"]["holderIdentity"], "")
