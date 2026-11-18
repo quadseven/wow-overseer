@@ -84,6 +84,35 @@ LATER_WAIT_SECONDS = 20.0
 DEAD_WAIT_SECONDS = 60.0
 
 
+# Refusals in a row, the same words each time with no use done between, after
+# which the use is a defect and not a wait (#678): three steps of
+# MAX_ATTEMPTS asks each.
+STREAK_LIMIT = 9
+
+
+class RefusalStreaks:
+    """Per (member, quest): how many times in a row the module refused the use
+    with the same reason, and the reason last given."""
+
+    def __init__(self):
+        self._by: dict = {}
+
+    def refused(self, name, quest, reason) -> bool:
+        """Record one refusal; True when the same reason has now stood
+        STREAK_LIMIT times running."""
+        key = (name, int(quest))
+        last, count = self._by.get(key, ("", 0))
+        count = count + 1 if last == reason else 1
+        self._by[key] = (reason, count)
+        return count >= STREAK_LIMIT
+
+    def done(self, name, quest) -> None:
+        self._by.pop((name, int(quest)), None)
+
+    def last_reason(self, name, quest) -> str:
+        return self._by.get((name, int(quest)), ("", 0))[0]
+
+
 @dataclass(frozen=True)
 class UseAnswer:
     """One reading of a use row: `state`, the sentence for the log, whether to

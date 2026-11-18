@@ -622,6 +622,14 @@ def loop_blocker(loop, now_at: int) -> dict | None:
 def _stuck_entry(member: dict, run: list, now_at: int, loop=None) -> dict | None:
     found = loop_blocker(loop, now_at)
     if found is not None:
+        # A class quest run beside deaths is the cause and the deaths the
+        # symptom (a death knight refused its Runeforge cast for 24 hours and
+        # read as a death loop): name the quest, keep the deaths in its words.
+        cause = ask_blocker(run, now_at)
+        if cause is not None and not loop.run:
+            cause["blocker"] += " Deaths meanwhile: " + found["blocker"]
+            cause["since"] = min(cause["since"] or found["since"], found["since"] or 0) or cause["since"]
+            return cause
         return found
     if member["life"] in ("dead", "ghost"):
         return None

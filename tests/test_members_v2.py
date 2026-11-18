@@ -159,6 +159,32 @@ def ask(
     }
 
 
+class ARepeatedRefusalOutranksADeathLoop(unittest.TestCase):
+    """Saevor read as a death loop for 24 hours while every Runeforge cast was
+    refused: the deaths were a symptom, so the class quest is the cause."""
+
+    def test_a_class_quest_run_beside_a_loop_names_the_class_quest(self):
+        loop = types.SimpleNamespace(
+            run=0,
+            place="Plaguelands: The Scarlet Enclave",
+            first_age=3600,
+            blocker=lambda: "Died 14 times in a day.",
+        )
+        run = [ask(NOW - 3 * 3600), ask(NOW - 600, state="open")]
+        member = {"life": "alive", "doing": "", "waiting": ""}
+        found = members._stuck_entry(member, run, NOW, loop)
+        self.assertEqual(found["kind"], "class quest")
+        self.assertIn("Died 14 times in a day.", found["blocker"])
+
+    def test_a_loop_with_no_class_quest_run_stays_a_death_loop(self):
+        loop = types.SimpleNamespace(
+            run=0, place="Silithus", first_age=3600, blocker=lambda: "Died 14 times."
+        )
+        member = {"life": "alive", "doing": "", "waiting": ""}
+        found = members._stuck_entry(member, [], NOW, loop)
+        self.assertEqual(found["kind"], "death-loop")
+
+
 class StuckIsTheBridgesOwnRecord(unittest.TestCase):
     def test_a_live_run_of_asks_is_stuck_since_its_first_ask(self):
         run = [ask(NOW - 3 * 3600), ask(NOW - 2 * 3600), ask(NOW - 600, state="open")]

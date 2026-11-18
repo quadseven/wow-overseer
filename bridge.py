@@ -9174,6 +9174,7 @@ class Bridge(discord.Client):
         # Each member's class quest hunt clock (classquest.Hunts) and the
         # class quests it asks guild chat for help with (classask.py).
         self._class_hunts = classquest.Hunts()
+        self._class_use_streaks = classuse.RefusalStreaks()
         self._class_helps: tuple = ()
         # cohort key -> its last job pass's helps and class quest holds, which
         # _keep_class_plan folds into _class_helps and _classquest_held.
@@ -21815,6 +21816,7 @@ class Bridge(discord.Client):
             if verdict.state in classuse.DONE:
                 # A done use restarts the class hunt's stall clock (#1140): the
                 # counter moves only when what it summoned dies.
+                self._class_use_streaks.done(step.holder, step.key)
                 if step.action == classquest.ACTION:
                     self._class_hunts.used(step.holder, int(step.key), time.time())
                 return True
@@ -21832,6 +21834,17 @@ class Bridge(discord.Client):
                     self._class_hunts.give_up(step.holder, step.key, time.time())
                 return False
             if verdict.state not in (classuse.RETRY, classuse.ELSEWHERE):
+                return False
+            if (step.action == classquest.ACTION
+                    and self._class_use_streaks.refused(
+                        step.holder, step.key, str(answer.get("detail") or ""))):
+                # The same refusal STREAK_LIMIT times running is a defect, not a
+                # wait (#678): give the quest up, as `never` does, and say why.
+                log.warning("guild jobs: %s's use for quest %s was refused %d times "
+                            "running as %r; given up for now",
+                            step.holder, step.key, classuse.STREAK_LIMIT,
+                            str(answer.get("detail") or ""))
+                self._class_hunts.give_up(step.holder, step.key, time.time())
                 return False
             if attempt == classuse.MAX_ATTEMPTS:
                 return False
