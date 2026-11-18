@@ -231,15 +231,17 @@ class TheRowsCarryWhatThePlannerReads(unittest.TestCase):
     def test_the_fetch_is_only_a_fetch(self):
         """The one filter it applies is mailrun's judgement, not its own:
         a letter the holder's mailbox has not loaded is left out (#2402)."""
-        body = _block("def _fetch_mail(")
+        body = _block("def _fetch_mail_split(")
         self.assertIn("_MAIL_SQL", body)
         self.assertIn("rows = [dict(row) for row in cur.fetchall()]", body)
-        self.assertIn("return mailrun.loaded_rows(rows, unloaded)", body)
+        self.assertIn("mailrun.loaded_rows(rows, unloaded)", body)
+        self.assertIn("mailrun.unloaded_held(rows, unloaded)", body)
+        self.assertIn("return _fetch_mail_split(names)[0]", _block("def _fetch_mail("))
 
     def test_a_world_with_no_mail_tables_is_an_empty_mailbox(self):
-        body = _block("def _fetch_mail(")
+        body = _block("def _fetch_mail_split(")
         self.assertIn("1146", body)
-        self.assertIn("return []", body)
+        self.assertIn("return [], frozenset()", body)
 
 
 class TheMailboxIsFoundInTheSpawnTable(unittest.TestCase):
