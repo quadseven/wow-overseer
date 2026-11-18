@@ -331,33 +331,33 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         self.assertIn("craft.MODE", reader)
         self.assertIn("craft.focus_for(", reader)
 
-    def test_the_demand_read_only_accepts_a_focus_with_a_walk(self):
-        """infra#3760 put a SECOND focus id into `craft.RECIPES`: the eleven
-        Anvil-gated Engineering brackets now declare `focus=1`, because they
-        always needed one and the old test could not see it. An anvil and a
-        forge are different objects in different places, so a demand read that
-        asked "does this recipe need SOME focus" would walk Grog to a forge for
-        Handful of Copper Bolts - a journey that moves the whole family and
-        ends in exactly the silent SPELL_FAILED_REQUIRES_SPELL_FOCUS it was
-        supposed to cure. A truthiness test on `focus_for` is that bug, and it
-        is a one-character edit away, so it is pinned rather than reasoned
-        about."""
+    def test_the_demand_read_asks_for_a_FORGE_and_not_for_any_focus(self):
+        """Only forge focus IDs with bridge routes may trigger the forge pass.
+
+        A generic "this recipe needs some focus" check would also treat
+        Anvil-only Engineering recipes as forge demand. Keep that distinction
+        explicit while supporting both regular and Dark Iron forge focuses.
+        """
         reader = self.source[self.source.index("def _forge_errands(") :]
         reader = reader[: reader.index("def _current_travel_npc")]
         self.assertIn("in craft.FOCUS_AIMS", reader)
-        # And the mapping the comparison relies on really does name the forge.
+        self.assertEqual(
+            set(craft.FOCUS_AIMS),
+            {travel.FORGE_FOCUS_ID, craft.BLACK_FORGE_FOCUS_ID},
+        )
         self.assertEqual(craft.FOCUS_AIMS[travel.FORGE_FOCUS_ID], "forge")
-        # Anvil-gated Engineering recipes exist in the table and must not match.
+        self.assertEqual(
+            craft.FOCUS_AIMS[craft.BLACK_FORGE_FOCUS_ID], "black-forge"
+        )
         anvil = [
-            r.spell_id
-            for r in craft.RECIPES[goals.SKILL_IDS["engineering"]]
-            if r.focus == 1
+            recipe.spell_id
+            for recipe in craft.RECIPES[goals.SKILL_IDS["engineering"]]
+            if recipe.focus == 1
         ]
-        self.assertTrue(anvil, "infra#3760's anvil entries have gone missing")
+        self.assertTrue(anvil, "Anvil-only Engineering recipes must remain distinct")
         for spell in anvil:
             with self.subTest(spell=spell):
-                self.assertNotEqual(craft.focus_for(spell), travel.FORGE_FOCUS_ID)
-
+                self.assertNotIn(craft.focus_for(spell), craft.FOCUS_AIMS)
     def test_it_goes_through_the_one_sanctioned_writer(self):
         """`_write_trade_errand` is the only thing in this process that writes
         `travel_npc`, and its guard is what keeps an economy aim from blanking
@@ -436,7 +436,7 @@ class TheFocusVocabularyCannotDriftFromTheWalk(unittest.TestCase):
     """`craft.FOCUS_AIMS` claims a walk exists for every id in it. These are
     what stop that being a claim."""
 
-    def test_each_supported_focus_has_a_walk(self):
+    def test_the_forge_is_the_only_focus_anything_walks_to(self):
         self.assertEqual(
             set(craft.FOCUS_AIMS),
             {travel.FORGE_FOCUS_ID, craft.BLACK_FORGE_FOCUS_ID},
