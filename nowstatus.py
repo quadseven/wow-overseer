@@ -782,7 +782,7 @@ def _from_intent(intent: dict, steps, now_at, creatures: dict | None = None):
     doing = doing[:1].upper() + doing[1:]
     age = intent.get("current_for")
     since = (now_at - int(age)) if (age is not None and now_at) else None
-    restarts = _restarts(steps, now_at)
+    restarts = _walk_restarts(steps, now_at)
     if restarts >= 3:
         return doing, restart_words(restarts), _first_restart(steps, now_at) or since
     return doing, "to get there", since
@@ -909,7 +909,7 @@ def _with_leader_job(f, step, said):
 
 def _from_restarts(intent, steps, now_at, creatures: dict | None = None):
     """Doing, waiting, since for a walk that keeps restarting, or None."""
-    restarts = _restarts(steps, now_at)
+    restarts = _walk_restarts(steps, now_at)
     if restarts < 3:
         return None
     if _intent_is_active(intent):
@@ -942,6 +942,26 @@ def _restarts(steps, now_at, window=900) -> int:
             if not now_at or now_at - int(s.get("last_at") or 0) <= window:
                 n += int(s.get("occurrences") or 1)
     return n
+
+
+def _walk_restarts(steps, now_at, window=900) -> int:
+    """The most times any ONE walk took over inside the window.
+
+    A restart is the same walk begun again. Different walks taking the leader
+    in turn (a vendor trip, then an errand leg, then the quest drive) are
+    hand-overs that each finished, and summing them read a healthy family as
+    "the walk has ended and restarted 7 times" (dev realm, 2026-11-18). The
+    dungeon stall breaker keeps the sum in `restart_count`: its steps are one
+    walk already.
+    """
+    per_walk: dict = {}
+    for s in steps:
+        doing = str(s.get("doing") or "")
+        if s.get("kind") == "intent" and " took over: " in doing:
+            if not now_at or now_at - int(s.get("last_at") or 0) <= window:
+                walk = doing.split(" took over: ", 1)[1]
+                per_walk[walk] = per_walk.get(walk, 0) + int(s.get("occurrences") or 1)
+    return max(per_walk.values(), default=0)
 
 
 def restart_count(steps, now_at, since_at=0, window=900) -> int:
