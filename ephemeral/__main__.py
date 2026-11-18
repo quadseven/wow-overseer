@@ -123,11 +123,21 @@ def _submit(args):
 
 
 def _dispatch(args):
-    from . import dispatch
+    from . import dispatch, dispatchlock
 
+    owner = dispatchlock.owner_name(args.owner)
+    path = dispatchlock.lock_path()
+    if args.stop:
+        return dispatchlock.stop(path, owner)
     cfg, k, _ = _runner(args)
-    d = dispatch.Dispatcher(cfg, k)
-    return d.run(interval=args.interval, once=args.once)
+    dispatchlock.acquire(path, owner, max_age=args.lock_max_hours * 3600)
+    try:
+        d = dispatch.Dispatcher(
+            cfg, k, owner=owner, on_tick=lambda: dispatchlock.renew(path)
+        )
+        return d.run(interval=args.interval, once=args.once)
+    finally:
+        dispatchlock.release(path)
 
 
 def _collect(args):
@@ -241,6 +251,21 @@ def main(argv=None):
     dp.add_argument("--config", help=cfg_help)
     dp.add_argument("--once", action="store_true", help="one pass, then exit")
     dp.add_argument("--interval", type=int, default=15)
+    dp.add_argument(
+        "--owner",
+        help="who owns this dispatcher (default: $EPH_OWNER, else the parent pid)",
+    )
+    dp.add_argument(
+        "--stop",
+        action="store_true",
+        help="stop the running dispatcher of --owner, by pid; refuses another owner's",
+    )
+    dp.add_argument(
+        "--lock-max-hours",
+        type=float,
+        default=6,
+        help="a lock not renewed for this long is stale and taken over",
+    )
     dp.set_defaults(func=_guarded(_dispatch))
     cl = sub.add_parser(
         "collect", help="copy results, decide, post evidence, close only under the rule"
