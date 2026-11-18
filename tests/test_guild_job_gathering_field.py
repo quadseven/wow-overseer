@@ -126,3 +126,40 @@ class GatheringFieldTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SkinningFieldGuardTest(unittest.TestCase):
+    def _beasts(self):
+        def spot(n, x):
+            return guildjobs.Spot(
+                kind="creature", spawn=n, map_id=1, x=x, y=0.0, name="Boar", why=""
+            )
+
+        near = [(spot(i, 100.0 + i), 10) for i in range(1, 6)]
+        far = [(spot(i, 1500.0 + i), 10) for i in range(11, 16)]
+        return near + far
+
+    def _run(self, guarded_x):
+        m = miner()
+        this = _Pass()
+        this._unguarded_field = lambda *a: bridge.Bridge._unguarded_field(this, *a)
+
+        def near(map_id, x, y, side):
+            return x < guarded_x
+
+        def pick(rest):
+            return guildjobs.skinning_field(rest, (0.0, 0.0), 10, 100)
+
+        with mock.patch.object(bridge, "_hostile_guards_near", near):
+            return asyncio.run(
+                bridge.Bridge._unguarded_field(this, m, self._beasts(), pick)
+            )
+
+    def test_an_unguarded_pack_is_taken_as_before(self):
+        self.assertLess(self._run(0.0).x, 1000.0)
+
+    def test_a_guarded_pack_is_dropped_for_the_next(self):
+        self.assertGreater(self._run(1000.0).x, 1000.0)
+
+    def test_every_pack_guarded_gives_none(self):
+        self.assertIsNone(self._run(10**6))

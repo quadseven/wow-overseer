@@ -21651,8 +21651,33 @@ class Bridge(discord.Client):
         beasts = await asyncio.to_thread(
             _survey_job_beasts, int(member.map_id), float(member.x),
             float(member.y), low, high)
-        return guildjobs.skinning_field(
-            beasts, (float(member.x), float(member.y)), member.level, skin, band)
+        return await self._unguarded_field(
+            member,
+            beasts,
+            lambda rest: guildjobs.skinning_field(
+                rest, (float(member.x), float(member.y)), member.level, skin, band),
+        )
+
+    async def _unguarded_field(self, member, mobs, pick):
+        """`pick(mobs)`, passed over where guards of the other side stand (#1912).
+
+        A pack whose spot has such guards within GATHER_GUARD_YARDS is dropped
+        with every spawn near it and the pick is made again, a few times; None
+        when nothing unguarded is left. A side that cannot be read drops nothing.
+        """
+        side = situation.side_mask([getattr(member, "race", 0)])
+        rest = list(mobs or ())
+        for _ in range(GATHER_GUARD_RETRIES):
+            spot = pick(rest)
+            if spot is None or not side:
+                return spot
+            if not await asyncio.to_thread(
+                    _hostile_guards_near, spot.map_id, spot.x, spot.y, side):
+                return spot
+            rest = [(s, lvl) for s, lvl in rest
+                    if (s.x - spot.x) ** 2 + (s.y - spot.y) ** 2
+                    > GATHER_GUARD_YARDS ** 2]
+        return None
 
     async def _cloth_field(self, member, band=None):
         """The pack of cloth-dropping humanoids a member is sent to, or None."""
@@ -21660,8 +21685,12 @@ class Bridge(discord.Client):
         mobs = await asyncio.to_thread(
             _survey_job_cloth, int(member.map_id), float(member.x),
             float(member.y), low, high)
-        return guildjobs.cloth_field(
-            mobs, (float(member.x), float(member.y)), member.level, band)
+        return await self._unguarded_field(
+            member,
+            mobs,
+            lambda rest: guildjobs.cloth_field(
+                rest, (float(member.x), float(member.y)), member.level, band),
+        )
 
     async def _run_job_step(self, step, cap: float) -> None:
         """Write one job step's rows in order, each after the last has answered.
@@ -42707,6 +42736,7 @@ _HOSTILE_GUARD_SQL = (
     "AND POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2) < POW(%s, 2)"
 )
 GATHER_GUARD_YARDS = 300
+GATHER_GUARD_RETRIES = 4
 
 
 def _hostile_guards_near(map_id: int, x: float, y: float, side: int) -> bool:
