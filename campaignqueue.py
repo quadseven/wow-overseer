@@ -774,6 +774,34 @@ def step(rows: list, leader: dict | None, owned_items: set | None = None) -> Mov
     return Move(why="%s, %d of %d" % (place, done, runs))
 
 
+# --- saying why a queue step waited ---------------------------------------------
+
+# A family's queue step has several holds that return without a word, and a
+# queue that sat `queued` for an hour could not be explained from the log. Each
+# hold now says its name, at most once per family per hold per this many seconds.
+HOLD_LOG_SECONDS = 600
+
+
+class HoldLog:
+    """Rate limit for "this family's queue step is held by <hold>" lines."""
+
+    def __init__(self) -> None:
+        self._said: dict = {}
+
+    def due(self, family: str, hold: str, now: float) -> bool:
+        """True when this (family, hold) has not been said in the last window.
+
+        A quiet answer does not move the clock, so a hold that persists is said
+        again every HOLD_LOG_SECONDS rather than never.
+        """
+        key = (family, hold)
+        last = self._said.get(key)
+        if last is not None and now - last < HOLD_LOG_SECONDS:
+            return False
+        self._said[key] = now
+        return True
+
+
 # --- saying it -----------------------------------------------------------------
 
 # Who chose a planned entry, as the queue line says it. An operator's order is

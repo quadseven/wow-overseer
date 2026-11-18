@@ -4,6 +4,12 @@ The Standing card's learned, trainable and above-level spell lists share
 `app/models/spellnames.js`. Its catalog is generated from the 3.3.5 client
 DBCs, including ranks. Unknown IDs retain the `Spell N` label and spell link.
 
+The catalog is about 220 KB, so no page imports it statically. The member
+view asks `app/models/spelllookup.js` for a name; that module imports the
+catalog the first time a name is drawn, answers `Spell N` until it arrives,
+then requests one redraw. If the import fails the chips keep `Spell N` and
+their links, and a later draw tries again after 30 seconds.
+
 ## Regeneration
 
 Obtain `Spell.dbc`, `SkillLine.dbc` and `SkillLineAbility.dbc` from the

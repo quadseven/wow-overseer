@@ -61,6 +61,7 @@ VENDOR = "vendor"
 BANK = "bank"
 HANDDOWN = "handdown"
 TIDY = "tidy"
+AUCTION = "auction"
 STEP_ORDER = (FUND, MAIL, EQUIP, VENDOR, BANK, HANDDOWN, TIDY)
 # AN ERRAND FOR BAG ROOM MAKES ROOM FIRST (#986). In STEP_ORDER the counters
 # that free a slot come after a mail step of up to fifteen minutes, so a
@@ -75,10 +76,20 @@ ROOM_STEP_ORDER = (VENDOR, BANK, TIDY, EQUIP, HANDDOWN, FUND, MAIL)
 # vendor step has nothing to sell and its 480 seconds are spent before the bank
 # step is reached. Same steps, bank ahead of the vendor.
 BANK_ROOM_STEP_ORDER = (BANK, VENDOR, TIDY, EQUIP, HANDDOWN, FUND, MAIL)
+# A BAG-ROOM ERRAND WHOSE ROOM COMES FROM LISTING goes to an auctioneer (#1261):
+# no stack a vendor would buy is left, the recipes nobody can learn are decided
+# AUCTION, and a vendor aim drained nothing for hours. The auction step runs
+# the economy pass at the counter, which lists what the plan prices.
+AUCTION_ROOM_STEP_ORDER = (AUCTION, VENDOR, BANK, TIDY, EQUIP, HANDDOWN, FUND, MAIL)
 # The routes a bag-room errand can take to make room, besides the default one
 # (a vendor): the personal bank, or the guild vault when no banker will do.
 ROUTE_BANKER = "banker"
 ROUTE_VAULT = "vault"
+ROUTE_AUCTION = "auction"
+# A vendor that would buy this many stacks or fewer cannot free a bag floor, and
+# fewer listings than this are not worth a walk to a counter.
+AUCTION_FIRST_SELLABLE_MAX = 2
+AUCTION_FIRST_MIN = 3
 
 # How long each step may take before the errand moves on without it. The mail
 # step is the longest: eight takes per visit, a few seconds apart, and a
@@ -91,6 +102,7 @@ STEP_SECONDS = {
     BANK: 300.0,
     HANDDOWN: 120.0,
     TIDY: 180.0,
+    AUCTION: 240.0,
 }
 # The walk to the capital. A family on the same continent flies or rides; one
 # that has not arrived in twenty minutes is not arriving.
@@ -130,6 +142,8 @@ def steps_for(why: str, route: str = "") -> tuple:
     empty the bags. A bag-room errand on a bank or vault route banks first."""
     if route in (ROUTE_BANKER, ROUTE_VAULT) and room_errand(why):
         return BANK_ROOM_STEP_ORDER
+    if route == ROUTE_AUCTION and room_errand(why):
+        return AUCTION_ROOM_STEP_ORDER
     if room_errand(why):
         return ROOM_STEP_ORDER
     return STEP_ORDER
@@ -732,6 +746,69 @@ def bank_first(why: str, sellable, bank_routed: int) -> bool:
     if not counts or any(c is None for c in counts):
         return False
     return sum(int(c) for c in counts) == 0
+
+
+def auction_first(why: str, sellable, auction_routed: int) -> bool:
+    """Whether a bag-room errand should make its room at an auctioneer.
+
+    True for the bag-room errand when every member's sellable count is read and
+    their sum is at most AUCTION_FIRST_SELLABLE_MAX (a vendor cannot free the
+    floor) while the item plan holds at least AUCTION_FIRST_MIN listings it
+    would make. An unread member keeps the vendor. `sellable` is
+    {member: count or None}.
+    """
+    if not room_errand(why) or int(auction_routed or 0) < AUCTION_FIRST_MIN:
+        return False
+    counts = list((sellable or {}).values())
+    if not counts or any(c is None for c in counts):
+        return False
+    return sum(int(c) for c in counts) <= AUCTION_FIRST_SELLABLE_MAX
+
+
+def auction_route(
+    why: str,
+    sellable,
+    auction_routed: int,
+    auctioneers,
+    leader_at,
+    released=(),
+    now: float = 0.0,
+    deaths=(),
+    walled=None,
+) -> tuple:
+    """(route, spot, line): the auctioneer a bag-room errand aims at, or ('', {}, why).
+
+    `auctioneers` are `vendor_stops(..., kind="auctioneer")` spots, already
+    without the side that attacks the family. The same guards as the vendor and
+    banker aims: a stop on another map, released unlanded lately, along ground
+    the family died on, or one the town slot would refuse is passed over.
+    """
+    if not auction_first(why, sellable, auction_routed):
+        return "", {}, ""
+    if not leader_at:
+        return "", {}, "the leader's position is unread, so the vendor stands"
+    here = {
+        "map_id": leader_at.get("map_id"),
+        "x": leader_at.get("pos_x"),
+        "y": leader_at.get("pos_y"),
+    }
+    walled = walled or (lambda _spot: False)
+
+    def usable(spot) -> bool:
+        return (
+            _same_map(spot, leader_at)
+            and not _was_released(spot, released, now)
+            and not lethal_stop(spot, here, deaths)
+            and not walled(spot)
+        )
+
+    near = [
+        (_planar(s, here), i, s) for i, s in enumerate(auctioneers or ()) if usable(s)
+    ]
+    if not near:
+        return "", {}, "no auctioneer is reachable; the vendor stands"
+    _d, _i, spot = min(near, key=lambda t: (t[0], t[1]))
+    return ROUTE_AUCTION, dict(spot), "the nearest reachable auctioneer"
 
 
 # How near a banker must stand to a hub to be that hub's banker: the counters of

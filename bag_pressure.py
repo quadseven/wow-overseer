@@ -1108,6 +1108,91 @@ def vendor_errand_step(
     return stranded_errand_step(sales_outstanding)
 
 
+# HOW LONG A LEADER MAY STAND AT A COUNTER, WITH NOTHING QUEUED, AFTER THE
+# MODULE HAS SAID THE ERRAND IS DONE, BEFORE THE BRIDGE HANDS THE COLUMN BACK.
+# The module declares the errand done the moment the leader is in range and is
+# fenced from clearing a column it did not write, so the aim stays and the
+# module reads the standing aim as a new walk every poll, the watch counting
+# each as a restart. Under bag pressure `vendor_errand_step` holds, because the
+# followers' sales may not be written yet; this is the bound on that hold, the
+# same shape as the 120 second lease (infra#3703): an errand that cannot finish
+# must not hold the one travel column for ever.
+COUNTER_DONE_RELEASE_SECONDS = 120.0
+
+
+def counter_done_step(
+    since: float | None,
+    now: float,
+    at_counter: bool,
+    sales_outstanding: int,
+    module_done: bool,
+) -> tuple[float | None, bool]:
+    """(clock, release) for a vendor errand the module says is done.
+
+    The clock starts when the leader is at the counter, nothing is queued
+    against it and the module has reported the errand finished, and it is
+    kept through a flicker of the module's own report (the walk re-armed and
+    finished again). Any queued sale, an unreadable queue (-1) or a leader off
+    the counter clears it. RELEASE only once the clock has run
+    COUNTER_DONE_RELEASE_SECONDS. Never on one reading: nothing in this
+    function releases for LOOKING finished.
+    """
+    if not at_counter or sales_outstanding != 0:
+        return None, False
+    if since is None:
+        return (now if module_done else None), False
+    return since, (now - since) >= COUNTER_DONE_RELEASE_SECONDS
+
+
+# Leader -> when the module first said a vendor errand was done with nothing
+# queued. In memory only: a restart restarts the clock, which costs one more
+# bounded wait.
+_COUNTER_DONE_SINCE: dict[str, float] = {}
+
+
+def bound_pressure_hold(
+    step: str,
+    leader: str,
+    now: float,
+    vendor,
+    current_aim: str,
+    outstanding: int,
+    intent: dict,
+) -> str:
+    """THE BOUND ON THE PRESSURE HOLD. The module calls the errand done on
+    arrival and may not clear the column; the bridge holds the aim under bag
+    pressure; so a leader at a counter with nothing queued would hold the one
+    travel column, and have the module read it as a new walk every poll, for
+    ever. See COUNTER_DONE_RELEASE_SECONDS. The release itself stays the pass's
+    one existing release: this only turns a hold into it once the bound has
+    run. The module's own record that it has finished the walk is its intent
+    row no longer holding the leader for the economy errand.
+    """
+    # A clock nobody has asked about for this long belongs to a leader that has
+    # gone, so the map cannot grow with leaders that come and go.
+    for name, started in list(_COUNTER_DONE_SINCE.items()):
+        if now - started > COUNTER_DONE_RELEASE_SECONDS * 10:
+            del _COUNTER_DONE_SINCE[name]
+    # An absent intent row is no word from the module, so it never starts the
+    # clock: "done" is a row that is present and no longer holds the economy
+    # errand.
+    since, release = counter_done_step(
+        _COUNTER_DONE_SINCE.get(leader),
+        now,
+        bool(vendor) and current_aim == "vendor",
+        outstanding,
+        bool(intent) and str(intent.get("current_kind") or "") != "economy",
+    )
+    if since is None:
+        _COUNTER_DONE_SINCE.pop(leader, None)
+        return step
+    _COUNTER_DONE_SINCE[leader] = since
+    if not (release and step == VENDOR_ERRAND_HOLD):
+        return step
+    _COUNTER_DONE_SINCE.pop(leader, None)
+    return VENDOR_ERRAND_RELEASE
+
+
 def _position_map(position: dict | None) -> int | None:
     """Map id from a settled snapshot row, or None when it cannot be read."""
     if not position:

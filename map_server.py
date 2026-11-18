@@ -2220,6 +2220,18 @@ def _fetch_watch_spots() -> list | None:
         return None
 
 
+def _spectate_card(row: dict | None) -> dict:
+    """The /api/spectate state for `row`. When the director's note says it is
+    following, the Watcher's live spot is read from overseer_snapshot to confirm
+    it: spectate_state with no spots always downgrades an arrival, so the spots
+    must be passed in the one call that decides, not fetched after it."""
+    note = str((row or {}).get("note") or "")
+    target = str((row or {}).get("target") or "")
+    if director.mandate_active(row) and director.note_state(note, target) == "arrived":
+        return director.spectate_state(row, _fetch_watch_spots())
+    return director.spectate_state(row)
+
+
 def _read_watch_order() -> dict | None:
     """The Watcher's one order row, or None. A missing `overseer_watch`
     (1146) is None too: the bridge creates it at start-up, never the site."""
@@ -5852,9 +5864,13 @@ class Handler(BaseHTTPRequestHandler):
         # does not, and it is not a broken link.
         # The build is stamped in beside the mount (appbuild.py), so an open
         # tab can tell when the server holds newer app code than it runs.
+        # The modulepreload links go in first (appbuild.preload), carrying the
+        # same placeholders as the rest of the page, so the mount and the
+        # build are stamped into them with everything else.
         self._send_file("index.html", "text/html; charset=utf-8",
                         transform=lambda body: appbuild.stamp(
-                            basepath.apply(body, BASE_PATH), appbuild.fingerprint(HERE)))
+                            basepath.apply(appbuild.preload(body, HERE), BASE_PATH),
+                            appbuild.fingerprint(HERE)))
 
     def _app_file(self, rel: str) -> None:
         """GET /app/[<build>/]<path> - one served file of the operations app.
@@ -5949,7 +5965,7 @@ class Handler(BaseHTTPRequestHandler):
         # the worker's own registration stay inside this realm's prefix (#2314).
         def _render(body: bytes) -> bytes:
             with open(os.path.join(HERE, "index.html"), "rb") as f:
-                index_html = f.read()
+                index_html = appbuild.preload(f.read(), HERE)
             return appbuild.stamp_worker(
                 basepath.apply(body, BASE_PATH), appbuild.fingerprint(HERE), index_html
             )
@@ -7356,11 +7372,7 @@ class Handler(BaseHTTPRequestHandler):
         different group may take it, and `stream` the observer's broadcast
         address, which is empty until the observer character is in the world.
         """
-        row = _read_watch_order()
-        state = director.spectate_state(row)
-        if state["arrived"]:
-            # The note says follow; only the Watcher's live spot can say it is there.
-            state = director.spectate_state(row, _fetch_watch_spots())
+        state = _spectate_card(_read_watch_order())
         state["watcher"] = director.WATCHER_NAME
         state["stream"] = family.broadcast_url(director.WATCHER_NAME) or ""
         return 200, state

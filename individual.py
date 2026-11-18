@@ -262,6 +262,28 @@ def gather_targets(
     }
 
 
+def split_line(who: str, orders, held_by_phase: str = "") -> str:
+    """The farm pass's sentence for a family whose members hold different orders.
+
+    `held_by_phase` is the profession loop phase that owns an individual family
+    (town, craft or train), or '' when nothing does. Under the loop the members
+    are meant to differ: each keeps the order its own skills chose, and the
+    loop's gather phase walks them (#2498). Saying "until every member holds
+    the same order" there named the wrong remedy and read as a fault.
+    """
+    shown = ", ".join(sorted(set(orders or ())))
+    if held_by_phase:
+        return (
+            "farm: %s holds the member orders %s while the profession loop is "
+            "in its %s phase, so no farm walk is taken until it gathers again"
+            % (who, shown, held_by_phase)
+        )
+    return (
+        "farm: %s is split across jobs %s, so no farm walk is taken until "
+        "every member holds the same order" % (who, shown)
+    )
+
+
 # --- what a page may say of a family (#2408) ---------------------------------
 
 LINKED = "linked"

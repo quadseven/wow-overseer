@@ -19,6 +19,7 @@ import { announce, CSS as ACH_CSS } from "./_achievements.js";
 import { reportSection } from "./now/report.js";
 import * as stage from "./now/stage.js";
 import { pickStaged, connectPlan } from "./now/stagechoice.js";
+import { swapKeeping } from "./now/keepslots.js";
 import { savedStage } from "../store.js";
 import { stage as watchStage, bind as bindWatch, CSS as WATCH_CSS, READ as WATCH_READ, OPERATOR as WATCH_OPERATOR } from "./_spectate.js";
 import { section as liveSection, READ as LIVE_READ } from "./now/live.js";
@@ -360,6 +361,12 @@ ${reportSection(ctx, allGuilds())}`;
       ctx.get("/api/v2/achievements").data,
     ]);
   },
+  // The wall's slots stay in the page, so a redraw does not take a playing
+  // picture out of the document and put it back (keepslots.js). A phone's
+  // body has no slot: its picture is on the stage.
+  swap(main, body) {
+    return swapKeeping(main, body);
+  },
   after(main, ctx) {
     // A phone connects the staged stream only; the wall connects every head.
     const options = stageOptions(ctx);
@@ -368,6 +375,9 @@ ${reportSection(ctx, allGuilds())}`;
     const plan = connectPlan(options, staged, narrow);
     plan.connect.forEach((c) => streams.connect(c.name, c.url));
     plan.release.forEach((name) => streams.disconnect(name));
+    // A head that left the wall has no slot to play in: its picture is let go.
+    // Only a wall that answered says who left; a failed read says nothing.
+    if (wallModel(ctx.get("/api/wall")).ready) streams.keepOnly(options.map((o) => o.name));
     stage.sync(options, staged, narrow);
     streams.mount(main);
     streams.bind(main, openPanel);

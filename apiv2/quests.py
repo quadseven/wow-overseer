@@ -21,7 +21,8 @@ GET /api/v2/quests/{id}
              first_taken, finished, reason}]}
 
   One catalogue quest with every quester's attempt at it. A quest outside the
-  catalogue is a 404.
+  catalogue is a 404. The generic failed-log reason explains the recorded
+  status without assigning a cause.
 
 GET /api/v2/questers
 
@@ -185,6 +186,9 @@ def quests(query: dict, ctx) -> tuple[int, dict]:
 
 def _attempt(row) -> dict:
     name = str(row.get("character_name") or "")
+    reason = str(row.get("reason") or "")
+    if reason == questledger.FAILED_REASON:
+        reason = "The quest log reported a failure. The cause was not recorded."
     return {
         "character": name,
         "guid": int(row["guid"]),
@@ -192,7 +196,7 @@ def _attempt(row) -> dict:
         "state": str(row.get("state") or ""),
         "first_taken": _when(row.get("first_taken")),
         "finished": _when(row.get("finished")),
-        "reason": str(row.get("reason") or ""),
+        "reason": reason,
     }
 
 

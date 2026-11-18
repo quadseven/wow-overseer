@@ -195,6 +195,48 @@ class AFinishedClearIsNotAStall(unittest.TestCase):
         self.assertEqual({"lower-blackrock-spire": 1}, failed)
 
 
+REFUSED_109 = (
+    "dungeon clear stopped: it refused 'dc skip' 1 inside map 109 with "
+    "nothing left it could reach"
+)
+
+
+class AReachableClearWithAnOptionalBossLeftIsNotAStall(unittest.TestCase):
+    """Map 109 credits eight encounters (bits 0, 1, 2, 3, 5, 6, 7, 8; there
+    is no bit 4), and bit 7 is an optional encounter a party may be unable
+    to start at all. A run that credits every other encounter (mask 367)
+    and ends on the module's refusal, because nothing left could be
+    reached, finished everything it could reach: it did not stall, and
+    two such runs must not bar the door (#2740)."""
+
+    ST = dict(map_id=109, portal="sunken-temple")
+
+    def test_a_run_missing_only_the_optional_encounter_did_not_stall(self):
+        events = [boss(7, 0, 367), stalled(7, REFUSED_109)]
+        self.assertIsNone(stall.stall_of(ledger_row(7, **self.ST), events))
+
+    def test_two_reachable_clears_do_not_bar_the_door(self):
+        runs = [ledger_row(1, **self.ST), ledger_row(2, **self.ST)]
+        events = [boss(1, 0, 367), stalled(1, REFUSED_109)]
+        events += [boss(2, 0, 367), stalled(2, REFUSED_109)]
+        self.assertEqual({}, stuck(runs, events))
+
+    def test_a_run_missing_a_required_encounter_still_stalls(self):
+        """Mask 303 is mask 367 without bit 6, a required encounter: the
+        same refusal text does not finish that run."""
+        events = [boss(7, 0, 303), stalled(7, REFUSED_109)]
+        got = stall.stall_of(ledger_row(7, **self.ST), events)
+        self.assertIsNotNone(got)
+        self.assertEqual(303, got.mask)
+
+    def test_the_reachable_mask_alone_does_not_finish_a_run(self):
+        """A run that credited every reachable encounter but stopped for
+        another reason (no movement) still stalled: the refusal text is
+        part of the shape, not decoration."""
+        events = [boss(7, 0, 367), stalled(7, NO_MOVEMENT)]
+        self.assertIsNotNone(stall.stall_of(ledger_row(7, **self.ST), events))
+
+
 def stuck(runs, events):
     return stall.stuck_doors(runs, events)
 

@@ -49,10 +49,11 @@ def _page_shell_urls(html_text: str, build: str) -> list[str]:
     return urls
 
 
-def _boot_graph() -> list[str]:
+def _boot_graph(entry: str = "main.js") -> list[str]:
+    """`entry` and every app module it reaches by static imports alone."""
     app_dir = HERE / "app"
     seen: list[str] = []
-    queue = ["main.js"]
+    queue = [entry]
     while queue:
         rel = queue.pop(0)
         if rel in seen:
@@ -238,11 +239,14 @@ console.log(JSON.stringify({ keys, skipWaitingCalls }));
             self.assertEqual(got["skipWaitingCalls"], 0)
 
     def test_index_modulepreload_covers_main_boot_graph(self):
-        page = (HERE / "index.html").read_text(encoding="utf-8")
+        # The list is made from the import statements when the page is served
+        # (appbuild.preload, #2312); this walk is a second reading of them.
+        page = _served("/", "").body().decode("utf-8")
         preloads = re.findall(
-            r'<link rel="modulepreload" href="__OVERSEER_BASE__/app/__OVERSEER_BUILD__/([^"]+)">',
+            r'<link rel="modulepreload" href="/app/%s/([^"]+)">' % BUILD,
             page,
         )
+        self.assertEqual(len(preloads), len(set(preloads)))
         self.assertEqual(set(preloads), set(_boot_graph()))
 
     def test_activate_deletes_only_older_overseer_shell_caches(self):

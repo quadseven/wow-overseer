@@ -75,8 +75,11 @@ drop chance times its item level gain, summed over the members), and
 `progress`, the raid progression a run gives (the Molten Core attunement in
 Blackrock Depths, the Upper Spire key in the Lower Spire). A capped family
 runs, in order: a run that advances the attunement now; one that advances
-the key; the most expected item levels, halved for a run across a continent
-crossing; the least of its target done; path order. Each dungeon is still
+the key; a run in the family's band before one whose bosses top out well
+under its weakest member (BELOW_BAND, #2715), unless that run drops a
+planned fire resistance piece; then the most expected item levels, halved
+for a run across a continent crossing; the least of its target done; path
+order. Each dungeon is still
 run AT_CAP_RUNS times a round before the next round starts, so the family
 works through the dungeons as it outgrows their loot rather than living in
 one.
@@ -137,6 +140,15 @@ DEATH_HOURS = 168
 # council's floor and the Run's ceiling.
 FIT_ABOVE = 3
 FIT_BELOW = 6
+
+# At the level cap a run whose bosses, as read, top out this far or more
+# under the weakest member ranks behind every run in the family's band,
+# however much its loot scores: an empty slot counts any drop as all gain,
+# so raw expected gain alone pulls a capped family into the lowest dungeon
+# that drops anything (#2715). The run stays offered while its loot holds
+# an upgrade, and a planned fire resistance piece excepts it: the tanks
+# reach the cap short of the raid's fire floor without those pieces.
+BELOW_BAND = 5
 
 # DOORS THAT NEED A KEY, and the run a player earns it in. mod-dungeon-clear
 # opens a keyed door only for a party member who carries the key or picks the
@@ -698,6 +710,15 @@ class Option:
         return self.ceiling - self.mean_level <= OUTGROWING_LEVELS
 
     @property
+    def below_band(self) -> bool:
+        """Its bosses, as read, top out BELOW_BAND or more under the
+        weakest member. Unread bosses say nothing, so the run keeps its
+        place: a wing that shares its map reads None for them."""
+        if not self.bosses or not self.level:
+            return False
+        return self.level - self.bosses[1] >= BELOW_BAND
+
+    @property
     def poor(self) -> bool:
         """The guilds rarely clear it and this family never has."""
         return (
@@ -1078,6 +1099,7 @@ def rank(option: Option) -> tuple:
             not option.ready,
             option.troubled,
             -option.progress_rank,
+            option.below_band and not option.fire,
             -option.value,
             option.done / max(option.target, 1),
             _order(option),

@@ -248,6 +248,7 @@ def _quest_complete(quest, status, progress=0) -> bool:
 # ledger's own words for it (questledger.FAILED_REASON, #923).
 FAILED = "the quest failed in the log"
 STALLED = "its objectives did not move for 2 hours of play"
+NO_OBJECTIVES = "the world defines no required objectives to complete"
 GIVER_MISSING = "the quest giver is not in the world"
 # Further Concerns and Report to Gryan Stoutmantle require speaking to an NPC
 # for objective credit. Questers can hunt and use quest verbs, but cannot speak
@@ -1846,6 +1847,12 @@ def _broken_reason(
     count, words = refused.get(("turnin", quest.id), (0, ""))
     if count >= FAILS_BEFORE_BROKEN:
         return _refused_words(REFUSED_TURN_IN, words)
+    if (
+        status == STATUS_INCOMPLETE
+        and played >= STALL_SECONDS
+        and classhunt.wanted(quest) == 0
+    ):
+        return NO_OBJECTIVES
     if played < STALL_SECONDS or complete:
         return ""
     # A chest that holds the item is a source: its quest is worked, not unsourced.
