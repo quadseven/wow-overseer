@@ -192,6 +192,35 @@ class TheCatalogueEndpoint(Base):
 
 
 class TheQuestEndpoint(Base):
+    def test_hunters_boast_explains_the_stored_failure_status(self):
+        # The brief supplies the quest and two failed attempts. The stored
+        # reason comes from questledger._in_log after status 5.
+        row = quest(257, 16, 38) | {"title": "A Hunter's Boast", "min_level": 11}
+        attempts = [
+            entry(257, 7, "Durga", "broken", "the quest failed in the log"),
+            entry(257, 8, "Pindle", "broken", "the quest failed in the log"),
+        ]
+        code, body = self.get(
+            "/api/v2/quests/257",
+            **{
+                qc.QUESTS_SQL: [row],
+                qc.GIVERS_SQL: [
+                    {"quest": 257, "role": role, "map_id": 0}
+                    for role in ("start", "end")
+                ],
+                v2quests.QUEST_LEDGER_SQL: attempts,
+            },
+        )
+        self.assertEqual(code, 200)
+        self.assertEqual(body["quest"]["status"], "broken")
+        self.assertEqual(
+            [(a["character"], a["reason"]) for a in body["attempts"]],
+            [
+                (name, "The quest log reported a failure. The cause was not recorded.")
+                for name in ("Durga", "Pindle")
+            ],
+        )
+
     def test_one_quest_with_every_attempt(self):
         code, body = self.get("/api/v2/quests/1")
         self.assertEqual(code, 200)
@@ -216,7 +245,7 @@ class TheQuestEndpoint(Base):
                     "state": "broken",
                     "first_taken": "2026-10-13 09:30:00",
                     "finished": "2026-10-13 09:30:00",
-                    "reason": ql.FAILED_REASON,
+                    "reason": "The quest log reported a failure. The cause was not recorded.",
                 },
             ],
         )
