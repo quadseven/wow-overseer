@@ -31,6 +31,8 @@ WATCHING_ZORK = dict(
     spec="character Zork",
     target="Zork",
     note="Zork: hold, moves are rate limited (budget spent)",
+    state="held",
+    arrived=False,
     watcher="Watcher",
 )
 
@@ -74,8 +76,8 @@ console.log(JSON.stringify({ children: slot.children.length }));
 class TheCardSaysWhyThereIsNoPicture(unittest.TestCase):
     def test_it_names_the_watcher_and_its_target(self):
         m = stage(cam(**WATCHING_ZORK))
-        self.assertIn("Now watching Zork", m)
-        self.assertIn("The Watcher is on its way to Zork", m)
+        self.assertIn("Waiting to move to Zork", m)
+        self.assertNotIn("Now watching Zork", m)
 
     def test_the_directors_reason_shows_even_with_a_target(self):
         m = stage(cam(**WATCHING_ZORK))

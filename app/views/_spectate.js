@@ -29,6 +29,20 @@ const kept = { video: null, player: null, url: "", status: null };
 function camera(read) { return read && read.data ? read.data : null; }
 function operatorOn(read) { return !!(read && read.data && read.data.enabled); }
 
+// What the camera is doing, in the words the buttons and the card share. "Now
+// watching" is only said once the director has seen the Watcher on the target's
+// map and instance within range (state "arrived"); before that the order is
+// given but the camera has not got there, and the page says what it is waiting on.
+function onWords(sp) {
+  switch (sp && sp.state) {
+    case "arrived": return "Now watching";
+    case "held": return "Waiting to move";
+    case "failed": return "Could not move";
+    case "refused": return "Cannot watch";
+    default: return "On its way";
+  }
+}
+
 function wait(sp) {
   const n = Number(sp.switch_in) || 0;
   return n > 0 ? " It can be switched in " + n + " seconds." : "";
@@ -40,7 +54,7 @@ export function control(run, spRead, opRead) {
   const id = Number(run && run.id);
   if (!sp) return html`<div class="sp-ctl"><button type="button" class="btn btn-secondary sp-btn" disabled><i class="ph ph-video-camera" aria-hidden="true"></i>Watch</button><span class="muted sp-hint">The camera has not been read yet.</span></div>`;
   if (sp.active && sp.run === id) {
-    return html`<div class="sp-ctl"><span class="sp-on" data-state="on"><i class="ph-fill ph-video-camera" aria-hidden="true"></i>Now watching</span></div>`;
+    return html`<div class="sp-ctl"><span class="sp-on" data-state="${sp.arrived ? "on" : "pending"}"><i class="ph-fill ph-video-camera" aria-hidden="true"></i>${onWords(sp)}</span></div>`;
   }
   if (!operatorOn(opRead)) {
     return html`<div class="sp-ctl"><button type="button" class="btn btn-secondary sp-btn" disabled><i class="ph ph-video-camera" aria-hidden="true"></i>Watch</button><span class="muted sp-hint">Operator actions are off on this site, so the camera cannot be pointed from here.</span></div>`;
@@ -59,7 +73,7 @@ export function charButton(name, spRead, opRead) {
   const icon = html`<i class="ph ph-video-camera" aria-hidden="true"></i>`;
   if (!sp) return html`<button type="button" class="btn btn-secondary sp-btn sp-mini" disabled title="The camera has not been read yet.">${icon}Watch</button>`;
   if (sp.active && sp.character === who) {
-    return html`<span class="sp-on sp-mini" data-state="on"><i class="ph-fill ph-video-camera" aria-hidden="true"></i>Now watching</span>`;
+    return html`<span class="sp-on sp-mini" data-state="${sp.arrived ? "on" : "pending"}"><i class="ph-fill ph-video-camera" aria-hidden="true"></i>${onWords(sp)}</span>`;
   }
   if (!operatorOn(opRead)) {
     return html`<button type="button" class="btn btn-secondary sp-btn sp-mini" disabled title="Operator actions are off on this site, so the camera cannot be pointed from here.">${icon}Watch</button>`;
@@ -76,7 +90,7 @@ export function jumpButton(order, spRead, opRead) {
   const byRun = order && order.run !== undefined;
   const icon = html`<i class="ph ph-video-camera" aria-hidden="true"></i>`;
   const on = sp && sp.active && (byRun ? sp.run === Number(order.run) : sp.character === order.character);
-  if (on) return html`<span class="sp-on sp-mini" data-state="on"><i class="ph-fill ph-video-camera" aria-hidden="true"></i>Now watching</span>`;
+  if (on) return html`<span class="sp-on sp-mini" data-state="${sp.arrived ? "on" : "pending"}"><i class="ph-fill ph-video-camera" aria-hidden="true"></i>${onWords(sp)}</span>`;
   if (!sp || !operatorOn(opRead)) {
     const why = !sp ? "The camera has not been read yet." : "Operator actions are off on this site, so the camera cannot be pointed from here.";
     return html`<button type="button" class="btn btn-secondary sp-btn sp-mini" disabled title="${why}">${icon}Jump in</button>`;
@@ -109,7 +123,9 @@ export function stage(spRead, runs, opRead, idle) {
   }
   const on = sp.run ? label(runs, sp.run) : sp.character || sp.spec;
   const who = sp.target && sp.target !== sp.character ? html` Following ${sp.target}.` : "";
-  const way = sp.character && sp.target ? html`<p class="muted sp-note">The Watcher is on its way to ${sp.target}. Until it arrives the picture shows wherever it is now.</p>` : "";
+  const arrived = !!sp.arrived;
+  const head = arrived ? "Now watching" : sp.state === "failed" ? "Could not reach" : sp.state === "refused" ? "Cannot watch" : sp.state === "held" ? "Waiting to move to" : sp.state === "moving" ? "Heading to" : "Waiting to watch";
+  const way = !arrived && sp.character && sp.target && sp.state === "moving" ? html`<p class="muted sp-note">The Watcher is on its way to ${sp.target}. Until it arrives the picture shows wherever it is now.</p>` : "";
   // The director's latest word, which is the reason when the Watcher is not
   // moving (no target yet, or its moves are held).
   const why = !sp.note ? "" : !sp.target ? html`<p class="muted sp-note">Waiting: ${sp.note}</p>` : html`<p class="muted sp-note">Latest from the camera: ${sp.note}</p>`;
@@ -120,7 +136,7 @@ export function stage(spRead, runs, opRead, idle) {
     ? html`<div class="sp-slot" data-spectate-slot data-spectate-stream="${sp.stream}"><p class="muted sp-note" data-spectate-wait>Starting the Watcher's stream. If it stays dark, the Watcher's client may be off.</p></div>`
     : html`<p class="muted sp-note">The camera has no stream address yet.</p>`;
   return html`<div class="sp-region">${status}<div class="card sp-stage" aria-live="polite">
-<span class="g-name"><i class="ph-fill ph-video-camera" aria-hidden="true"></i> Now watching ${on}.${who}</span>
+<span class="g-name"><i class="ph-fill ph-video-camera" aria-hidden="true"></i> ${head} ${on}.${arrived ? who : ""}</span>
 ${way}${why}${picture}${stop}
 <span class="muted sp-note">This is the camera's view, an invisible observer that follows the target. The interface on screen belongs to the camera, not to any of them.${wait(sp)}</span>
 </div></div>`;

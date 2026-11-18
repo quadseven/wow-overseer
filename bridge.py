@@ -4741,6 +4741,18 @@ def _note_watch(spec: str, target: str, note: str) -> None:
         cur.execute(director.NOTE_SQL, (target[:12], note[:255], spec))
 
 
+def _fetch_command_rows(ids) -> list:
+    """The overseer_command rows for ids the director queued, to read their answers."""
+    ids = [int(i) for i in ids]
+    if not ids:
+        return []
+    marks = ", ".join(["%s"] * len(ids))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"SELECT id, status, detail FROM overseer_command WHERE id IN ({marks})", ids)
+        return [dict(r) for r in cur.fetchall()]
+
+
 def _insert_watcher_lines(commands, source: str) -> list:
     """Queue observer lines for the Watcher, and ONLY observer lines.
 
@@ -28876,17 +28888,32 @@ class Bridge(discord.Client):
             new_target = True
         memory.target = picked.name
         target = next((s for s in world["spots"] if s.name == picked.name), None)
+        # READ BACK what the last lines became. A line the world refused did not
+        # move the Watcher, and until this read the director counted it as a move
+        # anyway, spent its budget, and the card said "watching" for a camera that
+        # had not moved. A refusal is named on the card and backed off from.
+        if memory.sent_ids:
+            rows = await asyncio.to_thread(_fetch_command_rows, memory.sent_ids)
+            failed = memory.on_results(rows, now)
+            if failed:
+                log.warning("watcher: the world refused the last move: %s", failed)
+        if memory.failure and memory.backing_off(now):
+            note = (f"{picked.name}: {director.FAILED}, "
+                    f"the world refused the move: {memory.failure}")
+            await asyncio.to_thread(_note_watch, spec_text, picked.name, note)
+            return
         decision = director.decide(
             watcher, target, now=now, moves=memory.moves,
             booted_at=memory.booted_at, new_target=new_target,
         )
         source = f"watcher:{row.get('set_by', '')}"[:48]
         if decision.commands:
-            await asyncio.to_thread(_insert_watcher_lines, decision.commands, source)
+            ids = await asyncio.to_thread(_insert_watcher_lines, decision.commands, source)
             if decision.action == director.BOOT:
                 memory.booted_at = now
             else:
                 memory.record_move(now)
+            memory.sent_ids, memory.sent_at = list(ids), now
             log.info("watcher: %s -> %s (%s)", decision.action, picked.name, decision.reason)
         note = f"{picked.name}: {decision.action}, {decision.reason}"
         if decision.client_hint and decision.action == director.FOLLOW:

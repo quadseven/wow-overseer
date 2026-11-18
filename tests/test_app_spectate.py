@@ -54,6 +54,10 @@ def cam(**kw):
         "stream": STREAM,
     }
     base.update(kw)
+    # A camera the tests call active has arrived unless a test says otherwise:
+    # the card says "Now watching" only for an arrived camera.
+    if base["active"] and "state" not in base:
+        base["state"], base["arrived"] = "arrived", True
     return {"data": base, "loading": False}
 
 
