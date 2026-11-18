@@ -10924,7 +10924,8 @@ class Bridge(discord.Client):
                     if who == name}
             chosen_by[name] = craft_rhythm.errand(
                 name, skills.get(name, {}), held, primaries.get(name),
-                bags_wanted, floor, known=known.get(name))
+                bags_wanted, floor, known=known.get(name),
+                dark_iron_enabled=fireplan.dark_iron_enabled())
         # THE REAGENTS ARE PLANNED BEFORE THE ERRAND IS CALLED FED (#774).
         # An errand with nothing in the bags casts nothing; the plan says
         # where each short reagent comes from, and the bank and guild bank
@@ -24292,8 +24293,8 @@ class Bridge(discord.Client):
         nearest spawn out of `acore_world.gameobject` and handing its surveyed
         position to `travel.ground_aim`, producing the `at:<map>:<x>,<y>,<z>`
         form `ResolveTravelTarget` answers with ground before it ever builds the
-        creature-only `_travelSpawns` index. This pass is that pass with
-        `gt.type = 8 AND gt.Data0 = 3`.
+        creature-only `_travelSpawns` index. This pass filters the same query
+        by the focus id required by the active smelt.
 
         AND SMELTING IS THE ONE CASE THAT NEEDS ONLY THE WALK. infra#3617's
         other half is the Blacksmith Hammer: every Anvil-gated recipe also needs
@@ -24354,17 +24355,41 @@ class Bridge(discord.Client):
             smelters = await self._town_stop_demand(cohort)
         if not smelters:
             return
+        focus_groups = {}
+        for name, spell in smelters.items():
+            focus = craft.focus_for(spell)
+            if focus in craft.FOCUS_AIMS:
+                focus_groups.setdefault(focus, {})[name] = spell
+        focus_ids = sorted(focus_groups)
+        if not focus_ids:
+            return
+        family = _cohort_key(cohort)
+        focus_turns = getattr(self, "_forge_focus_turns", None)
+        if not isinstance(focus_turns, dict):
+            focus_turns = {}
+            self._forge_focus_turns = focus_turns
+        last_focus = focus_turns.get(family)
+        focus_id = next(
+            (focus for focus in focus_ids if last_focus is not None and focus > last_focus),
+            focus_ids[0],
+        )
+        if last_focus in focus_ids:
+            focus_id = last_focus
+        next_focus = focus_ids[(focus_ids.index(focus_id) + 1) % len(focus_ids)]
+        focus_turns[family] = focus_id
+        smelters = focus_groups[focus_id]
         names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or await self._mid_run(names):
             return
         where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
-        spawn = await asyncio.to_thread(_nearest_forge, leader)
+        spawn = await asyncio.to_thread(_nearest_forge, leader, focus_id)
         if town_stop and spawn and not travel.station_in_town(spawn):
             log.info(
                 "forge: %s wait for a town stop with a Forge: the nearest is "
                 "past %d yards of leader=%s",
                 ", ".join(sorted(smelters)), travel.TOWN_STATION_YARDS, leader,
             )
+            focus_turns[family] = next_focus
             return
         forge = travel.forge_aim(spawn, where.get("map_id") if where else None)
         if not forge.aim:
@@ -24377,6 +24402,7 @@ class Bridge(discord.Client):
                 ", ".join("%s=%d" % pair for pair in sorted(smelters.items())),
                 forge.refused,
             )
+            focus_turns[family] = next_focus
             return
         if travel.within_focus(spawn):
             # ALREADY THERE, SO THE COLUMN IS LEFT ALONE. Writing an aim for a
@@ -24394,6 +24420,7 @@ class Bridge(discord.Client):
                 where.get("map_id") if where else "?",
                 ", ".join(sorted(smelters)),
             )
+            focus_turns[family] = next_focus
             return
         # NOT EVERY FORGE IS A WALK (#2538): the nearest on the whole map can
         # be past a death disc, in hostile ground, or a split family's drag.
@@ -24404,6 +24431,7 @@ class Bridge(discord.Client):
         if why:
             log.info("forge: %s wait: leader=%s is not walked to a Forge: %s",
                      ", ".join(sorted(smelters)), leader, why)
+            focus_turns[family] = next_focus
             return
         aimed = await self._claim_town_slot("forge", leader, forge.aim,
                                              cohort=_cohort_key(cohort))
@@ -24418,6 +24446,7 @@ class Bridge(discord.Client):
                 "pass, so %s cannot smelt until the town slot comes round",
                 leader, forge.aim, ", ".join(sorted(smelters)),
             )
+            focus_turns[family] = next_focus
             return
         log.info(
             "forge: leader=%s aimed at %s (%d-yard focus) so %s can smelt - %s",
@@ -43002,8 +43031,8 @@ _FORGE_SQL = (
 )
 
 
-def _nearest_forge(name: str):
-    """The nearest usable Forge spawn row on `name`'s own map, or None.
+def _nearest_forge(name: str, focus_id: int = travel.FORGE_FOCUS_ID):
+    """The nearest usable focus spawn row on `name`'s own map, or None.
 
     A ROW OUT OF THE SPAWN TABLE, NOT A COORDINATE THIS PROCESS INVENTED - the
     identical guarantee `_nearest_vault` gives, against the identical tables.
@@ -43021,7 +43050,7 @@ def _nearest_forge(name: str):
             cur.execute(_FORGE_SQL, (
                 name,
                 travel.SPELL_FOCUS_GO_TYPE,
-                travel.FORGE_FOCUS_ID,
+                focus_id,
                 travel.ARRIVED_POSITION_YARDS,
             ))
         except pymysql.err.MySQLError as exc:
@@ -43145,7 +43174,7 @@ def _forge_errands(family: str | None = None) -> dict:
             raise
         return {row["name"]: int(row["craft_spell"] or 0)
                 for row in cur.fetchall()
-                if craft.focus_for(row["craft_spell"]) == travel.FORGE_FOCUS_ID}
+                if craft.focus_for(row["craft_spell"]) in craft.FOCUS_AIMS}
 
 
 def _town_stop_errands(family: str | None = None) -> dict:

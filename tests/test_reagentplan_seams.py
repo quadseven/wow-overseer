@@ -143,6 +143,7 @@ class TheCraftPassSaysWhatIsMissing(unittest.TestCase):
                 "asyncio": types.SimpleNamespace(to_thread=_thread),
                 "craft": craft,
                 "reagentplan": reagentplan,
+                "fireplan": types.SimpleNamespace(dark_iron_enabled=lambda: False),
                 # The chosen recipe is craft_rhythm's (tested there); pinned here.
                 "craft_rhythm": types.SimpleNamespace(
                     reagents_to_count=lambda *a, **k: set(),

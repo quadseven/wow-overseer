@@ -52,6 +52,7 @@ from dataclasses import asdict, dataclass, replace
 
 import craft
 import craft_supply
+import fireplan
 import gatherband
 import guildcorps
 import jobs
@@ -346,6 +347,9 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     # the family at the same time. The Copper BAR this produces is not here and
     # must not be: it comes off a cast, not a walk.
     2657: (Reagent(2770, "Copper Ore", 1),),
+    fireplan.SMELT_SPELL: (
+        Reagent(fireplan.DARK_IRON_ORE, "Dark Iron Ore", fireplan.ORE_PER_BAR),
+    ),
     # ALCHEMY - herbs, every one of them a herb-node gather plus a long tail of
     # creature drops. The vial each of these also needs is craft_supply's.
     # Lesser Healing Potion (2337) lists only its Briarthorn: its Minor
@@ -1141,6 +1145,7 @@ def errand(
     bags_wanted: int = 0,
     floor=None,
     known=None,
+    dark_iron_enabled: bool = False,
 ) -> Errand:
     """Spend, smelt or bandage? The one `craft_spell` this character should carry.
 
@@ -1157,7 +1162,7 @@ def errand(
     bag = bag_errand(name, skills, held, primaries, bags_wanted, floor)
     if bag is not None and craft.holds(bag.spell, known):
         return bag
-    chosen = _spend_or_smelt(name, skills, held, primaries, known)
+    chosen = _spend_or_smelt(name, skills, held, primaries, known, dark_iron_enabled)
     return _bandage_errand(name, skills, held, chosen) or chosen
 
 
@@ -1175,7 +1180,12 @@ def _unheld_why(name: str, spell: int) -> str:
 
 
 def _spend_or_smelt(
-    name: str, skills: dict, held: dict, primaries=None, known=None
+    name: str,
+    skills: dict,
+    held: dict,
+    primaries=None,
+    known=None,
+    dark_iron_enabled: bool = False,
 ) -> Errand:
     """Spend, or smelt? The choice `errand` makes after the bag errand.
 
@@ -1238,6 +1248,10 @@ def _spend_or_smelt(
             spend, weaving = 0, _unheld_why(name, spell)
             break
     smelt = craft.smelt_errand(name, skills, primaries)
+    if smelt and not craft.holds(smelt, known):
+        return Errand(name=name, spell=spend, why=_unheld_why(name, smelt))
+    if smelt == fireplan.SMELT_SPELL and not dark_iron_enabled:
+        return Errand(name=name, spell=spend, why="Dark Iron smelting is disabled")
 
     if not smelt:
         return Errand(
