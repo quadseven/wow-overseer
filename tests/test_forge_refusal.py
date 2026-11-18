@@ -220,24 +220,18 @@ class TheForgePassWaits(unittest.TestCase):
         spawn["d2"] = 0
         asyncio.run(fn(me))
         asyncio.run(fn(me))
+        # AI-REVIEW 2026-11-18 [Grug Elder/gpt-6-luna] 2973-G1
+        # (standard-ai-review-provenance, PR #2973): pin the known focus IDs
+        # independently so an incorrect implementation constant cannot validate itself.
         self.assertEqual(
-            [
-                travel.FORGE_FOCUS_ID,
-                travel.FORGE_FOCUS_ID,
-                craft.BLACK_FORGE_FOCUS_ID,
-            ],
+            [3, 3, 543],
             me.nearest_focuses,
         )
 
         smelters.pop("Grug")
         asyncio.run(fn(me))
         self.assertEqual(
-            [
-                travel.FORGE_FOCUS_ID,
-                travel.FORGE_FOCUS_ID,
-                craft.BLACK_FORGE_FOCUS_ID,
-                craft.BLACK_FORGE_FOCUS_ID,
-            ],
+            [3, 3, 543, 543],
             me.nearest_focuses,
         )
 
