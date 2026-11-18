@@ -54,21 +54,31 @@ class BridgeNamesEveryHoldTest(unittest.TestCase):
 
     def _body(self, start, end):
         a = self.text.index(start)
-        return self.text[a:self.text.index(end, a)]
+        return self.text[a : self.text.index(end, a)]
 
     def test_the_family_step_names_each_early_return(self):
-        body = self._body("    async def _campaign_queue_family_once(",
-                          "    async def _family_lent_hold(")
+        body = self._body(
+            "    async def _campaign_queue_family_once(",
+            "    async def _family_lent_hold(",
+        )
         for hold in ("lent to a guild run", "queue hold", "family held"):
-            self.assertIn('"_say_queue_hold", lambda *a: None)(key, "%s"' % hold, body, hold)
+            self.assertIn(
+                '"_say_queue_hold", lambda *a: None)(key, "%s"' % hold, body, hold
+            )
 
     def test_each_queue_hold_names_itself(self):
-        body = self._body("    async def _queue_holds(", "    async def _stall_breaker(")
+        body = self._body(
+            "    async def _queue_holds(", "    async def _stall_breaker("
+        )
         for hold in ("stall breaker", "dungeon pace", "gear hold"):
-            self.assertIn('"_say_queue_hold", lambda *a: None)(key, "%s"' % hold, body, hold)
+            self.assertIn(
+                '"_say_queue_hold", lambda *a: None)(key, "%s"' % hold, body, hold
+            )
 
     def test_pace_names_the_mid_run_return(self):
-        body = self._body("    async def _dungeon_pace(", "    async def _leave_town_when_done(")
+        body = self._body(
+            "    async def _dungeon_pace(", "    async def _leave_town_when_done("
+        )
         self.assertIn('"_say_queue_hold", lambda *a: None)(key, "mid-run"', body)
 
     def test_the_helper_uses_the_rate_limit(self):
