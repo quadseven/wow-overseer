@@ -1,9 +1,8 @@
 """A member left in the starting lands of map 530, past its zone, gets its
 level step or a named reason in the same pass (#2400).
 
-Read on the dev realm on 2026-11-13: two Draenei at 23 and 25 stood on map 530
-past their zone's quests and wrote no command row in 24 hours, and no line of
-the log said why. The boat rung (guildjobs.isle_crossing_first) reads
+Such a member could be given no step pass after pass, and no line of the log
+said why. The boat rung (guildjobs.isle_crossing_first) reads
 level_step and returns nothing for every branch that issues no crossing, and
 four of level_step's branches return `None, "", ""`: blocked (fighting, a
 roster family member, the level cap), already at the flight master, the walk's

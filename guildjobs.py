@@ -5534,10 +5534,10 @@ def _loop_line_reason(m, loop, inputs, state) -> str:
     return _death_loop_reason(m, loop, inputs.leveling, inputs.recent, inputs.campaign)
 
 
-# A MEMBER LEFT IN THE STARTING LANDS IS NAMED, WITH THE REASON (#2400). Read
-# on the dev realm on 2026-11-13: two Draenei at 23 and 25 stood on map 530 past
-# their zone's quests and wrote no command row in 24 hours, and nothing in the
-# log said why. The boat rung (isle_crossing_first) reads level_step and
+# A MEMBER LEFT IN THE STARTING LANDS IS NAMED, WITH THE REASON (#2400). A
+# member past its zone's quests on map 530 could be given no step pass after
+# pass with nothing in the log saying why. The boat rung
+# (isle_crossing_first) reads level_step and
 # returns nothing for every branch that issues no crossing, and four of
 # level_step's branches say nothing themselves: blocked (fighting, a roster
 # member, the cap), already at the flight master, the walk's cooldown, and not
