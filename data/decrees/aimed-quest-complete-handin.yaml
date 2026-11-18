@@ -2,16 +2,18 @@
 # appears within 30 minutes (mod-overseer issue 180). Ugga holds 'A Threat Within' (quest 783) as complete
 # beside the quest's turn-in NPC; the drive must hand it in.
 # Scope: the reward event must fall inside the first 30 minutes of a 35 minute window (an upper bound the
-# issue states), so a hand-in at minute 31 does not pass. The re-issue line counts (single figures over 30
-# minutes) and the handed-in log line are bridge or worldserver text a decree can only forbid, so they are not
-# asserted; the rewarded row is the game's own record of the hand-in.
+# issue states), so a hand-in at minute 31 does not pass. The handed-in line ("handed chosen quest 783 ... in
+# to") is worldserver text and is required at least once, and the re-issue line for quest 783 ("was already on
+# quest ... re-issuing for the new errand", one line carrying both phrases) may appear at most 9 times
+# (wow-overseer issue 2767). That count runs over the whole 35 minute window, which is stricter than the 30
+# minutes the issue names, never looser. The rewarded row is the game's own record of the hand-in.
 # Ugga starts at Marshal McBride, the turn-in NPC of quest 783, and a precondition witnesses she is within 40
-# yards of his spawn, so the run tests the hand-in and not a long route. Log lines: see wow-overseer#2767.
+# yards of his spawn, so the run tests the hand-in and not a long route.
 # Fix: mod-overseer pull 1103 (the hand-in and aim stability check).
 decree: v1
 id: aimed-quest-complete-handin
 proves:
-  - {repo: quadseven/mod-overseer, issue: 180, criterion: "an aimed quest that reaches COMPLETE is handed in: a rewarded row exists and the reward event falls within 30 minutes (the log lines are not asserted here)"}
+  - {repo: quadseven/mod-overseer, issue: 180, criterion: "an aimed quest that reaches COMPLETE is handed in: the log shows the handed chosen quest line, a rewarded row exists, the reward event falls within 30 minutes, and re-issue lines for the quest stay in single figures"}
 fix: {repo: quadseven/mod-overseer, commit: "c1aef8cd489f78fb768a420166086909006ef4ed"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -51,3 +53,10 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_event WHERE character_name = 'Ugga' AND kind = 'quest_reward' AND first_seen >= @t0 AND first_seen <= DATE_ADD(@t0, INTERVAL 30 MINUTE)
     expect: {scalar: ">= 1"}
+  # The two lines issue 180 names; pinned to the module source by tests/test_eph_required_lines.py.
+  - name: the-hand-in-was-logged
+    role: check
+    log: {pattern: "'Ugga' handed chosen quest 783 \\(.*\\) in to '", expect: {at_least: 1}}
+  - name: re-issue-lines-stay-in-single-figures
+    role: check
+    log: {pattern: "'Ugga' was already on quest 783 \\(.*\\) by its own choice - re-issuing for the new errand", expect: {at_most: 9}}
