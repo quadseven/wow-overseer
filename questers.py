@@ -1641,8 +1641,10 @@ def _unhuntable(
 ) -> bool:
     """True when the quester has no objective spawn of this quest to hunt
     (`_hunt`'s own choice: a solo field within its level, on its map, not one
-    it leaves for now, or on the other classic continent, which `_hunt`
-    crosses to) and no chest to open for an item of it (`chest_spots`)."""
+    it leaves for now, or on a map `_hunt` crosses to: the other classic
+    continent, or the starting isles its side's boat reaches, which
+    classquest.cross_map knows and far_map does not) and no chest to open
+    for an item of it (`chest_spots`)."""
     quest = cat.quest(qid)
     if quest is None:
         return True
@@ -1657,7 +1659,7 @@ def _unhuntable(
         return False
     if member.placed:
         routable = tuple(s for s in fields if s.guid not in left)
-        return classquest.far_map(member, routable) < 0
+        return classquest.cross_map(member, routable) < 0
     return True
 
 
@@ -1783,7 +1785,7 @@ def failures(
         )
         if reason.startswith(STALLED):
             fields = _held_objective_fields(member, qid, quest)
-            destination = classquest.far_map(member, fields)
+            destination = classquest.cross_map(member, fields)
             wall = guildjobs.class_walls(member.name, crossings).get(destination)
             if wall:
                 reason += "; objective route is blocked: %s" % wall
@@ -2252,7 +2254,9 @@ def _hunt(
         # objectives are only on the other continent, cross to them before
         # choosing a new zone. Otherwise an incomplete Redridge quest held in
         # Darnassus is invisible to both the local hunt and next-zone search.
-        to_map = classquest.far_map(member, fields)
+        # cross_map, not far_map: a spawn only on the starting isles is a
+        # crossing away too, on the boat classquest.cross_map knows.
+        to_map = classquest.cross_map(member, fields)
         if to_map >= 0:
             crossings.append((qid, quest, to_map))
     if chests and (
@@ -2272,7 +2276,7 @@ def _hunt(
         _qid, quest, to_map = min(crossings, key=lambda option: option[0])
         said = "%s crosses to %s for %s" % (
             member.name,
-            classquest.CONTINENTS[to_map],
+            classquest.MAP_WORDS[to_map],
             quest.title,
         )
         return _move(classquest.CROSS, member, quest, None, said, to_map=to_map)
@@ -2320,7 +2324,7 @@ def stalled_holds_with_actionable_objectives(
         ):
             retry.add(qid)
             continue
-        to_map = classquest.far_map(member, fields)
+        to_map = classquest.cross_map(member, fields)
         if to_map < 0:
             continue
         crossing = _move(classquest.CROSS, member, quest, None, "", to_map=to_map)

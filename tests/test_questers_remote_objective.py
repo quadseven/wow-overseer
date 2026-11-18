@@ -8,6 +8,7 @@ import questers
 from test_questers import DUROTAR, REDRIDGE, giver, mirra, quest, spawn
 
 DUSKWOOD = 10
+DUN_MOROGH = 1
 
 
 class HeldRemoteItemObjectives(unittest.TestCase):
@@ -191,4 +192,114 @@ class HeldRemoteItemObjectives(unittest.TestCase):
         self.assertEqual(
             [(b.quest, b.reason) for b in plan.broken],
             [(173, questers.STALLED)],
+        )
+
+
+class HeldQuestOnTheIslesRoute(unittest.TestCase):
+    # Fixture of the ticket's world rows for quest 182 (The Troll Cave,
+    # Dun Morogh, level 4): creature 706 x10, 0 spawns in the quest zone,
+    # 62 in the world. The rows give no map for the 62, so the fixture
+    # stands them on map 530, the starting isles: the one routed map a
+    # quester's hunt could not see, because it asked far_map (the two
+    # classic continents only) where classquest.cross_map also knows the
+    # Alliance boat to the isles. A quester that took the quest and then
+    # crossed to Kalimdor holds it with every spawn a boat ride away.
+    def _troll_cave_catalogue(self, spawn_map):
+        troll_cave = quest(
+            182,
+            DUN_MOROGH,
+            4,
+            min_level=1,
+            kill=706,
+            count=10,
+            title="The Troll Cave",
+        )
+        spawns = [
+            spawn(
+                9000 + i,
+                706,
+                5000.0 + i * 10,
+                0.0,
+                level=5,
+                map_id=spawn_map,
+                name="Frostmane Troll Whelp",
+            )
+            for i in range(62)
+        ]
+        return questers.catalogue(
+            [troll_cave],
+            [
+                giver(182, "start", 8002, 802, 0, 0),
+                giver(182, "end", 8002, 802, 400, 0),
+            ],
+            spawns,
+            [],
+            [{"quest": 182, "kind": "creature", "entry": 802}],
+            [{"quest": 182, "kind": "creature", "entry": 802}],
+        )
+
+    def _holder_on_kalimdor(self):
+        return mirra(
+            name="Mirra",
+            level=10,
+            race=1,
+            map_id=1,
+            zone_id=DUROTAR,
+            x=0.0,
+            y=0.0,
+            quest_log={182: questers.STATUS_INCOMPLETE},
+            quest_progress={182: 0},
+            quest_objectives={182: {706: 0}},
+        )
+
+    def test_a_held_troll_cave_quest_crosses_to_its_isle_spawns(self):
+        cat = self._troll_cave_catalogue(spawn_map=530)
+        holder = self._holder_on_kalimdor()
+        move = questers.plan(cat, holder, questers.Clock(), 0.0).move
+        self.assertEqual(
+            (move.kind, move.quest, move.to_map),
+            (classquest.CROSS, 182, 530),
+        )
+        arrived = questers.Member(
+            **{**holder.__dict__, "map_id": 530, "zone_id": DUN_MOROGH}
+        )
+        hunt = questers.plan(cat, arrived, questers.Clock(), 0.0).move
+        self.assertEqual(
+            (hunt.kind, hunt.quest, hunt.spot.entry),
+            (classquest.HUNT, 182, 706),
+        )
+
+    def test_a_held_troll_cave_quest_is_huntable_and_its_stall_is_retried(self):
+        cat = self._troll_cave_catalogue(spawn_map=530)
+        holder = self._holder_on_kalimdor()
+        self.assertFalse(questers._unhuntable(cat, holder, 182))
+        retry = questers.stalled_holds_with_actionable_objectives(
+            cat, holder, {182: questers.STALLED}
+        )
+        self.assertEqual(retry, frozenset({182}))
+
+    def test_a_held_troll_cave_quest_with_spawns_on_no_routed_map_still_stalls(self):
+        # The same world rows with the spawns on a map no crossing route
+        # reaches: the stall clock still runs and the quest is still
+        # found broken, as before.
+        cat = self._troll_cave_catalogue(spawn_map=571)
+        holder = mirra(
+            name="Mirra",
+            level=10,
+            race=3,
+            map_id=0,
+            zone_id=DUN_MOROGH,
+            x=0.0,
+            y=0.0,
+            quest_log={182: questers.STATUS_INCOMPLETE},
+            quest_progress={182: 0},
+            quest_objectives={182: {706: 0}},
+        )
+        clock = questers.Clock()
+        plan = None
+        for i in range(13):
+            plan = questers.plan(cat, holder, clock, 600.0 * i)
+        self.assertEqual(
+            [(b.quest, b.reason) for b in plan.broken],
+            [(182, questers.STALLED)],
         )
