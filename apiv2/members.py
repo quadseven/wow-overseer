@@ -970,6 +970,10 @@ def stuck_digest(rows: list, checked_at: int | None) -> dict:
 
 
 def _stuck_notes(ctx) -> dict:
+    # Notes are optional decoration; a context without memo reads still serves
+    # the roster's stuck members.
+    if ctx.read is None:
+        return {}
     rows = ctx.read.rows(
         STUCK_NOTE_SQL, (STUCK_NOTE_MEMO_KIND,), what="overseer_bridge_memo"
     )

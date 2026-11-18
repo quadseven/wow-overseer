@@ -850,6 +850,31 @@ class TheLatestRefusalReason(unittest.TestCase):
 
 
 class TheStuckStatusNote(unittest.TestCase):
+    def test_the_stuck_route_still_works_without_a_memo_reader(self):
+        roster = {
+            "members": [
+                {
+                    "name": "TestMember",
+                    "stuck": True,
+                    "step": "Waiting for movement.",
+                    "blocker": "Waiting for movement.",
+                    "since": NOW - 60,
+                    "stuck_kind": "hold",
+                    "follows": "",
+                }
+            ],
+            "checked_at": NOW,
+            "basis": "test",
+        }
+        ctx = types.SimpleNamespace(read=None)
+
+        with mock.patch.object(members, "_roster_payload", return_value=roster):
+            code, payload = members.stuck({}, ctx)
+
+        self.assertEqual(code, 200)
+        self.assertEqual([row["name"] for row in payload["members"]], ["TestMember"])
+        self.assertNotIn("note", payload["members"][0])
+
     def test_current_note_is_exposed_for_the_matching_over_bound_episode(self):
         note = {
             "kind": "hold",
