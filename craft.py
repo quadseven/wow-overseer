@@ -246,7 +246,12 @@ TOOL_WALKS: frozenset = frozenset({BLACKSMITH_HAMMER, 6218, 6339, 11130, 11145})
 # tests/test_recipe_stations.py fails on a recipe whose measured focus is not a
 # key. A Forge is the bridge's walk, an Anvil is DriveCraft's and a Cooking Fire
 # is lit where the cook stands.
-STATIONS: dict = {1: "Anvil", 3: "Forge", 4: "Cooking Fire"}
+STATIONS: dict = {
+    1: "Anvil",
+    3: "Forge",
+    4: "Cooking Fire",
+    BLACK_FORGE_FOCUS_ID: "Black Forge",
+}
 
 # `TotemCategory.dbc` id -> the item that answers it, the same test's table.
 TOOL_ITEMS: dict = {
@@ -2885,11 +2890,15 @@ AUTO_LEARNED = frozenset(
     }
 )
 
+# Quest-taught recipes have no trainer row and are only known when the spellbook
+# read confirms them. Smelt Dark Iron comes from The Spectral Chalice.
+QUEST_TAUGHT = frozenset({14891})
+
 # THE TRAINER'S PRICE FOR EVERY BOUGHT RUNG, spell -> (ReqSkillRank, copper).
 # acore_world.trainer_spell on the dev world, 2026-10-10: the least
 # ReqSkillRank and MoneyCost across the trainers that teach it, for every
-# rung of RECIPES that is not AUTO_LEARNED and every trainer bag the tailor
-# sews (BAG_RECIPES, guildcorps.BAGS). Every one of them is sold by the
+# rung of RECIPES that is not AUTO_LEARNED or QUEST_TAUGHT, and every trainer
+# bag the tailor sews (BAG_RECIPES, guildcorps.BAGS). Each is sold by the
 # ordinary trainer of its trade in each capital (trainer ids 58-60, 61-63,
 # 65-67, 72-74, 81-83 and 84-92), so the nearest trainer of the trade sells
 # it. mod-overseer's TrainOnArrival buys a trade's recipes at this price once
@@ -3012,13 +3021,18 @@ TRAINER_RECIPES: dict[int, tuple[int, int]] = {
 def holds(spell_id: int, known) -> bool:
     """Does a character with spellbook `known` hold this recipe?
 
-    `known` None is an unread spellbook: held, so nothing is judged on it. An
-    auto-learned rung is held whatever `character_spell` says, and so is any
-    spell this module cannot place as a trainer purchase. Only a rung in
-    TRAINER_RECIPES that is absent from `known` is not held.
+    `known` None is an unread spellbook: held, so nothing is judged on it,
+    except a quest-taught recipe that cannot be assumed. An auto-learned rung
+    is held whatever `character_spell` says, and so is any spell this module
+    cannot place as a trainer purchase. Only a trainer or quest-taught recipe
+    absent from a readable spellbook is not held.
     """
     spell = int(spell_id or 0)
-    if known is None or not spell or spell in AUTO_LEARNED:
+    if not spell or spell in AUTO_LEARNED:
+        return True
+    if spell in QUEST_TAUGHT:
+        return known is not None and spell in known
+    if known is None:
         return True
     return spell not in TRAINER_RECIPES or spell in known
 

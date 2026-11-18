@@ -326,6 +326,7 @@ class TheCraftErrandIsWrittenForAnotherFamily(unittest.TestCase):
                 "asyncio": FAKE_ASYNCIO,
                 "craft": craft,
                 "craft_rhythm": craft_rhythm,
+                "fireplan": types.SimpleNamespace(dark_iron_enabled=lambda: False),
                 "log": _Log(),
                 "_crafting_roster": lambda family=None: (
                     ["Oz"] if family == "Zug" else ["Og"]

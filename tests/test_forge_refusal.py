@@ -16,6 +16,8 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+import craft  # noqa: E402
+import fireplan  # noqa: E402
 import levelroute  # noqa: E402
 import travel  # noqa: E402
 
@@ -150,11 +152,13 @@ def _forge_once(refusal_stub, spawn, smelters, claim_calls, logs, town_stop=Fals
         "asyncio": types.SimpleNamespace(to_thread=to_thread),
         "log": Log(),
         "travel": travel,
+        "craft": craft,
+        "fireplan": fireplan,
         "_cohort_key": lambda c: None,
         "_forge_errands": lambda key: {} if town_stop else smelters,
         "_family_of": lambda c: (["Grug", "Ugga"], "Grug"),
         "_fetch_positions": lambda names: {"Grug": {"map_id": 0}},
-        "_nearest_forge": lambda leader: spawn,
+        "_nearest_forge": lambda leader, focus_id: spawn,
     }
     if refusal_stub is not None:
         ns["_forge_refusal"] = refusal_stub

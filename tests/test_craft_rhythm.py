@@ -687,9 +687,17 @@ class SpendOrSmelt(unittest.TestCase):
         enabled = craft_rhythm.errand(
             "Grug", skills, held, known=known, dark_iron_enabled=True
         )
+        unlearned = craft_rhythm.errand(
+            "Grug", skills, held, known=frozenset(), dark_iron_enabled=True
+        )
+        unread = craft_rhythm.errand(
+            "Grug", skills, held, known=None, dark_iron_enabled=True
+        )
         self.assertFalse(disabled.smelting)
         self.assertEqual(enabled.spell, 14891)
         self.assertTrue(enabled.smelting)
+        self.assertNotEqual(unlearned.spell, 14891)
+        self.assertNotEqual(unread.spell, 14891)
 
     def test_a_bar_gated_craft_errand_is_answered_by_the_smelt(self):
         """Grog at Engineering 31 wants Handful of Copper Bolts, whose only
