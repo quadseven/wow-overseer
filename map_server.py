@@ -5864,9 +5864,13 @@ class Handler(BaseHTTPRequestHandler):
         # does not, and it is not a broken link.
         # The build is stamped in beside the mount (appbuild.py), so an open
         # tab can tell when the server holds newer app code than it runs.
+        # The modulepreload links go in first (appbuild.preload), carrying the
+        # same placeholders as the rest of the page, so the mount and the
+        # build are stamped into them with everything else.
         self._send_file("index.html", "text/html; charset=utf-8",
                         transform=lambda body: appbuild.stamp(
-                            basepath.apply(body, BASE_PATH), appbuild.fingerprint(HERE)))
+                            basepath.apply(appbuild.preload(body, HERE), BASE_PATH),
+                            appbuild.fingerprint(HERE)))
 
     def _app_file(self, rel: str) -> None:
         """GET /app/[<build>/]<path> - one served file of the operations app.
@@ -5961,7 +5965,7 @@ class Handler(BaseHTTPRequestHandler):
         # the worker's own registration stay inside this realm's prefix (#2314).
         def _render(body: bytes) -> bytes:
             with open(os.path.join(HERE, "index.html"), "rb") as f:
-                index_html = f.read()
+                index_html = appbuild.preload(f.read(), HERE)
             return appbuild.stamp_worker(
                 basepath.apply(body, BASE_PATH), appbuild.fingerprint(HERE), index_html
             )
