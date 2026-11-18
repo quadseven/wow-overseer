@@ -312,11 +312,11 @@ class TheSentenceNamesTheWork(unittest.TestCase):
         self.assertIn("restarted 424 times", got["waiting"])
 
     def test_different_walks_that_each_finished_are_not_one_walk_restarting(self):
-        # Measured on the dev realm 2026-11-18: a leader ran a Stormwind City
-        # errand leg twice, a vendor trip three times and a quest drive hand
-        # over twice in a quarter hour. Every leg ended and the next began;
-        # none was the same walk failing. The sum (7) read as a walk that
-        # "has ended and restarted" and flagged a healthy family as stalled.
+        # A leader that runs several different walks in turn (an errand leg,
+        # a vendor trip, a quest drive hand-over) finishes each one and begins
+        # the next; none is the same walk failing. Summing them read as a walk
+        # that "has ended and restarted" and flagged a healthy family as
+        # stalled.
         legs = [
             step(
                 "Grug",
