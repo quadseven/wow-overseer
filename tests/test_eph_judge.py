@@ -1180,7 +1180,9 @@ class GuardedWorldDbTest(unittest.TestCase):
             db.insert_command("Grug", "job", "quest'); DROP TABLE x; --")
         self.assertEqual(len(conn.writes), 1)
         db.insert_command("Uzza", "bot", "go -6968.6;-2274.1")
-        self.assertEqual(conn.writes[1][1], ("Uzza", "go -6968.6;-2274.1", "bot", "eph-judge"))
+        self.assertEqual(
+            conn.writes[1][1], ("Uzza", "go -6968.6;-2274.1", "bot", "eph-judge")
+        )
 
     def test_a_server_side_timeout_becomes_a_query_timeout(self):
         conn = ScriptedConn()
