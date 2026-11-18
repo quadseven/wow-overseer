@@ -131,6 +131,30 @@ _MASK = re.compile(r"\(mask \d+ -> (\d+)\)")
 # The module's stalled row when `dc skip` was refused because the dungeon
 # module had disabled itself (mod-overseer's clearing watchdog).
 _SWITCHED_OFF = "switched itself off"
+# The module's stalled row when `dc skip` was refused because nothing the
+# party could still reach was left.
+_NOTHING_LEFT = "nothing left it could reach"
+
+# THE ENCOUNTER BITS A MAP CREDITS, AND THE ONES A PARTY MAY NEVER START
+# (#2740). Map 109 credits eight encounters: bits 0, 1, 2, 3, 5, 6, 7, 8
+# (there is no bit 4 on that map). Bit 7 (128) is an optional encounter
+# gated behind a quest chain a party may not hold: when it cannot be
+# started, the module switches its clearing off and refuses the skip, and
+# a run that credited every other bit ends 'stalled' although nothing it
+# could reach is left. Data, not a special case in the flow: a map joins
+# the table only when its encounter bits and its optional bits have both
+# been read off the encounter data.
+FULL_MASKS = {109: 495}
+OPTIONAL_BITS = {109: 128}
+
+
+def reachable_mask(map_id) -> int | None:
+    """The mask of every encounter on `map_id` a party can reach, or None
+    when the map's encounter bits are not in the table."""
+    full = FULL_MASKS.get(int(map_id or 0))
+    if full is None:
+        return None
+    return full & ~OPTIONAL_BITS.get(int(map_id or 0), 0)
 
 
 def holes(count: int) -> str:
@@ -202,6 +226,16 @@ def stall_of(row: dict, events: list) -> Stall | None:
     # drops the fire protection recipe.
     if masks and masks[-1] and reasons and campaignplan.CLEARED_REASON in reasons[-1]:
         return None
+    # A RUN THAT CREDITED EVERY REACHABLE ENCOUNTER IS FINISHED TOO (#2740).
+    # Its last stalled row is the module refusing the skip because nothing
+    # left could be reached, and the only bits missing are the optional
+    # ones the party could not start. Without this the run read as a stall,
+    # and two of them barred a door the family had in fact cleared as far
+    # as it could reach.
+    if masks and reasons and _NOTHING_LEFT in reasons[-1]:
+        reachable = reachable_mask(row.get("map_id"))
+        if reachable is not None and masks[-1] == reachable:
+            return None
     return Stall(rid, masks[-1] if masks else 0, reasons[-1] if reasons else "")
 
 
