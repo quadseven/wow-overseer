@@ -2,7 +2,8 @@
 //
 // The server decides everything here. /api/clips lists the ready clips, newest
 // first, each with the URL the file is served at; a loot story or a run card
-// carries `clip` ({url, kind}) when its event has a saved clip, or `clip_note`
+// carries `clip` ({url, kind}, plus `view_note` when the clip was filmed from
+// another member's view) when its event has a saved clip, or `clip_note`
 // when no live view was up. This only draws them. A clip plays in place in the
 // browser's own video element; nothing is fetched but its metadata until Play.
 
@@ -25,11 +26,13 @@ const kept = new Map();
 
 function kindWord(kind) { return KIND[kind] || String(kind || "Clip").replace(/_/g, " "); }
 
-// The line under a story or run card: a link to its clip, the server's words
-// when no live view was up, or nothing.
+// The line under a story or run card: a link to its clip (with the server's
+// words for whose view filmed it, when not the subject's own), the server's
+// words when no live view was up, or nothing.
 export function clipLink(entry) {
   if (entry && entry.clip && entry.clip.url) {
-    return html`<a class="clip-link" href="${u(entry.clip.url)}" target="_blank" rel="noopener"><i class="ph-fill ph-play-circle" aria-hidden="true"></i>Watch the clip</a>`;
+    const from = entry.clip.view_note ? html` <span class="muted clip-note">${entry.clip.view_note}</span>` : "";
+    return html`<a class="clip-link" href="${u(entry.clip.url)}" target="_blank" rel="noopener"><i class="ph-fill ph-play-circle" aria-hidden="true"></i>Watch the clip</a>${from}`;
   }
   if (entry && entry.clip_note) return html`<span class="muted clip-note">${entry.clip_note}</span>`;
   return "";
