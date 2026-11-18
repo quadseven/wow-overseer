@@ -146,8 +146,11 @@ class ALevel60FamilyGearsInTheLowerDungeons(unittest.TestCase):
             alliance(upgrades=worth(zulfarrak=18.0, **{"dire-maul-east-east": 9.0}))
         )
         self.assertIn("zulfarrak", [o.keyword for o in opts])
+        # It stays offered, but the pick is the in-band run: Zul'Farrak's
+        # bosses top out well under a capped family's weakest member, so
+        # its higher raw expected gain no longer wins the pick (#2715).
         pick = campaignplan.heuristic(opts)
-        self.assertEqual(pick.keyword, "zulfarrak")
+        self.assertEqual(pick.keyword, "dire-maul-east-east")
         self.assertTrue(pick.capped)
         self.assertEqual(pick.runs, campaignplan.AT_CAP_RUNS)
 
