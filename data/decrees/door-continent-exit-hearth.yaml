@@ -10,7 +10,7 @@ proves:
 fix: {repo: quadseven/mod-overseer, commit: "3527a5984ad0d969c09985d901fa0f2408e15a7c"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
-duration: 1h
+duration: 40m
 cast:
   - who: family:grug
     set: {alive: true, health_pct: 100, homebind: {creature: "Gazlowe"}, at: {areatrigger: 286}}
@@ -18,8 +18,14 @@ cast:
 arrange:
   - group: {members: family:grug, leader: Grug}
 act:
-  - at: 0s
+  # The command is read the moment the judge starts, before the headless roster has logged in, and a command
+  # for a character who is not online is refused ("target not online"), so the job never lands. Wait for the login.
+  - at: 90s
     roster: {who: family:grug, job: "dungeon:uldaman"}
+  # Taking the job away mid-run is what makes the module end the run and walk the family out, which is the exit
+  # whose hearth the issue is about.
+  - at: 20m
+    roster: {who: family:grug, job: "rest"}
 observe:
   - name: family-is-bound-on-map-1
     role: precondition
