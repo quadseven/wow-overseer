@@ -223,6 +223,7 @@ GATE_HOME_COHORT = "that is the cohort this process already drives"
 NOT_A_NAME = "not a character name"
 UNKNOWN = "no such character"
 NOT_HORDE = "not Horde"
+NOT_ALLIANCE = "not Alliance"
 IN_A_GUILD = "already in a guild"
 OTHER_COHORT = "already enrolled in another cohort"
 
@@ -339,7 +340,7 @@ def blocked_by(
     return ""
 
 
-def verdict(candidate: Candidate, cohort: str) -> str:
+def verdict(candidate: Candidate, cohort: str, faction: str = "horde") -> str:
     """Why this one character cannot be enrolled, or '' when it can.
 
     ONE CANDIDATE, NO BATCH STATE. Duplicate detection needs to know what the
@@ -352,7 +353,14 @@ def verdict(candidate: Candidate, cohort: str) -> str:
         return NOT_A_NAME
     if not candidate.exists:
         return UNKNOWN
-    if candidate.race not in HORDE_RACES:
+    # THE FACTION A COHORT IS ENROLLED AS. Horde is the default and the only
+    # value this tool had until a second Alliance family was wanted; an
+    # Alliance cohort has to ask for itself (`faction="alliance"`), so no
+    # existing call changes.
+    if faction == "alliance":
+        if candidate.race in HORDE_RACES:
+            return NOT_ALLIANCE
+    elif candidate.race not in HORDE_RACES:
         return NOT_HORDE
     if candidate.guild_id:
         # A guild is the thing this cohort is being assembled to found
@@ -379,6 +387,7 @@ def plan(
     has_family_column: bool,
     module_reads_family: bool,
     limit: int = DEFAULT_LIMIT,
+    faction: str = "horde",
 ) -> Plan:
     """Who may be enrolled into `cohort`, and what stops the whole batch.
 
@@ -448,7 +457,7 @@ def plan(
             # the operator reads is the count that lands.
             skipped.append(Refusal(name=name, reason=ALREADY_HERE))
             continue
-        reason = verdict(candidate, cohort)
+        reason = verdict(candidate, cohort, faction)
         if not reason:
             seen.add(name)
             rows.append(row_for(name, cohort))

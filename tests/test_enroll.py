@@ -567,6 +567,14 @@ class TheCandidatesAreChecked(unittest.TestCase):
                 self.assertEqual(plan.rows, ())
                 self.assertEqual(plan.refused[0].reason, enroll.NOT_A_NAME)
 
+    def test_an_alliance_cohort_takes_alliance_races_only_when_it_asks(self):
+        human = _candidate("Tug", race=1)
+        horde = _candidate("Jug", race=2)
+        self.assertEqual(_plan([human]).refused[0].reason, enroll.NOT_HORDE)
+        plan = _plan([human, horde], cohort="Tug", faction="alliance")
+        self.assertEqual([row["name"] for row in plan.rows], ["Tug"])
+        self.assertEqual(plan.refused[0].reason, enroll.NOT_ALLIANCE)
+
     def test_a_good_batch_survives_a_bad_neighbour(self):
         """One refusal does not cost the rest their turn, and the report says
         exactly which is which."""
