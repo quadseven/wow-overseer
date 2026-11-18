@@ -204,6 +204,7 @@ import raidprep
 import raidroles
 import restsupply
 import raidrun
+import rebind
 import spirerun
 import raidsupply
 import reagentplan
@@ -7145,6 +7146,37 @@ def _roster_leads() -> set:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(_COUNCIL_LEAD_SQL)
         return {str(r["name"]) for r in cur.fetchall()}
+
+
+_RECENT_REBINDS_SQL = (
+    "SELECT DISTINCT target_name FROM overseer_command WHERE kind = 'bind' "
+    "AND source = %s AND created_at > NOW() - INTERVAL " + str(rebind.BACKOFF_SECONDS) +
+    " SECOND AND target_name IN (%s)")
+
+
+def _recent_rebinds(names: list) -> frozenset:
+    """Who was asked to rebind inside the back-off. An unreadable table asks
+    nobody twice by reading as everybody asked."""
+    if not names:
+        return frozenset()
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_RECENT_REBINDS_SQL % ("%s", ",".join(["%s"] * len(names))),
+                        (rebind.SOURCE, *names))
+            return frozenset(str(r["target_name"]) for r in cur.fetchall())
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in orders.MISSING_MACHINERY:
+                return frozenset(names)
+            raise
+
+
+def _insert_rebind(name: str) -> int:
+    """One kind='bind' row, empty command (`here`): the character binds where it
+    stands, which the verb allows only beside an innkeeper."""
+    return orders.send(
+        orders.MySqlStore(_connect),
+        orders.Order(target=name, command="", kind="bind", source=rebind.SOURCE),
+    )
 
 
 def _insert_hearth(name: str, source: str = jev_movement.SOURCE) -> int:
@@ -17502,7 +17534,43 @@ class Bridge(discord.Client):
                 await self._hearth_stranded_followers()
             except Exception:
                 log.exception("strand hearth: pass failed; retrying next cycle")
+            try:
+                await self._rebind_at_the_inn()
+            except Exception:
+                log.exception("rebind: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
+
+    async def _rebind_at_the_inn(self) -> int:
+        """Ask a member bound at another inn to bind, while it stands at its
+        leader's inn. Moves nobody: the `bind` verb only works beside an
+        innkeeper, so this waits for a family town errand to bring the member.
+        One row per member per rebind.BACKOFF_SECONDS."""
+        intents = await asyncio.to_thread(_fetch_family_intents)
+        leads = await asyncio.to_thread(_roster_leads)
+        live = {}
+        for leader, row in intents.items():
+            if strandhearth.fresh_leader_row(leader, row, leads):
+                live[leader] = [n for n in strandhearth.parse_members_state(
+                    row.get("members_state")) if n not in leads]
+        names = sorted({n for ms in live.values() for n in ms} | set(live))
+        if not names:
+            return 0
+        positions = await asyncio.to_thread(_fetch_positions, names)
+        reads = await asyncio.to_thread(_movement_reads, names)
+        facts = await asyncio.to_thread(hearthcast_data.read_from, _connect, names, log)
+        alive = getattr(facts, "alive", None) or {}
+        recent = await asyncio.to_thread(_recent_rebinds, names)
+        sent = 0
+        for leader, members in live.items():
+            rows = {m: rebind.Member(bind=reads["binds"].get(m), at=positions.get(m),
+                                     alive=alive.get(m)) for m in members}
+            asked, _ = rebind.select(reads["binds"].get(leader), rows, recent)
+            for name in asked:
+                await asyncio.to_thread(_insert_rebind, name)
+                sent += 1
+                log.info("rebind: %s is bound at another inn and stands at %s's; "
+                         "asked to bind here", name, leader)
+        return sent
 
     async def _hearth_stranded_followers(self) -> int:
         """Send a follower that cannot close on its held leader home by its stone.
