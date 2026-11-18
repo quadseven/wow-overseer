@@ -9018,10 +9018,6 @@ class Bridge(discord.Client):
         # store (#817): a deploy would otherwise count a trip stuck for most
         # of its bound from zero, and with deploys closer together than the
         # bound the give-up never fired.
-        # Leader -> when the module first said a vendor errand was done with
-        # nothing queued (bag_pressure.counter_done_step). In memory only: a
-        # restart restarts the clock, which costs one more bounded wait.
-        self._counter_done_since: dict[str, float] = {}
         self._vendor_movement: dict[str, vendor_stall.Movement] = _ClockMemo(
             "vendor_move", "vendor trip stall", vendor_stall.movement_memo,
             vendor_stall.movement_from_memo, _trip_clock, TRIP_CLOCK_MEMO_SECONDS)
@@ -14892,39 +14888,6 @@ class Bridge(discord.Client):
                 log.exception("gear routing pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
-    def _bound_the_pressure_hold(
-        self, step: str, leader: str, vendor, current_aim: str, outstanding: int,
-        intent: dict,
-    ) -> str:
-        """THE BOUND ON THE PRESSURE HOLD. The module calls the errand done on
-        arrival and may not clear the column; the bridge holds the aim under
-        bag pressure; so a leader at a counter with nothing queued would hold
-        the one travel column, and have the module read it as a new walk every
-        poll, for ever. See bag_pressure.COUNTER_DONE_RELEASE_SECONDS. The
-        release itself stays the pass's one existing release: this only turns
-        the hold into it once the bound has run. The module's own record that
-        it has finished the walk is its intent row no longer holding the leader
-        for the economy errand."""
-        since, release = bag_pressure.counter_done_step(
-            self._counter_done_since.get(leader), time.monotonic(),
-            bool(vendor) and current_aim == "vendor", outstanding,
-            str(intent.get("current_kind") or "") != "economy",
-        )
-        if since is None:
-            self._counter_done_since.pop(leader, None)
-            return step
-        self._counter_done_since[leader] = since
-        if not (release and step == bag_pressure.VENDOR_ERRAND_HOLD):
-            return step
-        log.info(
-            "economy: leader=%s has stood at a vendor %ds with nothing queued "
-            "since the module called the errand done, so the errand is handed "
-            "back and the travel column is free",
-            leader, int(bag_pressure.COUNTER_DONE_RELEASE_SECONDS),
-        )
-        self._counter_done_since.pop(leader, None)
-        return bag_pressure.VENDOR_ERRAND_RELEASE
-
     async def _settle_vendor_errand(self, names: list, leader: str) -> str:
         """Is the vendor errand the leader already carries finished? (infra#3708)
 
@@ -15029,8 +14992,9 @@ class Bridge(discord.Client):
             pressure=pressure,
             sale_counts=_vendor_sale_counts(names),
         )
-        step = self._bound_the_pressure_hold(
-            step, leader, leader_town.vendor, current_aim, outstanding, intent,
+        step = bag_pressure.bound_pressure_hold(
+            step, leader, time.monotonic(), leader_town.vendor, current_aim,
+            outstanding, intent,
         )
         if (step == bag_pressure.VENDOR_ERRAND_HOLD
                 and outstanding == 0

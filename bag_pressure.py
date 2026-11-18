@@ -1145,6 +1145,47 @@ def counter_done_step(
     return since, (now - since) >= COUNTER_DONE_RELEASE_SECONDS
 
 
+# Leader -> when the module first said a vendor errand was done with nothing
+# queued. In memory only: a restart restarts the clock, which costs one more
+# bounded wait.
+_COUNTER_DONE_SINCE: dict[str, float] = {}
+
+
+def bound_pressure_hold(
+    step: str,
+    leader: str,
+    now: float,
+    vendor,
+    current_aim: str,
+    outstanding: int,
+    intent: dict,
+) -> str:
+    """THE BOUND ON THE PRESSURE HOLD. The module calls the errand done on
+    arrival and may not clear the column; the bridge holds the aim under bag
+    pressure; so a leader at a counter with nothing queued would hold the one
+    travel column, and have the module read it as a new walk every poll, for
+    ever. See COUNTER_DONE_RELEASE_SECONDS. The release itself stays the pass's
+    one existing release: this only turns a hold into it once the bound has
+    run. The module's own record that it has finished the walk is its intent
+    row no longer holding the leader for the economy errand.
+    """
+    since, release = counter_done_step(
+        _COUNTER_DONE_SINCE.get(leader),
+        now,
+        bool(vendor) and current_aim == "vendor",
+        outstanding,
+        str(intent.get("current_kind") or "") != "economy",
+    )
+    if since is None:
+        _COUNTER_DONE_SINCE.pop(leader, None)
+        return step
+    _COUNTER_DONE_SINCE[leader] = since
+    if not (release and step == VENDOR_ERRAND_HOLD):
+        return step
+    _COUNTER_DONE_SINCE.pop(leader, None)
+    return VENDOR_ERRAND_RELEASE
+
+
 def _position_map(position: dict | None) -> int | None:
     """Map id from a settled snapshot row, or None when it cannot be read."""
     if not position:

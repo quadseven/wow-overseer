@@ -77,8 +77,49 @@ class CounterDoneStep(unittest.TestCase):
             encoding="utf-8",
         ) as fh:
             source = fh.read()
-        self.assertIn("bag_pressure.counter_done_step(", source)
-        self.assertIn("_counter_done_since", source)
+        self.assertIn("bag_pressure.bound_pressure_hold(", source)
+
+
+class BoundPressureHold(unittest.TestCase):
+    def setUp(self):
+        bag_pressure._COUNTER_DONE_SINCE.clear()
+
+    def ask(self, now, step=None, outstanding=0, intent=None, vendor=True):
+        return bag_pressure.bound_pressure_hold(
+            step or bag_pressure.VENDOR_ERRAND_HOLD,
+            "Grug",
+            now,
+            vendor,
+            "vendor",
+            outstanding,
+            {"current_kind": "quest"} if intent is None else intent,
+        )
+
+    def test_a_hold_becomes_the_release_after_the_bound(self):
+        self.assertEqual(self.ask(1000.0), bag_pressure.VENDOR_ERRAND_HOLD)
+        self.assertEqual(self.ask(1000.0 + LIMIT), bag_pressure.VENDOR_ERRAND_RELEASE)
+
+    def test_an_errand_the_module_still_holds_is_never_released(self):
+        economy = {"current_kind": "economy"}
+        self.ask(1000.0, intent=economy)
+        self.assertEqual(
+            self.ask(1000.0 + LIMIT * 3, intent=economy),
+            bag_pressure.VENDOR_ERRAND_HOLD,
+        )
+
+    def test_a_queued_sale_keeps_the_hold(self):
+        self.ask(1000.0)
+        self.assertEqual(
+            self.ask(1000.0 + LIMIT * 3, outstanding=2),
+            bag_pressure.VENDOR_ERRAND_HOLD,
+        )
+
+    def test_only_a_hold_is_turned_into_a_release(self):
+        self.ask(1000.0)
+        self.assertEqual(
+            self.ask(1000.0 + LIMIT, step=bag_pressure.VENDOR_ERRAND_AIM),
+            bag_pressure.VENDOR_ERRAND_AIM,
+        )
 
 
 if __name__ == "__main__":
