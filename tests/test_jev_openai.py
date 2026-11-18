@@ -46,7 +46,7 @@ class Pricing(unittest.TestCase):
         nano, luna = jo.PRICES["gpt-5-nano"], jo.PRICES["gpt-6-luna"]
         self.assertEqual((nano.input, nano.cached, nano.output), (0.05, 0.005, 0.40))
         self.assertEqual((luna.input, luna.cached, luna.output), (0.10, 0.01, 0.50))
-        self.assertEqual(jo.DEFAULT_MODEL, "gpt-5-nano")
+        self.assertEqual(jo.DEFAULT_MODEL, "gpt-6-luna")
 
     def test_cost_from_uncached_cached_and_output_tokens(self):
         usage = jo.Usage(100_000, 100_000, 500_000)
@@ -398,15 +398,34 @@ class Selection(unittest.TestCase):
         with self.assertLogs("wow-overseer.jev", "WARNING"):
             self.assertEqual(jev.backend_name({"JEV_PROVIDER": "nope"}), "jev")
 
-    def test_the_key_comes_from_the_environment_and_the_model_has_a_cheap_default(self):
+    def test_the_key_comes_from_the_environment_and_the_model_has_a_default(self):
         client = jev.Client.from_env(
             {"JEV_PROVIDER": "openai", "OPENAI_API_KEY": "k-test"}
         )
         self.assertEqual(client.backend.name, "openai")
         self.assertTrue(client.configured)
-        self.assertEqual(client.model, "gpt-5-nano")
+        self.assertEqual(client.model, "gpt-6-luna")
         self.assertIsNotNone(client.spend)
-        self.assertEqual(client.backend.effort, "low")
+        self.assertEqual(client.backend.effort, "")
+
+    def test_the_defaults_send_only_what_the_decisions_endpoint_accepts(self):
+        # POST /v1/decisions answers 404 model_not_found to any model but
+        # those in DECISIONS_MODELS, and 400 unknown_parameter to any body
+        # key but model, input and questions (live probes, 2026-11-17).
+        for env in (
+            {"JEV_PROVIDER": "openai", "OPENAI_API_KEY": "k-test"},
+            {"JEV_BACKEND": "openai", "OPENAI_API_KEY": "k-test"},
+        ):
+            transport = Transport(result=decision(usage=USAGE))
+            client = jev.Client.from_env(env, transport=transport)
+            run(client.ask("loot_council", "s", {"r": ROUTE}))
+            [(url, body)] = [(c[0], c[1]) for c in transport.calls]
+            self.assertTrue(url.endswith("/v1/decisions"), url)
+            self.assertIn(body["model"], jo.DECISIONS_MODELS)
+            self.assertEqual(set(body), {"model", "input", "questions"})
+        self.assertIn(jo.DEFAULT_MODEL, jo.DECISIONS_MODELS)
+        self.assertIn(jo.DEFAULT_MODEL, jo.PRICES)
+        self.assertEqual(jo.DEFAULT_REASONING, "")
 
     def test_the_model_and_effort_and_per_kind_models_are_configurable(self):
         env = {

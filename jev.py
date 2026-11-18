@@ -76,9 +76,10 @@ chosen by `JEV_BACKEND` (default `jev`):
 JEV_PROVIDER=openai (#2899) selects the openai backend ahead of JEV_BACKEND
 and puts it on a small model with a spend ledger (see jev_openai): the key is
 OPENAI_API_KEY (or the file named by OPENAI_API_KEY_FILE), the model is
-JEV_OPENAI_MODEL (default gpt-5-nano; JEV_OPENAI_MODEL_<KIND> overrides one
-kind, so a kind that misses the bar can step up), JEV_OPENAI_REASONING is the
-reasoning effort sent (default low), and a hard monthly cap
+JEV_OPENAI_MODEL (default gpt-6-luna, the one model /v1/decisions accepts;
+JEV_OPENAI_MODEL_<KIND> overrides one kind), JEV_OPENAI_REASONING is a
+reasoning effort to send (default empty, which sends none: the endpoint
+answers 400 to a `reasoning` parameter), and a hard monthly cap
 (JEV_OPENAI_CAP_USD, never above 90) skips calls near it. `JEV_MODE_<KIND>`
 takes `compare` (an alias of shadow: the answer is recorded beside the
 heuristic's, which acts) or `act`, and an `act` kind runs as compare until the
@@ -599,8 +600,8 @@ class OpenAIBackend:
     key_env = "OPENAI_API_KEY"
 
     def __init__(self, effort: str = "") -> None:
-        # The reasoning effort sent with each request ("" sends none): these
-        # are short classification calls, so a low one is enough.
+        # The reasoning effort sent with each request ("" sends none, the
+        # default: /v1/decisions answers 400 unknown_parameter to one).
         self.effort = str(effort or "").strip().lower()
 
     def service_ms(self, data) -> int:
@@ -1174,7 +1175,9 @@ class Client:
         backend = BACKENDS[name]
         if name == "openai":
             # Its own instance: the reasoning effort belongs to this client.
-            backend = OpenAIBackend(env.get("JEV_OPENAI_REASONING", "low"))
+            backend = OpenAIBackend(
+                env.get("JEV_OPENAI_REASONING", jev_openai.DEFAULT_REASONING)
+            )
             kw.setdefault("spend", jev_openai.Spend(env=env))
             kw.setdefault(
                 "models",
