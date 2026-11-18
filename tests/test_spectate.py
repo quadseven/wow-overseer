@@ -214,9 +214,14 @@ class TheArrivalCard(unittest.TestCase):
     @staticmethod
     def snap(name):
         return {
-            "name": name, "map_id": 209, "instance_id": 6,
-            "pos_x": 1851.2, "pos_y": 727.0, "pos_z": 18.7,
-            "in_combat": 0, "group_leader": 0,
+            "name": name,
+            "map_id": 209,
+            "instance_id": 6,
+            "pos_x": 1851.2,
+            "pos_y": 727.0,
+            "pos_z": 18.7,
+            "in_combat": 0,
+            "group_leader": 0,
         }
 
     def test_both_rows_present_and_together_read_arrived(self):
