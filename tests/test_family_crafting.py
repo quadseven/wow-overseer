@@ -234,6 +234,10 @@ def _rhythm_self(world, log):
             "jobs": jobs,
             "log": log,
             "_protected_guids": lambda: {1: "Grug"},
+            "_family_of": lambda cohort=None: (
+                list(cohort.names) if cohort else ["Grug"],
+                cohort.leader if cohort else "Grug",
+            ),
             "_queue_owns_job": world.queue_owns_job,
             "individual": individual,
             "_individual_family": lambda cohort=None: None,
@@ -264,7 +268,7 @@ def _rhythm_self(world, log):
     async def idle(claimant, cohort=None):
         world.idled.append((claimant, cohort))
 
-    async def no_material_requests(names):
+    async def no_material_requests(names, _leader):
         return []
 
     me._craft_once = craft_once

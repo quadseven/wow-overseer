@@ -93,6 +93,10 @@ def _individual_rhythm(world, log, *, mid_run=False, sitting=frozenset()):
             "jobs": jobs,
             "log": log,
             "_protected_guids": lambda: {1: "Grug"},
+            "_family_of": lambda cohort=None: (
+                list(cohort.names) if cohort else ["Grug"],
+                cohort.leader if cohort else "Grug",
+            ),
             "_queue_owns_job": world.queue_owns_job,
             "individual": individual,
             "_individual_family": lambda cohort=None: getattr(cohort, "key", None),
@@ -115,7 +119,7 @@ def _individual_rhythm(world, log, *, mid_run=False, sitting=frozenset()):
     async def run_check(names):
         return mid_run
 
-    async def no_material_requests(names):
+    async def no_material_requests(names, _leader):
         return []
 
     async def nothing(*a, **k):
