@@ -22809,6 +22809,7 @@ class Bridge(discord.Client):
             if slot.reserve(TOWN_ERRAND_CLAIMANT, now,
                             "the family's town errand") is False:
                 log.info("town slot: %s", slot.refused)
+        await self._town_errand_release_trainer(state, leader, in_run, label)
         positions = await self._settled_positions(names)
         hub = state.hub
         state = await self._town_errand_regroup(state, names, positions, now,
@@ -22898,6 +22899,31 @@ class Bridge(discord.Client):
         if new.phase == townerrand.DONE:
             await self._town_errand_release(names, leader, slot, label)
         _TOWN_ERRANDS[key] = new
+
+    async def _town_errand_release_trainer(self, state, leader, in_run,
+                                          label) -> bool:
+        """Hand a pending learn walk back so a room errand can reach town.
+
+        The campaign staging and town-first paths already release this exact
+        trainer aim while bag pressure holds the family. A town errand started
+        for the same room has to do so as well: otherwise its urgent mailbox
+        claim waits forever on an aim the economy is forbidden to preempt.
+        `_release_learn_aim` clears only the trainer keyword and leaves
+        `learn_skill` pending, so the learn pass can resume after the errand.
+        """
+        if (in_run or state.phase not in (
+                townerrand.GO, townerrand.GATHER, townerrand.STEPS)
+                or not townerrand.room_errand(state.why)):
+            return False
+        column = await asyncio.to_thread(_current_travel_npc, leader)
+        if column != learnaim.TRAINER_ROLE:
+            return False
+        released = await asyncio.to_thread(_release_learn_aim, leader)
+        if released:
+            log.info("town slot: handed %s's trainer walk back so the room "
+                     "errand can take the traveller; learning waits until "
+                     "the errand ends%s", leader, label)
+        return bool(released)
 
     async def _town_errand_watch_arrival(self, hub, leader) -> bool:
         """Whether the leader is seen at the hub, watched closely when near it.
