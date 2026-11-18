@@ -49,10 +49,11 @@ def _page_shell_urls(html_text: str, build: str) -> list[str]:
     return urls
 
 
-def _boot_graph() -> list[str]:
+def _boot_graph(entry: str = "main.js") -> list[str]:
+    """`entry` and every app module it reaches by static imports alone."""
     app_dir = HERE / "app"
     seen: list[str] = []
-    queue = ["main.js"]
+    queue = [entry]
     while queue:
         rel = queue.pop(0)
         if rel in seen:
