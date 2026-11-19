@@ -23,7 +23,10 @@ def walker(name, map_id):
 class KnightGryphonWalk(unittest.TestCase):
     def plan(self, trainee, map_id, recent=(), busy=()):
         return classtrain.plan(
-            [trainee], {trainee.name: walker(trainee.name, map_id)}, set(recent), set(busy)
+            [trainee],
+            {trainee.name: walker(trainee.name, map_id)},
+            set(recent),
+            set(busy),
         )
 
     def test_penniless_knight_on_start_map_gets_the_class_walk(self):
@@ -34,7 +37,10 @@ class KnightGryphonWalk(unittest.TestCase):
 
     def test_stranded_refusal_history_does_not_block_it(self):
         walks, _ = classtrain.plan(
-            [knight()], {"Knight": walker("Knight", 609)}, set(), set(),
+            [knight()],
+            {"Knight": walker("Knight", 609)},
+            set(),
+            set(),
             stranded={"Knight": 609},
         )
         self.assertEqual(len(walks), 1)

@@ -247,8 +247,8 @@ class Walk:
         if self.gryphon:
             return (
                 "%s %s (%s, level %d) is a death knight on the start map: the "
-                "class walk asks the module for its gryphon click" % (
-                    LOG_PREFIX, self.name, self.guild, self.level)
+                "class walk asks the module for its gryphon click"
+                % (LOG_PREFIX, self.name, self.guild, self.level)
             )
         return (
             "%s %s (%s, level %d) walks to its class trainer with %dc for %d "
@@ -342,7 +342,11 @@ def walk_refusal(walker, name, start_map_knight=False) -> str:
     if start_map_knight:
         # Map 609 is an instance to the classic lists; the module walks a
         # knight there (its class walk and gryphon click) all the same.
-        return "" if walker.by_row else "%s cannot be walked by the trainer walk row" % name
+        return (
+            ""
+            if walker.by_row
+            else "%s cannot be walked by the trainer walk row" % name
+        )
     starting = classic.is_starting_land(walker.map_id, getattr(walker, "zone_id", None))
     if classic.stands_outside(walker):
         return classic.outside_note_for(name, walker)
@@ -623,8 +627,13 @@ def _step_for_trainee(t: Trainee, state: dict) -> tuple[Walk | Cross | None, str
         if t.name in state["busy"]:
             return None, "%s is already on a guild walk" % t.name
         return _plan_walk_step(
-            t, state["walkers"][t.name], state["started"], state["per_guild"],
-            state["cap"], gryphon=True)
+            t,
+            state["walkers"][t.name],
+            state["started"],
+            state["per_guild"],
+            state["cap"],
+            gryphon=True,
+        )
     if not t.due.count:
         return None, ""
     if not t.due.affords(t.money):
