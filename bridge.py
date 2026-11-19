@@ -11711,6 +11711,7 @@ class Bridge(discord.Client):
                     else _release_trade_errand,
                     decision.release.character, decision.release.aim,
                 )
+            slot.let_go(decision.release, released, now)
             if not released:
                 # Not a failure, and not a reason to stop. The column changed
                 # hands between the read and this write, so there was nothing

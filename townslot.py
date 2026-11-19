@@ -1970,6 +1970,27 @@ class Slot:
             self.holder = None
             self._served[claimant] = now
 
+    def let_go(self, holder: Holder | None, released: bool, now: float) -> None:
+        """Record an aim handed back because its lease ran out.
+
+        THE WRITER OF AN AIM THAT OUTLIVED ITS LEASE DOES NOT WRITE IT AGAIN
+        STRAIGHT AWAY. The module lets go of a counter aim it cannot walk (no
+        reachable counter from that zone) and leaves the column alone, so the
+        aim stood until another pass took the column from it, and the pass
+        that wrote it asked for the same aim on its next cycle. The same
+        ledger a stall give-up writes now refuses it that aim for
+        SPENT_SECONDS. An orphan has no writer to refuse, so it records
+        nothing.
+        """
+        if holder is None or not holder.claimant or not holder.aim:
+            return
+        # An urgent ask zeroes every lease, so a walk taken off the leader
+        # young was not one that outlived anything.
+        if now - holder.since < self.lease:
+            return
+        self._spent[(holder.claimant, holder.aim)] = now
+        self._progress.pop((holder.claimant, holder.aim), None)
+
     def urgency_suppressed_until(self, claimant: str) -> float:
         """When this claimant may preempt on urgency again (0.0 = now).
 
