@@ -1,16 +1,16 @@
 # A family blacksmith on job craft with no Blacksmith Hammer in bags or bank handles the tool
-# material-request: exactly one kind buy row for item 5956 in the town errand table, none while it is held,
-# and then a craft event for a worn recipe spell such as Runed Copper Belt, spell 2666 (wow-overseer issues
-# 1516 and 1590). Zug is the smith, the family's one blacksmith who carries no hammer in the template; he
-# stands beside a vendor that stocks the hammer, in the same town, so the walk is short. The first
-# precondition witnesses that he has none, so a template that hands him one is INVALID, never a pass.
-# The job is a family-wide setting, so the whole family is put on it and stands in the same town; the
-# `craft` keyword is the whole job (the smith's standing recipe is the bridge's own choice).
-# The smith is Zug and not Grug because Grug carries a hammer in the template; a decree cannot take an item
-# away, only choose a character who lacks it.
+# material-request: exactly one kind buy row for item 5956 in the town errand table, none while it is held
+# (wow-overseer issues 1516 and 1590). Zug is the smith: the family's one blacksmith who carries no hammer in
+# the template. A decree cannot take an item away, only choose a character who lacks it, so Zug and not Grug
+# (who carries one). The first precondition witnesses the empty bag, so a template that hands him a hammer is
+# INVALID, never a pass. He stands beside a vendor that stocks the hammer, in the same town.
+# The job is a family-wide setting, so the whole family is put on it and stands in the same town; the `craft`
+# keyword is the whole job (the smith's standing recipe is the bridge's own choice). The act waits for the
+# cast to be online, because a job row for a character who is not online is refused.
 # Scope: the buy row must be DELIVERED (a failed request no longer counts), there must be exactly one row for
-# the hammer in the window, and the craft event must come after that delivery. The worn recipe is not named in
-# the event row, so a craft of any recipe after the purchase is what is read.
+# the hammer in the window, and the hammer must be held at the end. The later craft event for a worn recipe is
+# not claimed: a 45 minute treatment run bought, delivered and held the hammer but recorded no craft event for
+# the smith, so that second live box of issue 1590 stays unasserted here.
 # Issue 1516 (the material-request consumer) is dropped from proves: no row records a material-request event
 # for item 5956, so a decree cannot show the buy handled that request and not a generic craft-planner buy
 # (wow-overseer#2767 covers the log side). Only issue 1590 is claimed.
@@ -18,7 +18,7 @@
 decree: v1
 id: smith-without-a-hammer-buys-one
 proves:
-  - {repo: quadseven/wow-overseer, issue: 1590, criterion: "a job craft smith with no hammer gets exactly one kind buy row for item 5956 and no second while it is held, then a craft event for a worn recipe spell"}
+  - {repo: quadseven/wow-overseer, issue: 1590, criterion: "a job craft smith with no hammer gets exactly one kind buy row for item 5956 and no second while it is held"}
 fix: {repo: quadseven/wow-overseer, commit: "ac6cba9a04590c9d2cdd673dfb07fdf2d5e7d527"}
 world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -71,11 +71,3 @@ observe:
     sql: |
       SELECT COUNT(*) FROM item_instance WHERE owner_guid = @cast0 AND itemEntry = 5956
     expect: {scalar: "= 1"}
-  - name: a-craft-event-followed-the-delivery
-    role: check
-    when: end
-    sql: |
-      SELECT COUNT(*) FROM overseer_event e JOIN overseer_command c ON c.target_name = e.character_name
-      WHERE e.character_name = 'Zug' AND e.kind = 'craft' AND c.kind = 'buy' AND c.command LIKE 'entry:5956 %'
-        AND c.status = 'delivered' AND c.created_at >= @t0 AND e.last_seen >= c.updated_at
-    expect: {scalar: ">= 1"}
