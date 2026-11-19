@@ -6885,6 +6885,11 @@ def _in_loop_zone(m, loop) -> bool:
 # level, and gained no level. Every spirit healer and corpse run put it back
 # where its own AI kept choosing to quest. A player in that loop stops, goes to
 # town to repair, sell and train, and quests somewhere else.
+# What marks a death loop's hearth step among the hearth steps; _step_refusal
+# reads it so only this step, and no other hearth, is asked in a fight.
+LOOP_HEARTH_ERRAND = " for a town errand"
+
+
 def death_loop_hearth(m, loop, recent, world=None, cap=None):
     """The hearth home of a member in its death loop's zone, or None.
 
@@ -6908,8 +6913,9 @@ def death_loop_hearth(m, loop, recent, world=None, cap=None):
         return None
     if _cooling(m, "hearth", recent):
         return None
-    said = "%s hearths home to town for a town errand (repair, sell, train): %s" % (
+    said = "%s hearths home to town%s (repair, sell, train): %s" % (
         m.name,
+        LOOP_HEARTH_ERRAND,
         loop.reason(),
     )
     rows = (guildcorps.Row("hearth", "use", "", source_for("hearth", m.name)),)
@@ -10287,6 +10293,7 @@ def _is_loop_hearth(step) -> bool:
     rows = getattr(step, "rows", None) or ()
     return (
         getattr(step, "action", "") == "hearth"
+        and LOOP_HEARTH_ERRAND in str(getattr(step, "said", ""))
         and bool(rows)
         and rows[0].kind == "hearth"
         and rows[0].command == "use"
