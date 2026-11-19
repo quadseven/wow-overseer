@@ -322,6 +322,17 @@ KILLING_HUNT = "killing"
 NO_CREATURE_IN_REACH = "no living creature of the entry within reach"
 FRUITLESS_HUNTS = 3
 FRUITLESS_MINUTES = 120
+_KILLS = re.compile(r'"kills":(\d+)')
+# A STALL WHOSE HUNTS KILLED IS NOT A QUESTER THAT NEVER HUNTED (#2451). Three
+# questers held Tramping Paws for two hours of play each and the ledger said
+# only STALLED, which reads the same whether no hunt was written or the hunts
+# killed and the log never counted. A kill of an objective's creature inside
+# the stall window, while its counter stays at zero, is the second: the stall
+# reason names those kills (`_uncounted_kills`).
+UNCOUNTED_KILLS = (
+    "its hunts killed %d of its objective creatures in the last 2 hours "
+    "and the log counted none"
+)
 # A chest use the module read back as `unchanged` (the cast went off and
 # nothing reached the quest log) was written again every pass: eight rows in
 # forty-five minutes for one quester at one chest, each a walk back to it.
@@ -1051,6 +1062,8 @@ class Attempt:
     # the hunt ended (FRUITLESS_HUNT / KILLING_HUNT, "" for any other end).
     hunt_entry: int = 0
     hunt_end: str = ""
+    # The creatures a `hunt-spawn` row says it killed (`"kills":N`), else 0.
+    hunt_kills: int = 0
 
     @property
     def use_entry(self) -> int:
@@ -1090,6 +1103,7 @@ def attempts(rows) -> tuple:
                 retryable='"retryable":false' not in str(row.get("result") or ""),
                 hunt_entry=classhunt.entry_of(row.get("command")),
                 hunt_end=_hunt_end(row),
+                hunt_kills=_hunt_kills(row),
             )
         )
     return tuple(out)
@@ -1110,7 +1124,7 @@ def _hunt_end(row) -> str:
         return ""
     result = str(row.get("result") or "")
     status = str(row.get("status") or "")
-    kills = re.search(r'"kills":(\d+)', result)
+    kills = _KILLS.search(result)
     if kills and int(kills.group(1)) > 0:
         return KILLING_HUNT
     if status == "unchanged" and kills:
@@ -1118,6 +1132,14 @@ def _hunt_end(row) -> str:
     if status in _FAILED and NO_CREATURE_IN_REACH in result:
         return FRUITLESS_HUNT
     return ""
+
+
+def _hunt_kills(row) -> int:
+    """The creatures a `hunt-spawn` row's result says it killed, else 0."""
+    if not classhunt.is_hunt_row(row.get("command")):
+        return 0
+    kills = _KILLS.search(str(row.get("result") or ""))
+    return int(kills.group(1)) if kills else 0
 
 
 def _spawn_named(command, recent) -> tuple:
@@ -1784,15 +1806,43 @@ def failures(
             quest, facts, status, played, gone, refused, final, object_gone, prog
         )
         if reason.startswith(STALLED):
-            fields = _held_objective_fields(member, qid, quest)
-            destination = classquest.cross_map(member, fields)
-            wall = guildjobs.class_walls(member.name, crossings).get(destination)
-            if wall:
-                reason += "; objective route is blocked: %s" % wall
+            reason += _stall_detail(member, quest, tried, crossings)
         if reason:
             out.append(Broken(member.name, qid, quest.title, reason, held=True))
     clock.forget(member.name, member.quest_log)
     return out
+
+
+def _stall_detail(member, quest, tried, crossings) -> str:
+    """What a STALLED reason adds: the refused crossing to its objective
+    fields, and the kills its hunts made that the log did not count."""
+    detail = ""
+    fields = _held_objective_fields(member, quest.id, quest)
+    destination = classquest.cross_map(member, fields)
+    wall = guildjobs.class_walls(member.name, crossings).get(destination)
+    if wall:
+        detail += "; objective route is blocked: %s" % wall
+    killed = _uncounted_kills(member, quest, tried)
+    if killed:
+        detail += "; " + UNCOUNTED_KILLS % killed
+    return detail
+
+
+def _uncounted_kills(member, quest, tried) -> int:
+    """The creatures this quester's `hunt-spawn` rows killed in the last
+    STALL_SECONDS of a kill objective whose counter is still zero. A stall is
+    two hours of play holding the quest, so each such kill came while the
+    quest was in the log and should have counted."""
+    counters = member.quest_objectives.get(quest.id) or {}
+    unmoved = {
+        int(entry) for entry, _n in quest.kills if not int(counters.get(entry, 0))
+    }
+    window = STALL_SECONDS // 60
+    return sum(
+        a.hunt_kills
+        for a in tried or ()
+        if a.name == member.name and a.hunt_entry in unmoved and a.age_minutes < window
+    )
 
 
 def _broken_reason(

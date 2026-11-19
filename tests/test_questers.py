@@ -786,6 +786,59 @@ class Steps(unittest.TestCase):
         )
 
 
+# Tramping Paws (quest 276, #2451) as questers.QUESTS_SQL and
+# classquest.SPAWNS_SQL read it: 15 Mosshide Gnolls (1007) and 10 Mosshide
+# Mongrels (1008) in Wetlands, quest level 21, minimum 20. The spawn rows carry
+# a map and no zone, as SPAWNS_SQL reads them.
+PAWS = 276
+
+
+def paws_world():
+    paws = quest(
+        PAWS, WETLANDS, 21, min_level=20, kill=1007, count=15, title="Tramping Paws"
+    )
+    paws.update(npc2=1008, npc_count2=10)
+    fields = [
+        spawn(guid, entry, 500 + guid, 0, level=21)
+        for guid, entry in enumerate([1007] * 16 + [1008] * 16, 1)
+    ]
+    return world(
+        extra_quests=[paws],
+        extra_givers=[
+            giver(PAWS, "start", 1276, PAWS, 0, 0),
+            giver(PAWS, "end", 1276, PAWS, 0, 0),
+        ],
+        extra_spawns=fields,
+    )
+
+
+def paws_holder(objectives=None, progress=0):
+    """A level 21 quester in Wetlands holding Tramping Paws, its counters as
+    questers.LOG_SQL reads them (mobcount1..4 beside RequiredNpcOrGo1..4)."""
+    return mirra(
+        level=21,
+        zone_id=WETLANDS,
+        quest_log={PAWS: questers.STATUS_INCOMPLETE},
+        quest_objectives={PAWS: objectives or {1007: 0, 1008: 0}},
+        quest_progress={PAWS: progress},
+    )
+
+
+def paws_hunt_row(age, entry, kills, status="applied"):
+    """A `hunt-spawn` row as the bridge reads overseer_command (_JOB_RECENT_SQL),
+    its result in the module's hunt-spawn words (test_questers_fruitless_hunt)."""
+    return {
+        "id": 3000 + age,
+        "target_name": "Mirra",
+        "command": "hunt-spawn creature:%d count:1 max:480" % entry,
+        "source": guildjobs.source_for(questers.ACTION, "Mirra"),
+        "status": status,
+        "age": age,
+        "result": '{"outcome":"done","entry":%d,"kills":%d,"pulls":%d}'
+        % (entry, kills, kills + 1),
+    }
+
+
 class Broken(unittest.TestCase):
     def _play(self, member, minutes, clock=None, step=5, progress=None, cat=None):
         """Plan every `step` minutes, each pass told the quest its last move
@@ -1020,35 +1073,7 @@ class Broken(unittest.TestCase):
     def test_tramping_paws_hunts_both_objectives_outside_its_zone(self):
         # The creature rows have no zone field: their 32 world spawns need not
         # stand in Wetlands for a quester on the same map to hunt them.
-        paws = quest(
-            276,
-            WETLANDS,
-            21,
-            min_level=20,
-            kill=1007,
-            count=15,
-            title="Tramping Paws",
-        )
-        paws.update(npc2=1008, npc_count2=10)
-        fields = [
-            spawn(guid, entry, 500 + guid, 0, level=21)
-            for guid, entry in enumerate([1007] * 16 + [1008] * 16, 1)
-        ]
-        cat = world(
-            extra_quests=[paws],
-            extra_givers=[
-                giver(276, "start", 1276, 276, 0, 0),
-                giver(276, "end", 1276, 276, 0, 0),
-            ],
-            extra_spawns=fields,
-        )
-        member = mirra(
-            level=21,
-            zone_id=WETLANDS,
-            quest_log={276: questers.STATUS_INCOMPLETE},
-            quest_objectives={276: {1007: 0, 1008: 0}},
-            quest_progress={276: 0},
-        )
+        cat, member = paws_world(), paws_holder()
 
         first = questers.plan(cat, member, questers.Clock(), 0.0)
         self.assertEqual(first.move.kind, classquest.HUNT)
@@ -1077,6 +1102,38 @@ class Broken(unittest.TestCase):
             (hand_in.move.kind, hand_in.move.quest), (classquest.TURN_IN, 276)
         )
         self.assertEqual(hand_in.broken, ())
+
+    def test_a_stall_whose_hunts_killed_uncounted_says_so(self):
+        # Hunts of a kill objective whose counter stayed at zero killed its
+        # creatures inside the stall window: the reason names those kills, so
+        # the ledger tells a world that does not credit them from a quester
+        # that never hunted.
+        rows = [paws_hunt_row(30, 1007, 4), paws_hunt_row(90, 1008, 2)]
+        p = self._paws_stall(paws_holder(), rows)
+        self.assertEqual(
+            [b.reason for b in p.broken],
+            [questers.STALLED + "; " + questers.UNCOUNTED_KILLS % 6],
+        )
+
+    def test_a_stall_without_uncounted_kills_keeps_the_plain_reason(self):
+        # A kill older than the window, and one of an objective whose counter
+        # moved, say nothing about this stall.
+        holder = paws_holder(objectives={1007: 3, 1008: 0}, progress=3)
+        rows = [
+            paws_hunt_row(questers.STALL_SECONDS // 60 + 5, 1008, 4),
+            paws_hunt_row(30, 1007, 5),
+            paws_hunt_row(40, 1008, 0, status="unchanged"),
+        ]
+        p = self._paws_stall(holder, rows)
+        self.assertEqual([b.reason for b in p.broken], [questers.STALLED])
+
+    def _paws_stall(self, member, rows):
+        cat, clock, tried = paws_world(), questers.Clock(), questers.attempts(rows)
+        for minute in range(0, 121, 5):
+            p = questers.plan(
+                cat, member, clock, minute * 60, tried=tried, last_quest=276
+            )
+        return p
 
     def test_counters_at_the_required_total_are_handed_in_even_if_status_lags(self):
         # LOG_SQL sums the objective counters. The core can leave status at
