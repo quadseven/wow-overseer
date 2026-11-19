@@ -21,6 +21,16 @@ escape's offer names, so the post and the log line never disagree about
 who could come. A looper held for another job is not asked for, and a
 held mate is not counted in reach.
 
+THE SLOPE, BEFORE THE LOOP (#2636). A member on the death slope (a
+deathloop.Risk at SLOPE_DEATHS or more deaths, below the loop flag) is
+asked for the same way, from the same pass: waiting for the fifth death
+only re-fills the loop pool. A risk below SLOPE_DEATHS (the 30-minute
+same-killer or same-zone warnings) is not asked for yet, and a member
+already in a loop keeps the loop ask alone, never a second slope post.
+A slope ask is a live ask like any other: it holds its asker out of the
+expire half while the member stays on the slope or in a loop, and it
+draws a yes the same way.
+
 BOUNDED, LIKE THE CLASS ASKS. One live ask per looper, MAX_OPEN_PER_GUILD
 open in a guild, NEW_PER_PASS new a pass, and ASK_COOLDOWN_MINUTES before
 a looper whose last ask came to nothing is asked again (the class asks'
@@ -105,6 +115,11 @@ _ANSWER_LINES = (
     "Sure {asker}, I'll group up for {place}.",
 )
 
+# The slope bar (#2636): a risk counts for an ask only at this many
+# deaths, the ticket's 3+ in an hour; deathloop.RISK_DEATHS is the same
+# number for the hour window, and the 2-death 30-minute risks stay below it.
+SLOPE_DEATHS = 3
+
 REPLIES_PER_PASS = 4
 ANSWERS_PER_PASS = REPLIES_PER_PASS  # legacy alias; the cap below is this module's own
 
@@ -124,6 +139,17 @@ def enabled(environ=None) -> bool:
 
 def target_of(loop) -> str:
     return "deathloop:%d" % int(loop.zone)
+
+
+def _slope_candidates(risks, looping) -> dict:
+    """name -> Risk for the slope members this pass asks for (#2636):
+    a risk at SLOPE_DEATHS or more deaths whose member is not already
+    in a loop (a looper keeps the loop ask alone)."""
+    return {
+        name: risk
+        for name, risk in (risks or {}).items()
+        if name not in looping and int(getattr(risk, "deaths", 0)) >= SLOPE_DEATHS
+    }
 
 
 def death_asks(asks) -> list:
@@ -189,10 +215,12 @@ def expires(asks, looping, now) -> tuple:
     return tuple((a.id, a.asker, "") for a in sorted(ending, key=lambda a: a.id))
 
 
-def expire_pass(asks, loops, now) -> guildsocial.Pass:
+def expire_pass(asks, loops, now, risks=None) -> guildsocial.Pass:
     """A Pass holding only expires: the half that runs while the switch
-    is off, so asks already open keep closing (#2344)."""
-    return guildsocial.Pass(expire=expires(asks, set(loops or ()), now))
+    is off, so asks already open keep closing (#2344). A slope member's
+    ask stays live while the member stays on the slope (#2636)."""
+    keep = set(loops or ()) | set(_slope_candidates(risks, set(loops or ())))
+    return guildsocial.Pass(expire=expires(asks, keep, now))
 
 
 def _replies(live_asks, ending_ids, jobs, looping, answers, held, spoken=()) -> tuple:
@@ -240,6 +268,7 @@ def plan_pass(
     answers=(),
     spoken=frozenset(),
     seated=frozenset(),
+    risks=None,
 ) -> guildsocial.Pass:
     """One pass of the death-loop asks: posts for loopers with a mate in
     reach, expires for the live asks that end now, and one yes per live
@@ -257,13 +286,18 @@ def plan_pass(
     seated   names seated in a run formed this same pass (the class
              quest parties the bridge just planned): such a mate is not
              counted in reach, named in a post, or drawn as a yes
+    risks    name -> deathloop.Risk, the planning pass's risk read: a
+             member at SLOPE_DEATHS or more deaths who is not looping
+             is asked for on the slope (#2636)
     """
     held = set(held or ()) | set(seated or ())
     jobs = {}
     for mate in mates or ():
         jobs.setdefault(mate.name, _as_job_member(mate))
     looping = set(loops or ())
-    expire = expires(asks, looping, now)
+    slope = _slope_candidates(risks, looping)
+    at_risk = looping | set(slope)
+    expire = expires(asks, at_risk, now)
     ending_ids = {ask_id for ask_id, _asker, _line in expire}
     live = {a.asker for a in death_asks(asks) if a.state in LIVE_ASKS}
     recent = _recent_askers(asks, now)
@@ -272,8 +306,10 @@ def plan_pass(
         if a.state in LIVE_ASKS and a.id not in ending_ids:
             open_in[a.guild] = open_in.get(a.guild, 0) + 1
     free_mates = [m for name, m in jobs.items() if name not in held]
+    candidates = dict(loops or ())
+    candidates.update(slope)
     posts = []
-    for name in sorted(looping):
+    for name in sorted(candidates):
         if len(posts) >= NEW_PER_PASS:
             break
         member = jobs.get(name)
@@ -281,11 +317,11 @@ def plan_pass(
             continue
         if open_in.get(member.guild, 0) >= MAX_OPEN_PER_GUILD:
             continue
-        found = guildjobs.loop_mates(member, free_mates, looping=looping)
+        found = guildjobs.loop_mates(member, free_mates, looping=at_risk)
         if not found:
             continue
         mate = found[0]
-        loop = loops[name]
+        loop = candidates[name]
         posts.append(
             Post(
                 guild=member.guild,
@@ -306,7 +342,7 @@ def plan_pass(
     live_asks = [
         a for a in death_asks(asks) if a.state in LIVE_ASKS and a.id not in ending_ids
     ]
-    replies = _replies(live_asks, ending_ids, jobs, looping, answers, held, spoken)
+    replies = _replies(live_asks, ending_ids, jobs, at_risk, answers, held, spoken)
     yes_by_ask = {a.ask_id: a.member for a in answers or () if a.state == YES}
     for reply in replies:
         yes_by_ask[reply.ask_id] = reply.member
