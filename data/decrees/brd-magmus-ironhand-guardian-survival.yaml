@@ -1,0 +1,48 @@
+# The final check requires a cast member near an Ironhand Guardian spawn after
+# Magmus credit, so an empty run or a party that never reached the hall is invalid.
+decree: v1
+id: brd-magmus-ironhand-guardian-survival
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1485, criterion: "after Magmus is credited, a family member near an Ironhand Guardian spawn has no guardian-caused death"}
+fix: {repo: quadseven/mod-overseer, commit: "359548acbaacf57ad8550da38cc853b670531403"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 15m
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, at: {creature: "Magmus"}}
+    ceiling: "position and health only; no levels, gear, items, or gold granted"
+arrange:
+  - instance: {map: "Blackrock Depths", as: brd, bind: family:grug}
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+observe:
+  - name: magmus-was-credited
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM log_encounter
+      WHERE map = 230 AND creditEntry = 9938 AND time >= @t0
+    expect: {scalar: ">= 1"}
+  - name: a-family-member-is-by-an-ironhand-guardian-spawn
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(DISTINCT ch.guid) FROM characters ch
+      JOIN acore_world.creature g ON g.id = 8982 AND g.map = 230
+      WHERE ch.guid IN (@cast) AND ch.map = 230 AND ch.instance_id > 0
+        AND POW(ch.position_x - g.position_x, 2) + POW(ch.position_y - g.position_y, 2) <= 1600
+    expect: {scalar: ">= 1"}
+  - name: no-family-member-dies-to-a-guardian-after-magmus-credit
+    role: check
+    when: end
+    sql: |
+      SELECT d.id, d.character_name, d.created_at FROM overseer_death d
+      WHERE d.character_guid IN (@cast) AND d.killer_entry = 8982
+        AND d.created_at >= (
+            SELECT MAX(le.time) FROM log_encounter le
+            WHERE le.map = 230 AND le.creditEntry = 9938 AND le.time >= @t0
+        )
+    expect: {rows: 0}
