@@ -53,6 +53,9 @@ observe:
       JOIN overseer_dungeon_run_event c ON c.family = x.family AND c.kind = 'phase' AND c.detail LIKE '%CLEARING%' AND c.id > s.id
       WHERE x.family = 'Grug' AND x.character_name = 'Og' AND x.kind IN ('exit_hearth', 'dc_off') AND x.created_at >= @t0
     expect: {scalar: ">= 1"}
+  - name: stranded-rejoin-poll-was-logged
+    role: check
+    log: {pattern: "stranded outside map [0-9]+ - [0-9]+ went back in this poll", expect: {at_least: 1}}
   - name: no-split-failed
     role: check
     when: end
