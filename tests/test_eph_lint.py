@@ -80,6 +80,17 @@ def rules(d):
     return {f.rule for f in errors(d)}
 
 
+def scattered_doc():
+    d = doc()
+    d["cast"][0]["who"] = "family:grug"
+    d["cast"][0]["set"].pop("at")
+    d["cast"][0]["set"]["at_each"] = [
+        {"creature": "Some Creature"},
+        {"areatrigger": 2},
+    ]
+    return d
+
+
 class CleanTest(unittest.TestCase):
     def test_base_is_clean(self):
         self.assertEqual(run(doc()), [])
@@ -95,6 +106,42 @@ class CleanTest(unittest.TestCase):
 
 
 class CoordinatesTest(unittest.TestCase):
+    def test_family_at_each_anchor_forms_are_accepted(self):
+        self.assertEqual(errors(scattered_doc()), [])
+
+    def test_at_each_is_restricted_to_family_selectors(self):
+        d = scattered_doc()
+        d["cast"][0]["who"] = "Grug"
+        self.assertIn("scatter", rules(d))
+
+    def test_at_each_requires_at_least_two_points(self):
+        d = scattered_doc()
+        d["cast"][0]["set"]["at_each"] = [{"creature": "Some Creature"}]
+        self.assertIn("scatter", rules(d))
+
+    def test_at_each_rejects_repeated_point_references(self):
+        d = scattered_doc()
+        d["cast"][0]["set"]["at_each"] = [
+            {"creature": "Some Creature"},
+            {"creature": "Some Creature"},
+        ]
+        self.assertIn("scatter", rules(d))
+
+    def test_at_and_at_each_are_mutually_exclusive(self):
+        d = scattered_doc()
+        d["cast"][0]["set"]["at"] = {"creature": "Some Creature"}
+        self.assertIn("scatter", rules(d))
+
+    def test_at_each_rejects_literal_coordinates(self):
+        d = scattered_doc()
+        d["cast"][0]["set"]["at_each"][0] = {"x": 1, "y": 2, "z": 3}
+        self.assertIn("coordinates", rules(d))
+
+    def test_at_each_rejects_non_spawn_and_non_point_anchors(self):
+        d = scattered_doc()
+        d["cast"][0]["set"]["at_each"][0] = {"captured": "real-spot"}
+        self.assertIn("coordinates", rules(d))
+
     def test_literal_position_list_is_rejected(self):
         d = doc()
         d["cast"][0]["set"]["at"] = [1.0, 2.0, 3.0]
