@@ -26850,7 +26850,7 @@ class Bridge(discord.Client):
         last = await asyncio.to_thread(_fetch_last_run_end, leader)
         mid_run = False
         trades: dict = {}
-        if tradeturn.needs_facts(last, turn):
+        if tradeturn.needs_facts(last, turn, now):
             mid_run = await self._mid_run(names)
             if not mid_run:
                 trades = await asyncio.to_thread(_fetch_trade_skills, names)
@@ -26902,7 +26902,8 @@ class Bridge(discord.Client):
             return False
         if said.action == tradeturn.SKIP:
             await asyncio.to_thread(
-                _save_trade_turn, key, tradeturn.Turn(last, now, True))
+                _save_trade_turn, key,
+                tradeturn.Turn(int(last or 0), now, True))
             log.info("trade turn: %s skips - %s", label, said.reason)
             return False
         if said.action != tradeturn.START:
