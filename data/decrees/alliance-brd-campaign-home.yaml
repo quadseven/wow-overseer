@@ -49,6 +49,9 @@ observe:
   - name: no-walk-or-bind-mentions-kargath
     role: check
     log: {pattern: "(walk|bind).*Kargath|Kargath.*(walk|bind)|Shul'kar.*(walk|bind)|(walk|bind).*Shul'kar", expect: {count: 0}}
+  - name: alliance-named-home-refusal-was-recorded
+    role: check
+    log: {pattern: "the 'blackrock-depths' campaign's named home is a Horde inn, which does not serve a Alliance family; it binds at its own inn on the door's map instead", expect: {at_least: 1}}
   - name: nobody-is-bound-in-the-badlands
     role: check
     when: end
