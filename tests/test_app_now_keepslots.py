@@ -470,7 +470,8 @@ class APictureWithNoSlotIsLetGo(unittest.TestCase):
 @needs_node
 class APhoneRedrawnTenTimesShowsEachSectionOnce(unittest.TestCase):
     """#3030: ten draws on a phone, the reads changing between them the way
-    the 5s quick and 30s full reads land, counting every section after each."""
+    the 5s quick and 30s full reads land. After each draw every section is
+    counted once and the whole page must equal what that body alone draws."""
 
     def test_each_section_and_card_is_drawn_once_per_draw(self):
         got = run(
@@ -491,6 +492,7 @@ class APhoneRedrawnTenTimesShowsEachSectionOnce(unittest.TestCase):
             };
             const n = (sel) => main.querySelectorAll(sel).length;
             const out = [];
+            const pages = [];
             for (let i = 0; i < 10; i++) {
               const markup = await draw(reads(i));
               out.push({
@@ -498,6 +500,15 @@ class APhoneRedrawnTenTimesShowsEachSectionOnce(unittest.TestCase):
                 live: n(".sp-live"), rows: n(".sp-live-group"), rowsWanted: i % 4 === 1 ? 0 : 1 + (i % 3),
                 fams: n(".fams"), units: n(".fam"), slots: n("[data-stream]"),
               });
+              pages.push(drawn(main));
+            }
+            // What each body alone draws, the same steps on an empty page.
+            // The page after draw i must equal it, whatever the draws before
+            // it left behind.
+            for (let i = 0; i < 10; i++) {
+              main.innerHTML = "";
+              await draw(reads(i));
+              out[i].asDrawn = drawn(main) === pages[i];
             }
             return out;
             """
@@ -516,6 +527,7 @@ class APhoneRedrawnTenTimesShowsEachSectionOnce(unittest.TestCase):
                     "fams": 1,
                     "units": 3,
                     "slots": 0,
+                    "asDrawn": True,
                 },
                 "draw %d" % i,
             )
