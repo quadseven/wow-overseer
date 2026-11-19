@@ -230,6 +230,9 @@ class Walk:
     money: int
     cap: float = guildroute.FAR_WALK_YARDS
     kind: str = KIND
+    # A death knight on the start map, walked for the module's gryphon click
+    # rather than for a purchase.
+    gryphon: bool = False
 
     @property
     def command(self) -> str:
@@ -241,6 +244,12 @@ class Walk:
 
     @property
     def said(self) -> str:
+        if self.gryphon:
+            return (
+                "%s %s (%s, level %d) is a death knight on the start map: the "
+                "class walk asks the module for its gryphon click" % (
+                    LOG_PREFIX, self.name, self.guild, self.level)
+            )
         return (
             "%s %s (%s, level %d) walks to its class trainer with %dc for %d "
             "waiting spell(s) costing %dc"
@@ -312,7 +321,7 @@ def pass_line(trainees, started) -> str:
     )
 
 
-def walk_refusal(walker, name) -> str:
+def walk_refusal(walker, name, start_map_knight=False) -> str:
     """Why this member is not walked to a trainer now, "" when it can be.
 
     The mailbox walk's own refusals (guildroute) without its mailbox distance:
@@ -330,6 +339,10 @@ def walk_refusal(walker, name) -> str:
         return "%s is %s" % (name, walker.unwalkable)
     if walker.in_combat:
         return "%s is in combat" % name
+    if start_map_knight:
+        # Map 609 is an instance to the classic lists; the module walks a
+        # knight there (its class walk and gryphon click) all the same.
+        return "" if walker.by_row else "%s cannot be walked by the trainer walk row" % name
     starting = classic.is_starting_land(walker.map_id, getattr(walker, "zone_id", None))
     if classic.stands_outside(walker):
         return classic.outside_note_for(name, walker)
@@ -559,15 +572,24 @@ def unsupported(rows) -> bool:
     )
 
 
+def is_stranded_knight(trainee: Trainee, walker) -> bool:
+    """A death knight standing on the start map (Acherus, map 609)."""
+    return (
+        trainee.class_id == classquest.DEATH_KNIGHT
+        and getattr(walker, "map_id", None) == classquest.DEATH_KNIGHT_START_MAP
+    )
+
+
 def _plan_walk_step(
     trainee: Trainee,
     walker,
     started: dict[str, int],
     per_guild: int,
     cap: float,
+    gryphon: bool = False,
 ) -> tuple[Walk | None, str]:
     """Plan one trainer walk for a ready trainee, or explain why it waits."""
-    why = walk_refusal(walker, trainee.name)
+    why = walk_refusal(walker, trainee.name, gryphon)
     if why:
         return None, "%s waits: %s" % (trainee.name, why)
     if started.get(trainee.guild, 0) >= per_guild:
@@ -585,6 +607,7 @@ def _plan_walk_step(
             trainee.due.copper,
             trainee.money,
             cap,
+            gryphon=gryphon,
         ),
         "",
     )
@@ -592,6 +615,16 @@ def _plan_walk_step(
 
 def _step_for_trainee(t: Trainee, state: dict) -> tuple[Walk | Cross | None, str]:
     """Return (step or None, waiting_note) for one ordered trainee."""
+    knight = is_stranded_knight(t, state["walkers"].get(t.name))
+    if knight and t.online and t.name not in state["recent"]:
+        # The module's class walk is the only caller of its gryphon click for
+        # a knight whose class step and crossing are walled; it does not wait
+        # on a purchase, so the knight needs neither a due spell nor gold.
+        if t.name in state["busy"]:
+            return None, "%s is already on a guild walk" % t.name
+        return _plan_walk_step(
+            t, state["walkers"][t.name], state["started"], state["per_guild"],
+            state["cap"], gryphon=True)
     if not t.due.count:
         return None, ""
     if not t.due.affords(t.money):
