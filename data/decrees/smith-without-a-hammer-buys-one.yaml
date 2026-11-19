@@ -34,6 +34,15 @@ act:
   - at: 0s
     roster: {who: family:zug, job: "craft"}
 observe:
+  # The act is read the moment the judge starts, before the headless roster has logged in, and a job row for a
+  # character who is not online is refused ("target not online"). The judge holds the act until every start
+  # precondition holds, so this one makes it wait for the whole cast to be in the world.
+  - name: the-whole-cast-is-online
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast)
+    expect: {scalar: "= 5"}
   - name: zug-has-no-hammer
     role: precondition
     when: start
