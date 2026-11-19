@@ -221,6 +221,45 @@ class TheQuestEndpoint(Base):
             ],
         )
 
+    def test_until_death_do_us_part_explains_a_refused_take(self):
+        # The ticket's rows for quest 264: the reason each quester's pass
+        # writes is questers._giver_failure's REFUSED_TAKE prefix and the
+        # module's own words (QuestErrandRefusal in mod-overseer). The quester
+        # pass reads such a row as a wait (questers.ledger_state), so the page
+        # must say so instead of reading it as a fact about the quest.
+        row = quest(264, 15, 1638) | {"title": "Until Death Do Us Part"}
+        row["min_level"] = 12
+        refused = ql.REFUSED_TAKE_REASON + ": "
+        not_eligible = (
+            "not eligible (level, race, class, prerequisite or exclusive group)"
+        )
+        no_giver = "no giver of that quest in reach"
+        attempts = [
+            entry(264, 7, "Mortane", "broken", refused + not_eligible),
+            entry(264, 8, "Hulani", "broken", refused + no_giver),
+        ]
+        code, body = self.get(
+            "/api/v2/quests/264",
+            **{
+                qc.QUESTS_SQL: [row],
+                qc.GIVERS_SQL: [
+                    {"quest": 264, "role": role, "map_id": 1}
+                    for role in ("start", "end")
+                ],
+                v2quests.QUEST_LEDGER_SQL: attempts,
+            },
+        )
+        self.assertEqual(code, 200)
+        self.assertEqual(
+            [(a["character"], a["reason"]) for a in body["attempts"]],
+            [
+                ("Mortane", v2quests.REFUSED_TAKE_NOTE % not_eligible),
+                ("Hulani", v2quests.REFUSED_TAKE_NOTE % no_giver),
+            ],
+        )
+        for attempt in body["attempts"]:
+            self.assertIn("asks again", attempt["reason"])
+
     def test_one_quest_with_every_attempt(self):
         code, body = self.get("/api/v2/quests/1")
         self.assertEqual(code, 200)

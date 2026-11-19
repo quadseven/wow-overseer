@@ -22,7 +22,9 @@ GET /api/v2/quests/{id}
 
   One catalogue quest with every quester's attempt at it. A quest outside the
   catalogue is a 404. The generic failed-log reason explains the recorded
-  status without assigning a cause.
+  status without assigning a cause. A refused take
+  (questledger.REFUSED_TAKE_REASON) reads as the wait it is: the world's own
+  words, and that the quester asks again.
 
 GET /api/v2/questers
 
@@ -43,6 +45,14 @@ import questcatalogue
 import questledger
 import questlog
 import questtickets
+
+# What an attempt reads when the world refused the take: the quester pass holds
+# such a row as a wait, not a broken quest, and asks again once the refusals
+# have left the last day's rows (questers.ledger_state, retry_take_refusals).
+REFUSED_TAKE_NOTE = (
+    "The quest giver refused the take (%s). A refused take is not held as "
+    "broken: the quester asks again once the refusals are a day old."
+)
 
 # Read only catalogue quest ids, in bounded batches. Each result has at most
 # one count per quest and state, regardless of how many questers attempted it.
@@ -189,6 +199,9 @@ def _attempt(row) -> dict:
     reason = str(row.get("reason") or "")
     if reason == questledger.FAILED_REASON:
         reason = "The quest log reported a failure. The cause was not recorded."
+    elif reason.startswith(questledger.REFUSED_TAKE_REASON):
+        words = reason[len(questledger.REFUSED_TAKE_REASON) :].lstrip(": ")
+        reason = REFUSED_TAKE_NOTE % (words or "no words recorded")
     return {
         "character": name,
         "guid": int(row["guid"]),

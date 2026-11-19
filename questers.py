@@ -149,6 +149,7 @@ import guildcorps
 import guildjobs
 import guildroute
 import levelroute
+import questledger
 import questlog
 import vendorsale
 import weaponskill
@@ -278,7 +279,7 @@ STALLED_UNSOURCED = (
     STALLED
     + ", no huntable source supplies what it asks for, and questers cannot buy items from vendors"
 )
-REFUSED_TAKE = "the quest giver would not give it"
+REFUSED_TAKE = questledger.REFUSED_TAKE_REASON
 REFUSED_TURN_IN = "the turn-in NPC would not take it"
 # The module refused the hand-in and marked it never retryable (#19 in
 # quadseven/mod-overseer): the world names nothing that takes the quest in,

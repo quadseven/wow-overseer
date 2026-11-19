@@ -35,7 +35,8 @@ class ARefusedTakeIsNotBrokenForGood(unittest.TestCase):
     def test_quest_264_s_eligibility_refusal_does_not_hold_the_ledger(self):
         # Fixture from the ticket's Mortane row. The world gives no narrower
         # cause than its combined eligibility message, so keep the refusal
-        # transient instead of attributing it to one eligibility gate.
+        # transient instead of attributing it to one eligibility gate. The quest
+        # page says so for the same row (test_apiv2_quests, quest 264).
         reason = questers.REFUSED_TAKE + ": " + NOT_ELIGIBLE
         ledger = {
             ("Mortane", 264): questers.ledger_state("broken", reason),

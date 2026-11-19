@@ -47,6 +47,11 @@ ABANDONED = "abandoned"
 STATES = (TAKEN, COMPLETED, BROKEN, ABANDONED)
 
 FAILED_REASON = "the quest failed in the log"
+# A broken row's reason when the world refused the quester's take
+# (questers.REFUSED_TAKE), followed by the world's own words. The quester pass
+# reads such a row as a wait and asks again (questers.ledger_state), and the
+# quest page explains it so (apiv2/quests.py).
+REFUSED_TAKE_REASON = "the quest giver would not give it"
 # An abandoned row's reason (#1745). A quester that drops a quest it found
 # broken keeps it in its broken memo, and its pass writes the row broken with
 # the reason it dropped it (bridge._quester_ledger), so a row left abandoned is
