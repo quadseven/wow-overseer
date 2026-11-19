@@ -2340,3 +2340,67 @@ class ASummonedObjectEnder(unittest.TestCase):
         p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
         self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+    def test_quest_224_in_defense_of_the_kings_lands_has_no_spawn_sources(self):
+        """Quest 224 "In Defense of the King's Lands" requires creatures 1161 and 1162,
+        but there are no spawns for these creatures in Loch Modan zone (38).
+
+        According to the world rows:
+        - Required creature/object 1161 x10 (Stonesplinter Trogg): 0 spawn(s) in zone, 40 total
+        - Required creature/object 1162 x10 (Stonesplinter Scout): 0 spawn(s) in zone, 31 total
+
+        Without any spawn sources in the zone, questers cannot complete these objectives,
+        and the quest will stall after 2 hours of play (its objectives do not move for  2hours).
+        This explains why no quester was able to finish quest 224.
+        """
+        # Quest 224: In Defense of the King's Lands (Loch Modan, level 12, min level 10)
+        quest_224 = quest(
+            224,
+            LOCH_MODAN,
+            12,
+            min_level=10,
+            kill=1161,
+            count=10,
+            title="In Defense of the King's Lands",
+        )
+        # Add the second objective: creature 1162
+        quest_224.update(npc2=1162, npc_count2=10)
+        
+        cat = world(
+            extra_quests=[quest_224],
+            extra_givers=[
+                giver(224, "start", 1240, 1161, 0, 0, map_id=0),
+                giver(224, "end", 1240, 1162, 0, 0),
+            ],
+            # No extra_spawns - there are 0 spawns in the zone for creatures 1161 and 1162
+        )
+        member = mirra(
+            level=10,
+            zone_id=LOCH_MODAN,
+            quest_log={224: questers.STATUS_INCOMPLETE},
+            quest_progress={224: 0},
+            quest_objectives={224: {}},
+        )
+        clock = questers.Clock()
+        # First pass - quest is not yet stalled (0 hours played)
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        
+        # Advance clock in PLAY_GAP_SECONDS increments until stall
+        # Each call advances at most PLAY_GAP_SECONDS (10 min = 600 sec)
+        # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        
+        # After 2 hours of play - quest should be stalled with specific reason
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 224)
+        
+        # The quest is unst sourced because it has creature objectives but no spawn fields
+        # This leads to STALLED_UNSOURCED: "its objectives did not move for 2 hours of play, no huntable source supplies what it asks for"
+        self.assertEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        
+        # Verify the quest's ledger reason is the stall reason
+        # This matches the real-world symptoms: questers' objectives did not move for 2 hours
+        self.assertIn(questers.STALLED, p.broken[0].reason)
