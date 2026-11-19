@@ -467,6 +467,51 @@ class APictureWithNoSlotIsLetGo(unittest.TestCase):
         self.assertEqual(got, {"slots": 0, "held": ["Grugling"], "same": True})
 
 
+@needs_node
+class APhoneRedrawnTenTimesShowsEachSectionOnce(unittest.TestCase):
+    """#3030: ten draws on a phone, the reads changing between them the way
+    the 5s quick and 30s full reads land, counting every section after each."""
+
+    def test_each_section_and_card_is_drawn_once_per_draw(self):
+        got = run(
+            """
+            fx.narrow = true;
+            const sp = (target) => ({ data: { active: true, state: "arrived", arrived: true, character: "Flintt", target, run: 0, stream: "https://s.example/w" }, at: 1, error: null });
+            const live = (n) => ({ data: { dungeons: Array.from({ length: n }, (_, i) => ({ kind: "dungeon", title: "Cave " + i, place: "Cave " + i, progress: i + " of 8 bosses down", seats: [], order: { run: i + 1 } })) }, at: 1, error: null });
+            const reads = (i) => {
+              const c = ctx("pass " + i);
+              const get = c.get;
+              c.get = (p) => {
+                if (p === "/api/spectate") return sp(i % 2 ? "Flintt" : "Dire Maul");
+                if (p === "/api/live") return i % 4 === 1 ? {} : live(1 + (i % 3));
+                if (p === "/api/eye") return { data: { tiers: [{ tier: "REALM", state: i % 2 ? "ON" : "OFF" }], strip: [{ label: "IN WORLD", value: String(20 + i) }] }, at: 1, error: null };
+                return get(p);
+              };
+              return c;
+            };
+            const n = (sel) => main.querySelectorAll(sel).length;
+            const out = [];
+            for (let i = 0; i < 10; i++) {
+              const markup = await draw(reads(i));
+              out.push({
+                head: n(".now-head"), watcher: n('[aria-label="Watcher"]'), card: n(".sp-stage"),
+                live: n(".sp-live"), rows: n(".sp-live-group"), rowsWanted: i % 4 === 1 ? 0 : 1 + (i % 3),
+                fams: n(".fams"), units: n(".fam"), slots: n("[data-stream]"),
+              });
+            }
+            return out;
+            """
+        )
+        self.assertEqual(len(got), 10)
+        for i, c in enumerate(got):
+            self.assertEqual(
+                c,
+                {"head": 1, "watcher": 1, "card": 1, "live": 1, "rows": c["rowsWanted"],
+                 "rowsWanted": c["rowsWanted"], "fams": 1, "units": 3, "slots": 0},
+                "draw %d" % i,
+            )
+
+
 # keepslots.js on its own: small bodies, each slot holding a <video>.
 SWAP = r"""
 const keep = await import("./app/views/now/keepslots.js");
