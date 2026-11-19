@@ -122,7 +122,10 @@ SQL are checked against a snapshot of the game databases
   anchors, one for each resolved family member. The order follows the resolver's
   family order (lead first, then character GUID); the compiler refuses a count
   mismatch or anchors that resolve to the same map position. `at_each` cannot
-  be combined with `at`. Anchor positions come from existing spawn or point data;
+  be combined with `at`. A `with` anchor (in `at`, `homebind` or `corpse_at`)
+  may not name a family placed by `at_each`: its members have separate
+  positions, so lint refuses it with the entry's path. Anchor positions come
+  from existing spawn or point data;
   coordinates are never written in the decree.
 - `kind: gm` is rejected: bot sessions are SEC_PLAYER, so it silently does nothing.
 - Auction rows and the auction house bot are refused unless the decree sets
