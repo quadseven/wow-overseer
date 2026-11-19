@@ -92,6 +92,14 @@ WRITERS = {
     ("bridge.py", "_class_party_disband_row", "classparty.DISBAND"): lambda: [
         classparty.DISBAND
     ],
+    (
+        "bridge.py",
+        "_death_party_form",
+        "classparty.up_command(start.helpers)",
+    ): lambda: [classparty.up_command(["HealerA", "DamageA"])],
+    ("bridge.py", "_death_party_disband_row", "classparty.DISBAND"): lambda: [
+        classparty.DISBAND
+    ],
     ("bridge.py", "_start_guild_run", "comp.command(door.keyword)"): lambda: [
         _composition().command("dm")
     ],

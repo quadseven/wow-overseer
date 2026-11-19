@@ -352,6 +352,7 @@ def choose(
     zone_levels=None,
     origin=None,
     max_yards=MAX_YARDS,
+    guarded_zones=(),
 ):
     """The destination, or the reason there is not one.
 
@@ -400,6 +401,21 @@ def choose(
             return refusal
     else:
         candidates = fields_in_band(spawns, skill_name, value, standing_on)
+    # A field with the other side's guards beside it is not a candidate: they
+    # attack on sight and a walk to it ends at them (#1912). The level guard
+    # below cannot see this, a guard is a low-level creature.
+    guarded = {int(z) for z in guarded_zones or ()}
+    if guarded and candidates:
+        candidates = [c for c in candidates if int(c.zone_id) not in guarded]
+        if not candidates:
+            return Choice(
+                refused=(
+                    "every field on map %s that this skill can open lies beside "
+                    "guards that attack the family's side, so none may be walked to"
+                    % standing_on
+                ),
+                why="all in-band fields sit on hostile guard ground.",
+            )
     if not candidates:
         return Choice(
             refused=(

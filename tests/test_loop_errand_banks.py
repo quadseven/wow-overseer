@@ -22,7 +22,7 @@ BRIDGE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
 LOOP = te.LOOP_WHY + "Oz (0), Zug (0) below 8 free bag slots"
 CAMP = {"map_id": 0, "x": -6673.0, "y": -2151.0, "z": 244.0, "bind": True}
 HEAD = {"map_id": 0, "pos_x": -6673.0, "pos_y": -2151.0}
-CITY = {"map_id": 0, "x": -4900.0, "y": -1000.0, "name": "City Banker"}
+CITY = {"map_id": 0, "x": -6000.0, "y": -2000.0, "name": "City Banker"}
 COUNTS = {"Zug": 0, "Oz": 0}
 
 

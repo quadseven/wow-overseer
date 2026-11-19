@@ -44,13 +44,17 @@ def quester(name="Mirra", **kw):
 class Pass:
     """A bridge with only what the quester pass reads, and what it wrote."""
 
-    def __init__(self, members, ledger=None, cat=None, broken=None, clock=None):
+    def __init__(
+        self, members, ledger=None, cat=None, broken=None, clock=None, judged=None
+    ):
         self.members = list(members)
         self.ledger = dict(ledger or {})
         self.cat = cat or world()
         self.broken = {name: dict(rows) for name, rows in (broken or {}).items()}
         self.clock = dict(clock or {})
         self.broken_written = None
+        self.judged = dict(judged or {})
+        self.judged_written = None
         self.hunts_open = 0
         self.crossings = ()
         self.tried = ()
@@ -79,12 +83,17 @@ class Pass:
     def _write_memos(self, _clock, broken, _now):
         self.broken_written = {name: dict(rows) for name, rows in broken.items()}
 
+    def _write_judged(self, judged, _now):
+        self.judged_written = dict(judged)
+
     def run(self, now=0.0):
         with (
             mock.patch.multiple(
                 bridge,
                 _quester_memos=lambda: (self.clock, self.broken),
                 _quester_memos_write=self._write_memos,
+                _quester_judged=lambda: dict(self.judged),
+                _quester_judged_write=self._write_judged,
                 _quester_catalogue=lambda: self.cat,
                 _fetch_quester_facts=self._facts,
                 _record_quest_broken=lambda b: self.recorded.append(b) or True,
@@ -140,6 +149,18 @@ class TheQuesterPass(unittest.TestCase):
         )
         self.assertEqual(run.broken_written, {"Sylvi": {}})
         self.assertEqual(run.recorded, [])
+        self.assertEqual(run.judged_written, {"Sylvi": frozenset({180})})
+
+        # The same stall held again: judged once retried, so it stays held.
+        again = Pass(
+            [sylvi],
+            cat=cat,
+            broken={"Sylvi": {180: questers.STALLED}},
+            clock=clock,
+            judged=run.judged_written,
+        ).run()
+        self.assertEqual(again.broken_written, {"Sylvi": {180: questers.STALLED}})
+        self.assertEqual(again.judged_written, {"Sylvi": frozenset({180})})
 
     def test_it_reads_the_questers_and_nobody_else(self):
         run = Pass([quester()]).run()

@@ -73,6 +73,12 @@ class LootStories(unittest.TestCase):
         )
         self.assertNotIn("clip_note", story)
 
+    def test_a_clip_from_another_members_view_names_the_tier_on_the_story(self):
+        story = self.story(ledger(detail="Testblade; view: Otherchar (leader)"))
+        self.assertEqual(story["clip"]["url"], "/clips/clip-9-loot.mp4")
+        self.assertIn("Otherchar", story["clip"]["view_note"])
+        self.assertIn("leader", story["clip"]["view_note"])
+
     def test_a_no_view_row_says_no_live_view_was_up(self):
         story = self.story(ledger(state="no_view", file_name=None))
         self.assertEqual(story["clip_note"], clipledger.NO_VIEW_LINE)

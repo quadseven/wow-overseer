@@ -796,7 +796,7 @@ class Option:
     def why(self) -> str:
         """The run count, said: how it was sized."""
         if self.capped:
-            how = "a round at the level cap"
+            how = "a round at the level cap" + _kept(self.ceiling, self.expected)
         else:
             how = "until the weakest member outgrows it at %d" % self.ceiling
         if self.quests:
@@ -805,6 +805,18 @@ class Option:
                 "" if self.quests == 1 else "s",
             )
         return how
+
+
+def _kept(ceiling: int, expected: float | None) -> str:
+    """Why a capped family is on a door past its ceiling, said (#2207); ""
+    for a door of the cap. Only its loot keeps such a door (`_outgrown_run`),
+    so the line names the ceiling and what a run is still worth."""
+    if ceiling >= LEVEL_CAP or not expected:
+        return ""
+    return (
+        ", kept past its ceiling of %d for the %.1f expected item levels a run "
+        "its loot still holds" % (ceiling, expected)
+    )
 
 
 def _rounds(facts: Facts, runs: list) -> int:
@@ -1184,12 +1196,16 @@ class Due:
     dry: bool = False
 
 
-def due(rows: list, leader: dict | None, level_rows: list, dry=None) -> Due:
+def due(
+    rows: list, leader: dict | None, level_rows: list, dry=None, upgrades=None
+) -> Due:
     """Whether this family needs a planned run, from its pending queue rows.
 
-    rows    the family's queued and active entries, in order, each with its
-            `source` (campaignqueue.SELECT_PENDING_SQL)
-    leader  the leader's roster row; its dungeon_runs_done counts the head
+    rows      the family's queued and active entries, in order, each with its
+              `source` (campaignqueue.SELECT_PENDING_SQL)
+    leader    the leader's roster row; its dungeon_runs_done counts the head
+    upgrades  Facts.upgrades, or None unread; only a capped family on a door
+              past its ceiling is judged by it (`needs_loot`)
 
     Conservative on purpose: nothing is planned while any entry waits behind
     the head, or while the head (the operator's or a planned one) is short of
@@ -1213,18 +1229,46 @@ def due(rows: list, leader: dict | None, level_rows: list, dry=None) -> Due:
                 int(head["runs_wanted"]),
             )
         )
-    return _outgrown(head, level_rows, dry)
+    return _outgrown(head, level_rows, dry, upgrades)
 
 
-def _outgrown(head: dict, level_rows: list, dry=None) -> Due:
+def _planned_run(head: dict) -> Run | None:
+    """The run of a planner's own entry; None for an operator's order, which
+    runs to its count, and for a door the planner does not know."""
+    if str(head.get("source") or "") not in PLANNED_SOURCES:
+        return None
+    return BY_KEYWORD.get(wing_of(str(head.get("keyword") or "")))
+
+
+def needs_loot(rows: list, level_rows: list) -> bool:
+    """Whether `due` needs Facts.upgrades to judge these rows (#2207): the
+    one pending entry is the planner's own, active, for a door under the
+    level cap, and the weakest member is at the cap. Every other family is
+    judged without the loot read, so the bridge makes it for this one alone."""
+    if len(rows) != 1 or str(rows[0].get("status")) != "active":
+        return False
+    run = _planned_run(rows[0])
+    weakest = [int(r.get("level") or 0) for r in level_rows if r.get("level")]
+    return bool(
+        run is not None
+        and run.ceiling < LEVEL_CAP
+        and weakest
+        and min(weakest) >= LEVEL_CAP
+    )
+
+
+def _outgrown(head: dict, level_rows: list, dry=None, upgrades=None) -> Due:
     """An active planner entry the weakest member has outgrown ends early.
 
     Only the planner's own entries: an operator's order runs to its count.
-    Only while the family levels: at the level cap a lower dungeon was chosen
-    for its loot, not its levels, and its round is short (AT_CAP_RUNS).
+    While the family levels the ceiling alone ends it. At the level cap a
+    lower dungeon was chosen for its loot, not its levels, so it ends once
+    that loot, as read, holds no upgrade for anybody: the rule the plan
+    refuses the door by (`_outgrown_run`), kept for the entry already running
+    (#2207). Unread loot ends nothing.
     """
-    run = BY_KEYWORD.get(wing_of(str(head.get("keyword") or "")))
-    if str(head.get("source") or "") not in PLANNED_SOURCES or run is None:
+    run = _planned_run(head)
+    if run is None:
         return Due()
     weakest = [int(r.get("level") or 0) for r in level_rows if r.get("level")]
     if weakest and run.ceiling < min(weakest) < LEVEL_CAP:
@@ -1233,6 +1277,15 @@ def _outgrown(head: dict, level_rows: list, dry=None) -> Due:
             % (run.place, min(weakest), run.ceiling),
             finish=int(head["id"]),
         )
+    if weakest and run.ceiling < LEVEL_CAP <= min(weakest) and upgrades is not None:
+        if not sum(float(g.levels) for g in upgrades.get(run.keyword, ())):
+            return Due(
+                "the family has outgrown %s (the weakest is %d, it tops out at "
+                "%d and holds no upgrade for anyone)"
+                % (run.place, min(weakest), run.ceiling),
+                finish=int(head["id"]),
+            )
+        return Due()
     why = _dry(dry, run.keyword, min(weakest) if weakest else 0)
     if weakest and why:
         return Due("%s is %s" % (run.place, why), finish=int(head["id"]), dry=True)
@@ -1405,6 +1458,15 @@ def choice_line(row: dict | None) -> str:
     )
 
 
+def _kept_now(facts: Facts | None, head: dict) -> str:
+    """`_kept` for the entry the family is on now; "" when there is nothing
+    to say or the facts were not read."""
+    run = BY_KEYWORD.get(wing_of(str(head.get("keyword") or "")))
+    if facts is None or run is None or facts.weakest[1] < LEVEL_CAP:
+        return ""
+    return _kept(run.ceiling, _expected(facts, run.keyword))
+
+
 def page_view(
     queue_view: dict, facts: Facts | None, done: int | None, choice: dict | None = None
 ) -> dict:
@@ -1422,7 +1484,7 @@ def page_view(
             if head["status"] == "active" and done is not None
             else "%d runs, starting" % head["runs"]
         )
-        now = "Now: %s, %s." % (head["place"], count)
+        now = "Now: %s, %s%s." % (head["place"], count, _kept_now(facts, head))
     else:
         now = "Now: no dungeon; the family quests."
     if len(entries) > 1:

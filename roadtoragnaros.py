@@ -576,3 +576,26 @@ def build(
         "projected_60_measured": projected is not None,
         "checked_at": (goal or {}).get("checked_at"),
     }
+
+
+def readiness_line(guild: str, payload: dict) -> str:
+    """One compact line from the same total and seat counts the API serves."""
+    total = payload.get("total") or {}
+    percent = total.get("percent")
+    total_text = "unmeasured" if percent is None else "%s%%" % percent
+    milestones = {row.get("key"): row for row in payload.get("milestones") or ()}
+    seats = []
+    for key in "ABCEF":
+        have = (milestones.get(key) or {}).get("have")
+        seats.append("%s=%s/%d" % (key, have if have is not None else "?", SEATS))
+    return "Molten Core readiness: %s total=%s; seats %s" % (
+        guild,
+        total_text,
+        ", ".join(seats),
+    )
+
+
+def readiness_line_due(previous: dict | None, now: int | float) -> bool:
+    """Whether this guild has not yet received its line in the current UTC day."""
+    last_day = int((previous or {}).get("day", -1))
+    return last_day != int(now // 86400)
