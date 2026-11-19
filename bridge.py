@@ -20517,7 +20517,9 @@ class Bridge(discord.Client):
         now = time.monotonic()
         busy = self._guild_walkers_busy(now)
         candidates = [t.name for t in trainees
-                      if t.online and t.due.affords(t.money) and t.name not in busy]
+                      if t.online and t.name not in busy
+                      and (t.due.affords(t.money)
+                           or t.class_id == classquest.DEATH_KNIGHT)]
         row_walks = now >= self._mail_walk_unsupported_until
         walkers = (await asyncio.to_thread(_route_walkers, candidates, names, row_walks)
                    if candidates else {})
