@@ -6326,8 +6326,11 @@ def _silent_stall(head: dict, names: list):
         # was held off it. A bridge restart forgets this and falls back to the
         # database clock, which can only make the breaker fire later.
         seconds = min(seconds, int(time.monotonic() - off_at))
+    # Looked up: the silence tests load this function in isolation.
+    story = globals().get("_job_story")
     return dungeonstall.silent_run(
-        str(head.get("keyword") or ""), seconds, _job_story(names))
+        str(head.get("keyword") or ""), seconds,
+        story(names) if story is not None else "")
 
 
 def _job_story(names: list) -> str:
