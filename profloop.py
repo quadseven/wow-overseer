@@ -123,6 +123,10 @@ TOWN_SECONDS = 90 * 60.0
 TOWN_START_SECONDS = 10 * 60.0
 CRAFT_SECONDS = 90 * 60.0
 CRAFT_MIN_SECONDS = 5 * 60.0
+# One refresh of the saved bags, a little over one loop cycle: after a town
+# visit that fetched reagents the loop waits this long for the bags to show
+# them before it judges whether anyone can cast.
+BAGS_REFRESH_SECONDS = 150.0
 TRAIN_SECONDS = 45 * 60.0
 # A rank or recipe that falls due mid-gather pulls the family to the trainers
 # once this much gathering has passed, so a due item that keeps coming back
@@ -409,19 +413,21 @@ def _stocked_names(facts: Facts) -> list:
     )
 
 
+def _bags_may_lag(facts: Facts) -> bool:
+    """The errand fetched reagents, nobody shows a cast yet, and the bags have
+    not had one refresh since it ended."""
+    return (
+        bool(facts.fetch)
+        and not _casting(facts)
+        and facts.errand_ended > 0
+        and facts.now - facts.errand_ended < BAGS_REFRESH_SECONDS
+    )
+
+
 def _after_town(facts: Facts) -> tuple:
     casting = _casting(facts)
     if casting:
         return CRAFT, "%s can cast from the bags" % ", ".join(casting)
-    # The saved bags trail the world, so what the errand just bought or took
-    # out of a bank is not in them yet: a crafter whose every short reagent is
-    # one the errand fetches is sent to craft, and the phase ends by itself
-    # after CRAFT_MIN_SECONDS if the bags really are empty (#2501).
-    fetched = sorted(facts.fetch or ())
-    if fetched:
-        return CRAFT, "%s had reagents fetched in town (the saved bags may lag)" % (
-            ", ".join(fetched)
-        )
     due = _due(facts)
     if due:
         return TRAIN, "a rank or recipe is due for %s" % ", ".join(due)
@@ -512,6 +518,12 @@ def _town(state: State, facts: Facts, elapsed: float) -> Step:
     if facts.errand_active:
         return Step(replace(state, town_seen=True))
     if state.town_seen or facts.errand_ended >= state.since > 0:
+        if _bags_may_lag(facts):
+            # THE SAVED BAGS TRAIL THE WORLD: what the errand just bought or
+            # took out of a bank is not in them yet. A craft phase started on
+            # that guess ended within minutes with every crafter at zero casts
+            # (#2501), so the loop waits one refresh and judges the bags.
+            return Step(replace(state, town_seen=True))
         to, why = _after_town(facts)
         said = "the town errand ended; " + why
         report = crafters_line(facts.plans)

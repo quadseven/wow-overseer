@@ -75,6 +75,17 @@ class BridgeNamesEveryHoldTest(unittest.TestCase):
                 '"_say_queue_hold", lambda *a: None)(key, "%s"' % hold, body, hold
             )
 
+    def test_the_stall_breaker_hold_carries_why_it_stood_the_run_down(self):
+        body = self._body(
+            "    async def _queue_holds(", "    async def _stall_breaker("
+        )
+        self.assertIn('(key, "stall breaker", why)', body)
+        self.assertIn("_STALL_STOOD_DOWN", body)
+        breaker = self._body(
+            "    async def _stall_breaker(", "    async def _order_hold("
+        )
+        self.assertIn("_STALL_STOOD_DOWN[key] = leave.why", breaker)
+
     def test_pace_names_the_mid_run_return(self):
         body = self._body(
             "    async def _dungeon_pace(", "    async def _leave_town_when_done("
