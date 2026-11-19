@@ -24,19 +24,63 @@ bridge reads the starts this planner emits in its social pass and seats
 each new one on the StartBook below, which is also the runner's act-time
 gate: a start the book already holds is not seated (or logged) twice,
 and a seated start is acted on only while start_still_valid proves it
-against the newest reads. The runner that walks the two members to the
-meeting place, forms the party and ends it is the next slice, and the
-DEATH_ASK switch keeps its own gate in deathask.
+against the newest reads. The bridge's runner (bridge._run_death_party)
+walks the helper to the meeting place, sees both members stand there
+(together), forms the party and ends it; the DEATH_ASK switch keeps its
+own gate in deathask.
 No levels, gear or skills are granted here or anywhere in the route: help
 is another member's time.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import guildsocial
 from guildsocial import FILLED, YES
+
+# The corps source the runner's own rows carry; the party rows themselves
+# ride the party verbs' registered source (classparty.SOURCE), as the
+# class party runner's rows do.
+SOURCE = "deathparty"
+
+# Seconds the helper has to reach the leader, and the reads of the
+# snapshot after the walk before a member that arrived counts as not
+# seen beside the leader (the class party meeting's shape).
+MEET_SECONDS = 600.0
+MEET_READS = 3
+MEET_READ_SECONDS = 10.0
+# Yards a helper may stand from the leader and still count as beside it:
+# the seat range the other asks use (classask.SEAT_RANGE_YARDS).
+MEET_RANGE_YARDS = 90.0
+# The watch: one re-check of the start every WATCH_SECONDS, and the
+# party's own ceiling, the class party's PARTY_SECONDS shape.
+WATCH_SECONDS = 30.0
+PARTY_SECONDS = 1680.0
+
+
+def meet_command(start) -> str:
+    """The walk one helper makes to the leader it helps."""
+    return "walk-to-member %s" % start.leader
+
+
+def together(stands, start) -> bool:
+    """Whether the snapshot shows both members standing together at the
+    meeting place: the leader seen, and the helper seen within
+    MEET_RANGE_YARDS of it on the same map. `stands` is name ->
+    (map, x, y), as the bridge's snapshot read gives it; a member it
+    does not show is not there."""
+    lead = (stands or {}).get(start.leader)
+    if lead is None:
+        return False
+    for name in start.helpers:
+        at = stands.get(name)
+        if at is None or at[0] != lead[0]:
+            return False
+        if math.hypot(at[1] - lead[1], at[2] - lead[2]) > MEET_RANGE_YARDS:
+            return False
+    return True
 
 
 @dataclass
