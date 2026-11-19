@@ -340,15 +340,18 @@ def _out_of_reach(asker, mate, need) -> str:
     return ""
 
 
-def _helper_choices(asker, free: dict, taken: set, need, refused=frozenset()) -> list:
+def _helper_choices(
+    asker, free: dict, taken: set, need, refused=frozenset(), road_refused=frozenset()
+) -> list:
     """Free mates of the asker's guild that may answer, nearest first, within
-    reach_of(need), and not one barred from this ask."""
+    reach_of(need), and not one barred from this ask or a refused road."""
     out = []
     for name, mate in free.items():
         if (
             name == asker.name
             or name in taken
             or name in refused
+            or name in road_refused
             or mate.member.guild != asker.member.guild
             or _out_of_reach(asker, mate, need)
         ):
@@ -433,12 +436,14 @@ def _full_note(ask, need, seats) -> str:
     )
 
 
-def _replies(ask, need, free, spoken, wanted, refused=frozenset()) -> list:
+def _replies(
+    ask, need, free, spoken, wanted, refused=frozenset(), road_refused=frozenset()
+) -> list:
     """The new yes rows for one ask short of `wanted` helpers."""
     asker = free.get(ask.asker)
     if asker is None:
         return []
-    names = _helper_choices(asker, free, spoken, need, refused)
+    names = _helper_choices(asker, free, spoken, need, refused, road_refused)
     return [
         Reply(
             ask.id,
@@ -452,7 +457,16 @@ def _replies(ask, need, free, spoken, wanted, refused=frozenset()) -> list:
 
 
 def _answers(
-    still, by_member, yes_by_ask, withdraw, free, spoken, partied, refused, seats
+    still,
+    by_member,
+    yes_by_ask,
+    withdraw,
+    free,
+    spoken,
+    partied,
+    refused,
+    road_refused_helpers,
+    seats,
 ) -> tuple:
     """(replies, filled, notes) over the asks still running, oldest first."""
     gone = set(withdraw)
@@ -467,7 +481,13 @@ def _answers(
         wanted = max(1, len(ask.roles_needed)) - len(standing)
         if wanted > 0:
             made = _replies(
-                ask, need, free, spoken, wanted, (refused or {}).get(ask.id, ())
+                ask,
+                need,
+                free,
+                spoken,
+                wanted,
+                (refused or {}).get(ask.id, ()),
+                (road_refused_helpers or {}).get(need.move.quest, ()),
             )
             replies += made
             spoken.update(r.member for r in made)
@@ -490,6 +510,7 @@ def plan_pass(
     refused=None,
     cooling=frozenset(),
     seats=True,
+    road_refused_helpers=None,
 ) -> guildsocial.Pass:
     """One pass of the class quest asks.
 
@@ -499,6 +520,7 @@ def plan_pass(
     answers  the answer rows
     partied  ids of the asks a party is up for: their own clock does not end them
     refused  ask id -> the members the module refused for it, who do not answer it
+    road_refused_helpers  quest id -> members whose meeting road was refused
     cooling  the members who gave an ask up lately and do not ask again yet
     seats    False while this worldserver is known not to seat a party
     """
@@ -519,7 +541,16 @@ def plan_pass(
         y.member for a in still for y in yes_by_ask.get(a.id, []) if y.id not in gone
     }
     replies, filled, notes = _answers(
-        still, by_member, yes_by_ask, withdraw, free, spoken, partied, refused, seats
+        still,
+        by_member,
+        yes_by_ask,
+        withdraw,
+        free,
+        spoken,
+        partied,
+        refused,
+        road_refused_helpers,
+        seats,
     )
     closing = {e[0] for e in expire} | set(cancel)
     posts = _new_posts(

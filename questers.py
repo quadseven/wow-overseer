@@ -1641,8 +1641,10 @@ def _unhuntable(
 ) -> bool:
     """True when the quester has no objective spawn of this quest to hunt
     (`_hunt`'s own choice: a solo field within its level, on its map, not one
-    it leaves for now, or on the other classic continent, which `_hunt`
-    crosses to) and no chest to open for an item of it (`chest_spots`)."""
+    it leaves for now, or on a map `_hunt` crosses to: the other classic
+    continent, or the starting isles its side's boat reaches, which
+    classquest.cross_map knows and far_map does not) and no chest to open
+    for an item of it (`chest_spots`)."""
     quest = cat.quest(qid)
     if quest is None:
         return True
@@ -1657,7 +1659,7 @@ def _unhuntable(
         return False
     if member.placed:
         routable = tuple(s for s in fields if s.guid not in left)
-        return classquest.far_map(member, routable) < 0
+        return classquest.cross_map(member, routable) < 0
     return True
 
 
@@ -1783,7 +1785,7 @@ def failures(
         )
         if reason.startswith(STALLED):
             fields = _held_objective_fields(member, qid, quest)
-            destination = classquest.far_map(member, fields)
+            destination = classquest.cross_map(member, fields)
             wall = guildjobs.class_walls(member.name, crossings).get(destination)
             if wall:
                 reason += "; objective route is blocked: %s" % wall
@@ -2252,7 +2254,9 @@ def _hunt(
         # objectives are only on the other continent, cross to them before
         # choosing a new zone. Otherwise an incomplete Redridge quest held in
         # Darnassus is invisible to both the local hunt and next-zone search.
-        to_map = classquest.far_map(member, fields)
+        # cross_map, not far_map: a spawn only on the starting isles is a
+        # crossing away too, on the boat classquest.cross_map knows.
+        to_map = classquest.cross_map(member, fields)
         if to_map >= 0:
             crossings.append((qid, quest, to_map))
     if chests and (
@@ -2272,7 +2276,7 @@ def _hunt(
         _qid, quest, to_map = min(crossings, key=lambda option: option[0])
         said = "%s crosses to %s for %s" % (
             member.name,
-            classquest.CONTINENTS[to_map],
+            classquest.MAP_WORDS[to_map],
             quest.title,
         )
         return _move(classquest.CROSS, member, quest, None, said, to_map=to_map)
@@ -2286,12 +2290,15 @@ def _hunt(
 
 
 def stalled_holds_with_actionable_objectives(
-    cat, member, held, tried=(), crossings=()
+    cat, member, held, tried=(), crossings=(), judged=frozenset()
 ) -> frozenset:
     """Stalled memo entries whose incomplete objectives can now be pursued.
 
     World-fact holds remain durable. A stall is only retried when this pass can
-    route to an eligible local objective or across a known classic continent.
+    route to an eligible local objective or across a known classic continent,
+    and never when it is in `judged` (`judged_stalls`): so a stall held from
+    before the per-ingredient hunt is retried at most once, and one that hunt
+    judged is not retried at all.
     """
     if not member.placed:
         return frozenset()
@@ -2300,7 +2307,7 @@ def stalled_holds_with_actionable_objectives(
     object_left = object_spawns_left(cat, member.name, tried)
     retry = set()
     for qid, reason in held.items():
-        if not str(reason).startswith(STALLED):
+        if not str(reason).startswith(STALLED) or qid in judged:
             continue
         if member.quest_log.get(qid) != STATUS_INCOMPLETE:
             continue
@@ -2320,13 +2327,24 @@ def stalled_holds_with_actionable_objectives(
         ):
             retry.add(qid)
             continue
-        to_map = classquest.far_map(member, fields)
+        to_map = classquest.cross_map(member, fields)
         if to_map < 0:
             continue
         crossing = _move(classquest.CROSS, member, quest, None, "", to_map=to_map)
         if not crossing_held(member.name, crossing, crossings):
             retry.add(qid)
     return frozenset(retry)
+
+
+def judged_stalls(judged, retried, found, held, quest_log) -> frozenset:
+    """The quests whose stall is never retried again (#1745): those `judged`
+    already, those `retried` this pass, and those this pass `found` stalled
+    (Broken rows), which the hunt that filters every kill and ingredient by its
+    own counter judged. A quest neither `held` nor in the `quest_log` is
+    forgotten: a stall found after it is judged when it is found."""
+    stalled = {b.quest for b in found if str(b.reason).startswith(STALLED)}
+    keep = set(held) | set(quest_log)
+    return frozenset(q for q in set(judged) | set(retried) | stalled if q in keep)
 
 
 def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:

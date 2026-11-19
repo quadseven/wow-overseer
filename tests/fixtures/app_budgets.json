@@ -6,5 +6,41 @@
       "fonts/phosphor-regular-subset.woff2",
       "fonts/phosphor-fill-subset.woff2"
     ]
+  },
+  "boot": {
+    "limits": {
+      "boot_sent_bytes": 72000,
+      "boot_modules": 22,
+      "import_depth": 4,
+      "third_party_hosts": 0,
+      "boot_requests": 29
+    },
+    "raises": [
+      {
+        "name": "boot_sent_bytes",
+        "limit": 72000,
+        "reason": "Set from main after #2310, #2312 and #2315: 68,373 bytes sent for the boot graph and its stylesheets, with about 5 percent room so a small edit does not fail CI."
+      },
+      {
+        "name": "boot_modules",
+        "limit": 22,
+        "reason": "Set from main after #2310, #2312 and #2315: 22 modules in the boot graph of app/main.js."
+      },
+      {
+        "name": "import_depth",
+        "limit": 4,
+        "reason": "Set from main after #2310, #2312 and #2315: the deepest static import chain from app/main.js is 4 files."
+      },
+      {
+        "name": "third_party_hosts",
+        "limit": 0,
+        "reason": "The page loads nothing from another host (#2315)."
+      },
+      {
+        "name": "boot_requests",
+        "limit": 29,
+        "reason": "Set from main after #2310, #2312 and #2315: the page, 3 stylesheets, 22 modules and 3 fonts."
+      }
+    ]
   }
 }

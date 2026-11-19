@@ -389,6 +389,7 @@ def door_unreachable(keyword: str, restarts) -> Stuck | None:
 
 
 ERRAND_STATE = "on an errand of its own"
+CATCH_UP_UNREACHABLE_STATE = "held where it stands, too far to walk back"
 
 # A member on an errand of its own this long while its family waits at a door
 # is handed the errand back (#2280): well inside HOLD_SECONDS, so the party

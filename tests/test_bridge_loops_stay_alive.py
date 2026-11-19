@@ -111,6 +111,103 @@ class ADeadPassIsLogged(unittest.TestCase):
         error.assert_not_called()
 
 
+class StuckReportingPass(unittest.TestCase):
+    def test_the_registered_pass_runs_its_database_work_off_the_event_loop(self):
+        self.assertIn("_stuck_reporting_loop", [row.name for row in bridge.PASSES])
+        calls = []
+        closed = iter((False, True))
+
+        async def ready():
+            return None
+
+        async def sleep(_seconds):
+            return None
+
+        async def to_thread(fn, *args, **kwargs):
+            calls.append((fn, args, kwargs))
+
+        instance = types.SimpleNamespace(
+            wait_until_ready=ready, is_closed=lambda: next(closed)
+        )
+        with (
+            mock.patch.object(bridge.asyncio, "sleep", sleep),
+            mock.patch.object(bridge.asyncio, "to_thread", to_thread),
+        ):
+            asyncio.run(bridge.Bridge._stuck_reporting_loop(instance))
+
+        self.assertEqual(calls, [(bridge._stuck_reporting_once, (), {})])
+
+    def test_once_logs_the_latest_refusal_and_one_readiness_line_per_due_guild(self):
+        now = 1_800_000_000
+        row = {
+            "name": "TestMember",
+            "kind": "hold",
+            "step": "Waiting for movement.",
+            "blocker": "Waiting for movement.",
+            "since": now - bridge.v2_members.STUCK_BOUND_SECONDS - 1,
+            "follows": "",
+        }
+        stuck = {"members": [row], "checked_at": now}
+        readiness = {
+            "total": {"percent": 73},
+            "milestones": [
+                {"key": key, "have": 30 + index, "want": 40}
+                for index, key in enumerate("ABCEF")
+            ],
+        }
+        upserts = []
+
+        class Reader:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def rows(self, sql, params=(), what=None):
+                return [
+                    {
+                        "status": "error",
+                        "detail": "refused: no route is available",
+                        "result": "",
+                    }
+                ]
+
+        server = types.SimpleNamespace(_v2_context=lambda _rd: object())
+        with (
+            mock.patch.dict("sys.modules", {"map_server": server}),
+            mock.patch.object(bridge.realmread, "Session", lambda _connect: Reader()),
+            mock.patch.object(bridge, "_memo_read", return_value={}),
+            mock.patch.object(
+                bridge, "_memo_upsert", side_effect=lambda *row: upserts.append(row)
+            ),
+            mock.patch.object(bridge.v2_members, "stuck", return_value=(200, stuck)),
+            mock.patch.object(
+                bridge.v2_ragnaros, "build", return_value=readiness
+            ) as build,
+            mock.patch.object(bridge.raidteams, "GROUPS", {"Test Guild": []}),
+            mock.patch.object(bridge.log, "warning") as warning,
+            mock.patch.object(bridge.log, "info") as info,
+        ):
+            bridge._stuck_reporting_once(now)
+
+        warning.assert_called_once_with(
+            "%s",
+            "stuck guard: member=TestMember kind=hold "
+            "last_refusal=no route is available",
+        )
+        info.assert_called_once_with(
+            "%s",
+            "Molten Core readiness: Test Guild total=73%; seats "
+            "A=30/40, B=31/40, C=32/40, E=33/40, F=34/40",
+        )
+        build.assert_called_once_with(mock.ANY, "Test Guild")
+        self.assertEqual(upserts[0][0:2], ("stuck_watch", "TestMember"))
+        self.assertEqual(upserts[0][2]["last_refusal"], "no route is available")
+        self.assertEqual(upserts[1][0:2], ("mc_readiness_report", "Test Guild"))
+        self.assertEqual(upserts[1][2], {"day": int(now // 86400)})
+
+
 class TheOutcomeReplyIsSentUnderTry(unittest.TestCase):
     def test_channel_send_sits_inside_a_try_that_logs(self):
         fn = _function("_poll_outcomes")

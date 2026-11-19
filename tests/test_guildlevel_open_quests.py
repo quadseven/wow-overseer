@@ -610,7 +610,7 @@ class TheWiring(unittest.TestCase):
 
     def test_the_step_hands_the_open_quests_and_the_flights_to_the_choice(self):
         source = (HERE / "guildjobs.py").read_text(encoding="utf-8")
-        body = source[source.index("def level_step(") :][:3500]
+        body = source[source.index("def _level_outgrown(") :][:3500]
         self.assertIn(
             "guildlevel.member_opens(world, m.race, m.level, m.rewarded)", body
         )

@@ -346,6 +346,29 @@ def loaded_rows(rows, unloaded) -> list:
     ]
 
 
+def unloaded_held(rows, unloaded) -> frozenset:
+    """The letters in `unloaded` that `rows` still shows in a mailbox.
+
+    A refused take outlives its letter (the refusals are read 30 days back),
+    so only a letter the mail read still holds is one somebody is kept from.
+    """
+    held = {(row.get("holder"), _int(row.get("mail_id"))) for row in rows}
+    return frozenset(pair for pair in unloaded if pair in held)
+
+
+def errand_note(unloaded) -> str:
+    """The town errand's one line for the letters it cannot take, or ''.
+
+    Names each letter and its holder and says the mail step does not wait:
+    without it an errand that leaves post behind looks like one that forgot
+    it (#2402).
+    """
+    note = unloaded_note(unloaded)
+    if not note:
+        return ""
+    return note + "; the mail step does not wait for them"
+
+
 def unloaded_note(unloaded) -> str:
     """One line naming each unloaded letter and its holder, or ''."""
     if not unloaded:

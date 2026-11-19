@@ -1324,6 +1324,56 @@ def _slot_payload(
 TONE_PLAIN, TONE_CAUTION, TONE_WARN = "plain", "caution", "warn"
 
 
+# --- the same item worn twice (#2358) ---------------------------------------
+# A member was found wearing one trinket in BOTH trinket slots, and nothing in
+# this read said so: a reader had to compare slot entries pairwise to notice.
+# Every item worn in more than one slot is named here, over every slot and
+# not only the trinkets, and `fault` says which of them is wrong. Two pairs
+# are two real pieces and are listed without being called a fault: the same
+# ring on both fingers, and a matched pair of weapons in the two hands. Any
+# other repeat is one effect worn twice (two copies of a trinket share a
+# cooldown), which is the rule the gear drive refuses a second copy by.
+_PAIRS_THAT_ARE_TWO_PIECES = (
+    frozenset({"finger 1", "finger 2"}),
+    frozenset({"main hand", "off hand"}),
+)
+
+
+def worn_twice(slots: list[dict]) -> list[dict]:
+    """Every item worn in more than one slot, in slot order, or []."""
+    by_entry: dict[int, list[dict]] = {}
+    for s in slots:
+        if s["empty"] or s["cosmetic"] or s.get("entry") is None:
+            continue
+        by_entry.setdefault(s["entry"], []).append(s)
+    out = []
+    for entry, held in by_entry.items():
+        if len(held) < 2:
+            continue
+        names = [s["slot"] for s in held]
+        out.append(
+            {
+                "entry": entry,
+                "name": held[0]["name"],
+                "slots": names,
+                "fault": frozenset(names) not in _PAIRS_THAT_ARE_TWO_PIECES,
+                "said": f"{held[0]['name']} is worn twice: " + " and ".join(names),
+            }
+        )
+    return out
+
+
+def family_worn_twice(members: list[dict]) -> list[dict]:
+    """`worn_twice` for the whole read, each row naming its member, so a
+    sweep reads one list. An empty list is the answer "none"."""
+    return [
+        {"member": m["name"], **found}
+        for m in members
+        if m.get("present")
+        for found in m["gear"]["duplicates"]
+    ]
+
+
 def _build_gear(slots: list[dict]) -> dict:
     """The read across one character's slots: what is worn, what is missing."""
     counts = [s for s in slots if not s["cosmetic"]]
@@ -1372,6 +1422,8 @@ def _build_gear(slots: list[dict]) -> dict:
         "empty_slots": empty_slots,
         "average_item_level": average,
         "broken": broken,
+        # Always present, so "none" is an empty list and not a missing key.
+        "duplicates": worn_twice(slots),
         "chips": chips,
     }
 
@@ -2353,6 +2405,7 @@ def build_armory(
         "doll": {"left": DOLL_LEFT, "right": DOLL_RIGHT},
         "expected": len(members),
         "headline": _headline(members, len(members)),
+        "duplicates": family_worn_twice(members),
         "detail_hint": DETAIL_HINT,
         # The heading over the pieces the model host had no art for, sent
         # rather than typed into the page for the same reason every other

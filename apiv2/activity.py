@@ -28,6 +28,11 @@ COMMANDS_SQL = (
     "FROM overseer_command WHERE target_name = %s AND kind <> 'probe' "
     "AND source <> 'api:auras' ORDER BY id DESC LIMIT %s"
 )
+LATEST_REFUSAL_SQL = (
+    "SELECT status, detail, result FROM overseer_command WHERE target_name = %s "
+    "AND kind <> 'probe' AND source <> 'api:auras' AND status = 'error' "
+    "ORDER BY id DESC LIMIT 1"
+)
 LEVELS_SQL = (
     "SELECT old_level, new_level, UNIX_TIMESTAMP(created_at) AS at FROM overseer_level "
     "WHERE character_name = %s AND created_at > NOW() - INTERVAL %s DAY "
@@ -108,6 +113,20 @@ def answer_words(status: str, detail: str, result=None) -> str:
     elif detail.startswith(words + ": "):
         detail = detail[len(words) + 2 :]
     return words + (": " + detail if detail else "")
+
+
+def latest_refusal_reason(commands) -> str:
+    """The reason on the newest refused command in an id-descending read."""
+    for row in commands or ():
+        if str(row.get("status") or "") != "error":
+            continue
+        answer = answer_words(row.get("status"), row.get("detail"), row.get("result"))
+        if answer == "refused":
+            return "no refusal reason recorded"
+        if answer.startswith("refused: "):
+            return answer[len("refused: ") :]
+        return answer
+    return "no refusal reason recorded"
 
 
 def build(

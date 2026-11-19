@@ -31,7 +31,10 @@ import urllib.request
 
 import discord
 import pymysql
+from apiv2 import activity as v2_activity
+from apiv2 import members as v2_members
 from apiv2 import presence as v2_presence
+from apiv2 import ragnaros as v2_ragnaros
 
 import achievements
 import armory
@@ -121,6 +124,7 @@ import guildranks
 import guildrun
 import familyclass
 import familyseat
+import roadtoragnaros
 import guildpug
 import seatmeter
 import guildsocial
@@ -204,6 +208,7 @@ import raidprep
 import raidroles
 import restsupply
 import raidrun
+import rebind
 import spirerun
 import raidsupply
 import reagentplan
@@ -3421,6 +3426,79 @@ def _memo_delete(kind: str, subject: str) -> None:
         log.exception("bridge memo: could not delete %s memo for %s", kind, subject)
 
 
+STUCK_NOTE_MEMO_SECONDS = 30 * 24 * 3600
+READINESS_REPORT_MEMO_KIND = "mc_readiness_report"
+READINESS_REPORT_MEMO_SECONDS = 2 * 24 * 3600
+STUCK_REPORT_CYCLE_SECONDS = 5 * 60.0
+
+
+def _stuck_reporting_once(now=None) -> None:
+    """Log over-bound holds and the daily guild readiness from their API builders."""
+    now = time.time() if now is None else float(now)
+    readiness_memos = _memo_read(READINESS_REPORT_MEMO_KIND)
+    import map_server
+
+    with realmread.Session(_connect) as rd:
+        ctx = map_server._v2_context(rd)
+        _, stuck = v2_members.stuck({}, ctx)
+        over_bound = v2_members.over_bound_rows(
+            stuck.get("members"), stuck.get("checked_at")
+        )
+        note_memos = {
+            row["name"]: (row["note"], 0.0)
+            for row in stuck.get("members") or ()
+            if row.get("note")
+        }
+        refusals = {}
+        for row in over_bound:
+            name = row["name"]
+            found = rd.rows(
+                v2_activity.LATEST_REFUSAL_SQL,
+                (name,),
+                what="overseer_command",
+            )
+            refusals[name] = v2_activity.latest_refusal_reason(found)
+
+        notes, lines = v2_members.stuck_watch_updates(
+            stuck.get("members"),
+            stuck.get("checked_at"),
+            refusals,
+            note_memos,
+            now,
+        )
+        for name, note in notes.items():
+            _memo_upsert(
+                v2_members.STUCK_NOTE_MEMO_KIND,
+                name,
+                note,
+                now,
+                now + STUCK_NOTE_MEMO_SECONDS,
+            )
+        for line in lines:
+            log.warning("%s", line)
+
+        for guild in raidteams.GROUPS:
+            saved = readiness_memos.get(guild, ({}, 0.0))[0]
+            if not roadtoragnaros.readiness_line_due(saved, now):
+                continue
+            try:
+                report = v2_ragnaros.build(ctx, guild)
+            except Exception:
+                log.exception(
+                    "Molten Core readiness: guild %s read failed; retrying next pass",
+                    guild,
+                )
+                continue
+            log.info("%s", roadtoragnaros.readiness_line(guild, report))
+            _memo_upsert(
+                READINESS_REPORT_MEMO_KIND,
+                guild,
+                {"day": int(now // 86400)},
+                now,
+                now + READINESS_REPORT_MEMO_SECONDS,
+            )
+
+
 # The owed clock restarts only when the member's mark changes, so a member can
 # owe with no progress for far longer than OWED_HOURS. A short memo expiry would
 # drop that member's clock and the next restart would hold it all over again;
@@ -5563,6 +5641,28 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
         door_record=_read_or_none(guildrun.door_record, record))
 
 
+async def _planner_due(read: dict, key: str, fam: dict, rows: list,
+                       level_rows: list, dry, now: float):
+    """campaignplan.Due for one family's pending rows.
+
+    A CAPPED FAMILY ON A DOOR PAST ITS CEILING IS THERE FOR ITS LOOT (#2207),
+    so its entry is read against that loot: `_planner_facts` is built only
+    once something is due, and without this read the entry ran to its count
+    on a door the plan itself refuses as outgrown. `read` is family -> when
+    the loot was last read: one read an idle stretch, not one a cycle.
+    """
+    due = campaignplan.due(rows, fam["leader"], level_rows, dry)
+    if due.reason or not campaignplan.needs_loot(rows, level_rows):
+        return due
+    last = read.get(key)
+    if last is not None and now - last < campaignplan.IDLE_SECONDS:
+        return due
+    read[key] = now
+    upgrades, _progress = await asyncio.to_thread(
+        _planner_preraid, list(fam["names"]), level_rows)
+    return campaignplan.due(rows, fam["leader"], level_rows, dry, upgrades)
+
+
 def _planner_catalog(cur) -> dict | None:
     """preraid's catalog, read once per process; None when unreadable."""
     global _PLANNER_CATALOG
@@ -6155,8 +6255,71 @@ def _silent_stall(head: dict, names: list):
 
 # The member-state words the wedge judges are named inside _door_wedge.
 
-# (leader, member, state) -> (queue head id, monotonic first seen).
+# (leader, member) -> (queue head id, monotonic first seen). The same clock is
+# stored in overseer_bridge_memo as a wall timestamp so a pod restart cannot
+# start the stand-down bound over.
 _DOOR_HOLD_SINCE: dict = {}
+DOOR_HOLD_RECOVER_YARDS = 1500
+DOOR_HOLD_MEMO_KIND = "door_wedge_hold"
+DOOR_HOLD_MEMO_SECONDS = 7 * 24 * 3600
+DOOR_HOLD_MEMO_REFRESH_SECONDS = 60
+_DOOR_HOLD_MEMO_READ_AT: float | None = None
+
+
+def _door_hold_subject(key: tuple[str, str]) -> str:
+    return json.dumps(key, separators=(",", ":"))
+
+
+def _door_hold_memo_put(key: tuple[str, str], head_id: int,
+                        since: float, now: float) -> None:
+    wall_now = time.time()
+    value = {"head_id": int(head_id)}
+    args = (
+        DOOR_HOLD_MEMO_KIND,
+        _door_hold_subject(key),
+        value,
+        wall_now - max(0.0, now - since),
+        wall_now + DOOR_HOLD_MEMO_SECONDS,
+    )
+    writer = globals().get("_MEMO_WRITER")
+    job, upsert = globals().get("_memo_job"), globals().get("_memo_upsert")
+    if writer is not None and job is not None:
+        writer.submit(job, upsert, *args)
+    else:
+        upsert(*args)
+
+
+def _door_hold_memo_delete(key: tuple[str, str]) -> None:
+    args = (DOOR_HOLD_MEMO_KIND, _door_hold_subject(key))
+    writer = globals().get("_MEMO_WRITER")
+    job, delete = globals().get("_memo_job"), globals().get("_memo_delete")
+    if writer is not None and job is not None:
+        writer.submit(job, delete, *args)
+    else:
+        delete(*args)
+
+
+def _restore_door_hold_memos(now: float) -> None:
+    global _DOOR_HOLD_MEMO_READ_AT
+    if (_DOOR_HOLD_MEMO_READ_AT is not None
+            and now - _DOOR_HOLD_MEMO_READ_AT < DOOR_HOLD_MEMO_REFRESH_SECONDS):
+        return
+    offset = time.time() - now
+    for subject, (value, since_wall) in _memo_read(DOOR_HOLD_MEMO_KIND).items():
+        try:
+            pair = json.loads(subject)
+            if not isinstance(pair, list) or len(pair) != 2:
+                raise ValueError("memo subject is not a leader/member pair")
+            key = (str(pair[0]), str(pair[1]))
+            head_id = int(value["head_id"])
+            since = min(now, float(since_wall) - offset)
+            if now - since > DOOR_HOLD_MEMO_SECONDS:
+                _door_hold_memo_delete(key)
+                continue
+            _DOOR_HOLD_SINCE.setdefault(key, (head_id, since))
+        except (KeyError, TypeError, ValueError):
+            log.exception("bridge memo: invalid door-wedge hold memo for %s", subject)
+    _DOOR_HOLD_MEMO_READ_AT = now
 
 _DOOR_STEPS_SQL = (
     "SELECT kind, doing, occurrences, UNIX_TIMESTAMP(first_seen) AS first_at, "
@@ -6165,6 +6328,13 @@ _DOOR_STEPS_SQL = (
     "WHERE q.id = %s) AS since_at "
     "FROM overseer_now_step WHERE subject = %s AND kind = 'intent' "
     "AND last_seen > NOW() - INTERVAL 1 HOUR ORDER BY last_seen DESC LIMIT 60"
+)
+
+
+_COMPLETED_RUNS_SQL = (
+    "SELECT UNIX_TIMESTAMP(started_at) AS began, UNIX_TIMESTAMP(ended_at) AS ended "
+    "FROM overseer_dungeon_run WHERE leader_name = %s AND outcome = 'complete' "
+    "AND ended_at IS NOT NULL AND ended_at > NOW() - INTERVAL 2 HOUR"
 )
 
 
@@ -6186,50 +6356,112 @@ def _door_wedge_evidence(leader: str, head_id: int) -> tuple:
     if steps:
         now_at = int(steps[0].get("now_at") or 0) or int(time.time())
         since_at = int(steps[0].get("since_at") or 0)
+        # THE WAY OUT OF A RUN THAT CLEARED ITS DOOR IS NOT THE DOOR REFUSING
+        # THE LEADER: walks that began inside a completed run are not counted.
+        completed = []
+        with _connect() as conn, conn.cursor() as cur:
+            try:
+                cur.execute(_COMPLETED_RUNS_SQL, (leader,))
+                completed = [(int(r["began"]), int(r["ended"]))
+                             for r in cur.fetchall()
+                             if r.get("began") and r.get("ended")]
+            except pymysql.err.MySQLError as exc:
+                if not (exc.args and exc.args[0] in (1054, 1146)):
+                    raise
         restarts = (
-            nowstatus.restart_count(steps, now_at, since_at),
+            nowstatus.restart_count(steps, now_at, since_at, completed=completed),
             nowstatus.restart_count(
-                steps, now_at, since_at, window=dungeonstall.DOOR_RESTART_WINDOW),
+                steps, now_at, since_at, window=dungeonstall.DOOR_RESTART_WINDOW,
+                completed=completed),
         )
     row = _fetch_family_intents().get(leader, {})
     members = jev_family_intent.parse_members(row.get("members_state"))
     return restarts, members
 
 
+def _door_wedge_member_recovered(leader: str, member: str, positions: dict) -> bool:
+    """Whether a member is back inside the catch-up walk range of its leader."""
+    lead, part = positions.get(leader), positions.get(member)
+    if not lead or not part:
+        return False
+    try:
+        if (int(lead["map_id"]) != int(part["map_id"])
+                or int(lead["instance_id"]) != int(part["instance_id"])):
+            return False
+        distance_sq = sum(
+            (float(lead[f"pos_{axis}"]) - float(part[f"pos_{axis}"])) ** 2
+            for axis in ("x", "y", "z")
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+    return distance_sq <= DOOR_HOLD_RECOVER_YARDS ** 2
+
+
 def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
-    """name -> (state, seconds in it) for the members in a wedged state,
-    with _DOOR_HOLD_SINCE kept current: a state no longer published loses
-    its clock, and a clock from an earlier queue entry starts over.
+    """name -> (state, seconds in the active hold) for wedged members.
+
+    The clock belongs to the leader/member pair, not the published state. A
+    transient state flip leaves the family just as split, so it does not stop
+    the clock. A different queue entry starts a new one.
 
     The states are the module's member-state words (MemberStateWord):
     "dead", and the holds with no errand of the member's own choosing at
-    the end of them. The safety holds ("held off a walk that kept killing
-    it", "held where it stands, too far to walk back") are not judged:
-    they name their reason, and the module's fetch and regroup intents are
-    their recovery while a run is merely slow. In a wedge they end with
-    the run like everything else; they do not trigger it.
+    the end of them. A member held too far to walk back is included too:
+    unlike a member held off a walk that kept killing it, the module has
+    already refused both walking and flight for this catch-up. If that state
+    persists for the party-hold bound, another identical catch-up is not a
+    recovery.
     """
     now = time.monotonic()
-    seen = {}
+    restore_memos = globals().get("_restore_door_hold_memos")
+    if restore_memos is not None:
+        restore_memos(now)
+    states = {member.name: member.state for member in members if member.name != leader}
+    clock_keys = [key for key in _DOOR_HOLD_SINCE if key[0] == leader]
+    positions = {}
+    if clock_keys:
+        names = {leader, *states}
+        names.update(key[1] for key in clock_keys)
+        fetch_positions = globals().get("_fetch_positions")
+        positions = fetch_positions(sorted(names)) if fetch_positions else {}
+    recovered_member = globals().get("_door_wedge_member_recovered")
+    recovered = set()
+    for key in clock_keys:
+        name = key[1]
+        if states.get(name) == "dead":
+            continue
+        if recovered_member and recovered_member(leader, name, positions):
+            del _DOOR_HOLD_SINCE[key]
+            delete_memo = globals().get("_door_hold_memo_delete")
+            if delete_memo is not None:
+                delete_memo(key)
+            recovered.add(name)
+
+    ages = {}
     for member in members:
         if member.name == leader:
             continue
-        if member.state == "dead" or member.state in (
+        if member.state != "dead" and member.state not in (
             "on an errand of its own",
             "held still",
+            dungeonstall.CATCH_UP_UNREACHABLE_STATE,
         ):
-            seen[(leader, member.name, member.state)] = member
-    for key in [k for k in _DOOR_HOLD_SINCE if k[0] == leader and k not in seen]:
-        del _DOOR_HOLD_SINCE[key]
-    ages = {}
-    for key, member in seen.items():
+            continue
+        if member.name in recovered:
+            continue
+        key = (leader, member.name)
         stamp = _DOOR_HOLD_SINCE.get(key)
         if stamp is None or stamp[0] != head_id:
-            # AN ERRAND TAKEN UP AGAIN AFTER A RECALL GOES ON COUNTING (#2323).
-            # Looked up: the verdict harness loads this function in isolation.
             start = globals().get("_errand_clock_start")
-            stamp = (head_id, start(key, head_id, now) if start else now)
+            since = (
+                start((leader, member.name, member.state), head_id, now)
+                if start else now
+            )
+            stamp = (head_id, since)
             _DOOR_HOLD_SINCE[key] = stamp
+            write_memo = globals().get("_door_hold_memo_put")
+            if write_memo is not None:
+                write_memo(key, head_id, since, now)
         ages[member.name] = (member.state, now - stamp[1])
     return ages
 
@@ -6397,14 +6629,19 @@ def _door_wedge(head: dict, names: list, leader: str):
     A corpse outranks a walk, and a walk outranks a hold: the recorded
     reason names the worst thing wrong at the door.
     """
-    if head.get("status") != campaignqueue.ACTIVE or not any(
-        jobs.is_dungeon_job(job) for job in _jobs_of(names).values()
-    ):
-        # Not judged this pass: the leader's hold clocks stop with it, so a
-        # later return to the dungeon job does not count the gap as one hold
-        # (#2181).
+    if head.get("status") != campaignqueue.ACTIVE:
+        # A different queue phase is not a door hold. The active job may come
+        # back later, so discard clocks only when this queue entry is no longer
+        # active.
         for key in [k for k in _DOOR_HOLD_SINCE if k[0] == leader]:
-            del _DOOR_HOLD_SINCE[key]
+            _DOOR_HOLD_SINCE.pop(key, None)
+            delete_memo = globals().get("_door_hold_memo_delete")
+            if delete_memo is not None:
+                delete_memo(key)
+        return None
+    if not any(jobs.is_dungeon_job(job) for job in _jobs_of(names).values()):
+        # The family may switch jobs while still separated. Preserve its clock
+        # so a temporary quest job cannot restart the stand-down bound.
         return None
     keyword = str(head.get("keyword") or "")
     head_id = int(head.get("id") or 0)
@@ -7103,6 +7340,37 @@ def _roster_leads() -> set:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(_COUNCIL_LEAD_SQL)
         return {str(r["name"]) for r in cur.fetchall()}
+
+
+_RECENT_REBINDS_SQL = (
+    "SELECT DISTINCT target_name FROM overseer_command WHERE kind = 'bind' "
+    "AND source = %s AND created_at > NOW() - INTERVAL " + str(rebind.BACKOFF_SECONDS) +
+    " SECOND AND target_name IN (%s)")
+
+
+def _recent_rebinds(names: list) -> frozenset:
+    """Who was asked to rebind inside the back-off. An unreadable table asks
+    nobody twice by reading as everybody asked."""
+    if not names:
+        return frozenset()
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_RECENT_REBINDS_SQL % ("%s", ",".join(["%s"] * len(names))),
+                        (rebind.SOURCE, *names))
+            return frozenset(str(r["target_name"]) for r in cur.fetchall())
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in orders.MISSING_MACHINERY:
+                return frozenset(names)
+            raise
+
+
+def _insert_rebind(name: str) -> int:
+    """One kind='bind' row, empty command (`here`): the character binds where it
+    stands, which the verb allows only beside an innkeeper."""
+    return orders.send(
+        orders.MySqlStore(_connect),
+        orders.Order(target=name, command="", kind="bind", source=rebind.SOURCE),
+    )
 
 
 def _insert_hearth(name: str, source: str = jev_movement.SOURCE) -> int:
@@ -8873,6 +9141,7 @@ PASSES = (
     _Pass("_family_intent_loop"),
     _Pass("_now_loop"),
     _Pass("_watch_loop"),
+    _Pass("_stuck_reporting_loop"),
     _Pass("_quest_ledger_loop"),
     _Pass("_quest_tickets_loop"),
     _Pass("_corps_tickets_loop"),
@@ -9132,6 +9401,7 @@ class Bridge(discord.Client):
         # Each member's class quest hunt clock (classquest.Hunts) and the
         # class quests it asks guild chat for help with (classask.py).
         self._class_hunts = classquest.Hunts()
+        self._class_use_streaks = classuse.RefusalStreaks()
         self._class_helps: tuple = ()
         # cohort key -> its last job pass's helps and class quest holds, which
         # _keep_class_plan folds into _class_helps and _classquest_held.
@@ -9217,6 +9487,9 @@ class Bridge(discord.Client):
         # family -> (the last "nothing to plan" line, when), so it is said
         # once and the facts are not re-read every cycle.
         self._planner_said: dict = {}
+        # family -> when the loot was last read for an entry a capped family
+        # holds past its door's ceiling (#2207).
+        self._planner_loot_read: dict = {}
         # The family's ranked priorities (priorities.py, #1559), as last read.
         # Refreshed by `_priority_order` before every Jev Choice ask and on
         # every goal pass; the default until the first read lands.
@@ -10799,7 +11072,8 @@ class Bridge(discord.Client):
                     if who == name}
             chosen_by[name] = craft_rhythm.errand(
                 name, skills.get(name, {}), held, primaries.get(name),
-                bags_wanted, floor, known=known.get(name))
+                bags_wanted, floor, known=known.get(name),
+                dark_iron_enabled=fireplan.dark_iron_enabled())
         # THE REAGENTS ARE PLANNED BEFORE THE ERRAND IS CALLED FED (#774).
         # An errand with nothing in the bags casts nothing; the plan says
         # where each short reagent comes from, and the bank and guild bank
@@ -17457,7 +17731,43 @@ class Bridge(discord.Client):
                 await self._hearth_stranded_followers()
             except Exception:
                 log.exception("strand hearth: pass failed; retrying next cycle")
+            try:
+                await self._rebind_at_the_inn()
+            except Exception:
+                log.exception("rebind: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
+
+    async def _rebind_at_the_inn(self) -> int:
+        """Ask a member bound at another inn to bind, while it stands at its
+        leader's inn. Moves nobody: the `bind` verb only works beside an
+        innkeeper, so this waits for a family town errand to bring the member.
+        One row per member per rebind.BACKOFF_SECONDS."""
+        intents = await asyncio.to_thread(_fetch_family_intents)
+        leads = await asyncio.to_thread(_roster_leads)
+        live = {}
+        for leader, row in intents.items():
+            if strandhearth.fresh_leader_row(leader, row, leads):
+                live[leader] = [n for n in strandhearth.parse_members_state(
+                    row.get("members_state")) if n not in leads]
+        names = sorted({n for ms in live.values() for n in ms} | set(live))
+        if not names:
+            return 0
+        positions = await asyncio.to_thread(_fetch_positions, names)
+        reads = await asyncio.to_thread(_movement_reads, names)
+        facts = await asyncio.to_thread(hearthcast_data.read_from, _connect, names, log)
+        alive = getattr(facts, "alive", None) or {}
+        recent = await asyncio.to_thread(_recent_rebinds, names)
+        sent = 0
+        for leader, members in live.items():
+            rows = {m: rebind.Member(bind=reads["binds"].get(m), at=positions.get(m),
+                                     alive=alive.get(m)) for m in members}
+            asked, _ = rebind.select(reads["binds"].get(leader), rows, recent)
+            for name in asked:
+                await asyncio.to_thread(_insert_rebind, name)
+                sent += 1
+                log.info("rebind: %s is bound at another inn and stands at %s's; "
+                         "asked to bind here", name, leader)
+        return sent
 
     async def _hearth_stranded_followers(self) -> int:
         """Send a follower that cannot close on its held leader home by its stone.
@@ -19422,6 +19732,7 @@ class Bridge(discord.Client):
             self._quester_clock = questers.Clock()
             self._quester_clock.load(clock_data)
             self._quester_broken = broken
+            self._quester_judged = await asyncio.to_thread(_quester_judged)
             self._quester_last = {}
             self._quester_unledgered = 0.0
         cat = await asyncio.to_thread(_quester_catalogue)
@@ -19450,8 +19761,9 @@ class Bridge(discord.Client):
         kept = await asyncio.to_thread(_KEEP.now) if full else None
         for m in members:
             held = self._quester_broken.setdefault(m.name, {})
+            judged = self._quester_judged.get(m.name, frozenset())
             retry_stalls = questers.stalled_holds_with_actionable_objectives(
-                cat, m, held, tried, crossings
+                cat, m, held, tried, crossings, judged
             )
             for qid in retry_stalls:
                 held.pop(qid)
@@ -19470,6 +19782,8 @@ class Bridge(discord.Client):
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
                                  self._quester_last.get(m.name, 0), crossings)
             await self._quester_ledger(m, plan, held, ledger, mono)
+            self._quester_judged[m.name] = questers.judged_stalls(
+                judged, retry_stalls, plan.broken, held, m.quest_log)
             # Leftovers are destroyed first: no walk, and a slot back at once.
             sale = (questers.destroy_step(m, carried.get(m.name, ()), kept, cat, sold,
                                           tried, _quester_destroy_guard(m.name))
@@ -19483,6 +19797,7 @@ class Bridge(discord.Client):
         await asyncio.to_thread(_share_quester_quests, {m.name for m in members})
         await asyncio.to_thread(_quester_memos_write, self._quester_clock,
                                 self._quester_broken, now)
+        await asyncio.to_thread(_quester_judged_write, self._quester_judged, now)
 
     async def _quester_ledger(self, m, plan, held: dict, ledger: dict, mono: float) -> None:
         """Hold what this pass found broken in `held` (the bridge memo's quest
@@ -20942,6 +21257,10 @@ class Bridge(discord.Client):
         # The death loop's reasons are never capped (#2152): every listed
         # member that got no escape step is named, whatever else the pass says.
         _log_loop_lines(plan.loop_lines)
+        # A member left in the starting lands with no level step is named with
+        # its reason (#2400): uncapped, said when the line is new or changed.
+        _log_changed("guild jobs", plan.isle_lines,
+                     ("isle", _cohort_key(cohort)), capped=False)
         # A class quest that yields to levelling is named every pass, uncapped.
         for line in plan.yields:
             log.info("guild jobs: %s", line)
@@ -21555,9 +21874,12 @@ class Bridge(discord.Client):
         candidates, _beyond = gatheraim.near_fields(
             spawns, skills, int(member.map_id), origin)
         zone_levels = await self._gathering_zone_levels(candidates)
+        guarded = await self._gathering_guarded_zones(
+            candidates, situation.side_mask([getattr(member, "race", 0)]))
         choice = gatheraim.choose(
             skills=skills, standing_on=int(member.map_id), spawns=spawns,
-            family_level=int(member.level), zone_levels=zone_levels, origin=origin)
+            family_level=int(member.level), zone_levels=zone_levels, origin=origin,
+            guarded_zones=guarded)
         spawn = getattr(choice, "chosen", None)
         spawn = getattr(spawn, "spawn", spawn)
         if spawn is None or not getattr(spawn, "guid", 0):
@@ -21581,6 +21903,18 @@ class Bridge(discord.Client):
                 zone_levels[candidate.zone_id] = danger
         return zone_levels
 
+    async def _gathering_guarded_zones(self, candidates, side):
+        """The candidate zones with guards of the other side beside them (#1912)."""
+        out = set()
+        if not side:
+            return out
+        for candidate in candidates[:GATHER_DANGER_CANDIDATES]:
+            if await asyncio.to_thread(
+                    _hostile_guards_near, candidate.map_id, candidate.spawn.x,
+                    candidate.spawn.y, side):
+                out.add(candidate.zone_id)
+        return out
+
     async def _skinning_field(self, member, band=None):
         skin = member.skill(guildjobs.SKINNING)[0]
         low, high = guildjobs.skin_band(member.level, skin)
@@ -21591,8 +21925,33 @@ class Bridge(discord.Client):
         beasts = await asyncio.to_thread(
             _survey_job_beasts, int(member.map_id), float(member.x),
             float(member.y), low, high)
-        return guildjobs.skinning_field(
-            beasts, (float(member.x), float(member.y)), member.level, skin, band)
+        return await self._unguarded_field(
+            member,
+            beasts,
+            lambda rest: guildjobs.skinning_field(
+                rest, (float(member.x), float(member.y)), member.level, skin, band),
+        )
+
+    async def _unguarded_field(self, member, mobs, pick):
+        """`pick(mobs)`, passed over where guards of the other side stand (#1912).
+
+        A pack whose spot has such guards within GATHER_GUARD_YARDS is dropped
+        with every spawn near it and the pick is made again, a few times; None
+        when nothing unguarded is left. A side that cannot be read drops nothing.
+        """
+        side = situation.side_mask([getattr(member, "race", 0)])
+        rest = list(mobs or ())
+        for _ in range(GATHER_GUARD_RETRIES):
+            spot = pick(rest)
+            if spot is None or not side:
+                return spot
+            if not await asyncio.to_thread(
+                    _hostile_guards_near, spot.map_id, spot.x, spot.y, side):
+                return spot
+            rest = [(s, lvl) for s, lvl in rest
+                    if (s.x - spot.x) ** 2 + (s.y - spot.y) ** 2
+                    > GATHER_GUARD_YARDS ** 2]
+        return None
 
     async def _cloth_field(self, member, band=None):
         """The pack of cloth-dropping humanoids a member is sent to, or None."""
@@ -21600,8 +21959,12 @@ class Bridge(discord.Client):
         mobs = await asyncio.to_thread(
             _survey_job_cloth, int(member.map_id), float(member.x),
             float(member.y), low, high)
-        return guildjobs.cloth_field(
-            mobs, (float(member.x), float(member.y)), member.level, band)
+        return await self._unguarded_field(
+            member,
+            mobs,
+            lambda rest: guildjobs.cloth_field(
+                rest, (float(member.x), float(member.y)), member.level, band),
+        )
 
     async def _run_job_step(self, step, cap: float) -> None:
         """Write one job step's rows in order, each after the last has answered.
@@ -21770,6 +22133,7 @@ class Bridge(discord.Client):
             if verdict.state in classuse.DONE:
                 # A done use restarts the class hunt's stall clock (#1140): the
                 # counter moves only when what it summoned dies.
+                self._class_use_streaks.done(step.holder, step.key)
                 if step.action == classquest.ACTION:
                     self._class_hunts.used(step.holder, int(step.key), time.time())
                 return True
@@ -21787,6 +22151,17 @@ class Bridge(discord.Client):
                     self._class_hunts.give_up(step.holder, step.key, time.time())
                 return False
             if verdict.state not in (classuse.RETRY, classuse.ELSEWHERE):
+                return False
+            if (step.action == classquest.ACTION
+                    and self._class_use_streaks.refused(
+                        step.holder, step.key, str(answer.get("detail") or ""))):
+                # The same refusal STREAK_LIMIT times running is a defect, not a
+                # wait (#678): give the quest up, as `never` does, and say why.
+                log.warning("guild jobs: %s's use for quest %s was refused %d times "
+                            "running as %r; given up for now",
+                            step.holder, step.key, classuse.STREAK_LIMIT,
+                            str(answer.get("detail") or ""))
+                self._class_hunts.give_up(step.holder, step.key, time.time())
                 return False
             if attempt == classuse.MAX_ATTEMPTS:
                 return False
@@ -21948,6 +22323,20 @@ class Bridge(discord.Client):
         finally:
             await self._class_party_close(run, formed, done)
 
+    def _class_party_meet_retry_log(self, run, waited, held_rounds, meeting, held):
+        """Write one retry line after a party's new meeting round."""
+        if waited is None:
+            return
+        result = ("met" if meeting.met else
+                  "held again" if held else
+                  "not met: " + meeting.why)
+        log.info(CLASS_PARTY_MEET_RETRY_LINE, run.leader, run.title,
+                 ", ".join(waited[0]), waited[1], held_rounds,
+                 classparty.MEET_HELD_RETRIES, result)
+        if meeting.met:
+            log.info(CLASS_PARTY_MEET_RETRY_MET_LINE, run.leader,
+                     run.title, held_rounds, classparty.MEET_HELD_RETRIES)
+
     async def _class_party_meet(self, run) -> bool:
         """Walk the leader and every helper to the objective spawn and see them
         stand together there (classparty.judge_meeting); True when the party
@@ -21970,16 +22359,10 @@ class Bridge(discord.Client):
             arrived = await self._class_party_meet_walks(run)
             meeting = await self._class_party_meet_seen(run, arrived)
             held = classparty.meeting_held(run)
-            if waited is not None:
-                result = ("met" if meeting.met else
-                          "held again" if held else
-                          "not met: " + meeting.why)
-                log.info(CLASS_PARTY_MEET_RETRY_LINE, run.leader, run.title,
-                         ", ".join(waited[0]), waited[1], held_rounds,
-                         classparty.MEET_HELD_RETRIES, result)
-                if meeting.met:
-                    log.info(CLASS_PARTY_MEET_RETRY_MET_LINE, run.leader,
-                             run.title, held_rounds, classparty.MEET_HELD_RETRIES)
+            refused_roads = classparty.refused_road_members(run)
+            if refused_roads:
+                board.refuse_road(run, refused_roads)
+            self._class_party_meet_retry_log(run, waited, held_rounds, meeting, held)
             if (not meeting.met and held
                     and held_rounds < classparty.MEET_HELD_RETRIES):
                 held_rounds += 1
@@ -22002,7 +22385,6 @@ class Bridge(discord.Client):
                     # cannot open it, so the ask is given up now instead of
                     # walking two more helpers across the map to wait for it.
                     board.give_up(run.ask_id)
-                    board.refuse_road(run)
                 log.info("class party: the meeting for %s's %s fails: %s", run.leader,
                          run.title, meeting.why)
                 return False
@@ -23675,7 +24057,7 @@ class Bridge(discord.Client):
         if step == townerrand.MAIL:
             await self._town_errand_aim(leader, _hub_aim(state.hub), cohort)
             return await self._town_errand_mail(state.hub, names, positions,
-                                                cohort)
+                                                cohort, marks)
         if step in (townerrand.EQUIP, townerrand.HANDDOWN):
             await self._town_errand_aim(leader, _hub_aim(state.hub), cohort)
             if step not in marks:
@@ -23793,11 +24175,22 @@ class Bridge(discord.Client):
         marks[step] = now
         return sent == 0
 
-    async def _town_errand_mail(self, hub, names, positions, cohort) -> bool:
+    async def _town_errand_mail(self, hub, names, positions, cohort,
+                                marks=None) -> bool:
         """Take mail for members at the hub; defer absent members to a later
-        mailbox visit so their inaccessible mail cannot hold this errand."""
-        letters = mailrun.letters_from_rows(
-            await asyncio.to_thread(_fetch_mail, names), names)
+        mailbox visit so their inaccessible mail cannot hold this errand.
+
+        A letter its holder's mailbox has not loaded (#2402) is not planned,
+        so it cannot hold the step either; it is named once per errand
+        (`marks` is this step's own, dropped when the step changes).
+        """
+        marks = {} if marks is None else marks
+        rows, unloaded = await asyncio.to_thread(_fetch_mail_split, names)
+        letters = mailrun.letters_from_rows(rows, names)
+        if unloaded and not marks.get("unloaded_said"):
+            marks["unloaded_said"] = True
+            log.info("town errand mail: %s%s", mailrun.errand_note(unloaded),
+                     _family_label(cohort))
         seen = await asyncio.to_thread(_recent_mail_keys, GIVE_RETRY_MINUTES)
         here = {name for name in names if townerrand.in_range(
             hub, positions.get(name), TOWN_COUNTER_YARDS)}
@@ -24118,8 +24511,8 @@ class Bridge(discord.Client):
         nearest spawn out of `acore_world.gameobject` and handing its surveyed
         position to `travel.ground_aim`, producing the `at:<map>:<x>,<y>,<z>`
         form `ResolveTravelTarget` answers with ground before it ever builds the
-        creature-only `_travelSpawns` index. This pass is that pass with
-        `gt.type = 8 AND gt.Data0 = 3`.
+        creature-only `_travelSpawns` index. This pass filters the same query
+        by the focus id required by the active smelt.
 
         AND SMELTING IS THE ONE CASE THAT NEEDS ONLY THE WALK. infra#3617's
         other half is the Blacksmith Hammer: every Anvil-gated recipe also needs
@@ -24180,17 +24573,41 @@ class Bridge(discord.Client):
             smelters = await self._town_stop_demand(cohort)
         if not smelters:
             return
+        focus_groups = {}
+        for name, spell in smelters.items():
+            focus = craft.focus_for(spell)
+            if focus in craft.FOCUS_AIMS:
+                focus_groups.setdefault(focus, {})[name] = spell
+        focus_ids = sorted(focus_groups)
+        if not focus_ids:
+            return
+        family = _cohort_key(cohort)
+        focus_turns = getattr(self, "_forge_focus_turns", None)
+        if not isinstance(focus_turns, dict):
+            focus_turns = {}
+            self._forge_focus_turns = focus_turns
+        last_focus = focus_turns.get(family)
+        focus_id = next(
+            (focus for focus in focus_ids if last_focus is not None and focus > last_focus),
+            focus_ids[0],
+        )
+        if last_focus in focus_ids:
+            focus_id = last_focus
+        next_focus = focus_ids[(focus_ids.index(focus_id) + 1) % len(focus_ids)]
+        focus_turns[family] = focus_id
+        smelters = focus_groups[focus_id]
         names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or await self._mid_run(names):
             return
         where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
-        spawn = await asyncio.to_thread(_nearest_forge, leader)
+        spawn = await asyncio.to_thread(_nearest_forge, leader, focus_id)
         if town_stop and spawn and not travel.station_in_town(spawn):
             log.info(
                 "forge: %s wait for a town stop with a Forge: the nearest is "
                 "past %d yards of leader=%s",
                 ", ".join(sorted(smelters)), travel.TOWN_STATION_YARDS, leader,
             )
+            focus_turns[family] = next_focus
             return
         forge = travel.forge_aim(spawn, where.get("map_id") if where else None)
         if not forge.aim:
@@ -24203,6 +24620,7 @@ class Bridge(discord.Client):
                 ", ".join("%s=%d" % pair for pair in sorted(smelters.items())),
                 forge.refused,
             )
+            focus_turns[family] = next_focus
             return
         if travel.within_focus(spawn):
             # ALREADY THERE, SO THE COLUMN IS LEFT ALONE. Writing an aim for a
@@ -24220,6 +24638,7 @@ class Bridge(discord.Client):
                 where.get("map_id") if where else "?",
                 ", ".join(sorted(smelters)),
             )
+            focus_turns[family] = next_focus
             return
         # NOT EVERY FORGE IS A WALK (#2538): the nearest on the whole map can
         # be past a death disc, in hostile ground, or a split family's drag.
@@ -24230,6 +24649,7 @@ class Bridge(discord.Client):
         if why:
             log.info("forge: %s wait: leader=%s is not walked to a Forge: %s",
                      ", ".join(sorted(smelters)), leader, why)
+            focus_turns[family] = next_focus
             return
         aimed = await self._claim_town_slot("forge", leader, forge.aim,
                                              cohort=_cohort_key(cohort))
@@ -24244,6 +24664,7 @@ class Bridge(discord.Client):
                 "pass, so %s cannot smelt until the town slot comes round",
                 leader, forge.aim, ", ".join(sorted(smelters)),
             )
+            focus_turns[family] = next_focus
             return
         log.info(
             "forge: leader=%s aimed at %s (%d-yard focus) so %s can smelt - %s",
@@ -26714,11 +27135,12 @@ class Bridge(discord.Client):
         who = campaignqueue._family(key)
         level_rows = await asyncio.to_thread(_queue_level_rows, fam)
         dry = await asyncio.to_thread(_planner_dry, list(fam["names"]))
-        due = campaignplan.due(rows, fam["leader"], level_rows, dry)
+        now = time.monotonic()
+        due = await _planner_due(self._planner_loot_read, key, fam, rows,
+                                 level_rows, dry, now)
         if not due.reason:
             self._planner_said.pop(key, None)
             return False
-        now = time.monotonic()
         idle = self._planner_said.get(key)
         if idle is not None and now - idle[1] < campaignplan.IDLE_SECONDS:
             return False
@@ -28323,9 +28745,12 @@ class Bridge(discord.Client):
             if top is not None:
                 zone_levels[cand.zone_id] = top
 
+        side = await asyncio.to_thread(_family_side, names)
+        guarded = await self._gathering_guarded_zones(candidates, side)
         return gatheraim.choose(skills=skills, standing_on=standing_on,
                                 spawns=spawns, family_level=level,
-                                zone_levels=zone_levels, origin=origin)
+                                zone_levels=zone_levels, origin=origin,
+                                guarded_zones=guarded)
 
     async def _yield_gather_aim(self, why: str, cohort=None) -> bool:
         """Hand back a gathering walk this pass holds, and say why (#170).
@@ -29192,6 +29617,17 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("stray followers: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
+
+    async def _stuck_reporting_loop(self) -> None:
+        """Keep the over-bound notes and daily raid readiness visible."""
+        await self.wait_until_ready()
+        await asyncio.sleep(min(STUCK_REPORT_CYCLE_SECONDS, 60.0))
+        while not self.is_closed():
+            try:
+                await asyncio.to_thread(_stuck_reporting_once)
+            except Exception:
+                log.exception("stuck reporting: pass failed; retrying next cycle")
+            await asyncio.sleep(STUCK_REPORT_CYCLE_SECONDS)
 
     async def _watch_loop(self) -> None:
         """Keep the Watcher beside whoever the operator's order names."""
@@ -33226,10 +33662,11 @@ def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
     known = {m.name for m in mates}
     quest_mates = list(mates) + [m for m in answered if m.name not in known]
     own = classparty.ask_held({**pug_held, **held}, board)
+    refused_helper_roads = board.road_refused_helpers(quest_mates)
     quest_pass = classask.plan_pass(
         helps, quest_mates, own, asks, answers, now, partied=board.partied_asks(),
         refused=board.refused(), cooling=board.cooling(clock),
-        seats=board.seats(clock))
+        seats=board.seats(clock), road_refused_helpers=refused_helper_roads)
     escalation = classask.plan_escalation(
         quest_pass, helps, quest_mates, own, asks, answers, now,
         calls=facts.get("pug_calls", {}), pugs=pugs,
@@ -42188,8 +42625,18 @@ def _fetch_mail(names: list) -> list:
     image without the mail schema has nothing to collect, and taking the loop
     down over it would hide every other pass's log behind a traceback.
     """
+    return _fetch_mail_split(names)[0]
+
+
+def _fetch_mail_split(names: list) -> tuple:
+    """`_fetch_mail`'s rows, and the letters it left out of them.
+
+    The second is the (holder, mail id) of each letter still in a mailbox
+    that its holder has not loaded (mailrun.unloaded_held): one read, so the
+    town errand can name what it leaves behind without asking twice.
+    """
     if not names:
-        return []
+        return [], frozenset()
     marks = ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
         try:
@@ -42197,7 +42644,7 @@ def _fetch_mail(names: list) -> list:
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("mail: this world image has no mail tables to read")
-                return []
+                return [], frozenset()
             raise
         rows = [dict(row) for row in cur.fetchall()]
         # A LETTER THE MAILBOX HAS NOT LOADED IS NOT WAITING (#2402): every
@@ -42207,7 +42654,8 @@ def _fetch_mail(names: list) -> list:
         unloaded = _unloaded_mail(cur, names, marks) if rows else frozenset()
     _log_changed("mail", [mailrun.unloaded_note(unloaded)] if unloaded else [],
                  key=("unloaded",) + tuple(sorted(names)), capped=False)
-    return mailrun.loaded_rows(rows, unloaded)
+    return (mailrun.loaded_rows(rows, unloaded),
+            mailrun.unloaded_held(rows, unloaded))
 
 
 _UNLOADED_MAIL_SQL = (
@@ -42629,6 +43077,50 @@ def _survey_gather_nodes(leader: str, lock_ids):
             for row in cur.fetchall()]
 
 
+# GUARDS OF THE OTHER SIDE (#1912). A gathering field is judged for creature
+# level alone, and a guard is a low-level creature, so Horde characters were
+# walked to fields beside Alliance guard posts and killed by them. A guard is a
+# creature flagged as one or named as one whose faction attacks the walker's side.
+_HOSTILE_GUARD_SQL = (
+    "SELECT COUNT(*) AS n FROM acore_world.creature c "
+    "JOIN acore_world.creature_template ct ON ct.entry = c.id "
+    "JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
+    "WHERE c.map = %s AND (ft.EnemyGroup & %s) <> 0 "
+    "AND ((ct.flags_extra & 32768) <> 0 OR ct.name REGEXP "
+    "'Guard|Sentry|Defender|Sentinel|Protector|Watchman|Guardian') "
+    "AND POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2) < POW(%s, 2)"
+)
+GATHER_GUARD_YARDS = 300
+GATHER_GUARD_RETRIES = 4
+
+
+def _hostile_guards_near(map_id: int, x: float, y: float, side: int) -> bool:
+    """Whether guards that attack `side` stand within GATHER_GUARD_YARDS of a
+    point. A table this world image lacks reads as no guards, as the danger read
+    does for its own."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_HOSTILE_GUARD_SQL, (
+                int(map_id), int(side), float(x), float(y), GATHER_GUARD_YARDS))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return False
+            raise
+        row = cur.fetchone()
+    return bool(row and int(row.get("n") or 0))
+
+
+def _family_side(names) -> int:
+    """The FactionGroup bit of these characters' side, 0 when mixed or unread."""
+    names = [n for n in names or () if n]
+    if not names:
+        return 0
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT race FROM characters WHERE name IN (%s)"
+                    % ",".join(["%s"] * len(names)), tuple(names))
+        return situation.side_mask([r.get("race") for r in cur.fetchall()])
+
+
 def _gather_danger(map_id: int, x: float, y: float):
     """Highest creature level spawned within GATHER_DANGER_YARDS of a point.
 
@@ -42758,8 +43250,8 @@ _FORGE_SQL = (
 )
 
 
-def _nearest_forge(name: str):
-    """The nearest usable Forge spawn row on `name`'s own map, or None.
+def _nearest_forge(name: str, focus_id: int = travel.FORGE_FOCUS_ID):
+    """The nearest usable focus spawn row on `name`'s own map, or None.
 
     A ROW OUT OF THE SPAWN TABLE, NOT A COORDINATE THIS PROCESS INVENTED - the
     identical guarantee `_nearest_vault` gives, against the identical tables.
@@ -42777,7 +43269,7 @@ def _nearest_forge(name: str):
             cur.execute(_FORGE_SQL, (
                 name,
                 travel.SPELL_FOCUS_GO_TYPE,
-                travel.FORGE_FOCUS_ID,
+                focus_id,
                 travel.ARRIVED_POSITION_YARDS,
             ))
         except pymysql.err.MySQLError as exc:
@@ -42901,7 +43393,7 @@ def _forge_errands(family: str | None = None) -> dict:
             raise
         return {row["name"]: int(row["craft_spell"] or 0)
                 for row in cur.fetchall()
-                if craft.focus_for(row["craft_spell"]) == travel.FORGE_FOCUS_ID}
+                if craft.focus_for(row["craft_spell"]) in craft.FOCUS_AIMS}
 
 
 def _town_stop_errands(family: str | None = None) -> dict:
@@ -43512,6 +44004,15 @@ QUESTER_MEMO_SECONDS = 30 * 24 * 3600
 # one without it was judged by the old clock and is not held.
 QUESTER_STALL_CLOCK_KEY = "_stall_clock"
 QUESTER_STALL_CLOCK = 1809
+# A STALL IS RETRIED AT MOST ONCE (#1745). Each pass reopened every held stall
+# with an objective it could pursue (questers.stalled_holds_with_actionable_
+# objectives), so a quest that stalled again was reopened again, pass after
+# pass. This memo holds, per quester, the quests whose stall is never retried
+# (questers.judged_stalls): one found stalled by the per-ingredient hunt, or
+# one already retried. A stall held from before it is retried once. Its own
+# memo kind, not a key in the broken memo, so a bridge without it still reads
+# that memo.
+QUESTER_JUDGED_MEMO = "quester_stall_judged"
 # The realm's hunt rows the questers may hold at once, of its ceiling
 # (classhunt.HUNTS_AT_ONCE): the guild's class quests come first (classquest
 # OWED_*), so the questers leave them the rest. Past it a quester's hunt is the
@@ -43685,6 +44186,24 @@ def _quester_held(name: str, value) -> dict:
                  "#1809 clock: quests %s", name, len(dropped),
                  ", ".join(str(q) for q in sorted(dropped)))
     return held
+
+
+def _quester_judged() -> dict:
+    """name -> the quest ids whose stall is never retried (QUESTER_JUDGED_MEMO)."""
+    return {
+        name: frozenset(int(q) for q in (value or {}).get("quests", ()))
+        for name, (value, _since) in _memo_read(QUESTER_JUDGED_MEMO).items()
+    }
+
+
+def _quester_judged_write(judged: dict, now: float) -> None:
+    """Write each quester's judged stalls; an empty set deletes its memo."""
+    for name, held in judged.items():
+        if held:
+            _memo_upsert(QUESTER_JUDGED_MEMO, name, {"quests": sorted(held)},
+                         now, now + QUESTER_MEMO_SECONDS)
+        else:
+            _memo_delete(QUESTER_JUDGED_MEMO, name)
 
 
 def _quester_memos_write(clock, broken: dict, now: float) -> None:

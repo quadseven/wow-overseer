@@ -166,24 +166,10 @@ class Recipe:
     a claim that lives only in free prose is a claim nothing checks, and
     infra#3738 was filed proposing to add exactly such a recipe on the
     strength of a spell id that turned out to name a different spell. So the
-    number moved into the dataclass, where
-    `test_no_recipe_requires_a_spell_focus` holds the WHOLE table to
-    `focus == 0` on every pull request.
-
-    The value is a `SpellFocusObject.dbc` id rather than a boolean, because
-    the eventual fix is per-object rather than a flag: 1 is Anvil, 2 is Loom,
-    3 is Forge (read out of the running worldserver's own
-    SpellFocusObject.dbc, see the SMELTING comment below).
-
-    THAT "UNTIL THEN" HAS ARRIVED FOR EXACTLY ONE OF THE THREE (infra#3748).
-    `bridge._forge_once` now walks the leader to the nearest spawned Forge
-    before a smelt is cast, so `focus = 3` is a value this system can honour
-    and the Mining entries below carry it. Anvil and Loom still have no walk,
-    so `focus = 1` or `focus = 2` remains exactly as refusable as every
-    non-zero value used to be - see `FOCUS_AIMS` directly below, which is the
-    machine-readable list of which focus ids something actually stands a
-    character at, and the test that holds this field to it. Zero still means
-    "castable anywhere", which is every entry but Mining's.
+    The value is a `SpellFocusObject.dbc` id rather than a boolean.
+    `FOCUS_AIMS` lists bridge routes for Forge (3) and Black Forge (543).
+    Other focus ids remain unsupported. Zero means the recipe can be cast
+    anywhere; Mining's smelts are the focus-gated exceptions.
 
     `tool` IS THE ITEM ENTRY OF A BAG TOOL THE CAST NEEDS (the module ticket),
     0 FOR NONE. The worn Blacksmithing recipes carry RequiresSpellFocus 1
@@ -224,12 +210,13 @@ class Recipe:
 # (tests/test_craft.py's SpellFocusTests). A focus id can only be added here by
 # the change that adds its walk, which is what stops this becoming a list of
 # intentions.
+BLACK_FORGE_FOCUS_ID = 543
+
 FOCUS_AIMS = {
-    # 3 = Forge. `bridge._forge_once` reads the nearest spawned forge on the
-    # smelter's own map out of `acore_world.gameobject` and writes its surveyed
-    # position to `travel_npc` as `travel.forge_aim`'s `at:<map>:<x>,<y>,<z>`,
-    # through the one sanctioned writer (`bridge._write_trade_errand`).
+    # 3 = Forge and 543 = Black Forge; `_forge_once` selects the requested
+    # focus before reading a nearby spawn and writing its surveyed position.
     3: "forge",
+    BLACK_FORGE_FOCUS_ID: "black-forge",
 }
 
 
@@ -259,7 +246,12 @@ TOOL_WALKS: frozenset = frozenset({BLACKSMITH_HAMMER, 6218, 6339, 11130, 11145})
 # tests/test_recipe_stations.py fails on a recipe whose measured focus is not a
 # key. A Forge is the bridge's walk, an Anvil is DriveCraft's and a Cooking Fire
 # is lit where the cook stands.
-STATIONS: dict = {1: "Anvil", 3: "Forge", 4: "Cooking Fire"}
+STATIONS: dict = {
+    1: "Anvil",
+    3: "Forge",
+    4: "Cooking Fire",
+    BLACK_FORGE_FOCUS_ID: "Black Forge",
+}
 
 # `TotemCategory.dbc` id -> the item that answers it, the same test's table.
 TOOL_ITEMS: dict = {
@@ -1695,6 +1687,14 @@ RECIPES: dict = {
             "with Apprentice Mining, so no trainer visit is needed and "
             "no trainer_spell row exists for it",
         ),
+        Recipe(
+            14891,
+            "Smelt Dark Iron",
+            230,
+            300,
+            "8x Dark Iron Ore (11370) -> 1x Dark Iron Bar (11371)",
+            focus=BLACK_FORGE_FOCUS_ID,
+        ),
     ),
     # ALCHEMY 1-300 AGAINST THE REALM ITSELF (the operator, 2026-10-05). The
     # route is wow-professions.com's classic Alchemy guide; every fact is the
@@ -2890,11 +2890,15 @@ AUTO_LEARNED = frozenset(
     }
 )
 
+# Quest-taught recipes have no trainer row and are only known when the spellbook
+# read confirms them. Smelt Dark Iron comes from The Spectral Chalice.
+QUEST_TAUGHT = frozenset({14891})
+
 # THE TRAINER'S PRICE FOR EVERY BOUGHT RUNG, spell -> (ReqSkillRank, copper).
 # acore_world.trainer_spell on the dev world, 2026-10-10: the least
 # ReqSkillRank and MoneyCost across the trainers that teach it, for every
-# rung of RECIPES that is not AUTO_LEARNED and every trainer bag the tailor
-# sews (BAG_RECIPES, guildcorps.BAGS). Every one of them is sold by the
+# rung of RECIPES that is not AUTO_LEARNED or QUEST_TAUGHT, and every trainer
+# bag the tailor sews (BAG_RECIPES, guildcorps.BAGS). Each is sold by the
 # ordinary trainer of its trade in each capital (trainer ids 58-60, 61-63,
 # 65-67, 72-74, 81-83 and 84-92), so the nearest trainer of the trade sells
 # it. mod-overseer's TrainOnArrival buys a trade's recipes at this price once
@@ -3017,13 +3021,18 @@ TRAINER_RECIPES: dict[int, tuple[int, int]] = {
 def holds(spell_id: int, known) -> bool:
     """Does a character with spellbook `known` hold this recipe?
 
-    `known` None is an unread spellbook: held, so nothing is judged on it. An
-    auto-learned rung is held whatever `character_spell` says, and so is any
-    spell this module cannot place as a trainer purchase. Only a rung in
-    TRAINER_RECIPES that is absent from `known` is not held.
+    `known` None is an unread spellbook: held, so nothing is judged on it,
+    except a quest-taught recipe that cannot be assumed. An auto-learned rung
+    is held whatever `character_spell` says, and so is any spell this module
+    cannot place as a trainer purchase. Only a trainer or quest-taught recipe
+    absent from a readable spellbook is not held.
     """
     spell = int(spell_id or 0)
-    if known is None or not spell or spell in AUTO_LEARNED:
+    if not spell or spell in AUTO_LEARNED:
+        return True
+    if spell in QUEST_TAUGHT:
+        return known is not None and spell in known
+    if known is None:
         return True
     return spell not in TRAINER_RECIPES or spell in known
 

@@ -74,10 +74,28 @@ Before opening a roll PR, check the deploy repository's ship lock:
     python3 .github/scripts/wow_bridge_ship.py --check-lock
 
 The lock holds for a 30-minute watch window after a merged bridge ship,
-worldserver pin or numbered roll. If the command exits 1, it names the holder
+worldserver pin or numbered roll. A roll's stage PR (title `wow-dev roll N stage: ...`, source pins and
+drift entries only) deploys nothing and holds no lock; only the pin PR after the build does. If the command exits 1, it names the holder
 and when the window closes; wait for the window to close, then check again
 before opening the PR.
 
+**The one-command route.** `python3 .github/scripts/wow_roll.py` in the deploy repository does the
+mechanical half of each step below; the merges stay with a person and the pin PR stays `HOLD` until its
+merge is ordered.
+
+    wow_roll.py riders          # step 0: wait for riders, at most 45 minutes
+    wow_roll.py stage --number N --overseer-sha <40 hex> --why "<one line>"
+                                # steps 1-2: the stage edits and the stage title
+    wow_roll.py pin --number N --merge-sha <stage merge sha> --needle '<text>' --body-out body.md
+                                # steps 3-5: find (or dispatch) and wait for the build, read both digests,
+                                # binary proof, pin edits, pin PR body with its Binary proof line
+
+0. **Riders.** Before cutting the stage, `riders` lists open mod-overseer PRs a roll should carry: every
+   check green except `build`, green and mergeable now, or auto-merge armed. It prints what it waits for
+   each minute and holds the cut for at most 45 minutes (`--max-wait`), then cuts and names the riders it
+   left behind. A PR that fails a check, or is a draft, is not a rider. A roll cut minutes before a fix
+   merges costs a whole second worldserver restart, so a short bounded wait for a fix that is already green
+   is cheaper than that.
 1. **Merge the module PRs** (mod-overseer, mod-dungeon-clear) after checks pass and every bot thread is
    answered. Record the new main SHA of each. mod-dungeon-clear is pinned to the head of its deployed fork
    branch, not main.
@@ -215,7 +233,7 @@ API from inside the cluster (read-only). From a pod that has `python3` (for exam
 ### Rules for a worldserver roll
 
 - Batch what is already merged. When several changes are merged and waiting, carry them in one roll rather
-  than one roll each. Never hold a ready roll for a PR that has not merged yet; a later roll takes it.
+  than one roll each. Never hold a ready roll for a PR that is not a rider (section 1b, step 0); a later roll takes it.
 - Batch bridge ships the same way. A bridge ship never restarts the worldserver, but after a restart the passes
   wait for the passes they depend on, so each restart idles the realm for a cycle or more (the gates open at
   the latest after 30 minutes of uptime).
