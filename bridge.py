@@ -27414,11 +27414,11 @@ class Bridge(discord.Client):
         who = campaignqueue._family(key)
         names = list(fam["names"])
         leader = str(fam["leader"].get("name") or "")
-        looped_by = globals().get("_prof_loop_family")
-        if looped_by is not None and looped_by(key):
-            _prof_loop_quiet("attunement", key, "no attunement walk: the "
-                             "family is in the profession loop")
-            return False
+        # A FAMILY IN THE PROFESSION LOOP IS NOT STOOD DOWN. The step writes no
+        # job: it takes the town slot and kind='quest' rows, and attunestep's own
+        # gates (queue due, job idle or quest, not mid-run) already wait for the
+        # loop's craft, town and train phases. Standing the whole step down for a
+        # looped family meant a family that lives in the loop never took the quest.
         if not names or not leader:
             return False
         level_rows = await asyncio.to_thread(_queue_level_rows, fam)
