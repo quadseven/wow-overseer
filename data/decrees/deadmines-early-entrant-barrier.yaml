@@ -1,0 +1,62 @@
+# A Deadmines run starts with Zork already inside and the rest of Zug's family
+# at the outside staging trigger (mod-overseer issue 165). The barrier must
+# name Zork as inside already, then let the run reach CLEARING.
+# Scope: the entry is seeded at the instance exit trigger to avoid placing the
+# early entrant beside a live boss. The core encounter precondition ensures an
+# arranged instance was actually played; this does not assert a live-realm run.
+# Fix: mod-overseer commit ed8c47f (inside members named by the BARRIER line).
+decree: v1
+id: deadmines-early-entrant-barrier
+proves:
+  - {repo: quadseven/mod-overseer, issue: 165, criterion: "A BARRIER line names a member as inside already while others arrive, and the run reaches CLEARING without operator input"}
+fix: {repo: quadseven/mod-overseer, commit: "ed8c47f55f42167415f42198d667b370409fcf38"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 2h
+cast:
+  - who: family:zug
+    set: {alive: true, health_pct: 100, at: {areatrigger: 78}}
+    ceiling: "nothing granted but position"
+  - who: Zork
+    set: {alive: true, health_pct: 100, at: {areatrigger: 119}}
+    ceiling: "nothing granted but position"
+arrange:
+  - instance: {map: "The Deadmines", as: deadmines, bind: family:zug}
+  - group: {members: family:zug, leader: Zug}
+act:
+  - at: 90s
+    roster: {who: family:zug, job: "dungeon:deadmines"}
+observe:
+  - name: one-roster-member-starts-inside
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid = @Zork AND map_id = 36
+    expect: {scalar: "= 1"}
+  - name: the-other-four-start-outside
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND guid <> @Zork AND map_id = 0
+    expect: {scalar: "= 4"}
+  - name: run-opened-in-deadmines
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run WHERE map_id = 36 AND started_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: encounter-credited
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM log_encounter WHERE map = 36 AND time >= @t0
+    expect: {scalar: ">= 1"}
+  - name: barrier-names-the-early-entrant
+    role: check
+    log: {pattern: "dungeon run BARRIER (holds|satisfied).*inside already.*Zork", expect: {at_least: 1}}
+  - name: run-reached-clearing
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run_event WHERE family = 'Zug' AND kind = 'phase' AND detail LIKE '%CLEARING%' AND created_at >= @t0
+    expect: {scalar: ">= 1"}
