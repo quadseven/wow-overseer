@@ -7074,6 +7074,17 @@ def home_in_loop_zone(m, loop) -> bool:
     return home is not None and int(home) == int(loop.zone)
 
 
+def _on_start_map_knight(m) -> bool:
+    """A death knight standing on the start map (Acherus and the ground below
+    it), where the hearth and the level walk do not run: its way out is the
+    class walk (classtrain, the module's gryphon click), which is asked every
+    classtrain.KNIGHT_COOLDOWN_MINUTES while it stays."""
+    return (
+        int(m.class_id) == classquest.DEATH_KNIGHT
+        and m.map_id == classquest.DEATH_KNIGHT_START_MAP
+    )
+
+
 def _death_loop_reason(m, loop, leveling, recent, campaign="", level_note=""):
     """Why the death loop's escape issued no step for `m`, as one phrase.
 
@@ -7088,6 +7099,11 @@ def _death_loop_reason(m, loop, leveling, recent, campaign="", level_note=""):
         return "not online"
     if not m.alive:
         return "dead"
+    if _on_start_map_knight(m):
+        return (
+            "death knight on the start map: the class walk's gryphon click "
+            "is its way out"
+        )
     if not _in_the_open(m):
         return "not in the open world"
     if leveling is not None and m.name in leveling.roster:

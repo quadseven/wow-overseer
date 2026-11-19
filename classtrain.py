@@ -60,6 +60,12 @@ WALKS_PER_GUILD = 3
 # the walk answered: a trainer that taught what the purse covered has nothing
 # more to sell it until it earns more or levels.
 COOLDOWN_MINUTES = 180
+# A death knight on the start map is walked for the module's gryphon click, not
+# for a purchase, so the three-hour wait for a purse to refill does not apply:
+# one still on that map this long after its last walk is walked again. A knight
+# with no hearthstone has no other way off that map, so a three-hour gap leaves
+# it exposed to the creatures there for hours.
+KNIGHT_COOLDOWN_MINUTES = 20
 # A worldserver that does not know the class walk answers this, and is not
 # asked again for this long.
 MALFORMED = "malformed walk-to-trainer command"
@@ -367,22 +373,27 @@ def _is_no_trainer_refusal(result: dict) -> bool:
     )
 
 
-def recent_walkers(rows, minutes=COOLDOWN_MINUTES) -> set:
+def recent_walkers(rows, minutes=COOLDOWN_MINUTES, knights=()) -> set:
     """Members walked inside the cooldown, from the command log's rows.
 
     `rows` carry target_name, source and age (minutes). Refusals for lacking a
     trainer on the member's map are omitted so a stranded member can cross and
-    walk immediately after arriving on a trainer map.
+    walk immediately after arriving on a trainer map. A member named in
+    `knights` (death knights, walked for the gryphon click) is held only
+    KNIGHT_COOLDOWN_MINUTES.
     """
     out = set()
+    knights = {str(n) for n in knights or ()}
     for row in rows or ():
         source = str(row.get("source") or "")
         if not source.startswith(SOURCE + ":"):
             continue
         if _is_no_trainer_refusal(_result_of(row)):
             continue
-        if _int(row.get("age"), minutes + 1) <= minutes:
-            out.add(str(row.get("target_name") or source.split(":", 1)[1]))
+        who = str(row.get("target_name") or source.split(":", 1)[1])
+        window = min(minutes, KNIGHT_COOLDOWN_MINUTES) if who in knights else minutes
+        if _int(row.get("age"), window + 1) <= window:
+            out.add(who)
     return out
 
 
