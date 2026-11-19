@@ -6,10 +6,13 @@ handoff path to both, and resolves the worldserver log from the pod's own
 environment when no `--log` is given.
 """
 
+import pathlib
+import tempfile
 import unittest
 from unittest import mock
 
 from ephemeral import __main__ as cli
+from ephemeral import judge
 from ephemeral import podpaths
 
 
@@ -86,6 +89,63 @@ class PodPathsTest(unittest.TestCase):
     def test_no_flag_and_no_directory_stays_unset(self):
         # unset is refused by the judge as a harness fault; it is never guessed
         self.assertIsNone(podpaths.log_path(None, {}))
+
+
+class BridgeLogTest(unittest.TestCase):
+    """A bridge-on decree reads the bridge sidecar's log as well as the worldserver's."""
+
+    def _logs(self, tmp, module="module line\n", bridge=None):
+        d = pathlib.Path(tmp)
+        (d / "Module.log").write_text(module, encoding="utf-8")
+        if bridge is not None:
+            (d / "Bridge.log").write_text(bridge, encoding="utf-8")
+        return str(d / "Module.log"), str(d / "Bridge.log")
+
+    def test_the_bridge_log_is_found_in_the_logs_dir(self):
+        self.assertEqual(
+            podpaths.bridge_log_path({"EPH_LOGS_DIR": "/logs"}),
+            "/logs/" + podpaths.BRIDGE_LOG_NAME,
+        )
+        self.assertEqual(
+            podpaths.bridge_log_path(
+                {"EPH_LOGS_DIR": "/l", "EPH_BRIDGE_LOG_FILE": "/l/b.log"}
+            ),
+            "/l/b.log",
+        )
+        self.assertIsNone(podpaths.bridge_log_path({}))
+
+    def test_the_command_passes_the_bridge_log_to_the_judge(self):
+        got = {}
+
+        def fake_judge(decree, env, bridge_log_path=None, **kw):
+            got["bridge"] = bridge_log_path
+            return 0
+
+        with mock.patch.dict("os.environ", {"EPH_LOGS_DIR": "/logs"}, clear=True):
+            with mock.patch("ephemeral.judge.run", fake_judge):
+                cli.main(["judge", "d.yaml"])
+        self.assertEqual(got["bridge"], "/logs/Bridge.log")
+
+    def test_a_bridge_on_decree_sees_a_line_only_the_bridge_logged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            module, bridge = self._logs(tmp, bridge="flight: leader=Zug taxi node 40\n")
+            read = judge.log_reader({"world": {"bridge": "on"}}, module, bridge)
+            self.assertIn("taxi node 40", read())
+            self.assertIn("module line", read())
+
+    def test_a_bridge_off_decree_reads_only_the_worldserver_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            module, bridge = self._logs(tmp, bridge="bridge only line\n")
+            read = judge.log_reader({"world": {"bridge": "off"}}, module, bridge)
+            self.assertNotIn("bridge only line", read())
+
+    def test_a_bridge_on_decree_without_a_readable_bridge_log_refuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            module, bridge = self._logs(tmp)  # no Bridge.log written
+            with self.assertRaises(judge.JudgeError):
+                judge.log_reader({"world": {"bridge": "on"}}, module, bridge)()
+            with self.assertRaises(judge.JudgeError):
+                judge.log_reader({"world": {"bridge": "on"}}, module, None)()
 
 
 if __name__ == "__main__":
