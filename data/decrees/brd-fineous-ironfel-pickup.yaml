@@ -1,0 +1,53 @@
+# The family enters BRD with an active Dark Iron Legacy quest and no Ironfel.
+# The run must kill Fineous in this instance, then the module walks the carrier
+# to the corpse and loots the quest-required drop.
+# Scope: bridge-driven Shrine turn-in and Shadowforge Key creation are not
+# asserted here. This decree checks the module-owned pickup and item row only.
+# Fix: mod-overseer PR 1455.
+decree: v1
+id: brd-fineous-ironfel-pickup
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1454, criterion: "a BRD run kills Fineous with a Dark Iron Legacy holder present, opens his corpse for Ironfel, and leaves item 10999 on that holder"}
+fix: {repo: quadseven/mod-overseer, commit: "134f5d57ab67917e1fd9e293b45db569f1e43624"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 2h
+cast:
+  - who: family:zug
+    set: {alive: true, at: {areatrigger: 1466}, quests: {3802: incomplete}, free_backpack_slots: 1}
+    ceiling: "only the active quest state, position and one free backpack slot; no levels, items, gold or gear"
+arrange:
+  - instance: {map: "Blackrock Depths", as: brd, bind: family:zug}
+  - group: {members: family:zug, leader: Zug}
+act:
+  - at: 0s
+    roster: {who: family:zug, job: "dungeon:blackrock-depths"}
+observe:
+  - name: at-least-one-carrier-starts-with-dark-iron-legacy
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_queststatus WHERE guid IN (@cast) AND quest = 3802 AND status = 3
+    expect: {scalar: ">= 1"}
+  - name: no-carrier-starts-with-ironfel
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM item_instance WHERE owner_guid IN (@cast) AND itemEntry = 10999
+    expect: {scalar: "= 0"}
+  - name: fineous-was-credited-in-this-run
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM log_encounter
+      WHERE map = 230 AND creditEntry = 9056 AND time >= @t0
+    expect: {scalar: ">= 1"}
+  - name: a-carrier-holds-ironfel
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM item_instance WHERE owner_guid IN (@cast) AND itemEntry = 10999
+    expect: {scalar: ">= 1"}
+  - name: the-module-opened-fineous-corpse-for-ironfel
+    role: check
+    log: {pattern: "opened Fineous Darkvire's corpse for Ironfel", expect: {at_least: 1}}
