@@ -1,11 +1,7 @@
-# A use-portal row for the leader next to a mage portal walks to the portal, clicks it and reports the
-# map before and after, or a named refusal (mod-overseer issue 410). Oz, the Zug family mage, casts a
-# portal with the cast verb (the first word of a cast row is a spell id: 11418 is Portal: Undercity, which
-# Oz knows at 60 and which takes a Rune of Portals) and Zug stands beside it on Kalimdor. A portal lasts about a
-# minute, and a cast can be refused as "already casting" (a second live run: the mage's only cast was refused and the run
-# was INVALID), so the cast is ordered three times, 12 seconds apart, and the leader is told to use a portal at 56 seconds,
-# inside the minute of whichever cast applied (the first cast waits 20 seconds: a character that has
-# just logged in is still casting, measured: "character is already casting" at 0 seconds, accepted a few minutes later).
+# A split family has its mage and leader on Kalimdor and another member in Undercity. The mage casts a
+# portal to the family's map, then the leader uses it (mod-overseer issue 410). Oz must already know the
+# spell and hold three Runes of Portals; the decree grants no items. Cast is ordered three times, 12 seconds
+# apart, and the leader uses the portal at 56 seconds, within the minute of the last cast.
 # Fix: mod-overseer pull 1057.
 # Scope: the map before and after the click is read from the character table. A crossing means the row is
 # applied AND the leader no longer stands on the start map; a refusal means an error row that carries a reason.
@@ -22,8 +18,14 @@ runs: {control: 3, treatment: 3}
 duration: 20m
 cast:
   - who: family:zug
-    set: {alive: true, free_backpack_slots: 1, items: [{name: "Rune of Portals", count: 5}], at: {creature: "Gazlowe"}}
-    ceiling: "position, and the five Runes of Portals the mage needs to cast the portal, are the only grants"
+    set: {alive: true, at: {captured: undercity-floor-by-the-mailbox}}
+    ceiling: "position only; no levels, gear, items or gold are granted"
+  - who: Zug
+    set: {alive: true, at: {creature: "Gazlowe"}}
+    ceiling: "position only; no levels, gear, items or gold are granted"
+  - who: Oz
+    set: {alive: true, at: {creature: "Gazlowe"}}
+    ceiling: "position only; no levels, gear, items or gold are granted"
 arrange:
   - group: {members: family:zug, leader: Zug}
 act:
@@ -42,6 +44,26 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_snapshot WHERE name = 'Zug' AND map_id = 1
     expect: {scalar: "= 1"}
+  - name: family-member-starts-on-destination-map
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE name = 'Uzza' AND map_id = 0
+    expect: {scalar: "= 1"}
+  - name: mage-knows-spell-and-has-reagents
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_spell WHERE guid = @Oz AND spell = 11418
+    expect: {scalar: "= 1"}
+  - name: mage-has-three-portal-runes
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_inventory ci
+      JOIN item_instance ii ON ii.guid = ci.item
+      WHERE ci.guid = @Oz AND ii.itemEntry = 17032 AND ii.count >= 3
+    expect: {scalar: ">= 1"}
   - name: the-mage-cast-a-portal
     role: precondition
     when: end
@@ -60,5 +82,5 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_command c JOIN characters ch ON ch.name = c.target_name
       WHERE c.target_name = 'Zug' AND c.kind = 'quest' AND c.command LIKE 'use-portal%' AND c.created_at >= @t0
-        AND ((c.status = 'applied' AND ch.map <> 1) OR (c.status = 'error' AND c.detail <> '' AND c.detail <> 'refused'))
+        AND ((c.status = 'applied' AND ch.map = 0) OR (c.status = 'error' AND c.detail <> '' AND c.detail <> 'refused'))
     expect: {scalar: ">= 1"}

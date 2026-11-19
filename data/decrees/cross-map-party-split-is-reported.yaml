@@ -1,0 +1,48 @@
+# Four followers remain on Kalimdor after their leader is already revived in
+# the Eastern Kingdoms. Catch-up polls must report the cross-map split instead
+# of returning silently (mod-overseer issue 241).
+# Scope: casting begins at the post-revival split so the decree tests catch-up
+# reporting, not the preceding death or revival path.
+# Fix: mod-overseer commit 8a3b667 (a split party is reported instead of quiet).
+decree: v1
+id: cross-map-party-split-is-reported
+proves:
+  - {repo: quadseven/mod-overseer, issue: 241, criterion: "A leader revived on another continent from the rest of its party is reported by catch-up polls instead of returning silently on the cross-map gap"}
+fix: {repo: quadseven/mod-overseer, commit: "8a3b6672941515d57a6c147fda96fe2f9bdfefb4"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 20m
+cast:
+  - who: family:zug
+    set: {alive: true, at: {creature: "Gazlowe"}}
+    ceiling: "nothing granted but position"
+  - who: Zug
+    set: {alive: true, at: {creature: "Marshal McBride"}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:zug, leader: Zug}
+act:
+  - at: 90s
+    roster: {who: family:zug, job: "quest"}
+observe:
+  - name: leader-starts-on-the-other-continent
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid = @Zug AND map_id = 0
+    expect: {scalar: "= 1"}
+  - name: four-followers-start-on-kalimdor
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND guid <> @Zug AND map_id = 1
+    expect: {scalar: "= 4"}
+  - name: each-follower-reports-the-split
+    role: check
+    log: {pattern: "is on map 1 and its leader 'Zug' is on map 0 - THE PARTY IS SPLIT ACROSS TWO MAPS", expect: {at_least: 4}}
+  - name: split-remains-visible-in-the-world-state
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND map_id = 1 AND guid <> @Zug
+    expect: {scalar: "= 4"}

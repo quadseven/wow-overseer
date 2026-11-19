@@ -188,7 +188,7 @@ function draw(keepPlace) {
     // the reader. Nothing is written when the page is already there.
     const anchorEl = anchor ? resolveAnchor(main, anchor) : null;
     const shift = anchorEl ? scrollShift(anchorEl, anchor, line) : 0;
-    const to = restoreTarget(y, shift, window.scrollY);
+    const to = restoreTarget(y, shift, window.scrollY, hold.scrolling);
     if (to !== null) window.scrollTo(0, to);
     if (focusKey) {
       const el = main.querySelector("#" + CSS.escape(focusKey)) || main.querySelector('[data-focus="' + CSS.escape(focusKey) + '"]');

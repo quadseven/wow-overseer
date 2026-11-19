@@ -1,0 +1,51 @@
+# A family plays from the captured low floor in Undercity without the floor
+# being reported as below the world (mod-overseer issue 188). The family also
+# stays absent from the health reader's character-to-death-row join during the
+# controlled run.
+# Scope: the ephemeral runner caps a run at four hours, so this tests the
+# reachable floor classification in a bounded world; it does not claim that a
+# 20-minute run proves 48 hours of log absence or execute the web health page.
+# Fix: mod-overseer commit da36c6f (a levelled town floor is not the hidden plane).
+decree: v1
+id: below-world-floor-and-health-join
+proves:
+  - {repo: quadseven/mod-overseer, issue: 188, criterion: "At the captured low town floor, no STILL reads as below the world line is emitted, and no death row for the family is returned by the health reader's character join during the bounded run (not a 48-hour claim)"}
+fix: {repo: quadseven/mod-overseer, commit: "da36c6ff50de6c506fc245e07eb836d7b538884d"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 20m
+cast:
+  - who: family:zug
+    set: {alive: true, at: {captured: undercity-floor-by-the-mailbox}}
+    ceiling: "nothing granted but position"
+act:
+  - at: 90s
+    roster: {who: family:zug, job: "quest"}
+observe:
+  - name: family-starts-on-the-low-city-floor
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND map_id = 0 AND zone_id = 1497
+    expect: {scalar: "= 5"}
+  - name: health-reader-can-join-a-copied-family-death-row
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(DISTINCT d.character_name) FROM overseer_death d JOIN characters c ON c.name = d.character_name WHERE c.guid IN (@cast)
+    expect: {scalar: ">= 1"}
+  - name: no-false-below-world-reading
+    role: check
+    log: {pattern: "STILL reads as below the world", expect: {count: 0}}
+  - name: health-reader-still-joins-the-family-history
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(DISTINCT d.character_name) FROM overseer_death d JOIN characters c ON c.name = d.character_name WHERE c.guid IN (@cast)
+    expect: {scalar: ">= 1"}
+  - name: health-reader-death-join-has-no-new-family-death
+    role: check
+    when: end
+    sql: |
+      SELECT d.id FROM overseer_roster r JOIN overseer_death d ON d.character_name = r.name JOIN characters c ON c.name = r.name WHERE c.guid IN (@cast) AND d.created_at >= @t0
+    expect: {rows: 0}
