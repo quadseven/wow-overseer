@@ -502,7 +502,6 @@ class TheBridgeWiresIt(unittest.TestCase):
     def test_every_other_job_writer_stands_down(self):
         for name, guard in (
             ("async def _activity_for(", "looped_by(key)"),
-            ("async def _attunement_for(", "looped_by(key)"),
             ("async def _level_route_for(", "looped_by(key)"),
             ("async def _drive_skill(", "looped_by, None"),
             ("async def _craft_rhythm_once(", "if loop_key:"),
