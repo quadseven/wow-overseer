@@ -51,9 +51,7 @@ class AnAimThatOutlivedItsLease(unittest.TestCase):
     def test_the_refusal_is_bounded(self):
         slot, taken, when = self._preempted()
         slot.let_go(taken.release, True, when)
-        later = self._ask(
-            slot, "auction", AIM, "", when + townslot.SPENT_SECONDS + 1.0
-        )
+        later = self._ask(slot, "auction", AIM, "", when + townslot.SPENT_SECONDS + 1.0)
         self.assertTrue(later.granted)
 
     def test_another_aim_of_the_same_writer_is_not_refused(self):
