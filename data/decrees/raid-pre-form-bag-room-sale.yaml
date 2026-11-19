@@ -1,0 +1,68 @@
+# No items are seeded. A real full-bag seat and a sellable grey item must already
+# be present in the starting snapshot or the precondition rejects the run.
+# The check stops at the pre-FORM gate; it does not cover the between-boss gate.
+decree: v1
+id: raid-pre-form-bag-room-sale
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1461, criterion: "a naturally full raid seat receives an applied sale before the Molten Core raid writes its FORM phase"}
+fix: {repo: quadseven/mod-overseer, commit: "2bff3ffc53d113242f081fad6c45a1e9febd28b5"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 30m
+cast:
+  - who: family:grug
+    set: {alive: true, at: {creature: "Stephen Ryback"}}
+    ceiling: "position only; no levels, gear, items, or gold granted"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "raid:moltencore"}
+observe:
+  - name: a-cast-seat-starts-with-full-bags-and-a-sellable-grey
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters ch
+      WHERE ch.guid IN (@cast)
+        AND (SELECT COUNT(*) FROM character_inventory ci
+             WHERE ci.guid = ch.guid
+               AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) OR ci.bag BETWEEN 19 AND 22))
+            = 16 + COALESCE((
+                SELECT SUM(t.ContainerSlots) FROM character_inventory b
+                JOIN item_instance bi ON bi.guid = b.item
+                JOIN acore_world.item_template t ON t.entry = bi.itemEntry
+                WHERE b.guid = ch.guid AND b.bag = 0 AND b.slot BETWEEN 19 AND 22
+            ), 0)
+        AND EXISTS (
+            SELECT 1 FROM character_inventory ci
+            JOIN item_instance ii ON ii.guid = ci.item
+            JOIN acore_world.item_template t ON t.entry = ii.itemEntry
+            WHERE ci.guid = ch.guid
+              AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) OR ci.bag BETWEEN 19 AND 22)
+              AND t.Quality = 0 AND t.SellPrice > 0
+        )
+    expect: {scalar: ">= 1"}
+  - name: raid-seats-were-written
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_raid_seat
+      WHERE family = 'Grug' AND keyword = 'moltencore'
+        AND name IN (SELECT name FROM characters WHERE guid IN (@cast))
+    expect: {scalar: ">= 1"}
+  - name: a-seat-sale-precedes-form
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run_event e
+      WHERE e.family = 'Grug' AND e.portal = 'moltencore' AND e.kind = 'phase'
+        AND e.detail LIKE 'IDLE -> FORM%' AND e.created_at >= @t0
+        AND EXISTS (
+            SELECT 1 FROM overseer_command c
+            JOIN characters ch ON ch.name = c.target_name
+            WHERE ch.guid IN (@cast) AND c.kind = 'sell'
+              AND c.status IN ('applied', 'delivered')
+              AND c.created_at >= @t0 AND c.created_at <= e.created_at
+        )
+    expect: {scalar: ">= 1"}
