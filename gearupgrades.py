@@ -351,6 +351,7 @@ def _slot(
     pct = None
     if worn and best_pre and best_pre[0][1] > 0:
         pct = min(1.0, gearscore.score(worn_stats, spec, level, key) / best_pre[0][1])
+    nxt = _next_block(spec, level, key, worn, worn_stats, pool, list_rows)
     return {
         "slot": slot_name,
         "label": label,
@@ -359,7 +360,9 @@ def _slot(
         "worn": worn,
         "pct_of_preraid": None if pct is None else round(pct, 3),
         "targets": targets,
-        "next": _next_block(spec, level, key, worn, worn_stats, pool, list_rows),
+        "next": nxt,
+        # Says outright when no better piece is known, not a bare null.
+        "next_status": "named" if nxt else "none_known",
         "scored": bool(best_pre),
     }
 
