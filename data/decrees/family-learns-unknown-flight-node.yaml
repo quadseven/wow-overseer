@@ -1,0 +1,35 @@
+# The bridge's flight pass chooses the Horde node the family does not know.
+# Its first pass runs after startup; this uses a naturally held roster and does
+# not seed a taxi mask or a travel aim.
+decree: v1
+id: family-learns-unknown-flight-node
+proves:
+  - {repo: quadseven/mod-overseer, issue: 542, criterion: "the bridge aims a roster character at an undiscovered flight node and the node bit appears in that character's taximask"}
+fix: {repo: quadseven/wow-overseer, commit: "dff1b16316d64168906d25d708fc7b66b1bbb5fb"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 20m
+cast:
+  - who: family:zug
+    set: {alive: true, at: {creature: "Bulkrek Ragefist"}}
+    ceiling: "position only; no items, gear, levels, spells or gold"
+observe:
+  - name: gadgetzan-node-is-not-known-at-start
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters
+      WHERE guid = @cast0 AND race IN (2, 5, 6, 8, 10)
+        AND (CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(taximask, ' ', 2), ' ', -1) AS UNSIGNED) & 128) = 0
+    expect: {scalar: "= 1"}
+  - name: the-flight-pass-asked-for-node-forty
+    role: check
+    log: {pattern: "flight: leader=.*taxi node 40", expect: {at_least: 1}}
+  - name: gadgetzan-node-bit-is-set
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM characters
+      WHERE guid = @cast0
+        AND (CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(taximask, ' ', 2), ' ', -1) AS UNSIGNED) & 128) = 128
+    expect: {scalar: "= 1"}

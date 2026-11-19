@@ -1,0 +1,74 @@
+# The raid leader starts on Kalimdor while a warlock and helpers wait at the
+# Blackrock Mountain stone. They use only their existing spell and Soul Shard.
+decree: v1
+id: raid-ritual-summons-stranded-leader
+proves:
+  - {repo: quadseven/mod-overseer, issue: 702, criterion: "a raid leader on another continent is brought to Molten Core by an applied ritual summon while a guild warlock and two helpers wait at the stone"}
+fix: {repo: quadseven/mod-overseer, commit: "a682318613806640881ec16f168fa3097c446d6a"}
+world: {class: full, image: follow-dev, bridge: "on", random_bots: 0, config: {"Overseer.Recovery.SummonerPool": guild}}
+runs: {control: 3, treatment: 3}
+duration: 2h
+cast:
+  - who: family:grug
+    set: {alive: true, at: {creature: "Gazlowe"}}
+    ceiling: "position only; no items, gear, levels, spells or gold"
+  - who: family:zug
+    set: {alive: true, at: {captured: brm-meeting-stone}}
+    ceiling: "position only; no items, gear, levels, spells or gold"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+  - group: {members: family:zug, leader: Zug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "raid:moltencore"}
+observe:
+  - name: leader-starts-on-kalimdor
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid = @cast0 AND map = 1
+    expect: {scalar: "= 1"}
+  - name: warlock-and-two-helpers-wait-at-the-stone
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters ch
+      JOIN acore_world.areatrigger a ON a.entry = 2886
+      WHERE ch.guid IN (@cast) AND ch.map = a.map AND ch.class <> 9
+        AND POW(ch.position_x - a.x, 2) + POW(ch.position_y - a.y, 2) <= 1600
+    expect: {scalar: ">= 2"}
+  - name: an-eligible-warlock-waits-at-the-stone
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(DISTINCT ch.guid) FROM characters ch
+      JOIN acore_world.areatrigger a ON a.entry = 2886
+      JOIN character_spell cs ON cs.guid = ch.guid AND cs.spell = 698
+      JOIN character_inventory ci ON ci.guid = ch.guid
+      JOIN item_instance ii ON ii.guid = ci.item AND ii.itemEntry = 6265
+      WHERE ch.guid IN (@cast) AND ch.class = 9 AND ch.map = a.map
+        AND POW(ch.position_x - a.x, 2) + POW(ch.position_y - a.y, 2) <= 1600
+    expect: {scalar: ">= 1"}
+  - name: raid-seats-were-written
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_raid_seat WHERE family IN ('Grug', 'Zug')
+    expect: {scalar: ">= 5"}
+  - name: ritual-summon-was-applied
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command
+      WHERE kind = 'summon' AND command LIKE 'ritual %'
+        AND status = 'applied' AND created_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: leader-reaches-the-raid-door
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM characters ch
+      JOIN acore_world.areatrigger a ON a.entry = 2886
+      WHERE ch.guid = @cast0
+        AND (ch.map = 409 OR (ch.map = a.map AND POW(ch.position_x - a.x, 2) + POW(ch.position_y - a.y, 2) <= 1600))
+    expect: {scalar: "= 1"}
