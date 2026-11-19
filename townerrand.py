@@ -898,8 +898,10 @@ def bank_route(
     if near:
         _d, _i, spot = min(near, key=lambda t: (t[0], t[1]))
         return ROUTE_BANKER, dict(spot), "the nearest reachable banker"
-    refused = ("no banker is reachable (passed over, released, on other ground "
-               "or past the town-service limit)")
+    refused = (
+        "no banker is reachable (passed over, released, on other ground "
+        "or past the town-service limit)"
+    )
     if vault:
         spot = {
             "map_id": vault.get("map_id"),
