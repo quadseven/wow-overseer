@@ -388,6 +388,46 @@ def door_unreachable(keyword: str, restarts) -> Stuck | None:
     return None
 
 
+# The restart slope, before the wedge (#2636). The breaker's bounds above
+# judge a walk that has already failed ten times in a quarter hour (or
+# four times in an hour): by then the run has sat split across its door
+# for as long as the wedge takes to form. The climb is visible far
+# earlier: a walk restarted this many times inside the same quarter-hour
+# fold, on the same walk, is not staging either, and reissuing it
+# identically until the bound trips is not a plan. The slope verdict
+# leaves the door with the breaker's own stand-down, only sooner; the
+# breaker's bounds and verdict are untouched, and at its bound the
+# breaker speaks, not the slope.
+SLOPE_RESTART_BOUND = 3
+
+
+def door_restart_slope(keyword: str, restarts) -> Stuck | None:
+    """The leader's walk to this door is restarting on the slope.
+
+    `restarts` is the same fold `door_unreachable` reads: a bare count is
+    the quarter-hour count, and a pair is (quarter-hour count, hour
+    count). Only the quarter-hour count speaks here: restarts spread over
+    the hour, or over different walks (which the fold keeps apart), are
+    the breaker's wider window or no slope at all. Below SLOPE_RESTART_BOUND
+    the walk is staging; at RESTART_BOUND the breaker owns the verdict,
+    so this returns None there and the run is left once, by the breaker.
+    """
+    if restarts is None:
+        return None
+    if isinstance(restarts, (tuple, list)):
+        quick = int(restarts[0] or 0)
+    else:
+        quick = int(restarts)
+    if quick < SLOPE_RESTART_BOUND or quick >= RESTART_BOUND:
+        return None
+    return _wedged(
+        keyword,
+        "the leader's walk to the door ended and restarted %d times without "
+        "arriving, on the climb to the wedge; the run is stood down and "
+        "the door left before the wedge forms" % quick,
+    )
+
+
 ERRAND_STATE = "on an errand of its own"
 CATCH_UP_UNREACHABLE_STATE = "held where it stands, too far to walk back"
 

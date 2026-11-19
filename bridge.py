@@ -6756,6 +6756,14 @@ def _door_wedge(head: dict, names: list, leader: str):
             verdict = dungeonstall.member_dead(keyword, name, age)
             if verdict is not None:
                 return verdict
+    # The restart slope speaks before the breaker (#2636): a walk at
+    # three quarter-hour restarts is left now, with the same stand-down,
+    # instead of being reissued until the breaker's bound trips. The
+    # slope verdict is None at the breaker's bound, so a wedged walk is
+    # still left once, by the breaker.
+    verdict = dungeonstall.door_restart_slope(keyword, restarts)
+    if verdict is not None:
+        return verdict
     verdict = dungeonstall.door_unreachable(keyword, restarts)
     if verdict is not None:
         return verdict

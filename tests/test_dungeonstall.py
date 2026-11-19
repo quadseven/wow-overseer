@@ -1334,6 +1334,42 @@ class TheWedgeAtTheDoor(unittest.TestCase):
     def test_a_bare_count_still_reads_as_the_quarter_hour_fold(self):
         self.assertIsNone(stall.door_unreachable("shadowfang", 3))
 
+    def test_the_restart_slope_leaves_the_door_at_three_quick_restarts(self):
+        """The pre-wedge slope (#2636, second slice): three restarts of the
+        leader's walk inside the quarter-hour fold, below the breaker's
+        bound, already leave the door with the breaker's own stand-down,
+        instead of reissuing the same walk until the bound trips."""
+        got = stall.door_restart_slope("shadowfang", stall.SLOPE_RESTART_BOUND)
+        self.assertIsNotNone(got)
+        self.assertEqual("shadowfang", got.door)
+        self.assertIn("restarted 3 times", got.why)
+
+    def test_the_restart_slope_is_silent_below_three_quick_restarts(self):
+        self.assertIsNone(
+            stall.door_restart_slope("shadowfang", stall.SLOPE_RESTART_BOUND - 1)
+        )
+
+    def test_the_restart_slope_reads_only_the_quarter_hour_count(self):
+        """Restarts spread over the hour are the breaker's wider fold, not
+        the slope: a pair whose quarter-hour count is low stays silent here
+        however the hour count reads below the breaker's own bound."""
+        self.assertIsNone(stall.door_restart_slope("shadowfang", (1, 3)))
+        got = stall.door_restart_slope("shadowfang", (3, 3))
+        self.assertIsNotNone(got)
+        self.assertIn("restarted 3 times", got.why)
+
+    def test_the_restart_slope_does_not_duplicate_the_breaker(self):
+        """At the breaker's own bound the breaker speaks, not the slope:
+        the slope verdict is for the climb below it."""
+        self.assertIsNone(stall.door_restart_slope("shadowfang", stall.RESTART_BOUND))
+        self.assertIsNone(
+            stall.door_restart_slope("shadowfang", stall.RESTART_BOUND + 5)
+        )
+
+    def test_a_slope_verdict_needs_a_real_door_and_a_count(self):
+        self.assertIsNone(stall.door_restart_slope("nowhere", 3))
+        self.assertIsNone(stall.door_restart_slope("shadowfang", None))
+
     def test_an_unreachable_verdict_needs_a_real_door_and_a_count(self):
         self.assertIsNone(stall.door_unreachable("nowhere", 500))
         self.assertIsNone(stall.door_unreachable("shadowfang", None))
@@ -1523,6 +1559,27 @@ class TheDoorWedgeReads(unittest.TestCase):
         got = judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
         self.assertIsNotNone(got)
         self.assertIn("restarted 38 times", got.why)
+
+    def test_slope_restarts_are_a_verdict_on_the_first_pass(self):
+        """The bridge asks the slope verdict too (#2636): a leader's walk
+        at three quarter-hour restarts leaves the door on this pass, not
+        after the breaker's bound trips."""
+        judge = self.judge(((3, 0), ()), [1000.0])
+        got = judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("restarted 3 times", got.why)
+        self.assertIn("before the wedge forms", got.why)
+
+    def test_two_quick_restarts_are_no_verdict(self):
+        judge = self.judge(((2, 0), ()), [1000.0])
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+
+    def test_restarts_at_the_breaker_bound_speak_with_the_breaker(self):
+        judge = self.judge(((stall.RESTART_BOUND, 0), ()), [1000.0])
+        got = judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("restarted %d times" % stall.RESTART_BOUND, got.why)
+        self.assertNotIn("before the wedge forms", got.why)
 
     def test_the_walk_is_counted_for_the_queue_entry_being_judged(self):
         judge = self.judge((0, ()), [1000.0])
