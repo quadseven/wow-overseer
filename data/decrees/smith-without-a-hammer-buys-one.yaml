@@ -31,6 +31,10 @@ cast:
     set: {alive: true, at: {creature: "Krinkle Goodsteel"}}
     ceiling: "nothing granted but position"
 act:
+  # The family's first planning pass sends a family whose head is idle to a dungeon, and it rewrites every
+  # member's job, so the head is put on the job too (a named cast member is not part of `family:zug`).
+  - at: 0s
+    roster: {who: Zug, job: "craft"}
   - at: 0s
     roster: {who: family:zug, job: "craft"}
 observe:
@@ -53,13 +57,13 @@ observe:
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_command WHERE kind = 'buy' AND target_name = 'Zug' AND target_arg = '5956' AND created_at >= @t0
+      SELECT COUNT(*) FROM overseer_command WHERE kind = 'buy' AND target_name = 'Zug' AND command LIKE 'entry:5956 %' AND created_at >= @t0
     expect: {scalar: "= 1"}
   - name: the-hammer-buy-was-delivered
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_command WHERE kind = 'buy' AND target_name = 'Zug' AND target_arg = '5956' AND created_at >= @t0 AND status = 'delivered'
+      SELECT COUNT(*) FROM overseer_command WHERE kind = 'buy' AND target_name = 'Zug' AND command LIKE 'entry:5956 %' AND created_at >= @t0 AND status = 'delivered'
     expect: {scalar: "= 1"}
   - name: hammer-is-held-after
     role: check
@@ -72,6 +76,6 @@ observe:
     when: end
     sql: |
       SELECT COUNT(*) FROM overseer_event e JOIN overseer_command c ON c.target_name = e.character_name
-      WHERE e.character_name = 'Zug' AND e.kind = 'craft' AND c.kind = 'buy' AND c.target_arg = '5956'
+      WHERE e.character_name = 'Zug' AND e.kind = 'craft' AND c.kind = 'buy' AND c.command LIKE 'entry:5956 %'
         AND c.status = 'delivered' AND c.created_at >= @t0 AND e.last_seen >= c.updated_at
     expect: {scalar: ">= 1"}
