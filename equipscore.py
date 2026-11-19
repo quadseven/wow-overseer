@@ -319,6 +319,9 @@ def resistance_only(row: dict, book=None) -> bool:
         return False
     stats = stats_of(row, book)
     _spells, unread = _drive_spells(row, book)
+    # A known trinket effect is read by the drive, and is still something
+    # beyond a resistance: the piece is not a resistance-only one.
+    unread = unread or _has_known_effect(row)
     _rolled, unresolved = _drive_property(row, book)
     if (
         not unresolved
@@ -953,6 +956,10 @@ def plan(
 #   floor    a spell that is not a readable on-equip stat (a proc, a "Use:", a
 #            damage shield like Naglering's thorns), or a random property that
 #            cannot be read, leaves the score a FLOOR rather than exact.
+#   effect   a known trinket effect (GearKnownEffect, DRIVE_KNOWN_EFFECTS
+#            below) is read whatever its trigger: the standing stat it
+#            averages out to, at the role's own weight, for the roles it fits
+#            and nothing for any other.
 #   slot     the slot the core would fill: a ring or trinket against the worse
 #            of the two worn, a two-hander against both hands, an off-hand
 #            piece not while a two-hander is held.
@@ -1007,14 +1014,58 @@ _DRIVE_SLOT = {
 }
 
 
-def _drive_spells(row: dict, book=None) -> tuple:
-    """({stat type: amount} the equip spells give, any spell left unread)."""
+# THE KNOWN TRINKET EFFECTS (#2358), the module's GEAR_KNOWN_EFFECTS row for
+# row: spell id -> (the roles it fits, the item_template stat type it averages
+# out to, how much). A trinket's worth is mostly a proc or a "Use:" a stat sum
+# cannot price, so such a piece scored its item level and whatever flat stat
+# it carried, a floor that never cleared a flat trinket with more countable
+# stats. The price is the standing stat the effect averages out to, weighed
+# by the role's own weight, and only for the roles the row names: a hunter
+# prices attack power as a rogue does and never lands the melee hit a melee
+# proc needs.
+#
+#   15600  "Chance on melee hit to gain 1 extra attack." 2% of swings struck
+#          twice is about 2 damage per second on a level 60 swing, 28 attack
+#          power at 14 a point. Tank and melee.
+#   25891  "Use: Increases your melee and ranged attack power by 280. Effect
+#          lasts for 20 sec.", on a 2 min cooldown: 280 * 20 / 120 = 46. Tank,
+#          melee and ranged.
+#
+# A hand table keyed by spell id because that is the one fact both scorers
+# hold exactly: the module has no duration, cooldown or proc chance and this
+# file has only the spell's text. A change to the module's rows is a change
+# to these; a spell with no row keeps the floor it always had.
+ATTACK_POWER_STAT = 38
+_SWINGS = (statweights.TANK, statweights.MELEE)
+DRIVE_KNOWN_EFFECTS = {
+    15600: (frozenset(_SWINGS), ATTACK_POWER_STAT, 28),
+    25891: (frozenset(_SWINGS + (statweights.RANGED,)), ATTACK_POWER_STAT, 46),
+}
+
+
+def _has_known_effect(row: dict) -> bool:
+    return any(
+        _int(row.get(f"spellid_{n}")) in DRIVE_KNOWN_EFFECTS for n in range(1, 6)
+    )
+
+
+def _drive_spells(row: dict, book=None, role: str = "") -> tuple:
+    """({stat type: amount} the piece's spells give `role`, any spell left
+    unread). An equip spell that reads as a stat is that stat for every role;
+    a known trinket effect (DRIVE_KNOWN_EFFECTS) is read whatever its trigger
+    and gives its stat to the roles it fits only."""
     texts = getattr(book, "spells", None)
     stats: dict = {}
     unread = False
     for n in range(1, 6):
         spell = _int(row.get(f"spellid_{n}"))
         if spell <= 0:
+            continue
+        known = DRIVE_KNOWN_EFFECTS.get(spell)
+        if known is not None:
+            roles, kind, amount = known
+            if role in roles:
+                stats[kind] = stats.get(kind, 0) + amount
             continue
         if _int(row.get(f"spelltrigger_{n}")) != preraid.SPELL_ON_EQUIP:
             unread = True
@@ -1062,7 +1113,7 @@ def drive_score(row: dict, role: str, book=None) -> tuple:
     weights = statweights.stat_weights(role)
     if not weights:
         return 0.0, True
-    spells, unread = _drive_spells(row, book)
+    spells, unread = _drive_spells(row, book, role)
     rolled, unresolved = _drive_property(row, book)
     stats: dict = {}
     for n in range(1, 11):

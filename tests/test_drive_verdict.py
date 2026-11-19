@@ -14,6 +14,7 @@ read returns.
 
 from __future__ import annotations
 
+import dataclasses
 import pathlib
 import re
 import sys
@@ -270,6 +271,168 @@ class GrugsSeal(unittest.TestCase):
                 }
             },
         )
+
+
+def trinket(name, entry, guid, *, slot=None, level, req, stats=(), **kw):
+    return ring(
+        name,
+        entry,
+        guid,
+        slot=slot,
+        level=level,
+        req=req,
+        stats=stats,
+        item_flags=kw.pop("item_flags", 0),
+        inventory_type=12,
+        **kw,
+    )
+
+
+# The fixture pieces of mod-overseer's tests/test_gear_trinket_effect.cpp, as
+# rows: the same item levels, the same stats, the same spells.
+EXTRA_ATTACK_PROC, ATTACK_POWER_USE = 15600, 25891
+TWENTY_ATTACK_POWER, CRIT_28 = 9331, 7598
+SOME_OTHER_PROC = 15438  # Naglering's thorns: a proc with no row
+ON_USE, ON_EQUIP = 0, 1
+# Item level 58: 20 attack power and the extra-attack proc, both equip spells.
+HAND = trinket(
+    "Hand of Justice",
+    11815,
+    21,
+    level=58,
+    req=53,
+    spellid_1=TWENTY_ATTACK_POWER,
+    spelltrigger_1=ON_EQUIP,
+    spellid_2=EXTRA_ATTACK_PROC,
+    spelltrigger_2=ON_EQUIP,
+)
+UNPRICED_HAND = dict(HAND, spellid_2=SOME_OTHER_PROC)
+# Item level 63: 28 critical strike rating as an equip spell, nothing else.
+BREADTH = trinket(
+    "Blackhand's Breadth",
+    13965,
+    22,
+    level=63,
+    req=58,
+    spellid_1=CRIT_28,
+    spelltrigger_1=ON_EQUIP,
+)
+# Item level 66: the attack power "Use:", nothing else.
+EARTHSTRIKE = trinket(
+    "Earthstrike",
+    21180,
+    23,
+    level=66,
+    req=60,
+    spellid_1=ATTACK_POWER_USE,
+    spelltrigger_1=ON_USE,
+)
+
+
+def as_role(role):
+    return dataclasses.replace(grug(), role=role)
+
+
+def in_both_slots(row):
+    """One trinket worn in both trinket slots, the live fault of #2358."""
+    return [
+        dict(row, equipment_slot=12, item_guid=31),
+        dict(row, equipment_slot=13, item_guid=32),
+    ]
+
+
+class AKnownTrinketEffectIsPricedForTheRoleItFits(unittest.TestCase):
+    """#2358 box 2, and the module's numbers: GearKnownEffect in
+    mod-overseer prices the same rows, and its test pins the same scores."""
+
+    def test_the_table_is_the_modules_rows(self):
+        swings = frozenset({"tank", "melee"})
+        self.assertEqual(
+            equipscore.DRIVE_KNOWN_EFFECTS,
+            {
+                15600: (swings, 38, 28),
+                25891: (swings | {"ranged"}, 38, 46),
+            },
+        )
+
+    def test_the_proc_is_priced_for_the_roles_that_swing(self):
+        # 20 attack power, 28 for the proc, half a point per item level.
+        self.assertEqual(equipscore.drive_score(HAND, "melee", BOOK), (77.0, False))
+        # A tank prices attack power at 0.3: 6 + 8.4 + 29.
+        score, floor = equipscore.drive_score(HAND, "tank", BOOK)
+        self.assertAlmostEqual(score, 43.4)
+        self.assertFalse(floor)
+
+    def test_the_proc_is_nothing_to_a_role_it_does_not_fit(self):
+        # A hunter has the 20 attack power and not the melee proc.
+        self.assertEqual(equipscore.drive_score(HAND, "ranged", BOOK), (49.0, False))
+        self.assertEqual(equipscore.drive_score(HAND, "healer", BOOK), (29.0, False))
+        self.assertEqual(equipscore.drive_score(HAND, "caster", BOOK), (29.0, False))
+
+    def test_the_use_is_priced_at_its_share_of_the_cooldown(self):
+        # 280 for 20 sec of every 120 is 46, and 33 for the item level.
+        self.assertEqual(
+            equipscore.drive_score(EARTHSTRIKE, "ranged", BOOK), (79.0, False)
+        )
+        self.assertEqual(
+            equipscore.drive_score(EARTHSTRIKE, "melee", BOOK), (79.0, False)
+        )
+        self.assertEqual(
+            equipscore.drive_score(EARTHSTRIKE, "healer", BOOK), (33.0, False)
+        )
+
+    def test_a_proc_with_no_row_is_still_a_floor(self):
+        self.assertEqual(
+            equipscore.drive_score(UNPRICED_HAND, "melee", BOOK), (49.0, True)
+        )
+
+    def test_the_flat_trinket_scores_its_crit(self):
+        # 28 crit at 1.5 and 31.5 for the item level.
+        self.assertEqual(equipscore.drive_score(BREADTH, "melee", BOOK), (73.5, False))
+
+    def test_a_role_fitting_effect_trinket_takes_the_second_slot_from_a_duplicate(
+        self,
+    ):
+        worn = in_both_slots(BREADTH)
+        copy = dict(BREADTH, item_guid=33)
+        verdict, why = equipscore.drive_verdict(copy, as_role("melee"), worn, BOOK)
+        self.assertEqual(verdict, equipscore.DRIVE_REFUSED, why)
+        verdict, why = equipscore.drive_verdict(HAND, as_role("melee"), worn, BOOK)
+        self.assertEqual(verdict, equipscore.DRIVE_WEAR, why)
+        self.assertIn("77.0 against 73.5", why)
+
+    def test_the_flat_trinket_does_not_take_it_back(self):
+        worn = [
+            dict(BREADTH, equipment_slot=12),
+            dict(HAND, equipment_slot=13),
+        ]
+        spare = dict(BREADTH, entry=13966, item_guid=34)
+        verdict, why = equipscore.drive_verdict(spare, as_role("melee"), worn, BOOK)
+        self.assertEqual(verdict, equipscore.DRIVE_KEEP, why)
+
+    def test_without_a_row_the_same_piece_is_left_undecided(self):
+        verdict, why = equipscore.drive_verdict(
+            UNPRICED_HAND, as_role("melee"), in_both_slots(BREADTH), BOOK
+        )
+        self.assertEqual(verdict, equipscore.DRIVE_UNDECIDED, why)
+
+    def test_a_hunter_keeps_flat_crit_over_a_melee_proc(self):
+        verdict, why = equipscore.drive_verdict(
+            HAND, as_role("ranged"), in_both_slots(BREADTH), BOOK
+        )
+        self.assertEqual(verdict, equipscore.DRIVE_KEEP, why)
+
+    def test_a_hunters_attack_power_use_takes_the_second_slot(self):
+        verdict, why = equipscore.drive_verdict(
+            EARTHSTRIKE, as_role("ranged"), in_both_slots(BREADTH), BOOK
+        )
+        self.assertEqual(verdict, equipscore.DRIVE_WEAR, why)
+
+    def test_a_known_effect_keeps_a_resistance_piece_out_of_the_situational_set(
+        self,
+    ):
+        warded = dict(HAND, spellid_1=0, fire_res=10)
+        self.assertFalse(equipscore.resistance_only(warded, BOOK))
 
 
 def bag_row(entry, level):
