@@ -20618,7 +20618,12 @@ class Bridge(discord.Client):
             if needs_crossing else ()
         )
         walks, notes = classtrain.plan(
-            trainees, walkers, classtrain.recent_walkers(recent), busy,
+            trainees, walkers,
+            classtrain.recent_walkers(
+                recent,
+                knights=[t.name for t in trainees
+                         if t.class_id == classquest.DEATH_KNIGHT]),
+            busy,
             cap=self._guild_walk_cap(), stranded=stranded,
             trainer_spawns=trainer_spawns, cross_recent=cross_recent)
         _log_capped("guild training", notes)
