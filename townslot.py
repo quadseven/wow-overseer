@@ -2213,8 +2213,10 @@ class Slot:
                 aim=aim,
                 character=character,
             )
-        if not stop and not urgent_raw_exempt(urgent) and self.raw_point_young(
-            character, aim, now
+        if (
+            not stop
+            and not urgent_raw_exempt(urgent)
+            and self.raw_point_young(character, aim, now)
         ):
             return Decision(
                 verdict=SLOT_WAIT,
@@ -2258,9 +2260,14 @@ class Slot:
         if prior is None or now - prior[1] >= RAW_POINT_CEILING_SECONDS:
             return False
         holder = self.holder
-        if holder is not None and holder.character == character and holder.aim in (
-            aim,
-            prior[0],
+        if (
+            holder is not None
+            and holder.character == character
+            and holder.aim
+            in (
+                aim,
+                prior[0],
+            )
         ):
             return False
         return True

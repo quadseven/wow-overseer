@@ -51,9 +51,7 @@ class TheAlternationBetweenTwoRawPointErrands(unittest.TestCase):
     def test_it_is_asked_again_after_the_ceiling(self):
         slot = townslot.Slot(releasable=economy)
         self._ask(slot, "forge", A, "", 0.0)
-        late = self._ask(
-            slot, "mail", B, "", townslot.RAW_POINT_CEILING_SECONDS + 1
-        )
+        late = self._ask(slot, "mail", B, "", townslot.RAW_POINT_CEILING_SECONDS + 1)
         self.assertTrue(late.granted)
 
     def test_a_keyword_errand_and_an_urgent_ask_are_not_held(self):
