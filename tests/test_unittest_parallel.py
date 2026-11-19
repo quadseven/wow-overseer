@@ -308,3 +308,49 @@ class EachModuleStandsAloneTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _load_parallel():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("unittest_parallel", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+up = _load_parallel()
+
+
+class TheWorkerCount(unittest.TestCase):
+    """Off CI the pool is capped so a lane host is not oversubscribed; the
+    LOOM_CHECK_WORKERS variable overrides it, and CI keeps every core."""
+
+    def test_off_ci_the_pool_is_capped_at_four(self):
+        self.assertEqual(up.worker_count(500, env={}, cpus=12), 4)
+
+    def test_the_variable_overrides_the_cap(self):
+        self.assertEqual(
+            up.worker_count(500, env={"LOOM_CHECK_WORKERS": "2"}, cpus=12), 2
+        )
+        self.assertEqual(
+            up.worker_count(500, env={"LOOM_CHECK_WORKERS": "10"}, cpus=12), 10
+        )
+
+    def test_a_bad_value_falls_back_to_the_cap(self):
+        for bad in ("0", "-3", "many", ""):
+            self.assertEqual(
+                up.worker_count(500, env={"LOOM_CHECK_WORKERS": bad}, cpus=12), 4
+            )
+
+    def test_ci_keeps_every_core(self):
+        self.assertEqual(
+            up.worker_count(500, env={"GITHUB_ACTIONS": "true"}, cpus=4), 4
+        )
+        self.assertEqual(
+            up.worker_count(500, env={"GITHUB_ACTIONS": "true"}, cpus=16), 16
+        )
+
+    def test_never_more_workers_than_modules_or_fewer_than_one(self):
+        self.assertEqual(up.worker_count(2, env={}, cpus=12), 2)
+        self.assertEqual(up.worker_count(0, env={}, cpus=12), 1)
