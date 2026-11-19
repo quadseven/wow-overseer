@@ -4,6 +4,8 @@
 # 1516 and 1590). Zug is the smith, the family's one blacksmith who carries no hammer in the template; he
 # stands beside a vendor that stocks the hammer, in the same town, so the walk is short. The first
 # precondition witnesses that he has none, so a template that hands him one is INVALID, never a pass.
+# The job is a family-wide setting, so the whole family is put on it and stands in the same town; the
+# `craft` keyword is the whole job (the smith's standing recipe is the bridge's own choice).
 # The smith is Zug and not Grug because Grug carries a hammer in the template; a decree cannot take an item
 # away, only choose a character who lacks it.
 # Scope: the buy row must be DELIVERED (a failed request no longer counts), there must be exactly one row for
@@ -25,9 +27,12 @@ cast:
   - who: Zug
     set: {alive: true, at: {creature: "Krinkle Goodsteel"}}
     ceiling: "nothing granted but position"
+  - who: family:zug
+    set: {alive: true, at: {creature: "Krinkle Goodsteel"}}
+    ceiling: "nothing granted but position"
 act:
   - at: 0s
-    roster: {who: Zug, job: "craft smith"}
+    roster: {who: family:zug, job: "craft"}
 observe:
   - name: zug-has-no-hammer
     role: precondition
