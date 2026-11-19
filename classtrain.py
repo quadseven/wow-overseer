@@ -62,9 +62,9 @@ WALKS_PER_GUILD = 3
 COOLDOWN_MINUTES = 180
 # A death knight on the start map is walked for the module's gryphon click, not
 # for a purchase, so the three-hour wait for a purse to refill does not apply:
-# one still on that map this long after its last walk is walked again. Measured
-# on the dev realm: a stranded, hearthstone-less knight was walked once in three
-# hours and died to the ground's creatures in between (a death loop).
+# one still on that map this long after its last walk is walked again. A knight
+# with no hearthstone has no other way off that map, so a three-hour gap leaves
+# it exposed to the creatures there for hours.
 KNIGHT_COOLDOWN_MINUTES = 20
 # A worldserver that does not know the class walk answers this, and is not
 # asked again for this long.
