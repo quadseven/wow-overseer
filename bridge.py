@@ -19616,6 +19616,7 @@ class Bridge(discord.Client):
             self._quester_clock = questers.Clock()
             self._quester_clock.load(clock_data)
             self._quester_broken = broken
+            self._quester_judged = await asyncio.to_thread(_quester_judged)
             self._quester_last = {}
             self._quester_unledgered = 0.0
         cat = await asyncio.to_thread(_quester_catalogue)
@@ -19644,8 +19645,9 @@ class Bridge(discord.Client):
         kept = await asyncio.to_thread(_KEEP.now) if full else None
         for m in members:
             held = self._quester_broken.setdefault(m.name, {})
+            judged = self._quester_judged.get(m.name, frozenset())
             retry_stalls = questers.stalled_holds_with_actionable_objectives(
-                cat, m, held, tried, crossings
+                cat, m, held, tried, crossings, judged
             )
             for qid in retry_stalls:
                 held.pop(qid)
@@ -19664,6 +19666,8 @@ class Bridge(discord.Client):
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
                                  self._quester_last.get(m.name, 0), crossings)
             await self._quester_ledger(m, plan, held, ledger, mono)
+            self._quester_judged[m.name] = questers.judged_stalls(
+                judged, retry_stalls, plan.broken, held, m.quest_log)
             # Leftovers are destroyed first: no walk, and a slot back at once.
             sale = (questers.destroy_step(m, carried.get(m.name, ()), kept, cat, sold,
                                           tried, _quester_destroy_guard(m.name))
@@ -19677,6 +19681,7 @@ class Bridge(discord.Client):
         await asyncio.to_thread(_share_quester_quests, {m.name for m in members})
         await asyncio.to_thread(_quester_memos_write, self._quester_clock,
                                 self._quester_broken, now)
+        await asyncio.to_thread(_quester_judged_write, self._quester_judged, now)
 
     async def _quester_ledger(self, m, plan, held: dict, ledger: dict, mono: float) -> None:
         """Hold what this pass found broken in `held` (the bridge memo's quest
@@ -43883,6 +43888,15 @@ QUESTER_MEMO_SECONDS = 30 * 24 * 3600
 # one without it was judged by the old clock and is not held.
 QUESTER_STALL_CLOCK_KEY = "_stall_clock"
 QUESTER_STALL_CLOCK = 1809
+# A STALL IS RETRIED AT MOST ONCE (#1745). Each pass reopened every held stall
+# with an objective it could pursue (questers.stalled_holds_with_actionable_
+# objectives), so a quest that stalled again was reopened again, pass after
+# pass. This memo holds, per quester, the quests whose stall is never retried
+# (questers.judged_stalls): one found stalled by the per-ingredient hunt, or
+# one already retried. A stall held from before it is retried once. Its own
+# memo kind, not a key in the broken memo, so a bridge without it still reads
+# that memo.
+QUESTER_JUDGED_MEMO = "quester_stall_judged"
 # The realm's hunt rows the questers may hold at once, of its ceiling
 # (classhunt.HUNTS_AT_ONCE): the guild's class quests come first (classquest
 # OWED_*), so the questers leave them the rest. Past it a quester's hunt is the
@@ -44056,6 +44070,24 @@ def _quester_held(name: str, value) -> dict:
                  "#1809 clock: quests %s", name, len(dropped),
                  ", ".join(str(q) for q in sorted(dropped)))
     return held
+
+
+def _quester_judged() -> dict:
+    """name -> the quest ids whose stall is never retried (QUESTER_JUDGED_MEMO)."""
+    return {
+        name: frozenset(int(q) for q in (value or {}).get("quests", ()))
+        for name, (value, _since) in _memo_read(QUESTER_JUDGED_MEMO).items()
+    }
+
+
+def _quester_judged_write(judged: dict, now: float) -> None:
+    """Write each quester's judged stalls; an empty set deletes its memo."""
+    for name, held in judged.items():
+        if held:
+            _memo_upsert(QUESTER_JUDGED_MEMO, name, {"quests": sorted(held)},
+                         now, now + QUESTER_MEMO_SECONDS)
+        else:
+            _memo_delete(QUESTER_JUDGED_MEMO, name)
 
 
 def _quester_memos_write(clock, broken: dict, now: float) -> None:

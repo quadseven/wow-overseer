@@ -125,7 +125,8 @@ class TheLedgerMoves(unittest.TestCase):
     def test_a_taken_quest_gone_from_the_log_unrewarded_is_abandoned(self):
         e = moved([ledger(10, 7, "taken")])
         self.assertEqual(
-            e[(10, 7)].args(), (10, 7, "Tharn", "abandoned", EARLIER, NOW, "")
+            e[(10, 7)].args(),
+            (10, 7, "Tharn", "abandoned", EARLIER, NOW, ql.ABANDONED_REASON),
         )
 
     def test_an_abandoned_quest_taken_again_keeps_its_first_time(self):
