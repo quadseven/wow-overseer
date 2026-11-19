@@ -817,6 +817,13 @@ def auction_route(
 BANKER_AT_HUB_YARDS = 120.0
 
 
+# The module walks a character to a town counter only within this many yards
+# (mod-overseer TOWN_COUNTER_MAX_WALK_YARDS). A banker or vault further off can
+# never be reached by the bank step, so aiming at it only re-issues a hub the
+# errand cannot finish (the Kargath hub, nearest banker 2119 yards, #1261).
+TOWN_SERVICE_YARDS = 1500.0
+
+
 def banker_at_hub(hub: dict, bankers) -> bool:
     """Whether a banker spot (`vendor_stops(..., kind="banker")`) stands within
     BANKER_AT_HUB_YARDS of `hub` on its map."""
@@ -884,13 +891,17 @@ def bank_route(
             and not _was_released(spot, released, now)
             and not lethal_stop(spot, here, deaths)
             and not walled(spot)
+            and _planar(spot, here) <= TOWN_SERVICE_YARDS
         )
 
     near = [(_planar(s, here), i, s) for i, s in enumerate(bankers or ()) if usable(s)]
     if near:
         _d, _i, spot = min(near, key=lambda t: (t[0], t[1]))
         return ROUTE_BANKER, dict(spot), "the nearest reachable banker"
-    refused = "no banker is reachable (passed over, released or on other ground)"
+    refused = (
+        "no banker is reachable (passed over, released, on other ground "
+        "or past the town-service limit)"
+    )
     if vault:
         spot = {
             "map_id": vault.get("map_id"),

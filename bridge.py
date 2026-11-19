@@ -342,6 +342,9 @@ JEV_RETENTION_DAYS = int(os.environ.get("JEV_RETENTION_DAYS", "30"))
 # The decision backend in use (#820): jev, clef or openai, from JEV_BACKEND.
 # Recorded on every judgment so backends can be compared row for row.
 JEV_ACTIVE_BACKEND = jev.backend_name()
+# JEV_ROUTE (#2899): the backends asked in order, first answer wins; empty when
+# one backend serves. JEV_ACTIVE_BACKEND is then the first of them.
+JEV_ROUTED = tuple(jev.route_names())
 # The OpenAI backend's bar (#2899): a kind set to act runs as compare until the
 # hourly report says it clears jev_openai.BAR. Nothing clears before the first
 # report, so a restart starts every kind in compare.
@@ -6255,8 +6258,71 @@ def _silent_stall(head: dict, names: list):
 
 # The member-state words the wedge judges are named inside _door_wedge.
 
-# (leader, member, state) -> (queue head id, monotonic first seen).
+# (leader, member) -> (queue head id, monotonic first seen). The same clock is
+# stored in overseer_bridge_memo as a wall timestamp so a pod restart cannot
+# start the stand-down bound over.
 _DOOR_HOLD_SINCE: dict = {}
+DOOR_HOLD_RECOVER_YARDS = 1500
+DOOR_HOLD_MEMO_KIND = "door_wedge_hold"
+DOOR_HOLD_MEMO_SECONDS = 7 * 24 * 3600
+DOOR_HOLD_MEMO_REFRESH_SECONDS = 60
+_DOOR_HOLD_MEMO_READ_AT: float | None = None
+
+
+def _door_hold_subject(key: tuple[str, str]) -> str:
+    return json.dumps(key, separators=(",", ":"))
+
+
+def _door_hold_memo_put(key: tuple[str, str], head_id: int,
+                        since: float, now: float) -> None:
+    wall_now = time.time()
+    value = {"head_id": int(head_id)}
+    args = (
+        DOOR_HOLD_MEMO_KIND,
+        _door_hold_subject(key),
+        value,
+        wall_now - max(0.0, now - since),
+        wall_now + DOOR_HOLD_MEMO_SECONDS,
+    )
+    writer = globals().get("_MEMO_WRITER")
+    job, upsert = globals().get("_memo_job"), globals().get("_memo_upsert")
+    if writer is not None and job is not None:
+        writer.submit(job, upsert, *args)
+    else:
+        upsert(*args)
+
+
+def _door_hold_memo_delete(key: tuple[str, str]) -> None:
+    args = (DOOR_HOLD_MEMO_KIND, _door_hold_subject(key))
+    writer = globals().get("_MEMO_WRITER")
+    job, delete = globals().get("_memo_job"), globals().get("_memo_delete")
+    if writer is not None and job is not None:
+        writer.submit(job, delete, *args)
+    else:
+        delete(*args)
+
+
+def _restore_door_hold_memos(now: float) -> None:
+    global _DOOR_HOLD_MEMO_READ_AT
+    if (_DOOR_HOLD_MEMO_READ_AT is not None
+            and now - _DOOR_HOLD_MEMO_READ_AT < DOOR_HOLD_MEMO_REFRESH_SECONDS):
+        return
+    offset = time.time() - now
+    for subject, (value, since_wall) in _memo_read(DOOR_HOLD_MEMO_KIND).items():
+        try:
+            pair = json.loads(subject)
+            if not isinstance(pair, list) or len(pair) != 2:
+                raise ValueError("memo subject is not a leader/member pair")
+            key = (str(pair[0]), str(pair[1]))
+            head_id = int(value["head_id"])
+            since = min(now, float(since_wall) - offset)
+            if now - since > DOOR_HOLD_MEMO_SECONDS:
+                _door_hold_memo_delete(key)
+                continue
+            _DOOR_HOLD_SINCE.setdefault(key, (head_id, since))
+        except (KeyError, TypeError, ValueError):
+            log.exception("bridge memo: invalid door-wedge hold memo for %s", subject)
+    _DOOR_HOLD_MEMO_READ_AT = now
 
 _DOOR_STEPS_SQL = (
     "SELECT kind, doing, occurrences, UNIX_TIMESTAMP(first_seen) AS first_at, "
@@ -6316,10 +6382,30 @@ def _door_wedge_evidence(leader: str, head_id: int) -> tuple:
     return restarts, members
 
 
+def _door_wedge_member_recovered(leader: str, member: str, positions: dict) -> bool:
+    """Whether a member is back inside the catch-up walk range of its leader."""
+    lead, part = positions.get(leader), positions.get(member)
+    if not lead or not part:
+        return False
+    try:
+        if (int(lead["map_id"]) != int(part["map_id"])
+                or int(lead["instance_id"]) != int(part["instance_id"])):
+            return False
+        distance_sq = sum(
+            (float(lead[f"pos_{axis}"]) - float(part[f"pos_{axis}"])) ** 2
+            for axis in ("x", "y", "z")
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+    return distance_sq <= DOOR_HOLD_RECOVER_YARDS ** 2
+
+
 def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
-    """name -> (state, seconds in it) for the members in a wedged state,
-    with _DOOR_HOLD_SINCE kept current: a state no longer published loses
-    its clock, and a clock from an earlier queue entry starts over.
+    """name -> (state, seconds in the active hold) for wedged members.
+
+    The clock belongs to the leader/member pair, not the published state. A
+    transient state flip leaves the family just as split, so it does not stop
+    the clock. A different queue entry starts a new one.
 
     The states are the module's member-state words (MemberStateWord):
     "dead", and the holds with no errand of the member's own choosing at
@@ -6330,27 +6416,55 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
     recovery.
     """
     now = time.monotonic()
-    seen = {}
+    restore_memos = globals().get("_restore_door_hold_memos")
+    if restore_memos is not None:
+        restore_memos(now)
+    states = {member.name: member.state for member in members if member.name != leader}
+    clock_keys = [key for key in _DOOR_HOLD_SINCE if key[0] == leader]
+    positions = {}
+    if clock_keys:
+        names = {leader, *states}
+        names.update(key[1] for key in clock_keys)
+        fetch_positions = globals().get("_fetch_positions")
+        positions = fetch_positions(sorted(names)) if fetch_positions else {}
+    recovered_member = globals().get("_door_wedge_member_recovered")
+    recovered = set()
+    for key in clock_keys:
+        name = key[1]
+        if states.get(name) == "dead":
+            continue
+        if recovered_member and recovered_member(leader, name, positions):
+            del _DOOR_HOLD_SINCE[key]
+            delete_memo = globals().get("_door_hold_memo_delete")
+            if delete_memo is not None:
+                delete_memo(key)
+            recovered.add(name)
+
+    ages = {}
     for member in members:
         if member.name == leader:
             continue
-        if member.state == "dead" or member.state in (
+        if member.state != "dead" and member.state not in (
             "on an errand of its own",
             "held still",
             dungeonstall.CATCH_UP_UNREACHABLE_STATE,
         ):
-            seen[(leader, member.name, member.state)] = member
-    for key in [k for k in _DOOR_HOLD_SINCE if k[0] == leader and k not in seen]:
-        del _DOOR_HOLD_SINCE[key]
-    ages = {}
-    for key, member in seen.items():
+            continue
+        if member.name in recovered:
+            continue
+        key = (leader, member.name)
         stamp = _DOOR_HOLD_SINCE.get(key)
         if stamp is None or stamp[0] != head_id:
-            # AN ERRAND TAKEN UP AGAIN AFTER A RECALL GOES ON COUNTING (#2323).
-            # Looked up: the verdict harness loads this function in isolation.
             start = globals().get("_errand_clock_start")
-            stamp = (head_id, start(key, head_id, now) if start else now)
+            since = (
+                start((leader, member.name, member.state), head_id, now)
+                if start else now
+            )
+            stamp = (head_id, since)
             _DOOR_HOLD_SINCE[key] = stamp
+            write_memo = globals().get("_door_hold_memo_put")
+            if write_memo is not None:
+                write_memo(key, head_id, since, now)
         ages[member.name] = (member.state, now - stamp[1])
     return ages
 
@@ -6518,14 +6632,19 @@ def _door_wedge(head: dict, names: list, leader: str):
     A corpse outranks a walk, and a walk outranks a hold: the recorded
     reason names the worst thing wrong at the door.
     """
-    if head.get("status") != campaignqueue.ACTIVE or not any(
-        jobs.is_dungeon_job(job) for job in _jobs_of(names).values()
-    ):
-        # Not judged this pass: the leader's hold clocks stop with it, so a
-        # later return to the dungeon job does not count the gap as one hold
-        # (#2181).
+    if head.get("status") != campaignqueue.ACTIVE:
+        # A different queue phase is not a door hold. The active job may come
+        # back later, so discard clocks only when this queue entry is no longer
+        # active.
         for key in [k for k in _DOOR_HOLD_SINCE if k[0] == leader]:
-            del _DOOR_HOLD_SINCE[key]
+            _DOOR_HOLD_SINCE.pop(key, None)
+            delete_memo = globals().get("_door_hold_memo_delete")
+            if delete_memo is not None:
+                delete_memo(key)
+        return None
+    if not any(jobs.is_dungeon_job(job) for job in _jobs_of(names).values()):
+        # The family may switch jobs while still separated. Preserve its clock
+        # so a temporary quest job cannot restart the stand-down bound.
         return None
     keyword = str(head.get("keyword") or "")
     head_id = int(head.get("id") or 0)
@@ -9270,7 +9389,8 @@ class Bridge(discord.Client):
         self._jev.compare_sink = _jev_compare_sink
         # The OpenAI spend ledger lives in the database, so a restart does not
         # reset the month (#2899). The comparison client shares the one table.
-        for _client in (self._jev, self._jev.shadow):
+        # So do the clients JEV_ROUTE falls back to.
+        for _client in (self._jev, self._jev.shadow, *self._jev.fallbacks):
             if _client is not None and _client.spend is not None:
                 _client.spend.store = jev_openai.SqlStore(_connect)
         # THE GUILD COORDINATOR (guildrun). The names of every member in a
@@ -9304,6 +9424,10 @@ class Bridge(discord.Client):
         self._class_roads = _PersistentRoads()
         self._class_board = classparty.Board(roads=self._class_roads)
         self._class_party_tasks: set = set()
+        # The death party runner's tasks (deathparty.py), one per seated
+        # start; their members are held while a start stands on the book
+        # (_death_party_names).
+        self._death_party_tasks: set = set()
         # Until when (monotonic) this worldserver is known not to carry the
         # quest use verbs (quadseven/mod-overseer#865): the class quest plan
         # works from classquest.Book.plain() meanwhile (classuse.py).
@@ -25556,7 +25680,7 @@ class Bridge(discord.Client):
                 active = await asyncio.to_thread(_active_guild_run_names)
                 self._guild_run_names = (
                     set(active) | set(getattr(self, "_guild_social_names", ()))
-                    | _class_party_names(self))
+                    | _class_party_names(self) | _death_party_names(self))
                 await asyncio.to_thread(_hearth_stranded_guild_members)
                 # Its own failure does not cost the cycle its runs.
                 try:
@@ -25633,7 +25757,7 @@ class Bridge(discord.Client):
         # social pass): a member on a class quest, or in a class quest party
         # that is up, is not picked, so it counts as busy.
         facts["busy"] = (set(facts["busy"]) | set(getattr(self, "_classquest_held", ()))
-                         | _class_party_names(self))
+                         | _class_party_names(self) | _death_party_names(self))
         if swap:
             log.info("guild runs: the last run was refused over %s; forming again "
                      "without %s", guildrun.refused_member(gate["latest"][0].get("why")),
@@ -25845,7 +25969,8 @@ class Bridge(discord.Client):
             await meter(bounds, facts, mates, held, doors, lent)
 
     def _begin_death_parties(self, starts, loops=None, free=None) -> None:
-        """Seat each new death party start on the book and log it once.
+        """Seat each new death party start on the book, log it once, and
+        start its runner task (_run_death_party).
 
         A start already seated that the pass's reads no longer prove (its
         asker left the loop or moved, or a member is no longer free) is
@@ -25855,9 +25980,8 @@ class Bridge(discord.Client):
         The planner re-plans a filled ask on every social pass until the
         runner consumes it; the book (deathparty.StartBook) is what keeps
         one ask from seating, and logging, again on every pass. The
-        runner that walks the two members to the meeting place is the
-        next slice; it releases each ask from the book when its party
-        ends. Looked up so a test driving the social pass on a bare
+        runner releases each ask from the book when its party ends.
+        Looked up so a test driving the social pass on a bare
         object needs no book set up first.
         """
         book = getattr(self, "_death_book", None)
@@ -25871,6 +25995,188 @@ class Bridge(discord.Client):
                 log.info("death party: ask %d seats a start: %s leads, %s helps, "
                          "meeting at %s", start.ask_id, start.leader,
                          ", ".join(start.helpers), start.place)
+                names = getattr(self, "_guild_run_names", None)
+                if names is not None:
+                    names |= set(start.names())
+                start_runner = getattr(self, "_start_death_party", None)
+                if start_runner is not None:
+                    start_runner(start)
+
+    def _start_death_party(self, start) -> None:
+        """Start one runner task for a seated start. A bare object driven
+        outside the bridge's loop (a test of the seating pass) has no
+        running loop: the start stays seated on the book and no task is
+        started, exactly as before the runner existed."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        tasks = getattr(self, "_death_party_tasks", None)
+        if tasks is None:
+            tasks = self._death_party_tasks = set()
+        task = asyncio.ensure_future(self._run_death_party(start))
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    async def _run_death_party(self, start) -> None:
+        """One seated death party from its meeting to its end, following
+        the class party runner's shape: re-check the start against the
+        newest reads before each act (deathparty.start_still_valid),
+        walk the helper to the leader's meeting place and see both stand
+        there, form the two-member party, keep it formed while the
+        leader stays in its loop place, then disband it. However it
+        ends, the ask is released from the book and both members are
+        free again (_death_party_close)."""
+        formed = False
+        why = "the party ended"
+        try:
+            if not await self._death_party_still_valid(start):
+                why = "its start no longer holds"
+            elif not await self._death_party_meet(start):
+                why = "the meeting failed"
+            elif not await self._death_party_still_valid(start):
+                why = "its start no longer holds"
+            elif not await self._death_party_form(start):
+                why = "the party did not form"
+            else:
+                formed = True
+                log.info("death party: ask %d formed: %s leads, %s helps at %s",
+                         start.ask_id, start.leader,
+                         ", ".join(start.helpers), start.place)
+                why = await self._death_party_watch(start)
+        except Exception:
+            log.exception("death party: ask %d's runner failed", start.ask_id)
+            why = "the runner failed"
+        finally:
+            await self._death_party_close(start, formed, why)
+
+    async def _death_party_still_valid(self, start) -> bool:
+        """The act-time re-check: deathparty.start_still_valid over the
+        newest reads (_death_party_reads), with the members this bridge
+        already holds for other parties taken out of free."""
+        loops, free = await asyncio.to_thread(_death_party_reads, start.names())
+        # Members held by another party that is up are not free to this
+        # one; this start's own members are held by this very party, so
+        # they stay in.
+        others = (_class_party_names(self) | _death_party_names(self)) - set(
+            start.names())
+        return deathparty.start_still_valid(start, loops, set(free) - others)
+
+    async def _death_party_meet(self, start) -> bool:
+        """Walk the helper to the leader's meeting place and see both
+        stand there (deathparty.together over the live snapshot, read
+        again while a member that arrived is not yet seen beside the
+        leader, at most deathparty.MEET_READS times). The leader already
+        stands at the meeting place: the start was seated from its loop
+        there, and the re-check before this act proved it again."""
+        arrived = set()
+        for name in start.helpers:
+            if await self._death_party_meet_walk(start, name):
+                arrived.add(name)
+        if len(arrived) != len(start.helpers):
+            return False
+        for read in range(deathparty.MEET_READS):
+            if read:
+                await asyncio.sleep(deathparty.MEET_READ_SECONDS)
+            stands = await asyncio.to_thread(_class_party_stands, start.names())
+            if deathparty.together(stands, start):
+                return True
+        log.info("death party: ask %d: %s was not seen beside %s at %s",
+                 start.ask_id, ", ".join(start.helpers), start.leader, start.place)
+        return False
+
+    async def _death_party_meet_walk(self, start, name: str) -> bool:
+        """Walk one helper to the leader; True when it arrived in time."""
+        cap = self._guild_walk_cap()
+        row = guildcorps.Row("job", deathparty.meet_command(start), "",
+                             deathparty.SOURCE)
+
+        def insert():
+            return _insert_corps_row(name, row)
+
+        row_id = await asyncio.to_thread(insert)
+        if not row_id:
+            log.info("death party: ask %d: no meeting walk row was written for %s",
+                     start.ask_id, name)
+            return False
+        try:
+            answer, row_id = await asyncio.wait_for(
+                self._follow_guild_walk("death party", name, row_id, cap, insert,
+                                        start.leader),
+                timeout=deathparty.MEET_SECONDS)
+        except asyncio.TimeoutError:
+            log.info("death party: ask %d: %s did not reach %s within %d seconds",
+                     start.ask_id, name, start.leader,
+                     int(deathparty.MEET_SECONDS))
+            return False
+        if answer.state == guildroute.ARRIVED:
+            return True
+        log.info("death party: ask %d: meeting walk row %d for %s ended without "
+                 "arriving: %s", start.ask_id, row_id, name, answer.said)
+        return False
+
+    async def _death_party_form(self, start) -> bool:
+        """Write party-up for the leader with its one helper and follow
+        its answer (classparty.judge_up, the party verbs' own judge);
+        True when the party formed."""
+        row = guildcorps.Row("guild", classparty.up_command(start.helpers), "",
+                             classparty.SOURCE)
+        row_id = await asyncio.to_thread(_insert_corps_row, start.leader, row)
+        if not row_id:
+            log.info("death party: ask %d: the invite (party-up) row was not "
+                     "written", start.ask_id)
+            return False
+        answer = await self._await_corps_answer(
+            row_id, classparty.UP_FOLLOW_SECONDS) or {}
+        verdict = classparty.judge_up(
+            start.leader, answer.get("status"), answer.get("detail"),
+            answer.get("result"))
+        log.info("death party: ask %d: party-up row %d for %s: %s",
+                 start.ask_id, row_id, start.leader, verdict.said)
+        return verdict.state == classparty.FORMED
+
+    async def _death_party_watch(self, start) -> str:
+        """Keep the formed party up while the leader stays in its loop
+        place: one re-check of the start every deathparty.WATCH_SECONDS
+        until it no longer holds, or the party's own time is up. The
+        words the party ended with."""
+        deadline = time.monotonic() + deathparty.PARTY_SECONDS
+        while True:
+            await asyncio.sleep(deathparty.WATCH_SECONDS)
+            if not await self._death_party_still_valid(start):
+                return "the leader left its loop place"
+            if time.monotonic() >= deadline:
+                return "the party's time is up"
+
+    async def _death_party_disband_row(self, start) -> None:
+        """Write party-disband for the leader and follow its answer, as
+        the class party runner ends a formed party."""
+        row = guildcorps.Row("guild", classparty.DISBAND, "", classparty.SOURCE)
+        row_id = await asyncio.to_thread(_insert_corps_row, start.leader, row)
+        if not row_id:
+            return
+        answer = await self._await_corps_answer(row_id, CORPS_ROW_FOLLOW_SECONDS) or {}
+        log.info("death party: ask %d: party-disband row %d for %s came back %s",
+                 start.ask_id, row_id, start.leader,
+                 answer.get("status") or "unanswered")
+
+    async def _death_party_close(self, start, formed: bool, why: str) -> None:
+        """End the party: disband it when it formed, release the ask from
+        the book, free both members, and log the one ended line naming
+        the ask and the outcome."""
+        try:
+            if formed:
+                await self._death_party_disband_row(start)
+        except Exception:
+            log.exception("death party: ask %d: its disband failed", start.ask_id)
+        finally:
+            book = getattr(self, "_death_book", None)
+            if book is not None:
+                book.release(start.ask_id)
+            names = getattr(self, "_guild_run_names", None)
+            if names is not None:
+                names.difference_update(start.names())
+            log.info("death party: ask %d ended: %s", start.ask_id, why)
 
     async def _log_seat_meter(self, bounds, facts: dict, mates: list, held: dict,
                               doors: list, lent) -> None:
@@ -32258,7 +32564,13 @@ def _insert_jev_judgment(judgment) -> None:
     acted = str(getattr(judgment, "acted", "") or "")
     # Only the activity choice carries its facts (#216); every other kind ''.
     facts = str(getattr(judgment, "facts", "") or "")
-    backend = str(getattr(judgment, "backend", "") or JEV_ACTIVE_BACKEND)
+    # Under JEV_ROUTE the answer may come from any routed backend: its model
+    # id says which (jev.answered_by), and a row with no answer names the first.
+    backend = str(
+        getattr(judgment, "backend", "")
+        or (JEV_ROUTED and jev.answered_by(judgment.model))
+        or JEV_ACTIVE_BACKEND
+    )
     jev.TALLY.agreement(judgment.kind, agree)
     jev.TALLY.maybe_log()
     _jev_report_tick()
@@ -32286,9 +32598,11 @@ def _jev_report_tick() -> None:
     """Once an hour: the OpenAI backend's per-kind report, logged and handed to
     the act gate (jev_openai.Reporter). Runs on the thread that just wrote a
     judgment; a database failure is logged and the gate keeps its last verdict."""
-    if JEV_ACTIVE_BACKEND != "openai" and jev.backend_name(
-        os.environ, "JEV_COMPARE_BACKEND"
-    ) != "openai":
+    if (
+        JEV_ACTIVE_BACKEND != "openai"
+        and "openai" not in JEV_ROUTED
+        and jev.backend_name(os.environ, "JEV_COMPARE_BACKEND") != "openai"
+    ):
         return
     if not _JEV_REPORTER.due():
         return
@@ -33439,10 +33753,7 @@ def _fetch_guild_social_facts(bounds) -> dict:
             # The death loops the planning pass judges (deathloop.loops over
             # the same deaths read, #2277): the death-loop asks are planned
             # from this read in the social pass (deathask.plan_pass).
-            death_rows = _job_read(
-                cur, "deaths",
-                deathloop.SQL.format(holes=holes),  # noqa: S608 - placeholders only
-                (*names, deathloop.READ_SECONDS))
+            death_rows = _death_rows(cur, names)
             death_loops = deathloop.loops(
                 death_rows,
                 {str(r["name"]): int(r.get("level") or 0) for r in facts["rows"]})
@@ -33769,6 +34080,17 @@ def _class_party_names(owner) -> set:
     return board.names() if board is not None else set()
 
 
+def _death_party_names(owner) -> set:
+    """The members of the death parties seated on the book, for the passes
+    that leave them alone (a bridge with no book holds nobody). A start's
+    members are held from its seating until the runner releases its ask
+    at the party's end."""
+    book = getattr(owner, "_death_book", None)
+    if book is None:
+        return set()
+    return {name for start in book.seated() for name in start.names()}
+
+
 def _with_class_asks(social, quest_pass):
     """The dungeon pass with the class quest pass's rows added, to be written
     by the one writer (_write_guild_social)."""
@@ -33911,6 +34233,23 @@ def _class_party_stands(names) -> dict:
         if r.get("map_id") is not None and r.get("pos_x") is not None
         and r.get("pos_y") is not None
     }
+
+
+def _death_party_reads(names) -> tuple:
+    """(loops, free) for one death party's act-time re-check: the newest
+    death-loop read over the start's members (deathloop.loops over the
+    same deaths read the social pass judges, judged by the deaths' own
+    levels), and the members the fresh snapshot shows who are not inside
+    a live guild run."""
+    names = list(names)
+    if not names:
+        return {}, set()
+    holes = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        death_rows = _death_rows(cur, names)
+        cur.execute(_CLASS_PARTY_STANDS_SQL % holes, names)  # noqa: S608 - placeholders only
+        present = {str(r["name"]) for r in cur.fetchall()}
+    return deathloop.loops(death_rows), present - set(_active_guild_run_names())
 
 
 def _class_party_ask_live(ask_id: int) -> bool:
@@ -38794,6 +39133,18 @@ def _class_member_reads(cur, book, everyone: str) -> tuple:
         _job_read(cur, "class quests rewarded", classquest.REWARDED_SQL.format(
             guids=everyone, quests=ids)),
     )
+
+
+def _death_rows(cur, names) -> list:
+    """The deaths read every death-loop judge shares: deathloop.SQL over
+    the newest deathloop.READ_SECONDS for the named members, through the
+    guarded job read. Defined once so the social pass's planning read and
+    the death party runner's act-time re-check can never drift apart."""
+    holes = ",".join(["%s"] * len(names))
+    return _job_read(
+        cur, "deaths",
+        deathloop.SQL.format(holes=holes),  # noqa: S608 - placeholders only
+        (*names, deathloop.READ_SECONDS))
 
 
 def _job_read(cur, what: str, sql: str, params=()) -> list:

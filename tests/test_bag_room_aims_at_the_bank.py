@@ -18,7 +18,7 @@ WHY = te.BAG_PRESSURE_WHY
 CAPITAL = {"map_id": 0, "x": -8877.0, "y": 652.0, "z": 96.0, "place": "the capital"}
 HEAD = {"map_id": 0, "pos_x": -6705.0, "pos_y": -2195.0}
 NEAR = {"map_id": 0, "x": -6600.0, "y": -2100.0, "name": "Near Banker"}
-FAR = {"map_id": 0, "x": -8300.0, "y": -2200.0, "name": "Far Banker"}
+FAR = {"map_id": 0, "x": -7800.0, "y": -2200.0, "name": "Far Banker"}
 VAULT = {"map_id": 0, "x": -6500.0, "y": -2000.0, "z": 5.0, "d2": 1.0}
 FAMILY = ("Zug", "Grug")
 
@@ -45,6 +45,18 @@ class WhenTheErrandBanks(unittest.TestCase):
     def test_the_nearest_banker_is_chosen(self):
         _kind, spot, _line = route(rows=(FAR, NEAR))
         self.assertEqual(-6600.0, spot["x"])
+
+    def test_a_banker_past_the_town_service_limit_is_not_aimed_at(self):
+        # 2119 yards off: the module never walks a character that far to a
+        # counter, so the same hub would be re-issued for ever.
+        far = {"map_id": 0, "x": -6705.0 + 2119.0, "y": -2195.0, "name": "Far"}
+        kind, spot, line = route(rows=(far,))
+        self.assertEqual(("", {}), (kind, spot))
+        self.assertIn("town-service limit", line)
+
+    def test_a_vault_past_the_limit_is_not_aimed_at_either(self):
+        far = {"map_id": 0, "x": -4000.0, "y": -2195.0, "z": 5.0, "d2": 1.0}
+        self.assertEqual("", route(rows=(), vault=far)[0])
 
     def test_sellables_keep_the_vendor(self):
         self.assertEqual(("", {}, ""), route(sellable=1))
@@ -99,7 +111,7 @@ class WhenTheBankerIsRefused(unittest.TestCase):
         released = te.remember_released([], NEAR, 100.0)
         kind, spot, _line = route(rows=(NEAR, FAR), released=released, now=200.0)
         self.assertEqual(te.ROUTE_BANKER, kind)
-        self.assertEqual(-8300.0, spot["x"])
+        self.assertEqual(-7800.0, spot["x"])
 
     def test_the_vault_is_refused_by_the_same_guard(self):
         kind, _spot, line = route(vault=VAULT, walled=lambda _s: True)
