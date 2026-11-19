@@ -544,6 +544,7 @@ class StallWorld(FakeWorld):
         self.ordered_after = set()
         self.hold_said = {}
         self.stood_down = {}
+        self.hold_lines = []
         self.silent_seconds = None
         self.wedge = None
         self.dungeonquest_held = set()
@@ -604,6 +605,9 @@ def _pass(world):
             "_jobs_of": lambda names: {n: world.member_job(n) for n in names},
             "_last_job_source": lambda name: "town-errand",
             "_STALL_STOOD_DOWN": world.stood_down,
+            "_say_queue_hold": lambda key, hold, why="": world.hold_lines.append(
+                (hold, why)
+            ),
             "_fetch_positions": lambda names: dict(world.positions),
             "_REGROUP_SPENT": world.regroup_spent,
             "_fetch_queue_rows": world.fetch_queue,
@@ -723,6 +727,10 @@ class TheCampaignDoesNotStartAThirdRun(unittest.TestCase):
         self.assertIn("last written by town-errand", reason)
         # Kept where the queue's hold is said, not only in the pace row.
         self.assertEqual(reason[:255], w.stood_down[w.queue[0]["family"]][:255])
+        # And the queue's hold line says it.
+        self.assertIn(
+            ("stall breaker", w.stood_down[w.queue[0]["family"]]), w.hold_lines
+        )
 
     def test_silent_head_is_checked_before_a_dungeon_quest_hold(self):
         w = self.silent_family()

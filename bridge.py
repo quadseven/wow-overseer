@@ -6340,6 +6340,8 @@ def _job_story(names: list) -> str:
         writers = sorted({src for src in (_last_job_source(n) for n in names)
                           if src})
     except pymysql.err.MySQLError:
+        log.warning("stall: the family's job story could not be read; the "
+                    "reason is recorded without it", exc_info=True)
         return ""
     return "jobs now %s; last written by %s" % (
         ", ".join(held) or "unread", ", ".join(writers) or "unrecorded")
@@ -42547,6 +42549,9 @@ _MAIL_SQL = (
 TOWN_ERRAND_CLAIMANT = "town errand"
 TOWN_ERRAND_SOURCE = "overseer:town-errand"
 TOWN_ERRAND_CYCLE_SECONDS = 30.0
+for _name, _raw in townerrand.ENV_REJECTED:
+    log.warning("town errand: %s=%r is not a non-negative number of seconds; "
+                "the default stands", _name, _raw)
 # THE LOOP SAYS IT RAN (wow-dev 2026-10-05). An errand is due only now and
 # then, so a loop with nothing to run wrote nothing for two hours and the
 # "town errand loop has gone quiet" monitor could not tell idle from hung. One

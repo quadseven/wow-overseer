@@ -2043,4 +2043,29 @@ class TheRunWait(unittest.TestCase):
 
     def test_the_window_is_thirty_minutes_and_env_tunable(self):
         self.assertEqual(1800.0, te.RUN_WAIT_SECONDS)
-        self.assertIn("TOWN_ERRAND_RUN_WAIT_SECONDS", open(te.__file__).read())
+
+    def reloaded(self, value):
+        """RUN_WAIT_SECONDS and the refused reads after a reload with the
+        environment variable set to `value` (None: unset)."""
+        import importlib
+        import os
+        from unittest import mock
+
+        env = {} if value is None else {"TOWN_ERRAND_RUN_WAIT_SECONDS": value}
+        try:
+            with mock.patch.dict(os.environ, env):
+                if value is None:
+                    os.environ.pop("TOWN_ERRAND_RUN_WAIT_SECONDS", None)
+                module = importlib.reload(te)
+                return module.RUN_WAIT_SECONDS, list(module.ENV_REJECTED)
+        finally:
+            importlib.reload(te)
+
+    def test_the_environment_sets_the_window(self):
+        self.assertEqual((600.0, []), self.reloaded("600"))
+
+    def test_a_bad_or_negative_value_keeps_the_default_and_is_noted(self):
+        for raw in ("soon", "-5"):
+            seconds, rejected = self.reloaded(raw)
+            self.assertEqual(1800.0, seconds, raw)
+            self.assertEqual([("TOWN_ERRAND_RUN_WAIT_SECONDS", raw)], rejected)

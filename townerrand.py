@@ -127,13 +127,27 @@ HOLD_CEILING_SECONDS = 45 * 60.0
 BAG_PRESSURE_WHY = "campaign held at the dungeon door for bag room"
 
 
+# (name, raw value) of each environment read this module refused and replaced
+# with its default. The module imports no logger, so the bridge says them.
+ENV_REJECTED: list = []
+
+
 def _env_seconds(name: str, default: float) -> float:
-    """`name` from the environment as seconds; the default when unset or bad."""
-    try:
-        value = float(os.environ.get(name, default))
-    except (TypeError, ValueError):
+    """`name` from the environment as seconds; the default when unset or bad.
+
+    A value that is not a number, or is negative, is refused and noted in
+    ENV_REJECTED so the bridge can log it."""
+    raw = os.environ.get(name)
+    if raw is None:
         return default
-    return value if value >= 0 else default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = -1.0
+    if value < 0:
+        ENV_REJECTED.append((name, raw))
+        return default
+    return value
 
 
 # ONE ERRAND PER RUN ATTEMPT. Once a family's errand has ended, however it
