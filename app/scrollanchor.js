@@ -64,12 +64,7 @@ export function scrollShift(el, anchor, lineY) {
 // writing. `y` is the scroll before the swap, `shift` what scrollShift said
 // (0 with no anchor), `current` the scroll now. A write that would move the
 // page less than a pixel is not made: it can only interrupt a fling.
-// `scrolling` is true while the reader is scrolling (a finger down, or a
-// scroll a moment ago): then nothing is written at all, because a write
-// is the page snapping back under their finger. Only a reader parked at the
-// top (y of 0) is placed regardless: the top is the top.
-export function restoreTarget(y, shift, current, scrolling = false) {
-  if (scrolling && y > 0) return null;
+export function restoreTarget(y, shift, current) {
   const target = Math.max(0, y + shift);
   return Math.abs(target - current) < 1 ? null : target;
 }

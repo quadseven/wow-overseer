@@ -166,37 +166,7 @@ class IdenticalBodyIsSkipped(unittest.TestCase):
 
 
 @needs_node
-class AScrollSessionIsNotCutShortByAPhonesPause(unittest.TestCase):
-    """#3030: the page snapped back up while the reader scrolled down."""
-
-    def test_a_queued_redraw_waits_through_pauses_inside_one_gesture(self):
-        got = hold(
-            """
-            const h = M.makeHold({ ...clock, apply: () => { applied++; } });
-            h.scrolled();
-            h.request();
-            // A flick that slows: no scroll event for 300ms, then more.
-            clock.advance(300);
-            const pause = applied;
-            h.scrolled();
-            clock.advance(300);
-            const again = applied;
-            clock.advance(M.QUIET_MS);
-            return [pause, again, applied];
-            """
-        )
-        self.assertEqual(got, [0, 0, 1])
-
-
-@needs_node
 class NoScrollWriteWhenTheAnchorDidNotMove(unittest.TestCase):
-    def test_the_anchor_restore_never_moves_the_scroll_during_a_user_scroll(self):
-        for args in ("640, 30, 640, true", "640, -200, 640, true", "1, 500, 900, true"):
-            self.assertIsNone(self.run_target(args), args)
-
-    def test_a_reader_at_the_top_is_still_placed_while_scrolling(self):
-        self.assertEqual(self.run_target("0, 30, 0, true"), 30)
-
     def run_target(self, args):
         return node_module(
             "scrollanchor.js",

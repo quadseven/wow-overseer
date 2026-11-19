@@ -11,11 +11,7 @@
 // Pure of the DOM: the clock and the timers are handed in, so node can test
 // them with a fake clock.
 
-// A scroll is settled after this long with no scroll event. 150ms was shorter
-// than the pauses inside one phone gesture (a flick that slows, a finger that
-// rests), so a queued redraw landed mid-scroll and the anchor restore pulled
-// the reader back. scrollend, where the browser has it, still ends it at once.
-export const QUIET_MS = 500;
+export const QUIET_MS = 150;
 
 export function makeHold({ now, setTimer, clearTimer, apply, quiet = QUIET_MS }) {
   let touching = false;
@@ -55,8 +51,6 @@ export function makeHold({ now, setTimer, clearTimer, apply, quiet = QUIET_MS })
     scrolled() { lastScroll = now(); if (pending) arm(); },
     scrollEnd() { lastScroll = -Infinity; flush(); },
     get pending() { return pending; },
-    // True while a finger is down or the page scrolled within the quiet time.
-    get scrolling() { return busy(); },
   };
 }
 

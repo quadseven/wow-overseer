@@ -515,11 +515,8 @@ def ledger_state(state, reason) -> str:
     # the quest: a full bag or a level too low refuses a take that a later pass
     # may win, so neither holds the quest broken for good
     # (quest 298, refused "not eligible" while its start item had no
-    # bag room, stayed broken for weeks). A quest the log held as failed is a
-    # failed attempt too: dropping and retaking it can finish it.
-    if state == LEDGER_BROKEN and (
-        reason.startswith((STALLED, REFUSED_TAKE)) or reason == FAILED
-    ):
+    # bag room, stayed broken for weeks).
+    if state == LEDGER_BROKEN and reason.startswith((STALLED, REFUSED_TAKE)):
         return LEDGER_STALLED
     return state
 

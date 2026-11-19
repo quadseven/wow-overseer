@@ -20517,9 +20517,7 @@ class Bridge(discord.Client):
         now = time.monotonic()
         busy = self._guild_walkers_busy(now)
         candidates = [t.name for t in trainees
-                      if t.online and t.name not in busy
-                      and (t.due.affords(t.money)
-                           or t.class_id == classquest.DEATH_KNIGHT)]
+                      if t.online and t.due.affords(t.money) and t.name not in busy]
         row_walks = now >= self._mail_walk_unsupported_until
         walkers = (await asyncio.to_thread(_route_walkers, candidates, names, row_walks)
                    if candidates else {})
@@ -33731,6 +33729,7 @@ def _fetch_guild_social_facts(bounds) -> dict:
     names = sorted({str(r["name"]) for r in facts["rows"] if r.get("name")})
     worn, skills, quest_rows, campaigns = [], [], [], []
     death_loops: dict = {}
+    death_risks: dict = {}
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT NOW() AS now")
         now = (cur.fetchone() or {}).get("now")
@@ -33756,9 +33755,13 @@ def _fetch_guild_social_facts(bounds) -> dict:
             # the same deaths read, #2277): the death-loop asks are planned
             # from this read in the social pass (deathask.plan_pass).
             death_rows = _death_rows(cur, names)
-            death_loops = deathloop.loops(
-                death_rows,
-                {str(r["name"]): int(r.get("level") or 0) for r in facts["rows"]})
+            death_levels = {str(r["name"]): int(r.get("level") or 0)
+                            for r in facts["rows"]}
+            death_loops = deathloop.loops(death_rows, death_levels)
+            # The death slope beside the loops (#2636): the risks over the
+            # same deaths read, so the death-ask pass can ask for a member
+            # at 3+ deaths in an hour before the loop flag trips.
+            death_risks = deathloop.risks(death_rows, death_levels)
         try:
             cur.execute(guildsocial.CAMPAIGNS_SQL)
             campaigns = list(cur.fetchall())
@@ -33801,6 +33804,7 @@ def _fetch_guild_social_facts(bounds) -> dict:
         "gear": guildsocial.gear_by_name(facts["rows"], worn, skills),
         "campaigns": campaigns, "drops": drops, "pug_calls": pug_calls,
         "lendable": lendable, "death_loops": death_loops,
+        "death_risks": death_risks,
     })
     return facts
 
@@ -33814,11 +33818,14 @@ def _death_ask_pass(facts: dict, mates: list, held: dict,
     expiry half runs even while the DEATH_ASK switch is off and when the
     loop pool is empty, so an ask already open always closes (#2344)."""
     loops = facts.get("death_loops") or {}
+    risks = facts.get("death_risks") or {}
     if not deathask.enabled():
-        return deathask.expire_pass(facts["asks"], loops, facts["now"])
+        return deathask.expire_pass(facts["asks"], loops, facts["now"],
+                                    risks=risks)
     return deathask.plan_pass(
         loops, mates, facts["asks"], facts["now"], held=held,
-        answers=facts.get("answers") or (), spoken=spoken, seated=seated)
+        answers=facts.get("answers") or (), spoken=spoken, seated=seated,
+        risks=risks)
 
 
 def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,

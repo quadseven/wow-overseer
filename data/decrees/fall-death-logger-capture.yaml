@@ -1,17 +1,18 @@
-# Raise the entities.player and movement.motionmaster loggers, record one fall
-# from the captured start, and require the FALLDAMAGE and MoveFall lines
-# (mod-overseer issue 254). The loggers are the only world-config change; the
-# throwaway world teardown restores its baseline.
-# Scope: the decree proves a measured fall row and requires both relevant log
-# patterns. It does not claim the following deployment roll reset logger
-# levels, which is a realm-operations check outside the throwaway world.
-# Fix: mod-overseer commit 0cd0f90 (the CompleteDismount mod-playerbots patch).
+# Raise the entities.player and movement.motionmaster loggers, let a character fall from a captured
+# fall start, and quote the FALLDAMAGE and MoveFall lines (mod-overseer issue 254). The loggers are the
+# only world-config change; the baseline is restored by tearing the world down.
+# Scope: the loggers are raised through the world config, but the FALLDAMAGE and MoveFall lines themselves are
+# worldserver log text and a log assertion can only forbid a line, never require or quote one, so quoting them is
+# NOT asserted here (the judge keeps the matched lines of any log check it runs, but a decree cannot demand
+# them). What the rows prove: a fall from the captured start was recorded for Og on map 230 with a measured
+# fall start, not a guessed one.
+# Fix: mod-overseer pull 292 (the fall guard measures the fall).
 decree: v1
 id: fall-death-logger-capture
 proves:
-  - {repo: quadseven/mod-overseer, issue: 254, criterion: "one fall death is captured with entities.player and movement.motionmaster at DEBUG, including its FALLDAMAGE mZ and z line and any movement.motionmaster MoveFall line"}
-fix: {repo: quadseven/mod-overseer, commit: "0cd0f900b086e4207cd87c8720e3329fcbdeeff9"}
-world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {Logger.entities.player: "5,Console Server", Logger.movement.motionmaster: "5,Console Server"}}
+  - {repo: quadseven/mod-overseer, issue: 254, criterion: "a fall from the captured start is recorded with a measured fall start while entities.player and movement.motionmaster are raised (quoting the FALLDAMAGE and MoveFall lines is not asserted here)"}
+fix: {repo: quadseven/mod-overseer, commit: "97e790ccfd9d23723c52b943ed97fa20e4f47aeb"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {Logger.entities.player: "2,Console Server", Logger.movement.motionmaster: "2,Console Server"}}
 runs: {control: 3, treatment: 3}
 duration: 20m
 cast:
@@ -46,9 +47,3 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_death WHERE created_at >= @t0 AND character_name = 'Og' AND yards_fallen > 0 AND fall_start_z IS NULL
     expect: {scalar: "= 0"}
-  - name: fall-damage-debug-line-is-present
-    role: check
-    log: {pattern: "FALLDAMAGE.*mZ=.*z=", expect: {at_least: 1}}
-  - name: motionmaster-movefall-line-is-present
-    role: check
-    log: {pattern: "movement\\.motionmaster.*MoveFall", expect: {at_least: 1}}

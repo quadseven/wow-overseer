@@ -514,5 +514,109 @@ class DeathLoopFilled(unittest.TestCase):
         self.assertIn("or death_pass.filled", body)
 
 
+def risk_of(name="Sloper", deaths=3, level=26):
+    return deathloop.Risk(
+        name=name,
+        zone=HILLSBRAD,
+        map_id=0,
+        deaths=deaths,
+        killer="Hillsbrad Farmer",
+        level=level,
+        first_age=3000,
+        last_age=120,
+        trigger="died %d times within an hour" % deaths,
+    )
+
+
+def sloper_and_mate():
+    return mate("Sloper", 26, 1, at=NEAR, zone_id=HILLSBRAD), mate(
+        "Helper", 28, 2, at=NEAR, zone_id=HILLSBRAD
+    )
+
+
+class DeathSlopeAsks(unittest.TestCase):
+    """The pre-wedge slope (#2636, first slice): a member at 3+ deaths in
+    an hour in one zone, below the loop flag, gets the same help route a
+    looper gets, before the loop forms."""
+
+    def test_a_slope_member_with_a_mate_in_reach_gets_one_deathloop_post(self):
+        sloper, helper = sloper_and_mate()
+        found = deathask.plan_pass(
+            {}, [sloper, helper], [], NOW, risks={"Sloper": risk_of()}
+        )
+        self.assertEqual(len(found.posts), 1)
+        post = found.posts[0]
+        self.assertEqual(post.asker, "Sloper")
+        self.assertEqual(post.kind, "deathloop")
+        self.assertEqual(post.target, "deathloop:%d" % HILLSBRAD)
+
+    def test_a_two_death_risk_is_not_asked_for_yet(self):
+        sloper, helper = sloper_and_mate()
+        found = deathask.plan_pass(
+            {}, [sloper, helper], [], NOW, risks={"Sloper": risk_of(deaths=2)}
+        )
+        self.assertEqual(found.posts, ())
+
+    def test_a_looping_member_on_the_slope_gets_only_the_loop_post(self):
+        looper, helper = looper_and_mate()
+        found = deathask.plan_pass(
+            {"Looper": loop_of()},
+            [looper, helper],
+            [],
+            NOW,
+            risks={"Looper": risk_of(name="Looper", deaths=4)},
+        )
+        self.assertEqual(len(found.posts), 1)
+        self.assertEqual(found.posts[0].asker, "Looper")
+
+    def test_a_slope_members_live_ask_is_not_expired_or_reposted(self):
+        sloper, helper = sloper_and_mate()
+        live = ask(9, "Sloper")
+        found = deathask.plan_pass(
+            {}, [sloper, helper], [live], NOW, risks={"Sloper": risk_of()}
+        )
+        self.assertEqual(found.expire, ())
+        self.assertEqual(found.posts, ())
+
+    def test_a_slope_members_live_ask_draws_a_yes(self):
+        sloper, helper = sloper_and_mate()
+        live = ask(9, "Sloper")
+        found = deathask.plan_pass(
+            {}, [sloper, helper], [live], NOW, risks={"Sloper": risk_of()}
+        )
+        self.assertEqual(len(found.replies), 1)
+        self.assertEqual(found.replies[0].member, "Helper")
+
+    def test_the_bridge_pass_carries_risks_into_the_death_pass(self):
+        import os
+        import types
+        from unittest import mock
+
+        from _stub_modules import PYMYSQL, fresh_import, stub_modules
+
+        stub = types.ModuleType("discord")
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        stub.Client = Client
+        with stub_modules(pymysql=PYMYSQL):
+            bridge = fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
+
+        sloper, helper = sloper_and_mate()
+        facts = {
+            "death_loops": {},
+            "death_risks": {"Sloper": risk_of()},
+            "asks": [],
+            "answers": [],
+            "now": NOW,
+        }
+        with mock.patch.dict(os.environ, {"DEATH_ASK": "on"}):
+            found = bridge._death_ask_pass(facts, [sloper, helper], {})
+        self.assertEqual(len(found.posts), 1)
+        self.assertEqual(found.posts[0].asker, "Sloper")
+
+
 if __name__ == "__main__":
     unittest.main()
