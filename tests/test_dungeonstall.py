@@ -14,6 +14,7 @@ against a fake queue, roster and store.
 from datetime import datetime, timedelta
 import ast
 import asyncio
+import json
 import pathlib
 import time
 import types
@@ -1452,22 +1453,63 @@ class TheDoorWedgeReads(unittest.TestCase):
     HEAD = {"id": 7, "keyword": "maraudon-orange", "status": "active"}
     boss_age = None
 
-    def judge(self, evidence, clock, jobs_of=None):
+    def judge(self, evidence, clock, jobs_of=None, *, memo_store=None, positions=None):
         self.asked = []
         self.holds = {}
+        self.memos = {} if memo_store is None else memo_store
+
+        def memo_read(kind):
+            return {
+                subject: value
+                for (stored_kind, subject), value in self.memos.items()
+                if stored_kind == kind
+            }
+
+        def memo_upsert(kind, subject, value, since, expires):
+            self.memos[kind, subject] = (value, since)
+
+        def memo_delete(kind, subject):
+            self.memos.pop((kind, subject), None)
+
         ns = _load(
-            ["_door_wedge", "_door_wedge_ages", "_door_held_verdict"],
+            [
+                "_door_wedge",
+                "_door_wedge_ages",
+                "_door_wedge_member_recovered",
+                "_door_hold_subject",
+                "_door_hold_memo_put",
+                "_door_hold_memo_delete",
+                "_restore_door_hold_memos",
+                "_door_held_verdict",
+            ],
             {
                 "campaignqueue": campaignqueue,
                 "dungeonstall": stall,
                 "jobs": jobs,
-                "time": types.SimpleNamespace(monotonic=lambda: clock[0]),
+                "time": types.SimpleNamespace(
+                    monotonic=lambda: clock[0], time=lambda: clock[0]
+                ),
+                "json": json,
+                "DOOR_HOLD_RECOVER_YARDS": 1500,
                 "_jobs_of": jobs_of
                 or (lambda names: {n: "dungeon:maraudon-orange" for n in names}),
                 "_door_wedge_evidence": lambda leader, head_id: (
-                    self.asked.append((leader, head_id)) or evidence
+                    self.asked.append((leader, head_id))
+                    or (evidence() if callable(evidence) else evidence)
                 ),
                 "_DOOR_HOLD_SINCE": self.holds,
+                "_DOOR_HOLD_MEMO_READ_AT": None,
+                "DOOR_HOLD_MEMO_KIND": "door_wedge_hold",
+                "DOOR_HOLD_MEMO_SECONDS": 7 * 24 * 3600,
+                "DOOR_HOLD_MEMO_REFRESH_SECONDS": 60,
+                "_memo_read": memo_read,
+                "_memo_upsert": memo_upsert,
+                "_memo_delete": memo_delete,
+                "_MEMO_WRITER": types.SimpleNamespace(
+                    submit=lambda fn, *args: fn(*args)
+                ),
+                "_memo_job": lambda fn, *args: fn(*args),
+                "_fetch_positions": lambda names: positions or {},
                 "_door_run_boss_age": lambda leader: self.boss_age,
             },
         )
@@ -1531,19 +1573,45 @@ class TheDoorWedgeReads(unittest.TestCase):
         self.assertIsNotNone(got)
         self.assertIn("dead", got.why)
 
-    def test_a_hold_that_clears_and_returns_starts_a_new_clock(self):
+    def test_a_hold_that_recovers_within_walk_range_starts_a_new_clock(self):
         clock = [1000.0]
         box = [(0, (self.member("Uzza", "on an errand of its own"),))]
+        positions = {}
         ns = _load(
-            ["_door_wedge", "_door_wedge_ages", "_door_held_verdict"],
+            [
+                "_door_wedge",
+                "_door_wedge_ages",
+                "_door_wedge_member_recovered",
+                "_door_hold_subject",
+                "_door_hold_memo_put",
+                "_door_hold_memo_delete",
+                "_restore_door_hold_memos",
+                "_door_held_verdict",
+            ],
             {
                 "campaignqueue": campaignqueue,
                 "dungeonstall": stall,
                 "jobs": jobs,
-                "time": types.SimpleNamespace(monotonic=lambda: clock[0]),
+                "time": types.SimpleNamespace(
+                    monotonic=lambda: clock[0], time=lambda: clock[0]
+                ),
+                "json": json,
+                "DOOR_HOLD_RECOVER_YARDS": 1500,
                 "_jobs_of": lambda names: {n: "dungeon:maraudon-orange" for n in names},
                 "_door_wedge_evidence": lambda leader, head_id: box[0],
                 "_DOOR_HOLD_SINCE": {},
+                "_DOOR_HOLD_MEMO_READ_AT": None,
+                "DOOR_HOLD_MEMO_KIND": "door_wedge_hold",
+                "DOOR_HOLD_MEMO_SECONDS": 7 * 24 * 3600,
+                "DOOR_HOLD_MEMO_REFRESH_SECONDS": 60,
+                "_memo_read": lambda kind: {},
+                "_memo_upsert": lambda *args: None,
+                "_memo_delete": lambda *args: None,
+                "_MEMO_WRITER": types.SimpleNamespace(
+                    submit=lambda fn, *args: fn(*args)
+                ),
+                "_memo_job": lambda fn, *args: fn(*args),
+                "_fetch_positions": lambda names: positions,
                 "_door_run_boss_age": lambda leader: self.boss_age,
             },
         )
@@ -1551,10 +1619,57 @@ class TheDoorWedgeReads(unittest.TestCase):
         self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
         clock[0] += stall.HOLD_SECONDS - 1
         box[0] = (0, (self.member("Uzza", "following"),))
+        positions.update(
+            {
+                "Zug": {
+                    "map_id": 1,
+                    "instance_id": 0,
+                    "pos_x": 0,
+                    "pos_y": 0,
+                    "pos_z": 0,
+                },
+                "Uzza": {
+                    "map_id": 1,
+                    "instance_id": 0,
+                    "pos_x": 1400,
+                    "pos_y": 0,
+                    "pos_z": 0,
+                },
+            }
+        )
         self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
         box[0] = (0, (self.member("Uzza", "on an errand of its own"),))
         clock[0] += 2
         self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+
+    def test_a_state_flap_keeps_the_clock_while_the_member_is_still_far(self):
+        clock = [1000.0]
+        box = [(0, (self.member("Tork", stall.CATCH_UP_UNREACHABLE_STATE),))]
+        positions = {
+            "Zug": {"map_id": 1, "instance_id": 0, "pos_x": 0, "pos_y": 0, "pos_z": 0},
+            "Tork": {
+                "map_id": 1,
+                "instance_id": 0,
+                "pos_x": 2500,
+                "pos_y": 0,
+                "pos_z": 0,
+            },
+        }
+        judge = self.judge(
+            lambda: box[0],
+            clock,
+            memo_store={},
+            positions=positions,
+        )
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Tork"], "Zug"))
+        clock[0] += stall.HOLD_SECONDS - 1
+        box[0] = (0, (self.member("Tork", "following"),))
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Tork"], "Zug"))
+        box[0] = (0, (self.member("Tork", stall.CATCH_UP_UNREACHABLE_STATE),))
+        clock[0] += 1
+        got = judge(dict(self.HEAD), ["Zug", "Tork"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("Tork", got.why)
 
     def test_a_new_head_starts_new_clocks(self):
         """A hold timed under one queue entry must not hang the next entry
@@ -1619,8 +1734,9 @@ class TheDoorWedgeReads(unittest.TestCase):
     def test_a_stale_clock_is_not_counted_as_one_hold_after_the_job_returns(self):
         clock = [1000.0]
         job = ["dungeon:maraudon-orange"]
+        evidence = [(0, (self.member("Uzza", "on an errand of its own"),))]
         judge = self.judge(
-            (0, (self.member("Uzza", "on an errand of its own"),)),
+            evidence[0],
             clock,
             jobs_of=lambda names: {n: job[0] for n in names},
         )
@@ -1628,9 +1744,27 @@ class TheDoorWedgeReads(unittest.TestCase):
         # The family is off the dungeon job for longer than the bound.
         job[0] = "quest"
         self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
-        clock[0] += stall.HOLD_SECONDS + 60
+        self.assertTrue(self.holds)
+        clock[0] += stall.HOLD_SECONDS - 1
         job[0] = "dungeon:maraudon-orange"
-        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        clock[0] += 1
+        got = judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("Uzza", got.why)
+
+    def test_a_bridge_restart_restores_the_hold_clock(self):
+        clock, memos = [1000.0], {}
+        evidence = (0, (self.member("Tork", stall.CATCH_UP_UNREACHABLE_STATE),))
+        first = self.judge(evidence, clock, memo_store=memos)
+        self.assertIsNone(first(dict(self.HEAD), ["Zug", "Tork"], "Zug"))
+        clock[0] += stall.HOLD_SECONDS - 1
+
+        restarted = self.judge(evidence, clock, memo_store=memos)
+        self.assertIsNone(restarted(dict(self.HEAD), ["Zug", "Tork"], "Zug"))
+        clock[0] += 1
+        got = restarted(dict(self.HEAD), ["Zug", "Tork"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertTrue(got.regroup)
 
     def test_the_boss_read_is_the_open_runs_own_boss_rows(self):
         def sql(name):
@@ -2124,7 +2258,12 @@ class TheErrandARunWaitsOn(unittest.TestCase):
             "_is_economy_aim": lambda aim: aim in ("vendor", "banker"),
             "_release_trade_errand": release,
         }
-        names = ["_door_wedge", "_door_wedge_ages", "_door_held_verdict"]
+        names = [
+            "_door_wedge",
+            "_door_wedge_ages",
+            "_door_wedge_member_recovered",
+            "_door_held_verdict",
+        ]
         if with_recall:
             names.append("_recall_door_errands")
         self.recalled = recalled

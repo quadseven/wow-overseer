@@ -88,6 +88,30 @@ def tests_ran(output: str) -> int:
     return int(counts[-1]) if counts else 0
 
 
+# A lane host runs this beside other repos' checks: every core here plus
+# theirs overloads the box (a lane Mac reached a 1-minute load of 31.5 and has
+# panicked from oversubscription). So off CI the pool is capped, and the same
+# variable loom's runner reads sets it, so a lane host sets one knob for both.
+LOCAL_WORKER_CAP = 4
+WORKERS_ENV = "LOOM_CHECK_WORKERS"
+
+
+def worker_count(modules: int, env=None, cpus=None) -> int:
+    """How many workers to run: LOOM_CHECK_WORKERS when set to a positive
+    integer, else every core on GitHub Actions, else at most 4. Never more
+    than there are modules, never fewer than one."""
+    env = os.environ if env is None else env
+    cpus = (os.cpu_count() or 1) if cpus is None else cpus
+    raw = (env.get(WORKERS_ENV) or "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        wanted = int(raw)
+    elif env.get("GITHUB_ACTIONS") == "true":
+        wanted = cpus
+    else:
+        wanted = min(cpus, LOCAL_WORKER_CAP)
+    return max(1, min(modules, wanted))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--tests-dir", type=Path, default=Path("tests"))
@@ -95,7 +119,7 @@ def main() -> int:
     tests_dir = args.tests_dir.resolve()
 
     modules = discovered_modules(tests_dir)
-    workers = max(1, min(len(modules), os.cpu_count() or 1))
+    workers = worker_count(len(modules))
     batches = batched(modules, workers)
     print(
         f"Parallel unittest: {len(modules)} modules in {len(batches)} batches"

@@ -173,6 +173,14 @@ class TheSlotsReadAgainstTheLists(unittest.TestCase):
         self.assertIsNone(slot_of(one, "trinket 1")["next"])
         self.assertEqual(slot_of(one, "trinket 2")["next"]["entry"], second)
 
+    def test_a_slot_says_whether_its_next_piece_is_named_or_none_known(self):
+        # The payload says "none_known" outright instead of a bare null (#2208).
+        first, second = gearscore.slot_list("mage-dps", "preraid", "trinket")[:2]
+        trinkets = {first: row(first), second: row(second)}
+        one = build([worn("trinket 1", first, 0)], MAGE, trinkets)
+        self.assertEqual(slot_of(one, "trinket 1")["next_status"], "none_known")
+        self.assertEqual(slot_of(one, "trinket 2")["next_status"], "named")
+
     def test_a_trinket_scores_its_equip_spell_so_a_worn_one_gets_a_next_piece(self):
         # Spell 13881 reads "Increases spell power by 29." Trinket value is
         # almost all equip spell, so a list trinket carrying only that spell

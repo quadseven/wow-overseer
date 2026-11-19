@@ -14,7 +14,8 @@ character, in acore_characters beside the other overseer_* tables. `state`:
   broken     cannot be finished; `reason` says why. Today that is a quest
              the log holds as failed (an escort died, a timer ran out); the
              bridge's quester mode (#924) adds the failures it can name
-  abandoned  was taken, and has left the log without being rewarded
+  abandoned  was taken, and has left the log without being rewarded;
+             `reason` is ABANDONED_REASON
 
 `first_taken` is when the ledger first saw the quest in the log, and
 `finished` when it saw it completed, broken or abandoned. Both stay NULL
@@ -46,6 +47,13 @@ ABANDONED = "abandoned"
 STATES = (TAKEN, COMPLETED, BROKEN, ABANDONED)
 
 FAILED_REASON = "the quest failed in the log"
+# An abandoned row's reason (#1745). A quester that drops a quest it found
+# broken keeps it in its broken memo, and its pass writes the row broken with
+# the reason it dropped it (bridge._quester_ledger), so a row left abandoned is
+# one no quester recorded broken: dropped by another hand, or by the bot itself.
+ABANDONED_REASON = (
+    "it left the quest log without a reward, and no quester recorded it broken"
+)
 
 # The questers of #922, by guild: Cave is the Alliance guild, Bonkers the
 # Horde one. #927 recruits each at level 1 in its race's starting zone.
@@ -188,7 +196,7 @@ def _next(old: Entry | None, status, rewarded: bool, now) -> tuple | None:
     ):
         return _in_log(old, int(status), now)
     if old and old.state == TAKEN:
-        return ABANDONED, old.first_taken, now, ""
+        return ABANDONED, old.first_taken, now, ABANDONED_REASON
     return None
 
 
