@@ -6903,10 +6903,9 @@ def death_loop_hearth(m, loop, recent, world=None, cap=None):
         return None
     if home_in_loop_zone(m, loop):
         return None
-    # IN A FIGHT TOO (#2152). A looper is in combat at most passes: on the dev
-    # realm Erg, Gutsy and Saevor stood idle in Twilight camps and died with
-    # the combat flag set at 52, 66 and 53 deaths in three days, and the escape
-    # gave up on the flag every pass. The module refuses the cast for the fight
+    # IN A FIGHT TOO (#2152). A looper is in combat at most passes: a member
+    # left idle in a hostile camp dies again and again with the combat flag
+    # set, and an escape that gave up on the flag never issued at all. The module refuses the cast for the fight
     # at no cost and the hearth is asked again (PASSING_HEARTH_REASONS), so the
     # ask that lands is the one in a gap, as the stranded knight's recall is.
     if not (m.online and m.alive) or not _in_the_open(m):

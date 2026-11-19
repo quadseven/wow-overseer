@@ -174,9 +174,8 @@ class TheEscapeComesFirst(unittest.TestCase):
 
 
 class AFightDoesNotStopTheEscape(unittest.TestCase):
-    """Erg, Gutsy and Saevor died 52, 66 and 53 times in three days with the
-    combat flag set, so an escape that waited for a gap in the fight never
-    issued (#2152)."""
+    """A looper that dies with the combat flag set on most passes never got
+    an escape that waited for a gap in the fight (#2152)."""
 
     def test_a_looper_in_combat_is_issued_the_hearth(self):
         m = member(NAME, in_combat=True, rewarded=frozenset())
