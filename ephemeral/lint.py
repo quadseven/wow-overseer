@@ -371,7 +371,38 @@ def _cast(lint, doc):
         s = entry.get("set")
         if lint.keys(f"{path}.set", s, SET_KEYS):
             _cast_set(lint, path, entry, s)
+    _scattered_with(lint, cast)
     return whos
+
+
+def _scattered_with(lint, cast):
+    """Refuse a `with` anchor that names a family placed by at_each.
+
+    Such a family has one position per member, not one of its own, so there is
+    no single spot for `with` to mean.
+    """
+    scattered = {
+        e["who"]: i
+        for i, e in enumerate(cast)
+        if isinstance(e, dict)
+        and isinstance(e.get("who"), str)
+        and isinstance(e.get("set"), dict)
+        and "at_each" in e["set"]
+    }
+    for i, entry in enumerate(cast):
+        s = entry.get("set") if isinstance(entry, dict) else None
+        if not isinstance(s, dict):
+            continue
+        for key in ("at", "homebind", "corpse_at"):
+            a = s.get(key)
+            if isinstance(a, dict) and len(a) == 1 and a.get("with") in scattered:
+                lint.err(
+                    f"decree.cast[{i}].set.{key}",
+                    "scatter",
+                    f"with: {a['with']!r} names the family placed by at_each in "
+                    f"decree.cast[{scattered[a['with']]}]; its members have separate "
+                    "positions, so there is no single anchor to follow",
+                )
 
 
 def _guild_role(lint, path, who):

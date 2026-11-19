@@ -142,6 +142,25 @@ class CoordinatesTest(unittest.TestCase):
         d["cast"][0]["set"]["at_each"][0] = {"captured": "real-spot"}
         self.assertIn("coordinates", rules(d))
 
+    def test_with_anchor_on_an_at_each_family_is_refused_naming_the_entry(self):
+        for key in ("at", "homebind"):
+            d = scattered_doc()
+            d["cast"].append(
+                {"who": "Zork", "set": {"alive": True, "at": {"creature": "X"}}}
+            )
+            d["cast"][1]["set"][key] = {"with": "family:grug"}
+            found = [f for f in errors(d) if f.rule == "scatter"]
+            self.assertEqual(len(found), 1, key)
+            self.assertIn(f"decree.cast[1].set.{key}", found[0].path)
+            self.assertIn("decree.cast[0]", found[0].message)
+
+    def test_with_anchor_on_a_plain_member_is_still_accepted(self):
+        d = scattered_doc()
+        d["cast"].append(
+            {"who": "Zork", "set": {"alive": True, "at": {"with": "Grug"}}}
+        )
+        self.assertNotIn("scatter", rules(d))
+
     def test_literal_position_list_is_rejected(self):
         d = doc()
         d["cast"][0]["set"]["at"] = [1.0, 2.0, 3.0]

@@ -692,6 +692,22 @@ class CompileTest(unittest.TestCase):
         with self.assertRaisesRegex(SeedError, "resolve to distinct positions"):
             compile_(d, resolver)
 
+    def test_with_anchor_on_an_at_each_family_is_a_decree_error_not_a_keyerror(self):
+        resolver = FakeResolver()
+        point = {"guid": 11, "map": 0, "zone": 1, "z": 5.0, "o": 0.0}
+        resolver.creatures["First Point"] = [dict(point, x=10.0, y=20.0)]
+        resolver.gameobjects["Second Point"] = [dict(point, x=90.0, y=80.0)]
+        scatter = [{"creature": "First Point"}, {"gameobject": "Second Point"}]
+        d = doc()
+        d["cast"] = [
+            {"who": "family:grug", "set": {"at_each": scatter}},
+            {"who": "Zork", "set": {"at": {"with": "family:grug"}}},
+        ]
+        with self.assertRaises(SeedError) as ctx:
+            compile_(d, resolver)
+        self.assertIn("does not lint", str(ctx.exception))
+        self.assertIn("decree.cast[1].set.at", str(ctx.exception))
+
     def test_position_and_level(self):
         d = doc()
         d["cast"][0]["set"].update(level=58)
