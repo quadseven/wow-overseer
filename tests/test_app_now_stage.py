@@ -197,7 +197,6 @@ class NoScrollWriteWhenTheAnchorDidNotMove(unittest.TestCase):
     def test_a_reader_at_the_top_is_still_placed_while_scrolling(self):
         self.assertEqual(self.run_target("0, 30, 0, true"), 30)
 
-
     def run_target(self, args):
         return node_module(
             "scrollanchor.js",

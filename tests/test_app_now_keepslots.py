@@ -506,8 +506,17 @@ class APhoneRedrawnTenTimesShowsEachSectionOnce(unittest.TestCase):
         for i, c in enumerate(got):
             self.assertEqual(
                 c,
-                {"head": 1, "watcher": 1, "card": 1, "live": 1, "rows": c["rowsWanted"],
-                 "rowsWanted": c["rowsWanted"], "fams": 1, "units": 3, "slots": 0},
+                {
+                    "head": 1,
+                    "watcher": 1,
+                    "card": 1,
+                    "live": 1,
+                    "rows": c["rowsWanted"],
+                    "rowsWanted": c["rowsWanted"],
+                    "fams": 1,
+                    "units": 3,
+                    "slots": 0,
+                },
                 "draw %d" % i,
             )
 
