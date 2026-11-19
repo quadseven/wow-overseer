@@ -3223,6 +3223,13 @@ _BAG_HOLD_STUCK: dict[str, tuple] = {}
 # vendor step ended. `_bag_hold_why` puts the two together for the log and for
 # the campaign's withheld reason.
 _BAG_FLOOR_WHY: dict[str, str] = {}
+# Per member at the floor: stacks the vendor pass keeps (#1261), the module
+# vendor visits that changed nothing, and the members already logged as
+# released from the floor hold.
+_FLOOR_KEPT: dict[str, int] = {}
+_VISITS_UNCHANGED: dict[str, int] = {}
+_VISIT_SEEN: dict[str, object] = {}
+_FLOOR_RELEASED_SAID: set = set()
 _TOWN_PASS_NOTE: dict[tuple, str] = {}
 # The hold (its `since`) the reason was last logged for, per family key.
 _BAG_HOLD_SAID: dict[tuple, float] = {}
@@ -3247,14 +3254,81 @@ def _prune_bag_hold_stuck(families: dict) -> None:
 
 def _note_bag_floor(names, free_slots: dict, rows: list, sellable: dict) -> None:
     """Record what a vendor can do for each member at the bag floor."""
+    # Looked up: the queue tests load this function in isolation.
+    kept_by = globals().setdefault("_FLOOR_KEPT", {})
+    visits = globals().setdefault("_VISITS_UNCHANGED", {})
+    said = globals().setdefault("_FLOOR_RELEASED_SAID", set())
     for name in names:
         free = (free_slots or {}).get(name)
         if isinstance(free, int) and 0 <= free <= bag_pressure.TOWN_RUN_FREE_SLOTS:
             _BAG_FLOOR_WHY[name] = bag_pressure.floor_reason(
                 name, int((sellable or {}).get(name, 0)), rows,
                 keep_names=OWNER_KEEPS)
+            kept_by[name] = bag_pressure.floor_kept_count(
+                name, rows, keep_names=OWNER_KEEPS)
         else:
             _BAG_FLOOR_WHY.pop(name, None)
+            kept_by.pop(name, None)
+            visits.pop(name, None)
+            said.discard(name)
+
+
+_VISITS_SQL = ("SELECT subject_name AS name, last_seen FROM "
+               "acore_characters.overseer_event WHERE kind = 'town_trip' "
+               "AND subject_id = 0 AND LEFT(detail, 7) = 'vendor:' "
+               "AND subject_name IN (%s)")
+
+
+def _note_vendor_visits(names) -> None:
+    """Count the module's vendor visits that reported NOTHING CHANGED (#1261).
+
+    The module writes a 'town_trip' event per visit; proof 0 is nothing
+    changed. A visit is counted once per new last_seen. A member whose bags
+    a vendor changed (more free slots than the last visit) starts over.
+    """
+    names = list(names)
+    if not names:
+        return
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_VISITS_SQL % ",".join(["%s"] * len(names)), names)
+            rows = cur.fetchall()
+    except Exception:
+        log.exception("bag floor: could not read the vendor visits")
+        return
+    for row in rows:
+        name, seen = row["name"], row["last_seen"]
+        if _VISIT_SEEN.get(name) != seen:
+            _VISIT_SEEN[name] = seen
+            _VISITS_UNCHANGED[name] = _VISITS_UNCHANGED.get(name, 0) + 1
+
+
+def _floor_release(names, free_slots: dict) -> dict:
+    """`free_slots` without the members no vendor can clear (#1261).
+
+    A member at the floor with nothing a vendor will buy, or whose vendor
+    visits changed nothing bag_pressure.VENDOR_VISIT_LIMIT times, is not
+    held for: its reading drops out, which every floor gate reads as room
+    unknown (fail open). One line names each, once.
+    """
+    at_floor = _at_floor(names, free_slots)
+    if not at_floor:
+        return free_slots
+    globals().get("_note_vendor_visits", lambda n: None)(at_floor)
+    sellable = globals().get("_VENDOR_SELLABLE", {})
+    out = dict(free_slots)
+    for name in at_floor:
+        why = bag_pressure.vendor_cannot_clear(
+            name, sellable, _VISITS_UNCHANGED)
+        if not why:
+            continue
+        out.pop(name, None)
+        if name not in _FLOOR_RELEASED_SAID:
+            _FLOOR_RELEASED_SAID.add(name)
+            log.warning("bag floor: %s released from the hold at %d free "
+                        "slots: %s, %d stack(s) kept; the family proceeds",
+                        name, free_slots[name], why, _FLOOR_KEPT.get(name, 0))
+    return out
 
 
 def _note_vendor_sellable(names, sellable: dict) -> None:
@@ -3932,6 +4006,9 @@ def _bag_errand_needed(
     family is questing, and an errand that took it back to town every cooldown
     for an hour would be the same wait in instalments.
     """
+    release = globals().get("_floor_release")
+    if release is not None:
+        free_slots = release(names, free_slots)
     return (bool(campaign_waiting)
             and bag_pressure.family_town_run_needed(free_slots)
             and (not _bag_hold_stuck(names, free_slots, claim_store)
@@ -4240,6 +4317,10 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
         return _withheld(withheld, reason)
 
     free_slots = _fetch_free_slots(names)
+    # A member no vendor can clear does not hold the family (#1261).
+    release = globals().get("_floor_release")
+    if release is not None:
+        free_slots = release(names, free_slots)
     # Looked up for the same reason as the gear gate: the campaign tests load
     # this function in isolation.
     hold_stuck = globals().get("_bag_hold_stuck")
