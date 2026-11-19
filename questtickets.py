@@ -62,9 +62,7 @@ BROKEN_SQL = (
     "SELECT quest, guid, character_name, reason, ticket FROM overseer_quest_ledger "
     "WHERE state = %s ORDER BY quest, guid"
 )
-COMPLETED_SQL = (
-    "SELECT DISTINCT quest FROM overseer_quest_ledger WHERE state = %s"
-)
+COMPLETED_SQL = "SELECT DISTINCT quest FROM overseer_quest_ledger WHERE state = %s"
 # A refusal the world gave one quester at its place and in its bags: the take or
 # the hand-in was turned down ("no giver in reach", "not eligible", "the core
 # will not reward it now"). Where another quester has completed the quest, such
@@ -149,9 +147,7 @@ def _quest_ticket(group, quest: int, ticket_for) -> tuple[int | None, bool]:
 
 def _quester_bound(group) -> bool:
     """Every broken row of the quest is a refusal to one quester."""
-    return all(
-        str(r.get("reason") or "").startswith(QUESTER_REFUSALS) for r in group
-    )
+    return all(str(r.get("reason") or "").startswith(QUESTER_REFUSALS) for r in group)
 
 
 def plan(rows, ticket_for=None, completed=()) -> Plan:

@@ -366,10 +366,6 @@ class Plumbing(unittest.TestCase):
         self.assertIn("SqlStore(cur).last_pass()", bridge_src)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class QuesterBoundRefusalTest(unittest.TestCase):
     """A quest another quester completed is not filed for one quester's refusal."""
 
@@ -399,3 +395,7 @@ class QuesterBoundRefusalTest(unittest.TestCase):
         store.completed = lambda: [353]
         out = qt.run(store, qt.Client(FakeGitHub()), [])
         self.assertEqual(out["filed"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
