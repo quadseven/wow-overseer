@@ -13,6 +13,9 @@ import townslot
 
 A = "at:0:-6673.9,-2174.3,244.2"
 B = "at:0:2289.6,-5318.4,88.6"
+# Pinned from the ticket, not read from the module under test.
+CEILING = 900.0
+WAIT = "wait"
 
 
 def economy(_aim):
@@ -41,17 +44,15 @@ class TheAlternationBetweenTwoRawPointErrands(unittest.TestCase):
         self.assertTrue(first.granted)
         # The module let the leader go at A and the column was emptied.
         again = self._ask(slot, "mail", B, "", 90.0)
-        self.assertEqual(townslot.SLOT_WAIT, again.verdict)
+        self.assertEqual(WAIT, again.verdict)
         self.assertIn("ground point", again.reason)
         # The same point is not written again either.
-        self.assertEqual(
-            townslot.SLOT_WAIT, self._ask(slot, "forge", A, "", 200.0).verdict
-        )
+        self.assertEqual(WAIT, self._ask(slot, "forge", A, "", 200.0).verdict)
 
     def test_it_is_asked_again_after_the_ceiling(self):
         slot = townslot.Slot(releasable=economy)
         self._ask(slot, "forge", A, "", 0.0)
-        late = self._ask(slot, "mail", B, "", townslot.RAW_POINT_CEILING_SECONDS + 1)
+        late = self._ask(slot, "mail", B, "", CEILING + 1)
         self.assertTrue(late.granted)
 
     def test_a_keyword_errand_and_an_urgent_ask_are_not_held(self):

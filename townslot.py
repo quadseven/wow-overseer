@@ -1610,7 +1610,7 @@ class Slot:
         self._progress: dict = {}
         # {(claimant, aim): when given up} for walks that could not land.
         self._spent: dict = {}
-        # {character: (aim, when written)} for the last raw point errand taken
+        # {character: (aim, when the errand was taken)} for the last raw point errand taken
         # on each character, read by `_gate` (RAW_POINT_CEILING_SECONDS).
         self._ground: dict = {}
         # {(character, aim): when taken} for short town stops, which nobody
@@ -2213,11 +2213,12 @@ class Slot:
                 aim=aim,
                 character=character,
             )
-        if (
-            not stop
-            and not urgent_raw_exempt(urgent)
-            and self.raw_point_young(character, aim, now)
-        ):
+        age = (
+            None
+            if stop or urgent_raw_exempt(urgent)
+            else self.raw_point_age(character, aim, now)
+        )
+        if age is not None:
             return Decision(
                 verdict=SLOT_WAIT,
                 reason="%s waits: %s was sent to a ground point %ds ago and "
@@ -2226,7 +2227,7 @@ class Slot:
                 % (
                     claimant,
                     character,
-                    int(now - self._ground[character][1]),
+                    int(age),
                     aim,
                     int(RAW_POINT_CEILING_SECONDS),
                 ),
@@ -2248,17 +2249,18 @@ class Slot:
             return held
         return None
 
-    def raw_point_young(self, character: str, aim: str, now: float) -> bool:
-        """Is `aim` a raw point asked of a character whose last raw point
-        errand is still younger than RAW_POINT_CEILING_SECONDS?
+    def raw_point_age(self, character: str, aim: str, now: float):
+        """Seconds since the last raw point errand was taken on `character`
+        when `aim` is a raw point asked inside RAW_POINT_CEILING_SECONDS of it,
+        else None.
 
         The errand still standing on the column is not a re-issue (`decide`
         answers it as a hold or a refinement), so it passes."""
         if not is_ground_point(aim):
-            return False
+            return None
         prior = self._ground.get(character)
         if prior is None or now - prior[1] >= RAW_POINT_CEILING_SECONDS:
-            return False
+            return None
         holder = self.holder
         if (
             holder is not None
@@ -2269,8 +2271,8 @@ class Slot:
                 prior[0],
             )
         ):
-            return False
-        return True
+            return None
+        return now - prior[1]
 
     def _measure(self, decision: Decision, distance: float, now: float) -> Decision:
         """A held walk that has stopped closing becomes a give-up (#227)."""
