@@ -313,8 +313,9 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     3275: (Reagent(2589, "Linen Cloth", 1),),
     # The bandage ladder above 59 (operator, 2026-10-05). Cloth alone, a
     # humanoid kill drop, per Spell.dbc; see craft.RECIPES' First Aid comment.
-    # Every rung is a trainer purchase, so only a guild crew member that has
-    # bought it is ever aimed at one (guildjobs._open_recipe).
+    # Every rung is a trainer purchase, so only a member that has bought it
+    # is ever aimed at one (guildjobs._open_recipe for the guild crew,
+    # `_bandage_recipe` for the family, #2432).
     3276: (Reagent(2589, "Linen Cloth", 2),),
     3277: (Reagent(2592, "Wool Cloth", 1),),
     3278: (Reagent(2592, "Wool Cloth", 2),),
@@ -1048,7 +1049,9 @@ def reagents_to_count(
         # The rung, its rods and the trade an unfed enchanter keeps (#2411).
         wanted |= _enchant_entries(enchant)
         spend = craft.craft_errand(name, skills, primaries, skip=(ENCHANTING,))
-    bandage = _bandage_recipe(skills)
+    # The rung's cloth whether or not it is held: the book is read after the
+    # counts, and a bought rung (#2432) is cast from the same count.
+    bandage = _bandage_rung(skills)
     if bandage is not None:
         wanted.update(r.entry for r in GATHERED.get(bandage.spell_id, ()))
     fed = BOLT_FED.get(int(spend or 0))
@@ -1084,23 +1087,31 @@ def _guild_bag_entries() -> set:
 FIRST_AID = "first aid"
 
 
-def _bandage_recipe(skills: dict):
-    """The First Aid bandage this character holds for its skill value, or None.
-
-    Only a rung it holds without a trainer (craft.SECONDARY_AUTO_LEARNED:
-    Linen Bandage, 1 to 59). The trainer rungs above it are bought, and
-    DriveCraft drops a recipe the character does not know.
-    """
+def _bandage_rung(skills: dict):
+    """The First Aid rung this character's skill value has reached, or None."""
     value = int((skills or {}).get(FIRST_AID, 0) or 0)
     if not value:
         return None
-    recipe = craft.recipe_for(craft.SKILL_IDS[FIRST_AID], value)
-    if recipe is None or recipe.spell_id not in craft.SECONDARY_AUTO_LEARNED:
+    return craft.recipe_for(craft.SKILL_IDS[FIRST_AID], value)
+
+
+def _bandage_recipe(skills: dict, known=None):
+    """The First Aid bandage this character holds for its skill value, or None.
+
+    A rung it holds without a trainer (craft.SECONDARY_AUTO_LEARNED: Linen
+    Bandage, 1 to 59), or a trainer rung its spellbook `known` holds (#2432:
+    the learn errand buys Heavy Linen Bandage, and Linen Bandage is grey at
+    60). A rung absent from the book, or any trainer rung when the book was
+    not read, is not named: DriveCraft drops a recipe the character does not
+    know.
+    """
+    recipe = _bandage_rung(skills)
+    if recipe is None or not craft.secondary_held(recipe.spell_id, known):
         return None
     return recipe
 
 
-def _bandage_errand(name: str, skills: dict, held: dict, idle: Errand):
+def _bandage_errand(name: str, skills: dict, held: dict, idle: Errand, known=None):
     """Bandage from the cloth in hand while the craft cannot run, or None.
 
     WHY THE FAMILY'S FIRST AID SAT AT 1 (2026-10-05). `craft.craft_errand`
@@ -1119,7 +1130,7 @@ def _bandage_errand(name: str, skills: dict, held: dict, idle: Errand):
     """
     if idle.smelting or casts_in_hand(idle.spell, held) != 0:
         return None
-    recipe = _bandage_recipe(skills)
+    recipe = _bandage_recipe(skills, known)
     if recipe is None or recipe.spell_id == idle.spell:
         return None
     taken = {r.entry for r in feeds(idle.spell)}
@@ -1163,7 +1174,7 @@ def errand(
     if bag is not None and craft.holds(bag.spell, known):
         return bag
     chosen = _spend_or_smelt(name, skills, held, primaries, known, dark_iron_enabled)
-    return _bandage_errand(name, skills, held, chosen) or chosen
+    return _bandage_errand(name, skills, held, chosen, known) or chosen
 
 
 def _unheld_why(name: str, spell: int) -> str:
@@ -1235,10 +1246,12 @@ def _spend_or_smelt(
     """
     enchant = enchanting_rung(name, skills, primaries)
     if enchant:
-        other = craft.craft_errand(name, skills, primaries, skip=(ENCHANTING,))
+        other = craft.craft_errand(
+            name, skills, primaries, skip=(ENCHANTING,), known=known
+        )
         rung, enchanting = _enchant_first(name, enchant, held, other, known)
     else:
-        rung, enchanting = craft.craft_errand(name, skills, primaries), ""
+        rung, enchanting = craft.craft_errand(name, skills, primaries, known=known), ""
     spend, weaving = _bolt_first(name, rung, held)
     if not weaving:
         spend, weaving = _crew_reagents_first(name, spend, held)
