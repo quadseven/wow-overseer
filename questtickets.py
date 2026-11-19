@@ -62,6 +62,17 @@ BROKEN_SQL = (
     "SELECT quest, guid, character_name, reason, ticket FROM overseer_quest_ledger "
     "WHERE state = %s ORDER BY quest, guid"
 )
+COMPLETED_SQL = (
+    "SELECT DISTINCT quest FROM overseer_quest_ledger WHERE state = %s"
+)
+# A refusal the world gave one quester at its place and in its bags: the take or
+# the hand-in was turned down ("no giver in reach", "not eligible", "the core
+# will not reward it now"). Where another quester has completed the quest, such
+# a row says nothing about the quest, so it files nothing by itself.
+QUESTER_REFUSALS = (
+    "the quest giver would not give it",
+    "the turn-in NPC would not take it",
+)
 TICKET_SQL = (
     "SELECT ticket FROM overseer_quest_ledger "
     "WHERE quest = %s AND ticket IS NOT NULL ORDER BY ticket DESC LIMIT 1"
@@ -136,8 +147,17 @@ def _quest_ticket(group, quest: int, ticket_for) -> tuple[int | None, bool]:
     return None, False
 
 
-def plan(rows, ticket_for=None) -> Plan:
-    """What a pass does with the broken rows of the ledger."""
+def _quester_bound(group) -> bool:
+    """Every broken row of the quest is a refusal to one quester."""
+    return all(
+        str(r.get("reason") or "").startswith(QUESTER_REFUSALS) for r in group
+    )
+
+
+def plan(rows, ticket_for=None, completed=()) -> Plan:
+    """What a pass does with the broken rows of the ledger. A quest in
+    `completed` (some quester finished it) whose broken rows are all
+    quester-bound refusals is not filed: the quest works."""
     by_quest: dict = {}
     for row in rows or ():
         by_quest.setdefault(int(row["quest"]), []).append(row)
@@ -150,6 +170,8 @@ def plan(rows, ticket_for=None) -> Plan:
                 copies.append((quest, filed))
         elif has_filing:
             stuck.append(quest)
+        elif quest in completed and _quester_bound(group):
+            continue
         else:
             new.append((quest, tuple(group)))
     return Plan(tuple(new), tuple(copies), tuple(stuck))
@@ -339,6 +361,10 @@ class SqlStore:
         self.cur.execute(BROKEN_SQL, (questledger.BROKEN,))
         return list(self.cur.fetchall())
 
+    def completed(self) -> list:
+        self.cur.execute(COMPLETED_SQL, (questledger.COMPLETED,))
+        return [int(r["quest"]) for r in self.cur.fetchall()]
+
     def objectives(self, quest: int) -> list:
         self.cur.execute(OBJECTIVES_SQL, (quest,))
         return list(self.cur.fetchall())
@@ -390,7 +416,8 @@ def run(
     logs it. A timed-out filing stays at FILING so it is not retried before a
     person looks. unlinked lists issues filed but not linked under the epic."""
     ticket_for = getattr(store, "ticket", None)
-    todo = plan(store.broken(), ticket_for=ticket_for)
+    done = store.completed() if hasattr(store, "completed") else ()
+    todo = plan(store.broken(), ticket_for=ticket_for, completed=frozenset(done))
     for quest, ticket in todo.copies:
         store.take(quest, ticket)
     # The pass time is written before the first POST: a pass that files

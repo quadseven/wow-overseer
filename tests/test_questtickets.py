@@ -368,3 +368,34 @@ class Plumbing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuesterBoundRefusalTest(unittest.TestCase):
+    """A quest another quester completed is not filed for one quester's refusal."""
+
+    def refused(self, quest, reason, guid=8):
+        r = row(quest, guid=guid, name="Pindle")
+        r["reason"] = reason
+        return r
+
+    def test_completed_quest_with_only_refusals_files_nothing(self):
+        rows = [
+            self.refused(328, "the turn-in NPC would not take it: no object in reach"),
+            self.refused(328, "the quest giver would not give it: not eligible", 9),
+        ]
+        todo = qt.plan(rows, completed={328})
+        self.assertEqual(todo.new, ())
+
+    def test_same_rows_file_when_nobody_completed_it(self):
+        rows = [self.refused(328, "the turn-in NPC would not take it: no object")]
+        self.assertEqual([q for q, _ in qt.plan(rows).new], [328])
+
+    def test_a_stall_on_a_completed_quest_still_files(self):
+        rows = [self.refused(348, "its objectives did not move for 2 hours of play")]
+        self.assertEqual([q for q, _ in qt.plan(rows, completed={348}).new], [348])
+
+    def test_run_reads_completed_from_the_store(self):
+        store = Store([self.refused(353, "the quest giver would not give it: x")])
+        store.completed = lambda: [353]
+        out = qt.run(store, qt.Client(FakeGitHub()), [])
+        self.assertEqual(out["filed"], 0)
