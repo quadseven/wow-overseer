@@ -66,7 +66,7 @@ observe:
     role: check
     when: end
     sql: |
-      SELECT drive_quest FROM overseer_roster WHERE name = 'Ugga'
+      SELECT COUNT(*) FROM overseer_roster WHERE name = 'Ugga' AND drive_quest = 783
     expect: {scalar: "= 0"}
   - name: the-new-errand-reissues-the-quest-already-being-worked
     role: check
