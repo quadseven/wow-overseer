@@ -273,3 +273,51 @@ class TheLowTrades(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheOwnershipCeilingGivesAQueueThatNeverFinishesATurn(unittest.TestCase):
+    """The queue owns the job, no run ever ends, so no turn would ever start
+    and a looped family would never reach its GATHER phase."""
+
+    CEIL = tradeturn.OWNED_CEILING_SECONDS
+    RECENT = NOW - 60
+
+    def test_a_queue_owning_the_job_past_the_ceiling_starts_a_turn(self):
+        taken = tradeturn.Turn(RUN_END, NOW - self.CEIL - 1, True)
+        self.assertTrue(tradeturn.needs_facts(RUN_END + 1, taken, NOW))
+        said = decide(last=RUN_END, turn=taken)
+        self.assertEqual(tradeturn.START, said.action)
+        self.assertEqual(NOW, said.turn.started)
+
+    def test_inside_the_ceiling_the_taken_turn_stands(self):
+        taken = tradeturn.Turn(RUN_END, NOW - self.CEIL + 60, True)
+        self.assertFalse(tradeturn.needs_facts(RUN_END, taken, NOW))
+        self.assertEqual(tradeturn.NONE, decide(last=RUN_END, turn=taken).action)
+
+    def test_a_recent_finished_run_restarts_the_clock(self):
+        taken = tradeturn.Turn(RUN_END, NOW - 10 * self.CEIL, True)
+        said = decide(last=NOW - 60, turn=taken)
+        self.assertEqual(tradeturn.START, said.action)
+        self.assertNotIn("no run ended", said.reason)
+
+    def test_with_no_run_at_all_an_old_turn_record_still_counts(self):
+        taken = tradeturn.Turn(0, NOW - self.CEIL - 1, True)
+        self.assertEqual(tradeturn.START, decide(last=None, turn=taken).action)
+        self.assertEqual(tradeturn.NONE, decide(last=None).action)
+
+    def test_a_run_in_progress_is_still_never_interrupted(self):
+        taken = tradeturn.Turn(RUN_END, NOW - self.CEIL - 1, True)
+        self.assertEqual(
+            tradeturn.NONE, decide(last=RUN_END, turn=taken, mid_run=True).action
+        )
+
+    def test_a_live_turn_is_not_restarted_by_the_ceiling(self):
+        live = tradeturn.Turn(RUN_END, NOW - self.CEIL - 1, False)
+        self.assertFalse(tradeturn.ceiling_due(RUN_END, live, NOW))
+        self.assertNotEqual(tradeturn.START, decide(last=RUN_END, turn=live).action)
+
+    def test_every_trade_at_the_cap_skips_instead(self):
+        taken = tradeturn.Turn(RUN_END, NOW - self.CEIL - 1, True)
+        self.assertEqual(
+            tradeturn.SKIP, decide(last=RUN_END, turn=taken, trades=MAXED).action
+        )
