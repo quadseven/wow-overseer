@@ -113,21 +113,6 @@ def new_column_slot(
     )
 
 
-def release_legal(holder: Holder | None, releasable) -> bool:
-    """Whether this process may hand that holder's aim back.
-
-    A trainer errand answers False and can never be preempted by
-    anybody: the predicate is the same guard the write's WHERE clause
-    is built from, so this never grants a release the update refuses.
-    """
-    if holder is None or releasable is None:
-        return False
-    try:
-        return bool(releasable(holder.aim))
-    except (AttributeError, KeyError, TypeError, ValueError):
-        return False
-
-
 @dataclasses.dataclass(frozen=True)
 class Release:
     """Whether a ground aim may be handed back, and why not.
