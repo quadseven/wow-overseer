@@ -2293,12 +2293,15 @@ def _hunt(
 
 
 def stalled_holds_with_actionable_objectives(
-    cat, member, held, tried=(), crossings=()
+    cat, member, held, tried=(), crossings=(), judged=frozenset()
 ) -> frozenset:
     """Stalled memo entries whose incomplete objectives can now be pursued.
 
     World-fact holds remain durable. A stall is only retried when this pass can
-    route to an eligible local objective or across a known classic continent.
+    route to an eligible local objective or across a known classic continent,
+    and never when it is in `judged` (`judged_stalls`): so a stall held from
+    before the per-ingredient hunt is retried at most once, and one that hunt
+    judged is not retried at all.
     """
     if not member.placed:
         return frozenset()
@@ -2307,7 +2310,7 @@ def stalled_holds_with_actionable_objectives(
     object_left = object_spawns_left(cat, member.name, tried)
     retry = set()
     for qid, reason in held.items():
-        if not str(reason).startswith(STALLED):
+        if not str(reason).startswith(STALLED) or qid in judged:
             continue
         if member.quest_log.get(qid) != STATUS_INCOMPLETE:
             continue
@@ -2334,6 +2337,17 @@ def stalled_holds_with_actionable_objectives(
         if not crossing_held(member.name, crossing, crossings):
             retry.add(qid)
     return frozenset(retry)
+
+
+def judged_stalls(judged, retried, found, held, quest_log) -> frozenset:
+    """The quests whose stall is never retried again (#1745): those `judged`
+    already, those `retried` this pass, and those this pass `found` stalled
+    (Broken rows), which the hunt that filters every kill and ingredient by its
+    own counter judged. A quest neither `held` nor in the `quest_log` is
+    forgotten: a stall found after it is judged when it is found."""
+    stalled = {b.quest for b in found if str(b.reason).startswith(STALLED)}
+    keep = set(held) | set(quest_log)
+    return frozenset(q for q in set(judged) | set(retried) | stalled if q in keep)
 
 
 def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
