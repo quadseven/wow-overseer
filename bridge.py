@@ -11582,6 +11582,14 @@ class Bridge(discord.Client):
         held = globals().get("_economy_aim_hold", lambda *_a: "")
         if await asyncio.to_thread(held, claimant, character):
             return False
+        # NO AUCTIONEER IN REACH IS NOT AN ERRAND. The keyword resolves only
+        # to a counter of the family's side within a town walk; the module
+        # releases it at once otherwise, and writing it again every cycle
+        # held the column and the lease for a walk that could never start.
+        # Looked up like the hold above: the check is advisory.
+        unreachable = globals().get("_auctioneer_reach_refusal")
+        if unreachable and await asyncio.to_thread(unreachable, leader, aim):
+            return False
         # GROUND THE FAMILY DIED ON TWICE IS NOT A WALK (#2457): a ground aim
         # whose line from the leader crosses a death disc is not written.
         # Looked up like _fetch_family_death_spots above: the check is advisory.
@@ -47537,6 +47545,46 @@ def _nearest_keyword_spawn(name: str, aim: str):
                     "walk is not checked against it", aim, exc.args[:1])
         return None
     return dict(row) if row else None
+
+
+# What each leader was last found to have in reach of an auctioneer (see
+# auction.CounterRefusals). Process memory, like _ERRAND_HOLD_SAID: a restart
+# only costs one read of the spawn table.
+_AUCTION_COUNTER_REFUSALS = auction.CounterRefusals()
+
+
+def _auctioneer_reach_refusal(leader: str, aim: str) -> str:
+    """Why the `auctioneer` keyword cannot resolve for `leader`, or "".
+
+    Only the bare keyword is judged: a counter's creature entry is a far trip
+    the gear pass already priced, and any other aim is not this one's. A read
+    that fails, or a leader whose position or side is unknown, is not a
+    refusal. A refusal is remembered for auction.COUNTER_REFUSAL_SECONDS and
+    said once per change."""
+    if aim != auction.AUCTIONEER_ROLE:
+        return ""
+    here = bag_pressure.standing_from_rows(
+        _fetch_bag_trip_facts([leader])).get(leader)
+    if here is None or here.map_id is None:
+        return ""
+    now = time.monotonic()
+    standing = _AUCTION_COUNTER_REFUSALS.standing(leader, here.map_id, now)
+    if standing:
+        return standing
+    rows = _fetch_auctioneer_spawns(here)
+    if rows is None:
+        return ""
+    ok, why = auction.counter_in_reach(
+        _fetch_teams([leader]).get(leader, ""), rows, map_id=here.map_id)
+    if ok:
+        _AUCTION_COUNTER_REFUSALS.forget(leader)
+        return ""
+    if _AUCTION_COUNTER_REFUSALS.remember(leader, here.map_id, why, now):
+        log.info(
+            "auction: %s is not aimed at an auctioneer - %s, so the keyword "
+            "cannot resolve. Not asked again for %d minutes",
+            leader, why, int(auction.COUNTER_REFUSAL_SECONDS // 60))
+    return why
 
 
 def _death_disc_refusal(leader: str, aim: str) -> str:

@@ -540,6 +540,80 @@ def house_trip(
 
 
 # ---------------------------------------------------------------------------
+# NO AUCTIONEER IN REACH IS NOT AN ERRAND.
+#
+# The `auctioneer` keyword is a town-service walk: the module resolves it to a
+# counter this character may deal with, and refuses one past
+# TOWN_COUNTER_WALK_YARDS. The passes that write it used to ask only whether
+# the leader's MAP has any auctioneer at all, so a leader on a map whose
+# counters are all the other side's, or all a continent away, was aimed at one
+# anyway. The module released the aim as soon as it read it ("may interact with
+# none of them"), the pass wrote it again on its next cycle, and the family's
+# one travel column, and the town slot's lease on it, were held for a walk that
+# could never start: the leader could not be fetched back to its members, and
+# every other errand queued behind the lease.
+#
+# THE ANSWER IS READ WITH THE RULE THE GEAR PASS ALREADY USES (`house_trip`):
+# the keyword is the aim only when a counter of the family's side stands within
+# a town walk. Anything else is a refusal, and a refusal is remembered for a
+# bounded time so the question is not put to the world on every cycle.
+
+# How long a "no counter in reach" answer is trusted before it is read again.
+# Bounded, so a leader that has since walked or flown somewhere with a counter
+# is not held off for long, and long enough that a pass running every cycle
+# does not read the spawn table each time.
+COUNTER_REFUSAL_SECONDS = 600.0
+
+
+def counter_in_reach(team: str, rows, *, map_id, zone_id=None) -> tuple:
+    """`(True, "")` when the `auctioneer` keyword can resolve for a leader of
+    `team`, else `(False, why)`. Pure.
+
+    `rows` are the auctioneer spawns on the leader's map as `house_trip` reads
+    them. An unnamed team is not judged: the keyword stays the aim, because a
+    leader whose side cannot be read is not one this refuses on a guess.
+    """
+    if not str(team or "").strip():
+        return True, ""
+    trip = house_trip(team, rows, map_id=map_id, far=False, zone_id=zone_id)
+    if trip.aim == AUCTIONEER_ROLE:
+        return True, ""
+    return False, trip.why_not or "no auction house within a town walk"
+
+
+class CounterRefusals:
+    """The leaders recently found to have no auctioneer in reach.
+
+    One row per leader, with the map it was read on: the same answer is not
+    carried to another map. Pure but for the clock the caller hands in.
+    """
+
+    def __init__(self, seconds: float = COUNTER_REFUSAL_SECONDS):
+        self._seconds = float(seconds)
+        self._rows: dict = {}
+
+    def remember(self, leader: str, map_id, why: str, now: float) -> bool:
+        """Record a refusal. True when it is new, so the caller says it once."""
+        fresh = self.standing(leader, map_id, now) == ""
+        self._rows[leader] = (map_id, str(why), float(now))
+        return fresh
+
+    def standing(self, leader: str, map_id, now: float) -> str:
+        """Why the leader is still refused on `map_id`, or "" when it is not."""
+        row = self._rows.get(leader)
+        if row is None:
+            return ""
+        mapped, why, at = row
+        if mapped != map_id or float(now) - at >= self._seconds:
+            self._rows.pop(leader, None)
+            return ""
+        return why
+
+    def forget(self, leader: str) -> None:
+        self._rows.pop(leader, None)
+
+
+# ---------------------------------------------------------------------------
 # WHAT EACH RECIPE CONSUMES THAT NOBODY SELLS - AND IT IS `craft_rhythm`'s
 # TABLE, NOT A SECOND ONE.
 #
