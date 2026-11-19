@@ -689,6 +689,7 @@ class BridgeWiringTest(unittest.TestCase):
             "_connect": Conn,
             "jev": jev,
             "JEV_ACTIVE_BACKEND": "jev",
+            "JEV_ROUTED": (),
             "_jev_report_tick": lambda: None,
         }
         exec(insert, scope)  # noqa: S102 - bridge.py's own source
