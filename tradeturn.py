@@ -176,7 +176,12 @@ def decide(
             % classic.MAX_PROFESSION_SKILL,
         )
     name, trade, value = low[0]
-    why = "%d trade(s) below the cap, first %s %s at %d" % (len(low), name, trade, value)
+    why = "%d trade(s) below the cap, first %s %s at %d" % (
+        len(low),
+        name,
+        trade,
+        value,
+    )
     if overdue:
         why += "; no run ended or turn began for %d seconds" % OWNED_CEILING_SECONDS
     return Decision(
