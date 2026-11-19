@@ -154,9 +154,29 @@ class ColumnLeaseRules(unittest.TestCase):
         self.assertFalse(hasattr(claims, "column_expiry"))
 
     def test_the_unused_release_legal_helper_is_gone(self):
-        # Nothing called it: ground release reaches the same guard through
-        # Claims.release_ground, so the bare helper was a second door.
+        # Nothing called it: the live preemption decision applies the
+        # releasable-aim predicate itself, so the bare helper was unused.
         self.assertFalse(hasattr(claims, "release_legal"))
+
+    def test_a_predicate_programming_error_reaches_the_caller(self):
+        # What release_legal's own test pinned, moved to the live path: an
+        # expired holder asks the predicate, and a bug in it is raised, not
+        # read as "not releasable".
+        holder = townslot.Holder("economy", "Grug", "vendor", since=0.0)
+
+        def broken_predicate(_aim):
+            return unknown_name  # noqa: F821
+
+        with self.assertRaises(NameError):
+            decide(
+                claimant="guild bank",
+                aim="at:1:9,9,9",
+                column="vendor",
+                retaskable=("", "at:1:9,9,9"),
+                holder=holder,
+                now=claims.LEASE_SECONDS + 1.0,
+                releasable=broken_predicate,
+            )
 
     def test_an_orphan_gets_only_the_short_grace(self):
         orphan = townslot.Holder("", "Grug", "vendor", since=0.0)
