@@ -15,6 +15,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 from _stub_modules import PYMYSQL, stub_modules
 
@@ -157,6 +158,32 @@ def ask(
         "state": state,
         "at": at,
     }
+
+
+class ARepeatedRefusalOutranksADeathLoop(unittest.TestCase):
+    """A member read as a death loop while every class-quest use was refused:
+    the deaths were a symptom, so the class quest is the cause."""
+
+    def test_a_class_quest_run_beside_a_loop_names_the_class_quest(self):
+        loop = types.SimpleNamespace(
+            run=0,
+            place="Plaguelands: The Scarlet Enclave",
+            first_age=3600,
+            blocker=lambda: "Died 14 times in a day.",
+        )
+        run = [ask(NOW - 3 * 3600), ask(NOW - 600, state="open")]
+        member = {"life": "alive", "doing": "", "waiting": ""}
+        found = members._stuck_entry(member, run, NOW, loop)
+        self.assertEqual(found["kind"], "class quest")
+        self.assertIn("Died 14 times in a day.", found["blocker"])
+
+    def test_a_loop_with_no_class_quest_run_stays_a_death_loop(self):
+        loop = types.SimpleNamespace(
+            run=0, place="Silithus", first_age=3600, blocker=lambda: "Died 14 times."
+        )
+        member = {"life": "alive", "doing": "", "waiting": ""}
+        found = members._stuck_entry(member, [], NOW, loop)
+        self.assertEqual(found["kind"], "death-loop")
 
 
 class StuckIsTheBridgesOwnRecord(unittest.TestCase):
@@ -762,6 +789,185 @@ class TheStuckDigestRanksTheCauses(unittest.TestCase):
     def test_an_empty_list_digests_to_nobody(self):
         d = members.stuck_digest([], NOW)
         self.assertEqual((d["count"], d["longest"], d["causes"]), (0, None, []))
+
+
+class TheStuckWatchNote(unittest.TestCase):
+    def test_only_measured_rows_strictly_past_the_bound_are_reported(self):
+        at_bound = stuck_row("AtBound", NOW - members.STUCK_BOUND_SECONDS, "Waiting.")
+        past_bound = stuck_row(
+            "PastBound", NOW - members.STUCK_BOUND_SECONDS - 1, "Waiting."
+        )
+        unmeasured = stuck_row("Unmeasured", None, "Waiting.")
+
+        self.assertEqual(
+            [
+                row["name"]
+                for row in members.over_bound_rows(
+                    [at_bound, past_bound, unmeasured], NOW
+                )
+            ],
+            ["PastBound"],
+        )
+
+    def test_over_bound_members_get_a_note_and_at_most_one_line_per_hour(self):
+        row = stuck_row(
+            "TestMember", NOW - members.STUCK_BOUND_SECONDS - 1, "Waiting for movement."
+        )
+
+        notes, lines = members.stuck_watch_updates(
+            [row], NOW, {"TestMember": "no route is available"}, {}, NOW
+        )
+
+        self.assertEqual(
+            lines,
+            [
+                "stuck guard: member=TestMember kind=hold "
+                "last_refusal=no route is available"
+            ],
+        )
+        self.assertEqual(
+            notes["TestMember"],
+            {
+                "kind": "hold",
+                "last_refusal": "no route is available",
+                "since": NOW - members.STUCK_BOUND_SECONDS - 1,
+                "observed_at": NOW,
+                "last_logged_at": NOW,
+            },
+        )
+
+        later = NOW + 1800
+        updated, next_lines = members.stuck_watch_updates(
+            [row],
+            later,
+            {"TestMember": "the same route is still unavailable"},
+            {"TestMember": (notes["TestMember"], NOW)},
+            later,
+        )
+        self.assertEqual(next_lines, [])
+        self.assertEqual(
+            updated["TestMember"]["last_refusal"],
+            "the same route is still unavailable",
+        )
+        self.assertEqual(updated["TestMember"]["last_logged_at"], NOW)
+
+
+class TheLatestRefusalReason(unittest.TestCase):
+    def test_it_uses_the_newest_refusal_and_reads_its_result_reason(self):
+        commands = [
+            {"status": "applied", "detail": ""},
+            {
+                "status": "error",
+                "detail": "refused: see result",
+                "result": '{"reason":"no route is available"}',
+            },
+            {"status": "error", "detail": "refused: older refusal"},
+        ]
+
+        self.assertEqual(
+            activity.latest_refusal_reason(commands), "no route is available"
+        )
+
+    def test_no_refusal_has_an_explicit_fallback(self):
+        self.assertEqual(
+            activity.latest_refusal_reason([{"status": "applied"}]),
+            "no refusal reason recorded",
+        )
+
+
+class TheStuckStatusNote(unittest.TestCase):
+    def test_the_stuck_route_still_works_without_a_memo_reader(self):
+        roster = {
+            "members": [
+                {
+                    "name": "TestMember",
+                    "stuck": True,
+                    "step": "Waiting for movement.",
+                    "blocker": "Waiting for movement.",
+                    "since": NOW - 60,
+                    "stuck_kind": "hold",
+                    "follows": "",
+                }
+            ],
+            "checked_at": NOW,
+            "basis": "test",
+        }
+        ctx = types.SimpleNamespace(read=None)
+
+        with mock.patch.object(members, "_roster_payload", return_value=roster):
+            code, payload = members.stuck({}, ctx)
+
+        self.assertEqual(code, 200)
+        self.assertEqual([row["name"] for row in payload["members"]], ["TestMember"])
+        self.assertNotIn("note", payload["members"][0])
+
+    def test_current_note_is_exposed_for_the_matching_over_bound_episode(self):
+        note = {
+            "kind": "hold",
+            "last_refusal": "no route is available",
+            "since": NOW - members.STUCK_BOUND_SECONDS - 1,
+            "observed_at": NOW,
+            "last_logged_at": NOW,
+        }
+        roster = {
+            "members": [
+                {
+                    "name": "TestMember",
+                    "stuck": True,
+                    "step": "Waiting for movement.",
+                    "blocker": "Waiting for movement.",
+                    "since": note["since"],
+                    "stuck_kind": "hold",
+                    "follows": "",
+                }
+            ],
+            "checked_at": NOW,
+            "basis": "test",
+        }
+
+        payload = members.stuck_view(roster, {"TestMember": note})
+
+        self.assertEqual(payload["members"][0]["note"], note)
+
+    def test_the_stuck_route_reads_the_persisted_note_row(self):
+        since = NOW - members.STUCK_BOUND_SECONDS - 1
+        note = {
+            "kind": "hold",
+            "last_refusal": "no route is available",
+            "since": since,
+            "observed_at": NOW,
+            "last_logged_at": NOW,
+        }
+        roster = {
+            "members": [
+                {
+                    "name": "TestMember",
+                    "stuck": True,
+                    "step": "Waiting for movement.",
+                    "blocker": "Waiting for movement.",
+                    "since": since,
+                    "stuck_kind": "hold",
+                    "follows": "",
+                }
+            ],
+            "checked_at": NOW,
+            "basis": "test",
+        }
+        ctx, _ = ctx_for(
+            [
+                (
+                    ("FROM overseer_bridge_memo",),
+                    [{"name": "TestMember", "value": json.dumps(note)}],
+                )
+            ],
+            server(),
+        )
+
+        with mock.patch.object(members, "_roster_payload", return_value=roster):
+            code, payload = members.stuck({}, ctx)
+
+        self.assertEqual(code, 200)
+        self.assertEqual(payload["members"][0]["note"], note)
 
 
 def gain(slot, delta, entry, ilvl=30, boss="Boss"):

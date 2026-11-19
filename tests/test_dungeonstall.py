@@ -1508,6 +1508,20 @@ class TheDoorWedgeReads(unittest.TestCase):
         self.assertIsNotNone(got)
         self.assertIn("Uzza", got.why)
 
+    def test_an_impossible_catch_up_hold_is_bounded_and_regroups(self):
+        clock = [1000.0]
+        state = "held where it stands, too far to walk back"
+        judge = self.judge((0, (self.member("Tork", state),)), clock)
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Tork"], "Zug"))
+        clock[0] += stall.HOLD_SECONDS - 1
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Tork"], "Zug"))
+        clock[0] += 1
+        got = judge(dict(self.HEAD), ["Zug", "Tork"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertTrue(got.regroup)
+        self.assertIn("Tork", got.why)
+        self.assertIn("too far to walk back", got.why)
+
     def test_a_dead_member_becomes_a_verdict_past_the_shorter_bound(self):
         clock = [1000.0]
         judge = self.judge((0, (self.member("Uzza", "dead"),)), clock)

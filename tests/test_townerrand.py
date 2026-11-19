@@ -528,6 +528,7 @@ class TheAdapter(unittest.TestCase):
         self.hearthed = frozenset()
         self.binds = {}
         self.stall = 0.0
+        self.unloaded = frozenset()
         letters = [
             {
                 "holder": "Bork",
@@ -606,6 +607,11 @@ class TheAdapter(unittest.TestCase):
             "_town_errand_jobs": lambda names: self.jobs.append("town run") or 2,
             "_hub_aim": lambda hub: "at:0:100,100,10",
             "_fetch_mail": lambda names: letters,
+            # The split read is the same rows and the letters left out of them.
+            "_fetch_mail_split": lambda names: (
+                ns["_fetch_mail"](names),
+                self.unloaded,
+            ),
             "_recent_mail_keys": lambda minutes: set(),
             "_fetch_free_slots": lambda names: {"Bork": 5, "Grug": 5},
             "_fetch_town_worn": lambda names: [],
@@ -1211,6 +1217,77 @@ class TheAdapter(unittest.TestCase):
 
         self.assertTrue(done)
         self.assertEqual([], self.written)
+
+    def _hear(self):
+        """The errand's log lines, as written."""
+        lines = []
+        self.ns["log"] = types.SimpleNamespace(
+            info=lambda fmt, *args, **kw: lines.append(fmt % args if args else fmt)
+        )
+        return lines
+
+    def _to_the_mail_step(self):
+        self.tick()
+        self.positions = {"Grug": _at(101, 100), "Bork": _at(103, 101)}
+        self.assertEqual(te.GATHER, self.tick().phase)
+        self.assertEqual(te.STEPS, self.tick().phase)
+        state = self.tick()  # nothing to fund
+        self.assertEqual(te.MAIL, state.current_step)
+        return state
+
+    def test_a_letter_the_mailbox_has_not_loaded_ends_the_mail_step_at_once(self):
+        """#2402: eight such letters held the step its whole 900 seconds. The
+        read is the bridge's own, over a world whose only letter was refused
+        `no mail with that id` since its holder last logged out."""
+        from test_mail_unloaded import bridge, letter, refusal, world
+
+        def read(names):
+            with world([letter("Bork", 9, 77)], [refusal("Bork", 9, 77, 2000, 1000)]):
+                return bridge._fetch_mail_split(names)
+
+        self.ns["_fetch_mail_split"] = read
+        lines = self._hear()
+        at_mail = self._to_the_mail_step()
+        entered = self.now
+        state = self.tick()
+        self.assertEqual(te.STEPS, state.phase)
+        self.assertGreater(state.step, at_mail.step)
+        self.assertEqual([], self.written)
+        self.assertEqual(900.0, te.STEP_SECONDS[te.MAIL])
+        self.assertLess(self.now - entered, te.STEP_SECONDS[te.MAIL] / 10)
+        self.assertFalse([line for line in lines if "ran out of time" in line])
+        said = [line for line in lines if "wait for its next login" in line]
+        self.assertEqual(1, len(said))
+        self.assertIn("Bork mail 9", said[0])
+
+    def test_the_errand_names_the_unreachable_letters_once(self):
+        """One line per errand, however many passes the mail step takes: the
+        loaded letter keeps the step open, the unloaded one is named once."""
+        self.unloaded = frozenset({("Grug", 12), ("Bork", 31)})
+        lines = self._hear()
+        self._to_the_mail_step()
+        for _ in range(3):
+            self.assertEqual(te.MAIL, self.tick().current_step)
+        said = [line for line in lines if "wait for its next login" in line]
+        self.assertEqual(1, len(said), said)
+        self.assertTrue(said[0].startswith("town errand mail: 2 letter(s)"))
+        self.assertIn("Bork mail 31, Grug mail 12", said[0])
+        self.assertIn("the mail step does not wait for them", said[0])
+
+    def test_the_next_errand_names_them_again_and_no_letters_is_no_line(self):
+        self.unloaded = frozenset({("Grug", 12)})
+        lines = self._hear()
+        mail = self.ns["_town_errand_mail"]
+        where = {"Grug": _at(101, 100), "Bork": _at(103, 101)}
+        marks = {}
+        for step_marks in (marks, marks, {}):
+            asyncio.run(mail(self.fam, HUB, ["Bork", "Grug"], where, None, step_marks))
+        said = [line for line in lines if "wait for its next login" in line]
+        self.assertEqual(2, len(said))
+        del lines[:]
+        self.unloaded = frozenset()
+        asyncio.run(mail(self.fam, HUB, ["Bork", "Grug"], where, None, {}))
+        self.assertFalse([line for line in lines if "next login" in line])
 
     def test_the_richest_member_posts_gold_before_the_post_is_taken(self):
         # wow-dev 2026-09-28: the warrior carried 54 gold, the rogue 2.

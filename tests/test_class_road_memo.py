@@ -58,7 +58,11 @@ def _roads_class(store):
 
 def _run(level=20, map_id=1, quest=1476):
     return types.SimpleNamespace(
-        leader="Bigzug", quest=quest, level=level, map_id=map_id
+        leader="Bigzug",
+        quest=quest,
+        level=level,
+        map_id=map_id,
+        route_context={},
     )
 
 
@@ -68,6 +72,13 @@ def _help(level=20, map_id=1, quest=1476):
         level=level,
         map_id=map_id,
         move=types.SimpleNamespace(quest=quest),
+    )
+
+
+def _mate(name="Chill", level=19, map_id=1):
+    return types.SimpleNamespace(
+        name=name,
+        member=types.SimpleNamespace(level=level, map_id=map_id),
     )
 
 
@@ -88,6 +99,18 @@ class ARefusedRoadSurvivesARestart(unittest.TestCase):
         store = Store()
         _process(store).refuse_road(_run())
         self.assertEqual(_process(store).road_refused([_help()]), {"Bigzug"})
+
+    def test_a_helper_road_refusal_is_restored_after_restart(self):
+        store = Store()
+        run = _run()
+        run.route_context = {"Chill": (19, 1)}
+        _process(store).refuse_road(run, ("Chill",))
+
+        self.assertEqual(store.rows["class_road", "Chill"][0], [1476, 19, 1])
+        self.assertEqual(
+            _process(store).road_refused_helpers([_mate()]),
+            {1476: frozenset({"Chill"})},
+        )
 
     def test_a_new_level_after_the_restart_lets_the_member_ask(self):
         store = Store()

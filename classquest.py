@@ -434,6 +434,18 @@ CROSS_WALLS = frozenset(
 HOSTILE_BERTH_WALL_PREFIX = "the berth on map "
 HOSTILE_BERTH_WALL_INFIX = " stands in hostile ground, up to level "
 CROSS_WALL_MINUTES = 6 * 60
+# The module words NoRoute in a crossing row's detail, but its result carries a
+# diagnostic in place of that literal: one clause per transport it tried
+# (overseer_decisions.cpp, mod_overseer.cpp). Any of these says no transport
+# serves the trip, so the map is walled like the literal (#678).
+ROUTELESS_MARKERS = (
+    "no berth at",
+    "boarding and landing both select stop",
+    "no transport's path names both maps",
+    "no transport its faction may ride",
+    "no transport is known that serves both",
+    "no transport on this route calls there",
+)
 
 
 def is_cross_wall(refusal: str) -> bool:
@@ -441,7 +453,7 @@ def is_cross_wall(refusal: str) -> bool:
     CROSS_WALL_MINUTES: one of CROSS_WALLS, or a berth standing in hostile
     ground the character cannot survive."""
     text = str(refusal or "")
-    if text in CROSS_WALLS:
+    if text in CROSS_WALLS or any(m in text for m in ROUTELESS_MARKERS):
         return True
     return (
         text.startswith(HOSTILE_BERTH_WALL_PREFIX) and HOSTILE_BERTH_WALL_INFIX in text

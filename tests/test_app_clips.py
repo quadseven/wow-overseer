@@ -186,6 +186,23 @@ class TheClipLink(unittest.TestCase):
         )
         return out["m"]
 
+    def test_a_clip_from_another_view_says_whose_under_the_link(self):
+        note = "Filmed from the view of Otherchar (leader)."
+        m = self.link(
+            {
+                "clip": {
+                    "url": "/clips/clip-9-loot.mp4",
+                    "kind": "loot",
+                    "view_note": note,
+                }
+            }
+        )
+        self.assertIn("Watch the clip", m)
+        self.assertIn(note, m)
+        self.assertLess(m.index("Watch the clip"), m.index(note))
+        plain = self.link({"clip": {"url": "/clips/clip-9-loot.mp4", "kind": "loot"}})
+        self.assertNotIn("clip-note", plain)
+
     def test_a_clip_is_a_link_under_the_mount(self):
         m = self.link({"clip": {"url": "/clips/clip-9-loot.mp4", "kind": "loot"}})
         self.assertIn('href="/m/clips/clip-9-loot.mp4"', m)
