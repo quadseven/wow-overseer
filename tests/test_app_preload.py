@@ -34,11 +34,17 @@ needs_node = unittest.skipIf(NODE is None, "node is not on PATH")
 BUILD = appbuild.fingerprint(str(HERE))
 LINK = re.compile(r'<link rel="modulepreload" href="([^"]+)">')
 
-# Logs every file node resolves.
+# Logs every file node resolves, to a file beside the hook and before the
+# resolve returns. Node runs the hook on its own thread, and a console.log
+# there is only handed to the main thread to write: a process that ends first
+# drops the lines, and the closure read back empty on a busy machine (#3013).
+LINK_LOG = "linked.log"
 RESOLVE_HOOK = """
+import { appendFileSync } from "node:fs";
+const LOG = new URL("./linked.log", import.meta.url);
 export async function resolve(specifier, context, next) {
   const r = await next(specifier, context);
-  if (r.url.startsWith("file:")) console.log("MOD " + r.url);
+  if (r.url.startsWith("file:")) appendFileSync(LOG, "MOD " + r.url + "\\n");
   return r;
 }
 """
@@ -55,7 +61,7 @@ def _served_page(base: str = "") -> str:
         map_server.BASE_PATH = original
 
 
-def _node_linked(entry: str = "main.js") -> set[str]:
+def _node_linked(entry: str = "main.js", exit_at_once: bool = False) -> set[str]:
     """The app files node loads to link `entry`, with no module ever run.
 
     Node resolves and loads the whole static graph before it evaluates
@@ -78,7 +84,8 @@ def _node_linked(entry: str = "main.js") -> set[str]:
             'import { register } from "node:module";\n'
             'register("./hook.mjs", import.meta.url);\n'
             'try { await import("./wrap.mjs"); console.log("RAN"); }\n'
-            'catch (e) { console.log("STOPPED " + e.message); }\n',
+            'catch (e) { console.log("STOPPED " + e.message); }\n'
+            + ("process.exit(0);\n" if exit_at_once else ""),
             encoding="utf-8",
         )
         out = subprocess.run(
@@ -91,9 +98,11 @@ def _node_linked(entry: str = "main.js") -> set[str]:
         if out.returncode != 0 or "STOPPED linked, not run" not in out.stdout:
             raise AssertionError(out.stdout + out.stderr)
         prefix = (root / "app").as_uri() + "/"
+        log = root / LINK_LOG
+        lines = log.read_text("utf-8").splitlines() if log.exists() else []
         return {
             line[4 + len(prefix) :]
-            for line in out.stdout.splitlines()
+            for line in lines
             if line.startswith("MOD " + prefix)
         }
 
@@ -113,6 +122,16 @@ class ClosureTests(unittest.TestCase):
         linked = _node_linked()
         self.assertIn("main.js", linked)
         self.assertGreater(len(linked), 10)
+        self.assertEqual(set(appbuild.boot_graph(str(HERE))), linked)
+
+    @needs_node
+    def test_the_link_log_survives_a_process_that_exits_at_once(self):
+        # #3013: node runs the hook on its own thread. A line that thread
+        # prints is handed to the main thread to write, and a process that
+        # ends first drops it, so a busy machine read an empty closure. With
+        # the process ended the moment the link stops, every line must still
+        # be there.
+        linked = _node_linked(exit_at_once=True)
         self.assertEqual(set(appbuild.boot_graph(str(HERE))), linked)
 
     def test_closure_is_stable_entry_first_and_without_repeats(self):
