@@ -44,14 +44,21 @@ def load(rows_by_call):
             return contextlib.nullcontext(Cur())
 
     ns = {
-        "bag_pressure": bag_pressure, "log": log,
+        "bag_pressure": bag_pressure,
+        "log": log,
         "_connect": lambda: contextlib.nullcontext(Conn()),
-        "_VENDOR_SELLABLE": {}, "_VISITS_UNCHANGED": {}, "_VISIT_SEEN": {},
-        "_FLOOR_RELEASED_SAID": set(), "_FLOOR_KEPT": {},
+        "_VENDOR_SELLABLE": {},
+        "_VISITS_UNCHANGED": {},
+        "_VISIT_SEEN": {},
+        "_FLOOR_RELEASED_SAID": set(),
+        "_FLOOR_KEPT": {},
         "_VISITS_SQL": "%s",
     }
-    funcs = [n for n in ast.walk(ast.parse(BRIDGE))
-             if isinstance(n, ast.FunctionDef) and n.name in WANT]
+    funcs = [
+        n
+        for n in ast.walk(ast.parse(BRIDGE))
+        if isinstance(n, ast.FunctionDef) and n.name in WANT
+    ]
     exec(compile(ast.Module(body=funcs, type_ignores=[]), "bridge.py", "exec"), ns)
     return ns, log
 
