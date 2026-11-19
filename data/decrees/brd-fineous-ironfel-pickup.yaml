@@ -42,11 +42,13 @@ observe:
       SELECT COUNT(*) FROM log_encounter
       WHERE map = 230 AND creditEntry = 9056 AND time >= @t0
     expect: {scalar: ">= 1"}
-  - name: a-carrier-holds-ironfel
+  - name: an-active-quest-holder-holds-ironfel
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM item_instance WHERE owner_guid IN (@cast) AND itemEntry = 10999
+      SELECT COUNT(*) FROM item_instance ii
+      JOIN character_queststatus qs ON qs.guid = ii.owner_guid AND qs.quest = 3802 AND qs.status = 3
+      WHERE ii.owner_guid IN (@cast) AND ii.itemEntry = 10999
     expect: {scalar: ">= 1"}
   - name: the-module-opened-fineous-corpse-for-ironfel
     role: check
