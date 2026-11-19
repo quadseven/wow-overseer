@@ -28,6 +28,11 @@ class TheLedgerReading(unittest.TestCase):
             questers.ledger_state("broken", questers.STALLED_UNSOURCED),
         )
 
+    def test_a_broken_row_for_a_failed_attempt_reads_stalled(self):
+        self.assertEqual(
+            questers.LEDGER_STALLED, questers.ledger_state("broken", questers.FAILED)
+        )
+
     def test_a_broken_row_for_a_world_fact_reads_broken(self):
         self.assertEqual(
             "broken", questers.ledger_state("broken", questers.ENDER_MISSING)
@@ -87,6 +92,10 @@ class TheLedgerReading(unittest.TestCase):
 class KnownBroken(unittest.TestCase):
     def test_a_ledger_stall_alone_is_not_known(self):
         ledger = {("Bromli", 128): questers.LEDGER_STALLED}
+        self.assertEqual(frozenset(), questers.known_broken("Bromli", {}, ledger))
+
+    def test_a_ledger_failed_attempt_alone_is_not_known(self):
+        ledger = {("Bromli", 29): questers.ledger_state("broken", questers.FAILED)}
         self.assertEqual(frozenset(), questers.known_broken("Bromli", {}, ledger))
 
     def test_a_stall_the_memo_holds_is_known(self):
