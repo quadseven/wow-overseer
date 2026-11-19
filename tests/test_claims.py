@@ -165,11 +165,8 @@ class ColumnLeaseRules(unittest.TestCase):
         with self.assertRaises(NameError):
             claims.release_legal(holder, broken_predicate)
 
-    def test_expiry_is_since_plus_the_lease(self):
-        holder = townslot.Holder("economy", "Grug", "vendor", since=10.0)
-        self.assertEqual(
-            10.0 + claims.LEASE_SECONDS, claims.column_expiry(holder, 100.0)
-        )
+    def test_the_unused_column_expiry_helper_is_gone(self):
+        self.assertFalse(hasattr(claims, "column_expiry"))
 
     def test_an_orphan_gets_only_the_short_grace(self):
         orphan = townslot.Holder("", "Grug", "vendor", since=0.0)

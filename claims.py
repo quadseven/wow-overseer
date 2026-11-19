@@ -113,19 +113,6 @@ def new_column_slot(
     )
 
 
-def column_expiry(
-    holder: Holder | None,
-    now: float,
-    lease: float = LEASE_SECONDS,
-    orphan_lease: float = ORPHAN_LEASE_SECONDS,
-    long_leases=None,
-) -> float:
-    """When this holder's lease runs out, or now when there is none."""
-    if holder is None:
-        return now
-    return holder.since + lease_for(holder, lease, orphan_lease, long_leases)
-
-
 def release_legal(holder: Holder | None, releasable) -> bool:
     """Whether this process may hand that holder's aim back.
 
