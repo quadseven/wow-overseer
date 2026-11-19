@@ -334,6 +334,17 @@ PROGRESS_YARDS = 5.0
 ARRIVED_YARDS = 15.0
 SPENT_SECONDS = 1800.0
 
+# A RAW POINT ERRAND IS NOT RE-ISSUED INSIDE ITS ARRIVAL CEILING.
+#
+# The module lets a character go at a ground point it reached or gave up on and
+# will not walk the same standing aim again for fifteen minutes
+# (TRAVEL_LANDED_CEILING_SECONDS). The passes that write ground points never
+# clear them, so the next pass writes another point a minute later, the leader
+# leaves its quest drive for it, ends it at the point, goes back to the quest
+# drive and is taken off it again: seven walks in forty minutes. Keep this equal
+# to the module's ceiling.
+RAW_POINT_CEILING_SECONDS = 900.0
+
 # THE TOWN STOP: A SHORT WALK TO A MAILBOX, A BANKER OR A VAULT.
 #
 # Measured on the dev realm on 2026-09-24. Grug held 22 letters with 2,609
@@ -505,6 +516,16 @@ TRAINING_STOP_PREFIX = "trainer:"
 # How long an orphan training stop may stand unchanged before it is handed back
 # (#2087): the orphan lease, the module's own 20 minute travel backstop.
 STALE_STOP_SECONDS = ORPHAN_LEASE_SECONDS
+
+
+def is_ground_point(aim) -> bool:
+    """A raw `at:<map>:<x>,<y>,<z>` point, as `travel.ground_aim` writes it."""
+    return isinstance(aim, str) and aim.startswith("at:")
+
+
+def urgent_raw_exempt(urgent: bool) -> bool:
+    """An urgent ask (a full bag blocking loot) is never held by the ceiling."""
+    return bool(urgent)
 
 
 def is_training_stop_aim(aim) -> bool:
@@ -1589,6 +1610,9 @@ class Slot:
         self._progress: dict = {}
         # {(claimant, aim): when given up} for walks that could not land.
         self._spent: dict = {}
+        # {character: (aim, when written)} for the last raw point errand taken
+        # on each character, read by `_gate` (RAW_POINT_CEILING_SECONDS).
+        self._ground: dict = {}
         # {(character, aim): when taken} for short town stops, which nobody
         # preempts or hands back for TOWN_STOP_SECONDS (see STOP_CLAIMANTS).
         self._stops: dict = {}
@@ -2044,6 +2068,7 @@ class Slot:
             distance=distance,
             stop=stop,
             earned=self._earned(claimant, priority_after, now),
+            urgent=urgent,
         )
         if gate is not None:
             return gate
@@ -2126,6 +2151,7 @@ class Slot:
         distance,
         stop: bool,
         earned: bool = False,
+        urgent: bool = False,
     ) -> Decision | None:
         """What answers before the queue is asked, or None to ask it.
 
@@ -2187,6 +2213,25 @@ class Slot:
                 aim=aim,
                 character=character,
             )
+        if not stop and not urgent_raw_exempt(urgent) and self.raw_point_young(
+            character, aim, now
+        ):
+            return Decision(
+                verdict=SLOT_WAIT,
+                reason="%s waits: %s was sent to a ground point %ds ago and "
+                "the pass that wrote it has not cleared it, so %r is not "
+                "written until %ds have passed"
+                % (
+                    claimant,
+                    character,
+                    int(now - self._ground[character][1]),
+                    aim,
+                    int(RAW_POINT_CEILING_SECONDS),
+                ),
+                claimant=claimant,
+                aim=aim,
+                character=character,
+            )
         held = (
             None
             if earned
@@ -2200,6 +2245,25 @@ class Slot:
             self._note_wait(claimant, now)
             return held
         return None
+
+    def raw_point_young(self, character: str, aim: str, now: float) -> bool:
+        """Is `aim` a raw point asked of a character whose last raw point
+        errand is still younger than RAW_POINT_CEILING_SECONDS?
+
+        The errand still standing on the column is not a re-issue (`decide`
+        answers it as a hold or a refinement), so it passes."""
+        if not is_ground_point(aim):
+            return False
+        prior = self._ground.get(character)
+        if prior is None or now - prior[1] >= RAW_POINT_CEILING_SECONDS:
+            return False
+        holder = self.holder
+        if holder is not None and holder.character == character and holder.aim in (
+            aim,
+            prior[0],
+        ):
+            return False
+        return True
 
     def _measure(self, decision: Decision, distance: float, now: float) -> Decision:
         """A held walk that has stopped closing becomes a give-up (#227)."""
@@ -2288,6 +2352,8 @@ class Slot:
             self._served[decision.claimant] = now
             return
         name = decision.claimant
+        if decision.writes and is_ground_point(decision.aim):
+            self._ground[decision.character] = (decision.aim, now)
         if decision.writes:
             # A new walk is measured from where it starts (#227).
             self._progress.pop((name, decision.aim), None)
