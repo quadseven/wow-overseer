@@ -22,6 +22,8 @@ arrange:
 act:
   - at: 90s
     roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+  - at: 300s
+    roster: {who: Og, job: "dungeon:blackrock-depths"}
 observe:
   - name: ghost-starts-with-a-corpse
     role: precondition

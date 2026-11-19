@@ -1,5 +1,6 @@
 # A Razorfen Downs campaign exits through trigger 444 and starts its next run
 # with the same five members together (mod-overseer issue 1269).
+# The start precondition requires a five-member family; another size is INVALID.
 # Fix: mod-overseer pull 1277.
 decree: v1
 id: razorfen-downs-exits-and-restarts-together
@@ -20,7 +21,7 @@ act:
   - at: 90s
     roster: {who: family:grug, job: "dungeon:razorfen-downs"}
 observe:
-  - name: family-starts-inside-rfd
+  - name: exactly-five-family-members-start-inside-rfd
     role: precondition
     when: start
     sql: |
@@ -53,8 +54,11 @@ observe:
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_snapshot
-      WHERE guid IN (@cast) AND map_id = 129 AND instance_id = @rfd
+      SELECT COUNT(DISTINCT s.guid) FROM overseer_snapshot s
+      JOIN overseer_dungeon_run_damage d ON d.instance_id = s.instance_id
+      JOIN overseer_dungeon_run next_run ON next_run.id = d.run_id
+      WHERE s.guid IN (@cast) AND s.map_id = 129 AND next_run.map_id = 129
+        AND next_run.family = 'Grug' AND next_run.run_number = 2 AND next_run.started_at >= @t0
     expect: {scalar: "= 5"}
   - name: no-exit-hearth-was-used
     role: check

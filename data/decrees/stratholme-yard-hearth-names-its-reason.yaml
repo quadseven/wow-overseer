@@ -1,5 +1,7 @@
 # A Stratholme yard hearth log uses the yard-specific reason (mod-overseer issue
 # 1276), on a credited Stratholme run.
+# Oracle: issue 1276's live acceptance requires the log to carry the phrase
+# "leaving the Stratholme exit yard"; pull 1280 supplies its log context.
 # Fix: mod-overseer pull 1280.
 decree: v1
 id: stratholme-yard-hearth-names-its-reason
@@ -30,5 +32,5 @@ observe:
   - name: the-yard-hearth-line-names-the-yard
     role: check
     log:
-      pattern: "EXIT HEARTH - '[^']+' is hearthing out of map [0-9]+ \\(attempt [0-9]+ of [0-9]+\\) because leaving the Stratholme exit yard"
+      pattern: "leaving the Stratholme exit yard"
       expect: {at_least: 1}
