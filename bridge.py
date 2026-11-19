@@ -6255,8 +6255,71 @@ def _silent_stall(head: dict, names: list):
 
 # The member-state words the wedge judges are named inside _door_wedge.
 
-# (leader, member, state) -> (queue head id, monotonic first seen).
+# (leader, member) -> (queue head id, monotonic first seen). The same clock is
+# stored in overseer_bridge_memo as a wall timestamp so a pod restart cannot
+# start the stand-down bound over.
 _DOOR_HOLD_SINCE: dict = {}
+DOOR_HOLD_RECOVER_YARDS = 1500
+DOOR_HOLD_MEMO_KIND = "door_wedge_hold"
+DOOR_HOLD_MEMO_SECONDS = 7 * 24 * 3600
+DOOR_HOLD_MEMO_REFRESH_SECONDS = 60
+_DOOR_HOLD_MEMO_READ_AT: float | None = None
+
+
+def _door_hold_subject(key: tuple[str, str]) -> str:
+    return json.dumps(key, separators=(",", ":"))
+
+
+def _door_hold_memo_put(key: tuple[str, str], head_id: int,
+                        since: float, now: float) -> None:
+    wall_now = time.time()
+    value = {"head_id": int(head_id)}
+    args = (
+        DOOR_HOLD_MEMO_KIND,
+        _door_hold_subject(key),
+        value,
+        wall_now - max(0.0, now - since),
+        wall_now + DOOR_HOLD_MEMO_SECONDS,
+    )
+    writer = globals().get("_MEMO_WRITER")
+    job, upsert = globals().get("_memo_job"), globals().get("_memo_upsert")
+    if writer is not None and job is not None:
+        writer.submit(job, upsert, *args)
+    else:
+        upsert(*args)
+
+
+def _door_hold_memo_delete(key: tuple[str, str]) -> None:
+    args = (DOOR_HOLD_MEMO_KIND, _door_hold_subject(key))
+    writer = globals().get("_MEMO_WRITER")
+    job, delete = globals().get("_memo_job"), globals().get("_memo_delete")
+    if writer is not None and job is not None:
+        writer.submit(job, delete, *args)
+    else:
+        delete(*args)
+
+
+def _restore_door_hold_memos(now: float) -> None:
+    global _DOOR_HOLD_MEMO_READ_AT
+    if (_DOOR_HOLD_MEMO_READ_AT is not None
+            and now - _DOOR_HOLD_MEMO_READ_AT < DOOR_HOLD_MEMO_REFRESH_SECONDS):
+        return
+    offset = time.time() - now
+    for subject, (value, since_wall) in _memo_read(DOOR_HOLD_MEMO_KIND).items():
+        try:
+            pair = json.loads(subject)
+            if not isinstance(pair, list) or len(pair) != 2:
+                raise ValueError("memo subject is not a leader/member pair")
+            key = (str(pair[0]), str(pair[1]))
+            head_id = int(value["head_id"])
+            since = min(now, float(since_wall) - offset)
+            if now - since > DOOR_HOLD_MEMO_SECONDS:
+                _door_hold_memo_delete(key)
+                continue
+            _DOOR_HOLD_SINCE.setdefault(key, (head_id, since))
+        except (KeyError, TypeError, ValueError):
+            log.exception("bridge memo: invalid door-wedge hold memo for %s", subject)
+    _DOOR_HOLD_MEMO_READ_AT = now
 
 _DOOR_STEPS_SQL = (
     "SELECT kind, doing, occurrences, UNIX_TIMESTAMP(first_seen) AS first_at, "
@@ -6316,10 +6379,30 @@ def _door_wedge_evidence(leader: str, head_id: int) -> tuple:
     return restarts, members
 
 
+def _door_wedge_member_recovered(leader: str, member: str, positions: dict) -> bool:
+    """Whether a member is back inside the catch-up walk range of its leader."""
+    lead, part = positions.get(leader), positions.get(member)
+    if not lead or not part:
+        return False
+    try:
+        if (int(lead["map_id"]) != int(part["map_id"])
+                or int(lead["instance_id"]) != int(part["instance_id"])):
+            return False
+        distance_sq = sum(
+            (float(lead[f"pos_{axis}"]) - float(part[f"pos_{axis}"])) ** 2
+            for axis in ("x", "y", "z")
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+    return distance_sq <= DOOR_HOLD_RECOVER_YARDS ** 2
+
+
 def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
-    """name -> (state, seconds in it) for the members in a wedged state,
-    with _DOOR_HOLD_SINCE kept current: a state no longer published loses
-    its clock, and a clock from an earlier queue entry starts over.
+    """name -> (state, seconds in the active hold) for wedged members.
+
+    The clock belongs to the leader/member pair, not the published state. A
+    transient state flip leaves the family just as split, so it does not stop
+    the clock. A different queue entry starts a new one.
 
     The states are the module's member-state words (MemberStateWord):
     "dead", and the holds with no errand of the member's own choosing at
@@ -6330,27 +6413,55 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
     recovery.
     """
     now = time.monotonic()
-    seen = {}
+    restore_memos = globals().get("_restore_door_hold_memos")
+    if restore_memos is not None:
+        restore_memos(now)
+    states = {member.name: member.state for member in members if member.name != leader}
+    clock_keys = [key for key in _DOOR_HOLD_SINCE if key[0] == leader]
+    positions = {}
+    if clock_keys:
+        names = {leader, *states}
+        names.update(key[1] for key in clock_keys)
+        fetch_positions = globals().get("_fetch_positions")
+        positions = fetch_positions(sorted(names)) if fetch_positions else {}
+    recovered_member = globals().get("_door_wedge_member_recovered")
+    recovered = set()
+    for key in clock_keys:
+        name = key[1]
+        if states.get(name) == "dead":
+            continue
+        if recovered_member and recovered_member(leader, name, positions):
+            del _DOOR_HOLD_SINCE[key]
+            delete_memo = globals().get("_door_hold_memo_delete")
+            if delete_memo is not None:
+                delete_memo(key)
+            recovered.add(name)
+
+    ages = {}
     for member in members:
         if member.name == leader:
             continue
-        if member.state == "dead" or member.state in (
+        if member.state != "dead" and member.state not in (
             "on an errand of its own",
             "held still",
             dungeonstall.CATCH_UP_UNREACHABLE_STATE,
         ):
-            seen[(leader, member.name, member.state)] = member
-    for key in [k for k in _DOOR_HOLD_SINCE if k[0] == leader and k not in seen]:
-        del _DOOR_HOLD_SINCE[key]
-    ages = {}
-    for key, member in seen.items():
+            continue
+        if member.name in recovered:
+            continue
+        key = (leader, member.name)
         stamp = _DOOR_HOLD_SINCE.get(key)
         if stamp is None or stamp[0] != head_id:
-            # AN ERRAND TAKEN UP AGAIN AFTER A RECALL GOES ON COUNTING (#2323).
-            # Looked up: the verdict harness loads this function in isolation.
             start = globals().get("_errand_clock_start")
-            stamp = (head_id, start(key, head_id, now) if start else now)
+            since = (
+                start((leader, member.name, member.state), head_id, now)
+                if start else now
+            )
+            stamp = (head_id, since)
             _DOOR_HOLD_SINCE[key] = stamp
+            write_memo = globals().get("_door_hold_memo_put")
+            if write_memo is not None:
+                write_memo(key, head_id, since, now)
         ages[member.name] = (member.state, now - stamp[1])
     return ages
 
@@ -6518,14 +6629,19 @@ def _door_wedge(head: dict, names: list, leader: str):
     A corpse outranks a walk, and a walk outranks a hold: the recorded
     reason names the worst thing wrong at the door.
     """
-    if head.get("status") != campaignqueue.ACTIVE or not any(
-        jobs.is_dungeon_job(job) for job in _jobs_of(names).values()
-    ):
-        # Not judged this pass: the leader's hold clocks stop with it, so a
-        # later return to the dungeon job does not count the gap as one hold
-        # (#2181).
+    if head.get("status") != campaignqueue.ACTIVE:
+        # A different queue phase is not a door hold. The active job may come
+        # back later, so discard clocks only when this queue entry is no longer
+        # active.
         for key in [k for k in _DOOR_HOLD_SINCE if k[0] == leader]:
-            del _DOOR_HOLD_SINCE[key]
+            _DOOR_HOLD_SINCE.pop(key, None)
+            delete_memo = globals().get("_door_hold_memo_delete")
+            if delete_memo is not None:
+                delete_memo(key)
+        return None
+    if not any(jobs.is_dungeon_job(job) for job in _jobs_of(names).values()):
+        # The family may switch jobs while still separated. Preserve its clock
+        # so a temporary quest job cannot restart the stand-down bound.
         return None
     keyword = str(head.get("keyword") or "")
     head_id = int(head.get("id") or 0)
