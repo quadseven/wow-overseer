@@ -75,7 +75,7 @@ observe:
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_event e JOIN overseer_command c ON c.target_name = e.character_name
+      SELECT COUNT(*) FROM overseer_event e JOIN overseer_command c ON c.target_name = 'Zug'
       WHERE e.character_name = 'Zug' AND e.kind = 'craft' AND c.kind = 'buy' AND c.command LIKE 'entry:5956 %'
         AND c.status = 'delivered' AND c.created_at >= @t0 AND e.last_seen >= c.updated_at
     expect: {scalar: ">= 1"}
