@@ -33305,10 +33305,7 @@ def _fetch_guild_social_facts(bounds) -> dict:
             # The death loops the planning pass judges (deathloop.loops over
             # the same deaths read, #2277): the death-loop asks are planned
             # from this read in the social pass (deathask.plan_pass).
-            death_rows = _job_read(
-                cur, "deaths",
-                deathloop.SQL.format(holes=holes),  # noqa: S608 - placeholders only
-                (*names, deathloop.READ_SECONDS))
+            death_rows = _death_rows(cur, names)
             death_loops = deathloop.loops(
                 death_rows,
                 {str(r["name"]): int(r.get("level") or 0) for r in facts["rows"]})
@@ -33800,9 +33797,7 @@ def _death_party_reads(names) -> tuple:
         return {}, set()
     holes = ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
-        death_rows = _job_read(
-            cur, "deaths", deathloop.SQL.format(holes=holes),  # noqa: S608 - placeholders only
-            (*names, deathloop.READ_SECONDS))
+        death_rows = _death_rows(cur, names)
         cur.execute(_CLASS_PARTY_STANDS_SQL % holes, names)  # noqa: S608 - placeholders only
         present = {str(r["name"]) for r in cur.fetchall()}
     return deathloop.loops(death_rows), present - set(_active_guild_run_names())
@@ -38689,6 +38684,18 @@ def _class_member_reads(cur, book, everyone: str) -> tuple:
         _job_read(cur, "class quests rewarded", classquest.REWARDED_SQL.format(
             guids=everyone, quests=ids)),
     )
+
+
+def _death_rows(cur, names) -> list:
+    """The deaths read every death-loop judge shares: deathloop.SQL over
+    the newest deathloop.READ_SECONDS for the named members, through the
+    guarded job read. Defined once so the social pass's planning read and
+    the death party runner's act-time re-check can never drift apart."""
+    holes = ",".join(["%s"] * len(names))
+    return _job_read(
+        cur, "deaths",
+        deathloop.SQL.format(holes=holes),  # noqa: S608 - placeholders only
+        (*names, deathloop.READ_SECONDS))
 
 
 def _job_read(cur, what: str, sql: str, params=()) -> list:
