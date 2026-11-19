@@ -546,6 +546,152 @@ class ResolverQueriesTest(unittest.TestCase):
 
 
 class CompileTest(unittest.TestCase):
+    def test_family_at_each_maps_points_in_resolver_order(self):
+        resolver = FakeResolver()
+        resolver.fam["grug"].append((3, "Zork", False))
+        resolver.creatures.update(
+            {
+                "First Point": [
+                    {
+                        "guid": 11,
+                        "map": 0,
+                        "zone": 1,
+                        "x": 10.0,
+                        "y": 20.0,
+                        "z": 5.0,
+                        "o": 0.0,
+                    }
+                ],
+            }
+        )
+        resolver.gameobjects["Second Point"] = [
+            {"guid": 12, "map": 0, "zone": 2, "x": 90.0, "y": 80.0, "z": 5.0, "o": 0.0}
+        ]
+        d = doc()
+        d["cast"] = [
+            {
+                "who": "family:grug",
+                "set": {
+                    "at_each": [
+                        {"creature": "First Point"},
+                        {"gameobject": "Second Point"},
+                        {"areatrigger": 9},
+                    ]
+                },
+            }
+        ]
+        statements = sql_of(compile_(d, resolver))
+        updates = {
+            guid: next(
+                statement for statement in statements if statement.endswith(f"= {guid}")
+            )
+            for guid in (1, 2, 3)
+        }
+
+        self.assertIn("10.000000", updates[1])
+        self.assertIn("90.000000", updates[2])
+        self.assertIn("4.000000", updates[3])
+
+    def test_family_at_each_requires_one_anchor_per_resolved_member(self):
+        resolver = FakeResolver()
+        resolver.creatures.update(
+            {
+                "First Point": [
+                    {
+                        "guid": 11,
+                        "map": 0,
+                        "zone": 1,
+                        "x": 10.0,
+                        "y": 20.0,
+                        "z": 5.0,
+                        "o": 0.0,
+                    }
+                ],
+                "Second Point": [
+                    {
+                        "guid": 12,
+                        "map": 0,
+                        "zone": 2,
+                        "x": 90.0,
+                        "y": 80.0,
+                        "z": 5.0,
+                        "o": 0.0,
+                    }
+                ],
+                "Third Point": [
+                    {
+                        "guid": 13,
+                        "map": 0,
+                        "zone": 3,
+                        "x": 30.0,
+                        "y": 40.0,
+                        "z": 5.0,
+                        "o": 0.0,
+                    }
+                ],
+            }
+        )
+        d = doc()
+        d["cast"] = [
+            {
+                "who": "family:grug",
+                "set": {
+                    "at_each": [
+                        {"creature": "First Point"},
+                        {"creature": "Second Point"},
+                        {"creature": "Third Point"},
+                    ]
+                },
+            }
+        ]
+
+        with self.assertRaisesRegex(SeedError, "3 anchors for 2 family members"):
+            compile_(d, resolver)
+
+    def test_family_at_each_rejects_points_that_resolve_to_the_same_location(self):
+        resolver = FakeResolver()
+        resolver.creatures.update(
+            {
+                "First Point": [
+                    {
+                        "guid": 11,
+                        "map": 0,
+                        "zone": 1,
+                        "x": 10.0,
+                        "y": 20.0,
+                        "z": 5.0,
+                        "o": 0.0,
+                    }
+                ],
+                "Second Point": [
+                    {
+                        "guid": 12,
+                        "map": 0,
+                        "zone": 2,
+                        "x": 10.0,
+                        "y": 20.0,
+                        "z": 5.0,
+                        "o": 1.0,
+                    }
+                ],
+            }
+        )
+        d = doc()
+        d["cast"] = [
+            {
+                "who": "family:grug",
+                "set": {
+                    "at_each": [
+                        {"creature": "First Point"},
+                        {"creature": "Second Point"},
+                    ]
+                },
+            }
+        ]
+
+        with self.assertRaisesRegex(SeedError, "resolve to distinct positions"):
+            compile_(d, resolver)
+
     def test_position_and_level(self):
         d = doc()
         d["cast"][0]["set"].update(level=58)

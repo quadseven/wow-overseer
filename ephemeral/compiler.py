@@ -197,9 +197,23 @@ class Compiler:
     def _cast_rows(self, cast, by_entry):
         # Positions first (a `with` anchor reads another member's), then rows.
         resolved = {}
-        for entry in cast:
+        scattered = {}
+        for i, entry in enumerate(cast):
             s = entry["set"]
-            if "at" in s and "with" not in s["at"]:
+            if "at_each" in s:
+                points = [self.place(anchor) for anchor in s["at_each"]]
+                members = by_entry[i]
+                if len(points) != len(members):
+                    raise SeedError(
+                        f"{len(points)} anchors for {len(members)} family members"
+                    )
+                locations = [(p[0], p[2], p[3], p[4]) for p in points]
+                if len(set(locations)) != len(locations):
+                    raise SeedError(
+                        "at_each anchors must resolve to distinct positions"
+                    )
+                scattered[i] = points
+            elif "at" in s and "with" not in s["at"]:
                 corpse = self.place(s["corpse_at"]) if "corpse_at" in s else None
                 resolved[entry["who"]] = self.place(s["at"], corpse)
         for i, entry in enumerate(cast):
@@ -211,8 +225,11 @@ class Compiler:
             home = (
                 self.place(s["homebind"], None, resolved) if "homebind" in s else None
             )
-            for m in by_entry[i]:
-                self._member(m, s, at, corpse, home)
+            member_positions = scattered.get(i)
+            if member_positions is None:
+                member_positions = [at] * len(by_entry[i])
+            for m, member_at in zip(by_entry[i], member_positions, strict=True):
+                self._member(m, s, member_at, corpse, home)
 
     def _variables(self, by_entry):
         v = self.plan.variables

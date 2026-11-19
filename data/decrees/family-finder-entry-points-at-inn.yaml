@@ -1,0 +1,67 @@
+decree: v1
+id: family-finder-entry-points-at-inn
+proves:
+  - repo: quadseven/mod-overseer
+    issue: 1510
+    criterion: "Check that a scattered family's recorded dungeon entry points are within one thousand yards of its common inn."
+fix: {repo: quadseven/mod-overseer, commit: 5e44a0bc4b86d3476a82ef5d66fba645de9f13d2}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 20m
+cast:
+  - who: family:grug
+    set:
+      alive: true
+      at_each:
+        - {areatrigger: 1466}
+        - {areatrigger: 257}
+        - {areatrigger: 78}
+        - {areatrigger: 614}
+        - {areatrigger: 2886}
+      homebind: {creature: "Innkeeper Allison"}
+arrange:
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 90s
+    roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+observe:
+  - name: every-member-has-the-common-inn-bind
+    role: precondition
+    when: start
+    sql: "SELECT COUNT(*) FROM character_homebind WHERE guid IN (@cast)"
+    expect: {scalar: "= 5"}
+  - name: family-starts-scattered-from-its-inn
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters ch
+      JOIN character_homebind hb ON hb.guid = ch.guid
+      WHERE ch.guid IN (@cast)
+        AND ch.map = hb.mapId
+        AND POW(ch.position_x - hb.posX, 2) + POW(ch.position_y - hb.posY, 2) <= 1000000
+    expect: {scalar: "= 0"}
+  - name: no-old-entry-point-is-already-near-the-inn
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_entry_point ep
+      JOIN character_homebind hb ON hb.guid = ep.guid
+      WHERE ep.guid IN (@cast)
+        AND ep.joinMapId = hb.mapId
+        AND POW(ep.joinX - hb.posX, 2) + POW(ep.joinY - hb.posY, 2) <= 1000000
+    expect: {scalar: "= 0"}
+  - name: every-family-member-has-a-recorded-entry-point
+    role: check
+    when: end
+    sql: "SELECT COUNT(*) FROM character_entry_point WHERE guid IN (@cast)"
+    expect: {scalar: "= 5"}
+  - name: every-entry-point-is-near-the-common-inn
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM character_entry_point ep
+      JOIN character_homebind hb ON hb.guid = ep.guid
+      WHERE ep.guid IN (@cast)
+        AND (ep.joinMapId <> hb.mapId
+          OR POW(ep.joinX - hb.posX, 2) + POW(ep.joinY - hb.posY, 2) > 1000000)
+    expect: {scalar: "= 0"}
