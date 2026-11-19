@@ -332,6 +332,99 @@ class LeaseTest(Base):
             a.tick()
 
 
+class StandbyTest(Base):
+    LEASE = ("leases.coordination.k8s.io", "wow-ephemeral", "eph-dispatcher")
+
+    def dispatcher(self, holder, clock):
+        d = dispatch.Dispatcher(self.cfg, self.kube, clock=clock, out=self.logs.append)
+        d.holder = holder
+        return d
+
+    def test_a_standby_dispatcher_waits_for_a_live_lease_then_takes_over_by_itself(
+        self,
+    ):
+        a = self.dispatcher("one", lambda: self.now)
+        a.tick()
+        clock = {"t": self.now + 10}
+        b = self.dispatcher("two", lambda: clock["t"])
+        naps = []
+
+        def sleep(seconds):
+            naps.append(seconds)
+            clock["t"] += 3600  # the holder never renews: the lease runs out
+            if len(naps) > 3:
+                raise KeyboardInterrupt
+
+        self.assertEqual(b.run(interval=15, sleep=sleep, standby=True), 0)
+        self.assertEqual(self.c.objs[self.LEASE]["spec"]["holderIdentity"], "")
+        standby_lines = [m for m in self.logs if m.startswith("standby:")]
+        self.assertEqual(len(standby_lines), 1)
+        self.assertIn("held by one", standby_lines[0])
+        self.assertTrue(any("standby over" in m for m in self.logs))
+        self.assertEqual(naps[0], 15)
+
+    def test_without_standby_a_held_lease_still_raises(self):
+        self.dispatcher("one", lambda: self.now).tick()
+        b = self.dispatcher("two", lambda: self.now + 10)
+        with self.assertRaises(dispatch.LeaseHeld):
+            b.run(sleep=lambda s: None)
+
+    def test_once_keeps_the_strict_answer_even_in_standby(self):
+        self.dispatcher("one", lambda: self.now).tick()
+        b = self.dispatcher("two", lambda: self.now + 10)
+        with self.assertRaises(dispatch.LeaseHeld):
+            b.run(once=True, standby=True, sleep=lambda s: None)
+
+    def test_a_standby_never_starts_a_world_while_it_waits(self):
+        self.add("aaaaaa-c1", "control")
+        self.dispatcher("one", lambda: self.now).tick()
+        self.c.objs[("jobs", "wow-ephemeral", "eph-aaaaaa-c1")]["spec"]["suspend"] = (
+            True
+        )
+        b = self.dispatcher("two", lambda: self.now + 10)
+        calls = []
+
+        def sleep(seconds):
+            calls.append(seconds)
+            if len(calls) > 2:
+                raise KeyboardInterrupt
+
+        b.run(sleep=sleep, standby=True)
+        self.assertTrue(self.suspended("aaaaaa-c1"))
+
+    def test_the_lease_is_released_when_the_loop_ends_so_a_successor_need_not_wait(
+        self,
+    ):
+        a = self.dispatcher("one", lambda: self.now)
+        self.assertEqual(a.run(once=True, sleep=lambda s: None), 0)
+        self.assertEqual(self.c.objs[self.LEASE]["spec"]["holderIdentity"], "")
+        b = self.dispatcher("two", lambda: self.now + 1)
+        b.tick()  # no LeaseHeld: it is free the moment the first one is gone
+        self.assertEqual(self.c.objs[self.LEASE]["spec"]["holderIdentity"], "two")
+
+    def test_release_leaves_a_lease_another_dispatcher_now_holds(self):
+        a = self.dispatcher("one", lambda: self.now)
+        a.tick()
+        self.dispatcher("two", lambda: self.now + 3600).tick()
+        a.release()
+        self.assertEqual(self.c.objs[self.LEASE]["spec"]["holderIdentity"], "two")
+
+    def test_a_dispatcher_that_never_held_the_lease_releases_nothing(self):
+        self.dispatcher("one", lambda: self.now).tick()
+        b = self.dispatcher("two", lambda: self.now + 10)
+        with self.assertRaises(dispatch.LeaseHeld):
+            b.tick()
+        b.release()
+        self.assertEqual(self.c.objs[self.LEASE]["spec"]["holderIdentity"], "one")
+
+    def test_a_failed_release_is_logged_and_never_raised(self):
+        a = self.dispatcher("one", lambda: self.now)
+        a.tick()
+        self.c.fail["replace"] = 1
+        a.release()
+        self.assertTrue(any("could not release" in m for m in self.logs))
+
+
 class QuantityTest(unittest.TestCase):
     def test_quantities(self):
         self.assertEqual(dispatch.quantity("250m"), 0.25)

@@ -628,6 +628,14 @@ class TheCallerIsWiredAndWritesOnlyAJobMode(unittest.TestCase):
         self.assertTrue(re.search(r"async def send\(self, text", sink))
 
 
+class DarkIronCraftGateIsWired(unittest.TestCase):
+    def test_the_craft_writer_passes_the_dark_iron_flag(self):
+        source = BRIDGE.read_text(encoding="utf-8", errors="replace")
+        start = source.index("async def _craft_once(self")
+        body = source[start : source.index("async def _assign_crafts(self)")]
+        self.assertIn("dark_iron_enabled=fireplan.dark_iron_enabled()", body)
+
+
 class SpendOrSmelt(unittest.TestCase):
     """infra#3748's alternation: which of a miner's two recipes it carries.
 
@@ -668,6 +676,28 @@ class SpendOrSmelt(unittest.TestCase):
         )
         self.assertEqual(chosen.spell, 2657)  # Smelt Copper
         self.assertTrue(chosen.smelting)
+
+    def test_dark_iron_smelt_is_gated_and_uses_the_learned_recipe(self):
+        skills = {"mining": 230, "blacksmithing": 1}
+        held = {11370: 8}
+        known = frozenset({14891, 2660})
+        disabled = craft_rhythm.errand(
+            "Grug", skills, held, known=known, dark_iron_enabled=False
+        )
+        enabled = craft_rhythm.errand(
+            "Grug", skills, held, known=known, dark_iron_enabled=True
+        )
+        unlearned = craft_rhythm.errand(
+            "Grug", skills, held, known=frozenset(), dark_iron_enabled=True
+        )
+        unread = craft_rhythm.errand(
+            "Grug", skills, held, known=None, dark_iron_enabled=True
+        )
+        self.assertFalse(disabled.smelting)
+        self.assertEqual(enabled.spell, 14891)
+        self.assertTrue(enabled.smelting)
+        self.assertNotEqual(unlearned.spell, 14891)
+        self.assertNotEqual(unread.spell, 14891)
 
     def test_a_bar_gated_craft_errand_is_answered_by_the_smelt(self):
         """Grog at Engineering 31 wants Handful of Copper Bolts, whose only

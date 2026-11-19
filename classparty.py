@@ -346,14 +346,15 @@ def walk_why(holder, said) -> str:
     return said[len(prefix) :] if said.startswith(prefix) else said
 
 
-def leader_road_refused(run) -> bool:
-    """True when the leader's own meeting walk was refused for good: the
-    module's lasting words for a spawn it will not take the member to
-    (classquest.SPAWN_REFUSALS that are not SPAWN_SHORT_REFUSALS, such as
-    "the road to the spawn crosses ground far above its level"). No other
-    helper changes the leader's own road, so the ask is over at once."""
+def refused_road_members(run) -> tuple:
+    """The party members whose meeting walk named a lasting spawn refusal."""
     lasting = classquest.SPAWN_REFUSALS - classquest.SPAWN_SHORT_REFUSALS
-    return run.walks.get(run.leader) in lasting
+    return tuple(name for name in run.names() if run.walks.get(name) in lasting)
+
+
+def leader_road_refused(run) -> bool:
+    """True when the leader's own meeting walk was refused for good."""
+    return run.leader in refused_road_members(run)
 
 
 def _missed(run, name, where) -> str:
@@ -548,10 +549,11 @@ class PartyRun:
     deadline: float | None = None
     outcome: str = ""
     walks: dict = field(default_factory=dict)
-    # The leader's level and map when the ask was planned: what a refused road
+    # Each member's level and map when the ask was planned: what a refused road
     # is held against (Board.refuse_road).
     level: int = 0
     map_id: int = 0
+    route_context: dict = field(default_factory=dict)
 
     def names(self) -> tuple:
         return (self.leader,) + tuple(self.helpers)
@@ -637,29 +639,54 @@ class Board:
         """Count the ask out at once: its failures reach MAX_FAILURES."""
         self._failures[int(ask_id)] = MAX_FAILURES
 
-    def refuse_road(self, run) -> None:
-        """Keep the leader's refused road: its quest, level and map when the
-        module refused the way for good (leader_road_refused). The road stays
+    def refuse_road(self, run, members=None) -> None:
+        """Keep members' refused roads: their quest, level and map when the
+        module refused the way for good (refused_road_members). The road stays
         refused until the member's level or map is not these (#2071), not for
         as long as a cooldown lasts: a cooldown ran out, and the member asked
         again from the same place, three hours apart, with the same road
         under it."""
-        if int(run.level) > 0:
-            self._roads[run.leader] = (int(run.quest), int(run.level), int(run.map_id))
+        names = (run.leader,) if members is None else tuple(members)
+        for name in names:
+            context = run.route_context.get(name)
+            if context is None and name == run.leader:
+                context = (run.level, run.map_id)
+            if context is None:
+                continue
+            level, map_id = context
+            if int(level) > 0:
+                self._roads[name] = (int(run.quest), int(level), int(map_id))
 
     def road_refused(self, helps) -> set:
         """The members among `helps` still on the road that was refused for
-        them. A member whose level or map changed is let go."""
+        them. A member whose level or map changed is let go. A different quest
+        does not erase the old road: that member may still answer it as a helper."""
         held = set()
         for h in helps:
             road = self._roads.get(h.member)
             if road is None:
                 continue
-            if road == (int(h.move.quest), int(h.level), int(h.map_id)):
-                held.add(h.member)
-            else:
+            if road[1:] != (int(h.level), int(h.map_id)):
                 del self._roads[h.member]
+            elif road[0] == int(h.move.quest):
+                held.add(h.member)
         return held
+
+    def road_refused_helpers(self, mates) -> dict:
+        """Quest id -> free mates still on a permanently refused road."""
+        refused = {}
+        for mate in mates:
+            name = mate.name
+            road = self._roads.get(name)
+            if road is None:
+                continue
+            level = int(mate.member.level)
+            map_id = int(mate.member.map_id)
+            if road[1:] != (level, map_id):
+                del self._roads[name]
+                continue
+            refused.setdefault(road[0], set()).add(name)
+        return {quest: frozenset(names) for quest, names in refused.items()}
 
     def failures(self, ask_id) -> int:
         return self._failures.get(int(ask_id), 0)
@@ -786,8 +813,17 @@ def _yes_by_ask(answers) -> dict:
     return out
 
 
-def _run(ask, need, standing, spot) -> PartyRun:
+def _run(ask, need, standing, spot, free) -> PartyRun:
     chosen = standing[:MAX_HELPERS]
+    names = (ask.asker,) + tuple(y.member for y in chosen)
+    route_context = {
+        name: (
+            int(free[name].member.level),
+            int(free[name].member.map_id),
+        )
+        for name in names
+        if name in free
+    }
     return PartyRun(
         ask.id,
         ask.asker,
@@ -798,6 +834,7 @@ def _run(ask, need, standing, spot) -> PartyRun:
         {y.member: y.id for y in chosen},
         level=int(getattr(need, "level", 0) or 0),
         map_id=int(getattr(need, "map_id", 0) or 0),
+        route_context=route_context,
     )
 
 
@@ -816,7 +853,7 @@ def _plan_ask(ask, need, board, taken, filled, yes_by_ask, gone, free, now, book
         return None, _skip_note(
             ask, need, "its objective has no spawn for a party to walk to"
         )
-    return _run(ask, need, standing, spot), None
+    return _run(ask, need, standing, spot, free), None
 
 
 def plan(asks, answers, quest_pass, helps, free, board, now, clock, book=None):

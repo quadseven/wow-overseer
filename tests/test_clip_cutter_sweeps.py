@@ -367,6 +367,56 @@ class TheTickLine(unittest.TestCase):
         )
 
 
+class TheTickLineReadsTheRealCounts(unittest.TestCase):
+    """#2251: scan_clips and sweep_clips carry `timed_out` as time_out
+    answers it, a count per new state. The line once read it as one number,
+    so every live tick raised TypeError and logged "clip scan failed"."""
+
+    class NoRows:
+        rowcount = 0
+
+        def execute(self, *_a):
+            pass
+
+        def fetchall(self):
+            return []
+
+    def test_time_out_answers_a_count_per_state(self):
+        counts = clipledger.time_out(self.NoRows(), now=NOW)
+        self.assertEqual(counts, {"no_view": 0, "failed": 0})
+
+    def test_per_state_counts_add_up_in_the_line(self):
+        self.assertEqual(
+            clipledger.tick_line(
+                {"written": 1, "expired": 0, "timed_out": {"no_view": 1, "failed": 2}},
+                {"timed_out": {"no_view": 0, "failed": 1}, "deleted": 0, "partial": 0},
+            ),
+            "clip scan: planned 1, expired 0, timed out 4, files deleted 0, "
+            "partial uploads removed 0",
+        )
+
+    def test_a_quiet_tick_in_the_real_shape_logs_nothing_and_raises_nothing(self):
+        quiet = clipledger.time_out(self.NoRows(), now=NOW)
+        scan = {"written": 0, "expired": 0, "timed_out": quiet}
+        swept = {"timed_out": dict(quiet), "deleted": 0, "partial": 0}
+        with (
+            mock.patch.object(map_server, "scan_clips", return_value=scan),
+            mock.patch.object(map_server, "sweep_clips", return_value=swept),
+            self.assertNoLogs(map_server.log, level="INFO"),
+        ):
+            self.assertEqual(map_server.clip_tick(), scan)
+
+    def test_a_sweep_that_timed_out_rows_after_a_failed_scan_is_counted(self):
+        self.assertEqual(
+            clipledger.tick_line(
+                None,
+                {"timed_out": {"no_view": 0, "failed": 2}, "deleted": 0, "partial": 0},
+            ),
+            "clip sweep after a failed scan: timed out 2, files deleted 0, "
+            "partial uploads removed 0",
+        )
+
+
 class Upload(unittest.TestCase):
     def test_the_stream_is_read_in_bounded_chunks(self):
         tmp = tempfile.TemporaryDirectory()

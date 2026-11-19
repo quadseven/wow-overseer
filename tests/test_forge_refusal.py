@@ -16,6 +16,8 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+import craft  # noqa: E402
+import fireplan  # noqa: E402
 import levelroute  # noqa: E402
 import travel  # noqa: E402
 
@@ -140,6 +142,8 @@ def _forge_once(refusal_stub, spawn, smelters, claim_calls, logs, town_stop=Fals
     async def town_demand(_cohort=None):
         return smelters
 
+    nearest_focuses = []
+
     class Log:
         def info(self, msg, *a):
             logs.append(msg % a)
@@ -150,11 +154,15 @@ def _forge_once(refusal_stub, spawn, smelters, claim_calls, logs, town_stop=Fals
         "asyncio": types.SimpleNamespace(to_thread=to_thread),
         "log": Log(),
         "travel": travel,
+        "craft": craft,
+        "fireplan": fireplan,
         "_cohort_key": lambda c: None,
         "_forge_errands": lambda key: {} if town_stop else smelters,
         "_family_of": lambda c: (["Grug", "Ugga"], "Grug"),
         "_fetch_positions": lambda names: {"Grug": {"map_id": 0}},
-        "_nearest_forge": lambda leader: spawn,
+        "_nearest_forge": lambda leader, focus_id: (
+            nearest_focuses.append(focus_id) or spawn
+        ),
     }
     if refusal_stub is not None:
         ns["_forge_refusal"] = refusal_stub
@@ -163,6 +171,7 @@ def _forge_once(refusal_stub, spawn, smelters, claim_calls, logs, town_stop=Fals
         _mid_run=mid_run,
         _claim_town_slot=claim,
         _town_stop_demand=town_demand,
+        nearest_focuses=nearest_focuses,
     )
     return ns["_forge_once"], me
 
@@ -201,6 +210,30 @@ class TheForgePassWaits(unittest.TestCase):
         claims, logs = self.go("", spawn=far, town_stop=True, smelters={"Grog": 2657})
         self.assertEqual(claims, [])
         self.assertTrue([x for x in logs if "wait for a town stop" in x])
+
+    def test_mixed_focus_errands_are_served_in_stable_focus_groups(self):
+        smelters = {"Grug": 2657, "Grog": fireplan.SMELT_SPELL}
+        spawn = dict(FORGE)
+        fn, me = _forge_once(None, spawn, smelters, [], [])
+
+        asyncio.run(fn(me))
+        spawn["d2"] = 0
+        asyncio.run(fn(me))
+        asyncio.run(fn(me))
+        # AI-REVIEW 2026-11-18 [Grug Elder/gpt-6-luna] 2973-G1
+        # (standard-ai-review-provenance, PR #2973): pin the known focus IDs
+        # independently so an incorrect implementation constant cannot validate itself.
+        self.assertEqual(
+            [3, 3, 543],
+            me.nearest_focuses,
+        )
+
+        smelters.pop("Grug")
+        asyncio.run(fn(me))
+        self.assertEqual(
+            [3, 3, 543, 543],
+            me.nearest_focuses,
+        )
 
     def test_the_refusal_is_asked_after_the_walk_is_known_and_before_the_claim(self):
         body = BRIDGE.split("async def _forge_once", 1)[1].split(

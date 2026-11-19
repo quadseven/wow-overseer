@@ -102,8 +102,9 @@ MEASURED_FOCUS = {
     19788: 0,
     19791: 1,
     19795: 1,
-    # MINING - the one focus-gated entry that has a walk (infra#3748)
+    # MINING - the smelts have explicit focus routes
     2657: 3,
+    14891: 543,
     # COOKING
     2538: 4,
     2540: 4,
@@ -251,6 +252,7 @@ MEASURED_BANDS = {
     19795: (1, 295, 315),
     # MINING
     2657: (1, 25, 70),
+    14891: (1, 300, 310),
     # COOKING
     2538: (1, 45, 85),
     2540: (1, 45, 85),
@@ -1344,6 +1346,7 @@ class MeasuredCraftBands(unittest.TestCase):
             9918: 200,
             16641: 250,
             18243: 250,
+            14891: 230,
         }
         for skill_recipes in craft.RECIPES.values():
             for index, recipe in enumerate(skill_recipes):
@@ -1556,24 +1559,18 @@ class SpellFocusTests(unittest.TestCase):
         # of that claim: the pure aim builder, and the bridge pass that writes
         # what it returns. Imported by name rather than by grepping source, so
         # a rename breaks this instead of silently passing.
-        self.assertEqual(set(craft.FOCUS_AIMS), {3})
+        self.assertEqual(set(craft.FOCUS_AIMS), {3, craft.BLACK_FORGE_FOCUS_ID})
         self.assertEqual(craft.FOCUS_AIMS[3], "forge")
+        self.assertEqual(craft.FOCUS_AIMS[craft.BLACK_FORGE_FOCUS_ID], "black-forge")
         self.assertEqual(travel.FORGE_FOCUS_ID, 3)
         self.assertTrue(callable(travel.forge_aim))
         self.assertTrue(callable(travel.within_focus))
 
-    def test_a_smelt_spell_may_only_appear_under_mining_with_the_forge_focus(self):
-        """The smelt chain, read off the running worldserver's Spell.dbc.
-
-        infra#3747's version of this refused every one of these ids outright.
-        Now that one of them ships, the pin has to say something sharper than
-        "no smelts": a smelt is Forge-gated and sits on skill line 186, so an
-        entry that named one under Engineering, or named one with `focus` left
-        at its default, would be a recipe DriveCraft could never cast and this
-        is where that is caught. 2659 is Smelt Bronze, NOT Smelt Copper as
-        infra#3738 states; Smelt Copper is 2657."""
+    def test_each_smelt_is_a_mining_recipe_with_its_required_focus(self):
+        """Every shipped smelt is a Mining ability with its measured focus."""
         smelt_spells = {
             2657: "Smelt Copper",
+            14891: "Smelt Dark Iron",
             2658: "Smelt Silver",
             2659: "Smelt Bronze",
             3304: "Smelt Tin",
@@ -1598,8 +1595,8 @@ class SpellFocusTests(unittest.TestCase):
                     )
                     self.assertEqual(
                         recipe.focus,
-                        3,
-                        "%s carries RequiresSpellFocus = 3 (Forge) in "
+                        543 if recipe.spell_id == 14891 else 3,
+                        "%s carries its required focus in "
                         "Spell.dbc; declaring anything else here would skip "
                         "the walk" % recipe.name,
                     )

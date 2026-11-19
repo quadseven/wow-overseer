@@ -79,6 +79,11 @@
     "name": "Dream Dust",
     "subclass": 12
   },
+  "11370": {
+    "class": 7,
+    "name": "Dark Iron Ore",
+    "subclass": 7
+  },
   "118": {
     "class": 0,
     "name": "Minor Healing Potion",

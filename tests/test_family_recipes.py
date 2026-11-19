@@ -168,7 +168,10 @@ class AFamilyCrafterIsDueATrainerRecipe(unittest.TestCase):
         for skill, recipes in craft.RECIPES.items():
             for recipe in recipes:
                 if recipe.spell_id in (
-                    craft.AUTO_LEARNED | PLAN_TAUGHT | VENDOR_OR_QUEST_COOKING
+                    craft.AUTO_LEARNED
+                    | craft.QUEST_TAUGHT
+                    | PLAN_TAUGHT
+                    | VENDOR_OR_QUEST_COOKING
                 ):
                     continue
                 with self.subTest(skill=skill, recipe=recipe.name):

@@ -81,6 +81,35 @@ def _coverage():
 
 
 class TheMilestones(unittest.TestCase):
+    def test_daily_readiness_line_is_due_once_per_utc_day_even_after_restart(self):
+        now = 1_800_000_000
+        day = now // 86400
+
+        self.assertTrue(road.readiness_line_due({}, now))
+        self.assertFalse(road.readiness_line_due({"day": day}, now + 3600))
+        self.assertTrue(road.readiness_line_due({"day": day - 1}, now))
+
+    def test_readiness_line_reports_the_existing_total_and_seat_milestones(self):
+        payload = {
+            "total": {"percent": 73},
+            "milestones": [
+                {"key": "A", "have": 38, "want": 40},
+                {"key": "B", "have": 31, "want": 40},
+                {"key": "C", "have": 40, "want": 40},
+                {"key": "D", "have": 2, "want": 10},
+                {"key": "E", "have": 22, "want": 40},
+                {"key": "F", "have": 17, "want": 40},
+                {"key": "G", "have": 4, "want": 8},
+                {"key": "H", "have": 0, "want": 1},
+            ],
+        }
+
+        self.assertEqual(
+            road.readiness_line("Guild", payload),
+            "Molten Core readiness: Guild total=73%; seats "
+            "A=38/40, B=31/40, C=40/40, E=22/40, F=17/40",
+        )
+
     def test_eight_milestones_in_order(self):
         out = road.build("Cave", _teams(), None, [])
         self.assertEqual([m["key"] for m in out["milestones"]], list("ABCDEFGH"))

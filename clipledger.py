@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 import achievements
 import eventclips
+import eye
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +82,24 @@ NO_STREAMED_IN_RUN = "no streamed family member in the run"
 RUN_AMBIGUOUS = "run ambiguous"
 
 
+# A view is live while its clock is no older than this: the bound past which
+# the eye read calls the same clock stale, so the two agree on a view.
+VIEW_LIVE_SECONDS = eye.STALE_AFTER_SECONDS
+
+
+def view_live(seen, segment, now, within=VIEW_LIVE_SECONDS) -> bool:
+    """Is a streamed view live, by the cutter's clocks (epoch seconds)?
+
+    `segment` is when the view's recorder wrote its newest segment and `seen`
+    when the cutter's poll last named the view. A view with a segment clock is
+    judged by it alone: a recorder that still runs over a picture that stopped
+    moving is polled every time and is not live. A view with no clock at all
+    was never named by the cutter and is not live.
+    """
+    clock = seen if segment is None else segment
+    return clock is not None and now - clock <= within
+
+
 def _with_view(detail, extra):
     return "%s; %s" % (detail, extra) if detail else extra
 
@@ -99,10 +118,18 @@ class Views:
     event only when the run's leader is in the subject's family, and presence
     is limited to the leader's family. When the subject's family is unknown,
     one matching run is taken and several are ambiguous: no guess.
+
+    `live_of(name, path)` says whether a streamed view is live right now. With
+    it, a streamed tier whose view is down is passed over for the first tier
+    in the same order whose view is live. When no tier reads live, the first
+    streamed tier is still asked, as it is without `live_of`: the read is of
+    this moment, not of the event's, and its clocks are empty after a restart,
+    so the cutter, which holds the footage, keeps the last word.
     """
 
-    def __init__(self, path_of, roster, runs, rows, now, families=None):
+    def __init__(self, path_of, roster, runs, rows, now, families=None, live_of=None):
         self.path_of = path_of
+        self.live_of = live_of
         self.roster = list(roster)
         self.runs = sorted(runs, key=lambda r: (r["started_at"], r["id"]))
         self.rows = [r for r in rows if r.get("map") is not None]
@@ -141,28 +168,38 @@ class Views:
             and achievements.in_run(run, r["first_seen"], int(r["map"]), self.now)
         }
 
-    def pick(self, who, leader, members, detail, reason=NOT_IN_A_RUN):
-        """(path, detail) for `who`; `leader` is None when no run is known."""
-        self.tried = []
-        own = self.path_of(who)
-        self.tried.append(("subject", who, own))
-        if own:
-            return own, detail
+    def _tiers(self, who, leader, members):
+        """(tier, name) in the order the views are tried."""
+        yield "subject", who
         if leader is None:
-            return "", _with_view(detail, reason)
+            return
         if leader != who:
-            lead = self.path_of(leader)
-            self.tried.append(("leader", leader, lead))
-            if lead:
-                return lead, _with_view(detail, "view: %s (leader)" % leader)
+            yield "leader", leader
         present = set(members)
         for name in self.roster:
             if name in present and name not in (who, leader):
-                path = self.path_of(name)
-                self.tried.append(("party member", name, path))
-                if path:
-                    return path, _with_view(detail, "view: %s (party member)" % name)
-        return "", _with_view(detail, NO_STREAMED_IN_RUN)
+                yield "party member", name
+
+    def pick(self, who, leader, members, detail, reason=NOT_IN_A_RUN):
+        """(path, detail) for `who`; `leader` is None when no run is known."""
+        self.tried = []
+        down = None  # the first streamed tier, when its view was not live
+        for tier, name in self._tiers(who, leader, members):
+            path = self.path_of(name)
+            self.tried.append((tier, name, path))
+            if not path:
+                continue
+            note = (
+                detail
+                if tier == "subject"
+                else _with_view(detail, "view: %s (%s)" % (name, tier))
+            )
+            if self.live_of is None or self.live_of(name, path):
+                return path, note
+            down = down or (path, note)
+        if down:
+            return down
+        return "", _with_view(detail, reason if leader is None else NO_STREAMED_IN_RUN)
 
     def for_event(self, who, at, map_id, detail):
         found, ambiguous = self._matches(who, at, map_id)
@@ -410,6 +447,7 @@ def plan_requests(
     runs: Iterable[Mapping] = (),
     families: Mapping[str, Iterable[str]] | None = None,
     late_horizon: timedelta = LATE_HORIZON,
+    live_of: Callable[[str, str], bool] | None = None,
 ) -> list[dict]:
     """The ledger rows to insert now, oldest event first.
 
@@ -419,12 +457,17 @@ def plan_requests(
     `runs` are the dungeon runs, open or ended, that an event may sit in; an
     event row names its map as `map`. `families` maps each family to its
     members; a run is matched to an event within the subject's family only.
+
+    `live_of(name, path)` says whether a streamed view is live; a view that is
+    down gives way to a live one in the same run (see Views).
     """
     guilds = frozenset(family_guilds)
     order = list(roster)
     names = frozenset(order)
     loot_rows, event_rows = list(loot_rows), list(event_rows)
-    views = Views(path_of, order, list(runs), loot_rows + event_rows, now, families)
+    views = Views(
+        path_of, order, list(runs), loot_rows + event_rows, now, families, live_of
+    )
     rows = _loot_requests(loot_rows, guilds, now, views)
     rows += _event_requests(event_rows, order, views, families)
     rows += _clear_requests(list(cleared_runs), names, views)
@@ -589,22 +632,29 @@ def delete_expired(cur, root: str) -> int:
     return done
 
 
+def _count(value) -> int:
+    """One tick count as a number. `time_out` answers its count per new state
+    ({"no_view": n, "failed": n}), and those add up; a missing count is 0."""
+    if isinstance(value, dict):
+        return sum(int(v or 0) for v in value.values())
+    return int(value or 0)
+
+
 def tick_line(scan, swept) -> str:
     """The one log line for a clip tick, or "" for a tick that did nothing.
 
     `scan` is what the scan answered (None when it failed) and `swept` what
     the sweeps answered. A count either side left out reads as zero, so the
     scan with no roster and a sweep with no clip folder need no special case.
+    Both sides carry `timed_out` as `time_out` answers it, a dict per state.
     """
     scan_counts = scan if isinstance(scan, dict) else {}
     swept = swept if isinstance(swept, dict) else {}
-    planned = int(scan_counts.get("written") or 0)
-    expired = int(scan_counts.get("expired") or 0)
-    timed_out = int(scan_counts.get("timed_out") or 0) + int(
-        swept.get("timed_out") or 0
-    )
-    deleted = int(swept.get("deleted") or 0)
-    partial = int(swept.get("partial") or 0)
+    planned = _count(scan_counts.get("written"))
+    expired = _count(scan_counts.get("expired"))
+    timed_out = _count(scan_counts.get("timed_out")) + _count(swept.get("timed_out"))
+    deleted = _count(swept.get("deleted"))
+    partial = _count(swept.get("partial"))
     if not (planned or expired or timed_out or deleted or partial):
         return ""
     tail = "timed out %d, files deleted %d, partial uploads removed %d" % (
@@ -636,18 +686,27 @@ def _iso(t) -> str | None:
     return t.isoformat() if isinstance(t, datetime) else (t or None)
 
 
-_VIEW_NOTE = re.compile(r"view: ([A-Za-z]{2,12}) \((?:leader|party member)\)")
+_VIEW_NOTE = re.compile(r"view: ([A-Za-z]{2,12}) \((leader|party member)\)")
+# What a story says under a clip filmed from another member's view: whose
+# view it is and which tier of the view rule that member was.
+VIEW_LINE = "Filmed from the view of %s (%s)."
 
 
-def view_owner(row: Mapping) -> str:
-    """Whose eyes a clip shows: the member the detail names, else the subject."""
+def _other_view(row: Mapping):
+    """(member, tier) when the clip is from another member's view, else None."""
     # The planner writes the marker at the start of a "; " part. Any other
     # text in the detail, such as a cutter's note, is never read for it.
     for part in (row.get("detail") or "").split("; "):
         found = _VIEW_NOTE.match(part)
         if found:
-            return found.group(1)
-    return row["character"]
+            return found.group(1), found.group(2)
+    return None
+
+
+def view_owner(row: Mapping) -> str:
+    """Whose eyes a clip shows: the member the detail names, else the subject."""
+    other = _other_view(row)
+    return other[0] if other else row["character"]
 
 
 SUBJECT_KINDS = ("loot", "boss_kill")
@@ -704,7 +763,9 @@ def shelf(rows: Iterable[Mapping]) -> dict:
 def link(row: Mapping | None) -> dict:
     """What a story or timeline entry adds for its event's ledger row.
 
-    A ready row with a file adds `clip` (url and kind). A no_view row adds
+    A ready row with a file adds `clip` (url and kind, plus `view_note` when
+    the clip was filmed from another member's view: it names that member and
+    the tier, leader or party member). A no_view row adds
     `clip_note`, saying no live view was up. A failed row adds `clip_note`
     with its recorded reason. Any other state, or no row at all, adds
     nothing: the entry says nothing about clips.
@@ -712,7 +773,11 @@ def link(row: Mapping | None) -> dict:
     if not row:
         return {}
     if row.get("state") == "ready" and row.get("file_name"):
-        return {"clip": {"url": clip_url(row["file_name"]), "kind": row["kind"]}}
+        clip = {"url": clip_url(row["file_name"]), "kind": row["kind"]}
+        other = _other_view(row)
+        if other:
+            clip["view_note"] = VIEW_LINE % other
+        return {"clip": clip}
     if row.get("state") == "no_view":
         return {"clip_note": NO_VIEW_LINE}
     if row.get("state") == "failed":
