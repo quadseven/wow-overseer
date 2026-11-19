@@ -218,6 +218,10 @@ volume both containers mount), and the judge reads the worldserver log from
 world adds, which carries the module's and the bots' lines at trace and info
 level); `--log` overrides both. With none of them it reports a log that
 could not be read, which is INVALID.
+On a `bridge: on` decree the log assertions also read the bridge sidecar's own log, the
+worldserver log followed by `EPH_BRIDGE_LOG_FILE`, else `$EPH_LOGS_DIR/Bridge.log` (the sidecar
+tees its output there); a bridge log that is missing is INVALID, so a forbidden line can never
+read as absent for want of a file.
 It reads the variables and resolved cast the seed left in `EPH_VARS_FILE`, runs
 the `act` steps (by time, or when a named observation first holds), samples the
 `observe` entries and decides one of three verdicts:
