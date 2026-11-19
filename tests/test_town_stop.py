@@ -68,19 +68,20 @@ class WhatCountsAsAStop(unittest.TestCase):
 
 
 class AStopGoesAheadOfTheQueueIntoAFreeColumn(unittest.TestCase):
-    def queue(self):
+    def queue(self, aim=MAILBOX):
         """Clearance waited first and the mail pass was served since, so an
-        ordinary mail ask stands aside for it."""
+        ordinary mail ask stands aside for it. A keyword aim keeps the raw
+        point ceiling out of a test that is about queue order."""
         s = slot()
-        s.settle(ask(s, "mail", MAILBOX, 0.0), True, 0.0)
+        s.settle(ask(s, "mail", aim, 0.0), True, 0.0)
         s.holder = None
         ask(s, "clearance", "at:1:5,5,5", 10.0, column="vendor")
         s.holder = None
         return s
 
     def test_an_ordinary_trip_stands_aside_for_the_older_want(self):
-        s = self.queue()
-        d = ask(s, "mail", MAILBOX, 100.0, distance=790.0)
+        s = self.queue("banker")
+        d = ask(s, "mail", "banker", 100.0, distance=790.0)
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
         self.assertIn("stands aside", d.reason)
 

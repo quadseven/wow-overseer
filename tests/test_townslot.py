@@ -2859,7 +2859,7 @@ class AWaitLineSaysThePasssOwnWait(unittest.TestCase):
             got = slot.want(
                 claimant=name,
                 character="Grug",
-                aim="at:0:%d,0,0" % len(name),
+                aim="%d" % len(name),
                 leader="Grug",
                 column="",
                 retaskable=("",),
@@ -2872,7 +2872,7 @@ class AWaitLineSaysThePasssOwnWait(unittest.TestCase):
         decision = slot.want(
             claimant="auction",
             character="Grug",
-            aim="at:0:7,0,0",
+            aim="7",
             leader="Grug",
             column="",
             retaskable=("",),
