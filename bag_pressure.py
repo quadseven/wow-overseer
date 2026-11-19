@@ -709,6 +709,43 @@ def vendor_trip_makes_room(free_slots: dict, sellable: dict) -> bool:
     )
 
 
+# A MEMBER NO VENDOR CAN CLEAR IS NOT HELD FOR ONE (#1261). A member at the
+# floor whose every stack is kept (nothing a vendor will buy), or whose vendor
+# visits have changed nothing VENDOR_VISIT_LIMIT times, cannot be helped by
+# another town pass, so holding the family for it waits for a thing that never
+# comes. Such a member is left out of the gates' floor reading: the family
+# proceeds, and the bridge logs one line naming the member and why.
+VENDOR_VISIT_LIMIT = 3
+
+
+def floor_kept_count(name: str, rows: Iterable[dict], keep_names=()) -> int:
+    """How many of `name`'s carried stacks the vendor pass keeps."""
+    return sum(
+        1
+        for row in rows or ()
+        if str(row.get("holder", "")) == str(name)
+        and (vendor_refusal(row, keep_names) or KEPT_UNREAD)
+    )
+
+
+def vendor_cannot_clear(
+    name: str, sellable: dict, visits_unchanged: dict, limit: int = VENDOR_VISIT_LIMIT
+) -> str:
+    """Why no vendor can make room for `name`, or '' when one still might.
+
+    `sellable` is the vendor pass's read (name -> stacks a vendor will buy; a
+    member it has not read is absent and is never called unclearable on that
+    alone), `visits_unchanged` name -> module vendor visits that reported
+    nothing changed.
+    """
+    if name in (sellable or {}) and int(sellable[name]) <= 0:
+        return "nothing a vendor will buy"
+    seen = int((visits_unchanged or {}).get(name, 0))
+    if seen >= limit:
+        return "%d vendor visits changed nothing" % seen
+    return ""
+
+
 # TOWN FIRST, THEN THE DUNGEON (#265). A campaign that was withheld at
 # TOWN_RUN_FREE_SLOTS and let go again at TOWN_RUN_FREE_SLOTS + 1 flapped: one
 # sale lifted a member to four, the run opened, the first loot put him back at

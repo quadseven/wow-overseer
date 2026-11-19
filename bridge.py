@@ -3223,6 +3223,13 @@ _BAG_HOLD_STUCK: dict[str, tuple] = {}
 # vendor step ended. `_bag_hold_why` puts the two together for the log and for
 # the campaign's withheld reason.
 _BAG_FLOOR_WHY: dict[str, str] = {}
+# Per member at the floor: stacks the vendor pass keeps (#1261), the module
+# vendor visits that changed nothing, and the members already logged as
+# released from the floor hold.
+_FLOOR_KEPT: dict[str, int] = {}
+_VISITS_UNCHANGED: dict[str, int] = {}
+_VISIT_SEEN: dict[str, object] = {}
+_FLOOR_RELEASED_SAID: set = set()
 _TOWN_PASS_NOTE: dict[tuple, str] = {}
 # The hold (its `since`) the reason was last logged for, per family key.
 _BAG_HOLD_SAID: dict[tuple, float] = {}
@@ -3247,14 +3254,81 @@ def _prune_bag_hold_stuck(families: dict) -> None:
 
 def _note_bag_floor(names, free_slots: dict, rows: list, sellable: dict) -> None:
     """Record what a vendor can do for each member at the bag floor."""
+    # Looked up: the queue tests load this function in isolation.
+    kept_by = globals().setdefault("_FLOOR_KEPT", {})
+    visits = globals().setdefault("_VISITS_UNCHANGED", {})
+    said = globals().setdefault("_FLOOR_RELEASED_SAID", set())
     for name in names:
         free = (free_slots or {}).get(name)
         if isinstance(free, int) and 0 <= free <= bag_pressure.TOWN_RUN_FREE_SLOTS:
             _BAG_FLOOR_WHY[name] = bag_pressure.floor_reason(
                 name, int((sellable or {}).get(name, 0)), rows,
                 keep_names=OWNER_KEEPS)
+            kept_by[name] = bag_pressure.floor_kept_count(
+                name, rows, keep_names=OWNER_KEEPS)
         else:
             _BAG_FLOOR_WHY.pop(name, None)
+            kept_by.pop(name, None)
+            visits.pop(name, None)
+            said.discard(name)
+
+
+_VISITS_SQL = ("SELECT subject_name AS name, last_seen FROM "
+               "acore_characters.overseer_event WHERE kind = 'town_trip' "
+               "AND subject_id = 0 AND LEFT(detail, 7) = 'vendor:' "
+               "AND subject_name IN (%s)")
+
+
+def _note_vendor_visits(names) -> None:
+    """Count the module's vendor visits that reported NOTHING CHANGED (#1261).
+
+    The module writes a 'town_trip' event per visit; proof 0 is nothing
+    changed. A visit is counted once per new last_seen. A member whose bags
+    a vendor changed (more free slots than the last visit) starts over.
+    """
+    names = list(names)
+    if not names:
+        return
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_VISITS_SQL % ",".join(["%s"] * len(names)), names)
+            rows = cur.fetchall()
+    except Exception:
+        log.exception("bag floor: could not read the vendor visits")
+        return
+    for row in rows:
+        name, seen = row["name"], row["last_seen"]
+        if _VISIT_SEEN.get(name) != seen:
+            _VISIT_SEEN[name] = seen
+            _VISITS_UNCHANGED[name] = _VISITS_UNCHANGED.get(name, 0) + 1
+
+
+def _floor_release(names, free_slots: dict) -> dict:
+    """`free_slots` without the members no vendor can clear (#1261).
+
+    A member at the floor with nothing a vendor will buy, or whose vendor
+    visits changed nothing bag_pressure.VENDOR_VISIT_LIMIT times, is not
+    held for: its reading drops out, which every floor gate reads as room
+    unknown (fail open). One line names each, once.
+    """
+    at_floor = _at_floor(names, free_slots)
+    if not at_floor:
+        return free_slots
+    globals().get("_note_vendor_visits", lambda n: None)(at_floor)
+    sellable = globals().get("_VENDOR_SELLABLE", {})
+    out = dict(free_slots)
+    for name in at_floor:
+        why = bag_pressure.vendor_cannot_clear(
+            name, sellable, _VISITS_UNCHANGED)
+        if not why:
+            continue
+        out.pop(name, None)
+        if name not in _FLOOR_RELEASED_SAID:
+            _FLOOR_RELEASED_SAID.add(name)
+            log.warning("bag floor: %s released from the hold at %d free "
+                        "slots: %s, %d stack(s) kept; the family proceeds",
+                        name, free_slots[name], why, _FLOOR_KEPT.get(name, 0))
+    return out
 
 
 def _note_vendor_sellable(names, sellable: dict) -> None:
@@ -3932,6 +4006,9 @@ def _bag_errand_needed(
     family is questing, and an errand that took it back to town every cooldown
     for an hour would be the same wait in instalments.
     """
+    release = globals().get("_floor_release")
+    if release is not None:
+        free_slots = release(names, free_slots)
     return (bool(campaign_waiting)
             and bag_pressure.family_town_run_needed(free_slots)
             and (not _bag_hold_stuck(names, free_slots, claim_store)
@@ -4240,6 +4317,10 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
         return _withheld(withheld, reason)
 
     free_slots = _fetch_free_slots(names)
+    # A member no vendor can clear does not hold the family (#1261).
+    release = globals().get("_floor_release")
+    if release is not None:
+        free_slots = release(names, free_slots)
     # Looked up for the same reason as the gear gate: the campaign tests load
     # this function in isolation.
     hold_stuck = globals().get("_bag_hold_stuck")
@@ -27414,11 +27495,11 @@ class Bridge(discord.Client):
         who = campaignqueue._family(key)
         names = list(fam["names"])
         leader = str(fam["leader"].get("name") or "")
-        looped_by = globals().get("_prof_loop_family")
-        if looped_by is not None and looped_by(key):
-            _prof_loop_quiet("attunement", key, "no attunement walk: the "
-                             "family is in the profession loop")
-            return False
+        # A FAMILY IN THE PROFESSION LOOP IS NOT STOOD DOWN. The step writes no
+        # job: it takes the town slot and kind='quest' rows, and attunestep's own
+        # gates (queue due, job idle or quest, not mid-run) already wait for the
+        # loop's craft, town and train phases. Standing the whole step down for a
+        # looped family meant a family that lives in the loop never took the quest.
         if not names or not leader:
             return False
         level_rows = await asyncio.to_thread(_queue_level_rows, fam)
@@ -33731,6 +33812,7 @@ def _fetch_guild_social_facts(bounds) -> dict:
     names = sorted({str(r["name"]) for r in facts["rows"] if r.get("name")})
     worn, skills, quest_rows, campaigns = [], [], [], []
     death_loops: dict = {}
+    death_risks: dict = {}
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT NOW() AS now")
         now = (cur.fetchone() or {}).get("now")
@@ -33756,9 +33838,13 @@ def _fetch_guild_social_facts(bounds) -> dict:
             # the same deaths read, #2277): the death-loop asks are planned
             # from this read in the social pass (deathask.plan_pass).
             death_rows = _death_rows(cur, names)
-            death_loops = deathloop.loops(
-                death_rows,
-                {str(r["name"]): int(r.get("level") or 0) for r in facts["rows"]})
+            death_levels = {str(r["name"]): int(r.get("level") or 0)
+                            for r in facts["rows"]}
+            death_loops = deathloop.loops(death_rows, death_levels)
+            # The death slope beside the loops (#2636): the risks over the
+            # same deaths read, so the death-ask pass can ask for a member
+            # at 3+ deaths in an hour before the loop flag trips.
+            death_risks = deathloop.risks(death_rows, death_levels)
         try:
             cur.execute(guildsocial.CAMPAIGNS_SQL)
             campaigns = list(cur.fetchall())
@@ -33801,6 +33887,7 @@ def _fetch_guild_social_facts(bounds) -> dict:
         "gear": guildsocial.gear_by_name(facts["rows"], worn, skills),
         "campaigns": campaigns, "drops": drops, "pug_calls": pug_calls,
         "lendable": lendable, "death_loops": death_loops,
+        "death_risks": death_risks,
     })
     return facts
 
@@ -33814,11 +33901,14 @@ def _death_ask_pass(facts: dict, mates: list, held: dict,
     expiry half runs even while the DEATH_ASK switch is off and when the
     loop pool is empty, so an ask already open always closes (#2344)."""
     loops = facts.get("death_loops") or {}
+    risks = facts.get("death_risks") or {}
     if not deathask.enabled():
-        return deathask.expire_pass(facts["asks"], loops, facts["now"])
+        return deathask.expire_pass(facts["asks"], loops, facts["now"],
+                                    risks=risks)
     return deathask.plan_pass(
         loops, mates, facts["asks"], facts["now"], held=held,
-        answers=facts.get("answers") or (), spoken=spoken, seated=seated)
+        answers=facts.get("answers") or (), spoken=spoken, seated=seated,
+        risks=risks)
 
 
 def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,

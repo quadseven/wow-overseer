@@ -1,0 +1,31 @@
+# Azuregos begins a natural open-world fight with the existing warrior. No
+# level, equipment, item, spell or gold changes are seeded.
+decree: v1
+id: open-world-tank-avoids-out-of-range-melee
+proves:
+  - {repo: quadseven/mod-overseer, issue: 967, criterion: "an open-world tank fight against a casting creature has no OUT_OF_RANGE melee-ability failures"}
+fix: {repo: quadseven/mod-overseer, commit: "9ec5197029c4bae116e521f4ab4298e6c73d32a2"}
+world: {class: full, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 30m
+cast:
+  - who: Grug
+    set: {alive: true, at: {creature: "Azuregos"}}
+    ceiling: "position only; no items, gear, levels, spells or gold"
+act:
+  - at: 0s
+    command: {who: Grug, kind: bot, text: "attack"}
+observe:
+  - name: tank-is-a-warrior-in-the-open-world
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters
+      WHERE guid = @cast0 AND class = 1 AND map = 1
+    expect: {scalar: "= 1"}
+  - name: casting-creature-fight-started
+    role: check
+    log: {pattern: "Azuregos.*casts|casts.*Azuregos", expect: {at_least: 1}}
+  - name: no-out-of-range-melee-ability-failures
+    role: check
+    log: {pattern: "OUT_OF_RANGE", expect: {count: 0}}

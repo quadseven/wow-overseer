@@ -283,6 +283,19 @@ class TheBridgeCarriesItOut(unittest.TestCase):
         self.assertLess(attune, body.index("for key, fam in sorted(fams.items()):"))
         self.assertIn("            if key in held:\n                continue", body)
 
+    def test_a_family_in_the_profession_loop_is_not_stood_down(self):
+        start = BRIDGE.index("    async def _attunement_for(")
+        body = BRIDGE[start : BRIDGE.index("    def _attune_hold_spent(", start)]
+        self.assertNotIn("_prof_loop_family", body)
+        self.assertNotIn("_prof_loop_quiet", body)
+        self.assertIn("attunestep.step(facts)", body)
+
+    def test_a_looped_family_on_a_busy_job_still_waits_in_the_step(self):
+        f = facts([at_lothos("Grug")], job="craft", due=True)
+        self.assertEqual(attunestep.step(f).verdict, attunestep.WAIT)
+        f = facts([at_lothos("Grug")], job="quest", due=True)
+        self.assertEqual(attunestep.step(f).verdict, attunestep.GO)
+
     def test_the_walk_goes_through_the_town_slot_with_a_long_lease(self):
         self.assertIn(
             "await self._claim_town_slot(ATTUNE_CLAIMANT, leader,\n"
