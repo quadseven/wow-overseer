@@ -23,15 +23,11 @@ class TheWalkAfterTheHearth(unittest.TestCase):
         self.assertIsNotNone(resume(at_home(), (hearthed(30), refused_walk(29)))[0])
 
     def test_the_retry_is_bounded_when_the_hold_never_lifts(self):
-        refusals = tuple(
-            refused_walk(40 - 7 * i) for i in range(BOUND)
-        )
+        refusals = tuple(refused_walk(40 - 7 * i) for i in range(BOUND))
         self.assertIsNone(resume(at_home(), (hearthed(45),) + refusals))
 
     def test_one_fewer_refusal_still_retries(self):
-        refusals = tuple(
-            refused_walk(40 - 7 * i) for i in range(BOUND - 1)
-        )
+        refusals = tuple(refused_walk(40 - 7 * i) for i in range(BOUND - 1))
         self.assertIsNotNone(resume(at_home(), (hearthed(45),) + refusals)[0])
 
     def test_refusals_from_before_the_landed_hearth_are_not_counted(self):
