@@ -607,7 +607,9 @@ class TheRealBlockerIsLevelAndTheQuorum(unittest.TestCase):
             self.assertFalse(raidrun.door_quorum_overridden())
             _, card = self._card_with(low=10)
         text = [
-            b["text"] for b in card["blockers"] if "holds a raid at the door" in b["text"]
+            b["text"]
+            for b in card["blockers"]
+            if "holds a raid at the door" in b["text"]
         ][0]
         self.assertIn("module defaults", text)
         self.assertIn("RAID_DOOR_QUORUM_", text)
@@ -617,7 +619,9 @@ class TheRealBlockerIsLevelAndTheQuorum(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=True):
             _, card = self._card_with(low=10)
         text = [
-            b["text"] for b in card["blockers"] if "holds a raid at the door" in b["text"]
+            b["text"]
+            for b in card["blockers"]
+            if "holds a raid at the door" in b["text"]
         ][0]
         self.assertIn("set on the bridge", text)
         self.assertNotIn("module defaults", text)
