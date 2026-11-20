@@ -89,13 +89,9 @@ def trainer_ranks(rows) -> tuple:
     a zero or negative cost is not a price and is ignored."""
     found = {}
     for row in rows or ():
-        spell, cost, level = (
-            _int(row.get("SpellId")),
-            _int(row.get("MoneyCost")),
-            _int(row.get("ReqLevel")),
-        )
+        cost = _int(row.get("MoneyCost"))
         if cost > 0:
-            found[spell] = (cost, level)
+            found[_int(row.get("SpellId"))] = (cost, _int(row.get("ReqLevel")))
     out = []
     for rank in RIDING_RANKS:
         cost, level = found.get(rank.spell, (rank.cost, rank.level))
@@ -108,6 +104,7 @@ def install_trainer_rows(rows) -> tuple:
     global _ranks
     _ranks = trainer_ranks(rows)
     return _ranks
+
 
 LOG_PREFIX = "purse:"
 
