@@ -1,7 +1,7 @@
 """The rehearsal grant flag lives only in the ephemeral example and its guard.
 
-No tracked file outside the ephemeral package, its example config and the
-tests (so the Dockerfiles, units, env examples and workflows too) may carry the
+No tracked file outside the ephemeral package, its example config, the
+tests and the docs (so the Dockerfiles, units, env examples and workflows too) may carry the
 harness grants line or the variable that carries it, so a copy of one of those
 files cannot enable grants there.
 """
@@ -15,8 +15,8 @@ FLAG_TEXT = "grants: enabled"
 FLAG_NAME = "EPH_HARNESS_GRANTS"
 # The one place the flag is allowed: the ephemeral world's own example config.
 ALLOWED = {"data/ephemeral/config.example.env"}
-# Not deployment files: the guard and its tests name the flag by design.
-EXEMPT_PREFIXES = ("ephemeral/", "tests/")
+# Not deployment files: the guard, its tests and the docs name the flag by design.
+EXEMPT_PREFIXES = ("ephemeral/", "tests/", "docs/")
 
 
 def tracked_files():
