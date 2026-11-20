@@ -7,6 +7,7 @@ is one and the title when there is not, so the operator reads the ship note
 straight from the ship pull request.
 
 Pure functions over (number, title, body) rows; nothing here reads GitHub.
+The ship workflow runs it as `python3 playerstory.py < rows.json`.
 """
 
 import re
@@ -42,3 +43,19 @@ def line(number, title, body) -> str:
 def collect(rows) -> str:
     """The ship note: one line per (number, title, body) row, in the order given."""
     return "\n".join(line(n, t, b) for n, t, b in rows)
+
+
+def main(argv=None, stdin=None, stdout=None) -> int:
+    """Entry point for the ship workflow: a JSON list of
+    {"number", "title", "body"} objects on stdin, the ship note on stdout."""
+    import json
+    import sys
+
+    rows = json.load(stdin or sys.stdin)
+    note = collect((r["number"], r.get("title"), r.get("body")) for r in rows)
+    print(note, file=stdout or sys.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

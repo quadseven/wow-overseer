@@ -41,6 +41,14 @@ class StoryTest(unittest.TestCase):
             "- #1 Two members could not sell their loot.\n- #2 B",
         )
 
+    def test_the_entry_point_reads_json_rows_and_prints_the_note(self):
+        import io
+
+        rows = '[{"number": 4, "title": "T", "body": null}]'
+        out = io.StringIO()
+        self.assertEqual(playerstory.main(stdin=io.StringIO(rows), stdout=out), 0)
+        self.assertEqual(out.getvalue(), "- #4 T\n")
+
 
 if __name__ == "__main__":
     unittest.main()
