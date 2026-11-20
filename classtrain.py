@@ -369,7 +369,7 @@ def _is_no_trainer_refusal(result: dict) -> bool:
     return (
         result.get("outcome") == "refused"
         and result.get("retryable") is False
-        and reason.startswith(NO_TRAINER_REASON)
+        and reason.startswith(NO_TRAINER_REASONS)
     )
 
 
@@ -401,6 +401,15 @@ def recent_walkers(rows, minutes=COOLDOWN_MINUTES, knights=()) -> set:
 # map it stands on (mod-overseer's walk_refusals fixture): not retryable, and
 # true for as long as the member stays on that map (ticket 2624).
 NO_TRAINER_REASON = "no trainer of this character's class on this map"
+# The module's other way of saying the same for a class walk: a trainer stands
+# on the map but no safe crossing reaches one with a spell to teach. Also not
+# retryable and also true for as long as the member stays, so it strands the
+# member the same way: a crossing is planned, no walk is repeated (#792).
+NO_REACHABLE_TRAINER_REASON = (
+    "no trainer of this character's class with a class spell to teach it "
+    "is reachable by a safe crossing"
+)
+NO_TRAINER_REASONS = (NO_TRAINER_REASON, NO_REACHABLE_TRAINER_REASON)
 # How far back the log is read for such a refusal: a member left on a map with
 # no trainer is not asked again for as long as it stays.
 STRANDED_READ_DAYS = 30
