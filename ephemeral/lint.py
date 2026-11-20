@@ -13,7 +13,7 @@ from . import dbschema, gamedata
 from .miniyaml import YamlError, loads
 
 TOP_KEYS = {
-    "decree", "id", "family", "proves", "fix", "world", "runs", "duration",
+    "decree", "id", "family", "proves", "box", "fix", "world", "runs", "duration",
     "cast", "arrange", "act", "observe",
 }  # fmt: skip
 REQUIRED_TOP = (
@@ -217,9 +217,26 @@ def _todo_or(lint, path, value, ok, what):
 
 def _header_proves(lint, doc):
     proves = doc.get("proves")
+    if _is_int(proves):
+        lint.ensure(
+            proves > 0,
+            "decree.proves",
+            "schema",
+            "must be a positive issue number",
+        )
+        box = doc.get("box")
+        lint.ensure(
+            isinstance(box, str) and bool(box.strip()),
+            "decree.box",
+            "schema",
+            "is required with numeric proves and must name one checkbox",
+        )
+        return
     if not isinstance(proves, list) or not proves:
         lint.err("decree.proves", "schema", "must be a non-empty list")
         return
+    if "box" in doc:
+        lint.err("decree.box", "schema", "requires numeric proves")
     fields = ("repo", "issue", "criterion")
     for i, p in enumerate(proves):
         path = f"decree.proves[{i}]"

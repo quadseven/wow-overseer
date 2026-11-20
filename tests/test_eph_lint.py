@@ -188,6 +188,28 @@ class CoordinatesTest(unittest.TestCase):
             [f for f in run(d) if f.level == "warning" and f.rule == "anchor"]
         )
 
+    def test_numeric_issue_and_box_are_accepted_for_batch_reporting(self):
+        d = doc()
+        d["proves"] = 42
+        d["box"] = "The family leaves without a defeat"
+        self.assertEqual(errors(d), [])
+
+    def test_numeric_issue_requires_box_text(self):
+        d = doc()
+        d["proves"] = 42
+        self.assertIn("schema", rules(d))
+
+    def test_box_cannot_be_attached_to_legacy_issue_list(self):
+        d = doc()
+        d["box"] = "The family leaves without a defeat"
+        self.assertIn("schema", rules(d))
+
+    def test_numeric_issue_must_be_positive(self):
+        d = doc()
+        d["proves"] = 0
+        d["box"] = "The family leaves without a defeat"
+        self.assertIn("schema", rules(d))
+
     def test_two_anchor_keys_are_rejected(self):
         d = doc()
         d["cast"][0]["set"]["at"] = {"creature": "A", "captured": "real-spot"}
