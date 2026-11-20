@@ -15,6 +15,7 @@ so the wait never ended and the trip re-fired into a sale of nothing.
 import ast
 import asyncio
 import pathlib
+import time
 import types
 import unittest
 
@@ -38,6 +39,7 @@ def _queue_vendor_sales(town_vendor: dict, logged: list, inserted: list):
     )
     namespace = {
         "asyncio": asyncio,
+        "time": time,
         "bag_pressure": bag_pressure,
         "item_plan": item_plan,
         "_fetch_town": lambda name: types.SimpleNamespace(
