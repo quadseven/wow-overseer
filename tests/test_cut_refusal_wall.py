@@ -36,8 +36,7 @@ class CutRefusal(unittest.TestCase):
 
     def test_a_whole_result_still_ends_at_its_closing_quote(self):
         whole = (
-            '{"outcome":"refused","reason":"the character is in combat",'
-            '"retry":true}'
+            '{"outcome":"refused","reason":"the character is in combat","retry":true}'
         )
         (recent,) = guildjobs.recent_from_rows([_row(whole)])
         self.assertEqual(recent.refusal, "the character is in combat")
