@@ -106,7 +106,8 @@ def _checkbox_result(body, target, standard_met, timestamps_complete):
         if not m:
             continue
         text = " ".join(m.group(3)[1:].casefold().split())
-        if text.startswith(target):
+        # A prefix must end on a word boundary: `foo` never matches `foobar`.
+        if text.startswith(target) and not text[len(target) :][:1].isalnum():
             matches.append((index, m))
     if not matches:
         return body, "no matching checkbox"

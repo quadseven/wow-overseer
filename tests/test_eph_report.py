@@ -231,6 +231,13 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(preview["checkbox_status"], "ticked")
         self.assertIn("- [x] The family leaves without a defeat", self._writes()[0][2])
 
+    def test_a_prefix_that_ends_mid_word_does_not_tick(self):
+        preview = self._run(
+            box="The family leave", body="- [ ] The family leaves without a defeat\n"
+        )
+        self.assertEqual(preview["checkbox_status"], "no matching checkbox")
+        self.assertFalse(any(x[0] == "PATCH" for x in self._writes()))
+
     def test_ambiguous_box_prefix_does_not_tick_either_match(self):
         body = f"- [ ] {BOX}\n- [ ] {BOX} after the next step\n"
         preview = self._run(box=BOX, body=body)
