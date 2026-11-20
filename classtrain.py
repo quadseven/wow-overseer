@@ -386,7 +386,10 @@ def _passing_refusal(row) -> bool:
     result = _result_of(row)
     if result.get("outcome") not in ("refused", "entered_combat"):
         return False
-    return result.get("transient") is True or result.get("reason") == "character is dead"
+    return (
+        result.get("transient") is True
+        or result.get("reason") == "character is dead"
+    )
 
 
 def recent_walkers(rows, minutes=COOLDOWN_MINUTES, knights=()) -> set:
