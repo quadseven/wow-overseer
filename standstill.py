@@ -100,6 +100,24 @@ def track(anchors, members, now) -> dict:
     return out
 
 
+def walking(anchors, members) -> frozenset:
+    """Names read away from the spot an earlier pass anchored them at (#2401).
+
+    A member whose last reading is more than STILL_YARDS from its anchor, on
+    the same map, was on the move between the two passes; the module refuses a
+    cast while a character walks ("character is moving"). A member with no
+    anchor, or on another map, is not named: there is nothing to compare. Call
+    it before `track`, which moves the anchors to this reading."""
+    out = set()
+    for m in members or ():
+        old = (anchors or {}).get(str(m.name))
+        if old is None or not _standing(m) or int(m.map_id) != int(old.map_id):
+            continue
+        if math.hypot(old.x - float(m.x), old.y - float(m.y)) >= STILL_YARDS:
+            out.add(str(m.name))
+    return frozenset(out)
+
+
 def _same_spot(anchor: Anchor, here) -> bool:
     map_id, x, y, level = here
     return (
