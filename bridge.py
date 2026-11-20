@@ -23203,7 +23203,17 @@ class Bridge(discord.Client):
             _fetch_positions,
             sorted({leader} | {t.character for t in mail_plan.takes}))
         where = positions.get(leader)
-        spawn = await asyncio.to_thread(_nearest_mailbox, leader)
+        # A MAILBOX THE MODULE RELEASED AS UNREACHABLE IS SKIPPED FOR THE NEXT
+        # ONE, the way clearance skips it (#227). The refusal grows with each
+        # repeat (townslot.SPENT_CEILING_SECONDS), so a family standing where
+        # no walking bearing reaches the box is not sent to it for ever; with
+        # no other box the pass says so and issues nothing.
+        mail_slot = self._cohort_town_slot(_cohort_key(cohort))
+        spent_now = time.monotonic()
+        spawn = await asyncio.to_thread(
+            _nearest_mailbox, leader,
+            lambda row: mail_slot.spent("mail", travel.mailbox_aim(
+                row, row.get("map_id")).aim, spent_now))
         post = travel.mailbox_aim(spawn, where.get("map_id") if where else None)
         if not post.aim:
             log.info("mail: nobody can be sent to a mailbox - %s", post.refused)
