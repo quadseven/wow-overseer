@@ -3941,6 +3941,17 @@ def _class_reagent_first(m, offer, recent, cap, kept=None, spell_reagents=None):
 # to the guild bank's Materials tab.
 CRAFTER_FLOOR = 5
 
+# COOKING IS THE ONE TRADE THAT CAN BE CAST AT 1 (#534). The floor above was
+# written when every Cooking recipe needed a Cooking Fire nobody could light,
+# so a cook at 1 could not work meat and a post to it was a letter never used.
+# The module now lights Basic Campfire before the recipe, and both meat
+# recipes grant a point from skill 1 (COOK_BANDS). With the floor at 5 a cook
+# at 1 was never posted meat, never carried any, so was never asked to cook,
+# and could never leave 1: the cycle that kept Cooking at 1 on every cook.
+# A cook at 1 now qualifies. The unopened-post and full-mailbox guards
+# (without_unclaimed, MAILBOX_FULL_LETTERS) still bound what one cook is sent.
+CRAFTER_FLOORS = {COOKING: 1}
+
 # The subject every post carries, which is also how an unopened one is found.
 POST_SUBJECT = "Guild materials"
 
@@ -3977,13 +3988,18 @@ def consumes_at(skill: int, value: int, entry: int) -> bool:
     A master tailor is read one bracket ahead (guildcorps.LADDER_AHEAD): the
     cloth and the leather its next rung and bag eat reach it before the cast.
     """
-    if int(value) < CRAFTER_FLOOR:
+    if int(value) < CRAFTER_FLOORS.get(int(skill), CRAFTER_FLOOR):
         return False
     ahead = guildcorps.LADDER_AHEAD if int(skill) == TAILORING else 0
     if int(entry) in _bag_inputs(skill, value):
         return True
     for recipe in craft.RECIPES.get(int(skill), ()):
-        if recipe.min_skill > int(value) + ahead:
+        low = recipe.min_skill
+        if int(skill) == COOKING and recipe.spell_id in COOK_BANDS:
+            # Both meat rungs grant a point from 1 (COOK_BANDS), not only
+            # from the ladder's own bracket edge.
+            low = min(low, COOK_BANDS[recipe.spell_id][0])
+        if low > int(value) + ahead:
             continue
         if any(
             r.entry == int(entry)
