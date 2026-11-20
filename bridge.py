@@ -101,6 +101,7 @@ import guildfund
 import guildshare
 import guildpost
 import guildroute
+import gearfetch
 import gearrouting
 import gearroomwait
 import gearroutingexec
@@ -9498,6 +9499,8 @@ class Bridge(discord.Client):
         # CLASS TRAINER WALKS UNDER WAY (classtrain.py): member -> monotonic
         # start. The cooldown is read from the command log.
         self._train_walks: dict = {}
+        # Members a gear fetch has walking to a meeting mailbox (#2503).
+        self._gear_fetch_walks: dict = {}
         # WHAT EACH GUILD MASTER WOULD WITHDRAW FOR THE GUILD FUND
         # (guildfund.py), so the guild bank pass walks it to a vault.
         self._fund_wants: dict = {}
@@ -15135,7 +15138,7 @@ class Bridge(discord.Client):
             getattr(self, "_guild_run_names", ()), getattr(self, "_job_steps", ()),
             getattr(self, "_corps_steps", ()), getattr(self, "_dues_walks", ()),
             getattr(self, "_crafter_walks", ()), getattr(self, "_post_walks", ()),
-            getattr(self, "_train_walks", ()))
+            getattr(self, "_train_walks", ()), getattr(self, "_gear_fetch_walks", ()))
         rows = await asyncio.to_thread(_roster_cohort_rows)
         family_of = {str(r.get("name") or ""): str(r.get("family") or "")
                      for r in rows}
@@ -20309,7 +20312,7 @@ class Bridge(discord.Client):
         posted = await asyncio.to_thread(_dues_recent_holders)
         busy = self._claims.busy(getattr(self, "_guild_run_names", ()), self._dues_walks,
                 self._guild_mail_runs, getattr(self, "_job_steps", ()),
-                getattr(self, "_train_walks", ()))
+                getattr(self, "_train_walks", ()), getattr(self, "_gear_fetch_walks", ()))
         # NATURALLY EARNED ONLY (the operator, 2026-09-24): a member posts dues
         # only once it has been reset to level 1; natural.py has the rule.
         eligible = await asyncio.to_thread(
@@ -20449,7 +20452,7 @@ class Bridge(discord.Client):
         free_slots = await asyncio.to_thread(_fetch_free_slots, receivers)
         busy = self._claims.busy(getattr(self, "_guild_run_names", ()), self._crafter_walks, self._guild_mail_runs,
                 self._dues_walks, getattr(self, "_job_steps", ()),
-                getattr(self, "_train_walks", ()))
+                getattr(self, "_train_walks", ()), getattr(self, "_gear_fetch_walks", ()))
         plan, notes = crafters.visits(letters, designated, known,
                                       frozenset(busy), free_slots)
         notes += await self._start_crafter_walks(plan, names, now)
@@ -20605,7 +20608,7 @@ class Bridge(discord.Client):
                 self._crafter_walks, self._guild_mail_runs,
                 self._dues_walks, self._corps_steps,
                 getattr(self, "_job_steps", ()),
-                getattr(self, "_train_walks", ()))
+                getattr(self, "_train_walks", ()), getattr(self, "_gear_fetch_walks", ()))
         sitting = await asyncio.to_thread(_sitting_out_to_walk, names)
         held_until = getattr(self, "_post_held_until", {})
         held = {n for n, until in held_until.items() if until > time.monotonic()}
@@ -20840,8 +20843,10 @@ class Bridge(discord.Client):
         walk, and the refusal spends the step's cooldown."""
         self._train_walks = guildroute.live_runs(
             self._train_walks, now, guildroute.GUILD_STEP_SECONDS)
+        self._gear_fetch_walks = guildroute.live_runs(
+            self._gear_fetch_walks, now, gearfetch.MEET_STAY_SECONDS)
         return self._claims.busy(getattr(self, "_guild_run_names", ()), self._train_walks,
-                self._dues_walks, self._guild_mail_runs,
+                self._gear_fetch_walks, self._dues_walks, self._guild_mail_runs,
                 self._corps_steps, getattr(self, "_post_walks", ()),
                 getattr(self, "_job_steps", ()))
 
@@ -20962,7 +20967,7 @@ class Bridge(discord.Client):
         busy = self._claims.busy(getattr(self, "_guild_run_names", ()), self._corps_steps, self._dues_walks,
                 self._guild_mail_runs, self._crafter_walks,
                 getattr(self, "_job_steps", ()),
-                getattr(self, "_train_walks", ()))
+                getattr(self, "_train_walks", ()), getattr(self, "_gear_fetch_walks", ()))
         cap = self._guild_walk_cap()
         near = await self._corps_mailbox_yards(members, names, busy, now)
         masters = await asyncio.to_thread(_corps_masters_at_mailbox, members)
@@ -21485,7 +21490,7 @@ class Bridge(discord.Client):
             self._job_steps, now, guildroute.GUILD_STEP_SECONDS)
         busy = self._claims.busy(getattr(self, "_guild_run_names", ()), self._job_steps, self._corps_steps, self._dues_walks,
                 self._guild_mail_runs, self._crafter_walks,
-                getattr(self, "_train_walks", ()))
+                getattr(self, "_train_walks", ()), getattr(self, "_gear_fetch_walks", ()))
         busy -= self._stranded_knights_freed(members)
         cap = self._guild_walk_cap()
         walking = standstill.walking(self._guild_still, members)
@@ -26128,7 +26133,7 @@ class Bridge(discord.Client):
         mid_job = self._claims.busy(getattr(self, "_job_steps", ()), getattr(self, "_corps_steps", ()),
                    getattr(self, "_dues_walks", ()), getattr(self, "_guild_mail_runs", ()),
                    getattr(self, "_crafter_walks", ()),
-                   getattr(self, "_train_walks", ()),
+                   getattr(self, "_train_walks", ()), getattr(self, "_gear_fetch_walks", ()),
                    {n for n, held in getattr(self, "_pvp_held", {}).items() if held},
                    getattr(self, "_classquest_held", ()))
         mates, held, needs = _guild_social_mates(facts, mid_job, doors)
