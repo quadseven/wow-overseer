@@ -75,7 +75,8 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     while it is the quest the quester's last move was for, or while it is in
     its log, of the zone it stands in, and has no objective spawn the quester
     could hunt (`_working`): nothing works that one, so its clock is the
-    world's, not the quester's;
+    world's, not the quester's. A quest whose objective spawns are on its map
+    but all over its level is waiting for its levels, and its clock waits too;
   * GIVER_MISSING: a creature is named as its giver, none is spawned, and
     no gameobject or item starts it either;
   * ENDER_MISSING: nothing is named to hand it in to, or the creature named is
@@ -1647,23 +1648,35 @@ def _unhuntable(
     it leaves for now, or on a map `_hunt` crosses to: the other classic
     continent, or the starting isles its side's boat reaches, which
     classquest.cross_map knows and far_map does not) and no chest to open
-    for an item of it (`chest_spots`)."""
+    for an item of it (`chest_spots`).
+
+    A quest whose objective spawns stand on the quester's map but every one
+    over its level is not unhuntable: it waits for the quester's levels, so
+    its clock waits too. A quester may take a quest levelroute.ABOVE levels
+    over itself, and quest 25 (Stonetalon Standstill), taken three levels
+    under it, was dropped as stalled by five questers (#1728)."""
     quest = cat.quest(qid)
     if quest is None:
         return True
     if _nearest_chest(member, qid, quest, object_left) is not None:
         return False
-    fields = tuple(
-        s
-        for s in classquest.within_level(member, classquest.solo_fields(quest))
-        if s.entry not in idle
-    )
+    solo = tuple(s for s in classquest.solo_fields(quest) if s.entry not in idle)
+    fields = classquest.within_level(member, solo)
     if _nearest(member, fields, left) is not None:
+        return False
+    if _nearest(member, _over_level(solo, fields), left) is not None:
         return False
     if member.placed:
         routable = tuple(s for s in fields if s.guid not in left)
         return classquest.cross_map(member, routable) < 0
     return True
+
+
+def _over_level(spawns, within) -> tuple:
+    """The spawns of `spawns` that classquest.within_level left out of
+    `within`: the ones too far over the quester's level to hunt yet."""
+    kept = {s.guid for s in within}
+    return tuple(s for s in spawns if s.guid not in kept)
 
 
 def _chested(quest) -> bool:
