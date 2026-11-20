@@ -294,6 +294,9 @@ class Reads:
     zone_levels: dict
     deaths: tuple = ()
     free_slots: dict = dataclasses.field(default_factory=dict)
+    # Members the bag-floor release judged no vendor can clear (#1261): their
+    # low reading does not hand the walk to a trip that cannot help them.
+    released: frozenset = frozenset()
     gathered: int = 0
     walking: object = None
     visited: dict = dataclasses.field(default_factory=dict)
@@ -709,7 +712,7 @@ def decide(order, reads) -> Step:
     ended = _ending(order, reads, what)
     if ended is not None:
         return ended
-    full = gatheraim.bags_block_gathering(reads.free_slots)
+    full = gatheraim.bags_block_gathering(reads.free_slots, released=reads.released)
     if full:
         return Step(TOWN, full)
     if order.item and not reads.spawns and reads.creatures:
