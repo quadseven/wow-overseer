@@ -611,6 +611,20 @@ class ShelfRepeatTests(unittest.TestCase):
         self.assertEqual((1, 2), (got[1]["nth"], got[1]["of"]))
         self.assertEqual((2, 2), (got[2]["nth"], got[2]["of"]))
 
+    def test_two_drops_a_failed_and_an_unviewed_row_give_two_cards_and_a_count(self):
+        shelf = clipledger.shelf(
+            [
+                self.row(1, 600),
+                self.row(2, 10),
+                self.row(3, 5, state="failed", file_name=None),
+                self.row(4, 5, state="no_view", file_name=None),
+            ]
+        )
+        self.assertEqual([2, 1], [c["id"] for c in shelf["clips"]])
+        self.assertEqual(["Test Blade"] * 2, [c["subject"] for c in shelf["clips"]])
+        (day,) = shelf["missed"]
+        self.assertEqual((1, 1), (day["no_view"], day["failed"]))
+
     def test_a_single_clip_and_other_items_carry_no_number(self):
         got = self.clips(
             self.row(1, 600),
