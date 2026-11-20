@@ -14,8 +14,9 @@ reach of a quester when:
 
   * its zone is the quester's zone (a starting area counts as the zone it lies
     in, `START_AREAS`: Northshire Valley is Elwynn Forest);
-  * its race and class masks hold the quester's, its minimum level is met and
-    its own level is at most levelroute.ABOVE over the quester's;
+  * its race and class masks hold the quester's, its minimum level is met, its
+    maximum level (MaxLevel, 0 for none) is not passed, and its own level is
+    at most levelroute.ABOVE over the quester's;
   * the quest before it is rewarded (or held, for a negative PrevQuestID), and
     no quest of its exclusive group is rewarded or held. "The quest before it"
     is the world's list, not the row's: its own PrevQuestID or any quest whose
@@ -375,7 +376,8 @@ _ITEM_OBJECTIVES = "".join(
 QUESTS_SQL = (
     "SELECT q.ID AS id, q.LogTitle AS title, q.QuestSortID AS sort, "  # noqa: S608
     "q.QuestSortID AS zone, q.QuestLevel AS level, q.QuestInfoID AS info, "
-    "q.MinLevel AS min_level, q.AllowableRaces AS races, "
+    "q.MinLevel AS min_level, COALESCE(a.MaxLevel, 0) AS max_level, "
+    "q.AllowableRaces AS races, "
     "COALESCE(a.AllowableClasses, 0) AS classes, "
     "COALESCE(a.PrevQuestID, 0) AS prev_signed, "
     "COALESCE(a.PrevQuestID, 0) AS prev, "
@@ -664,6 +666,9 @@ class Facts:
     zone: int
     level: int
     classes: int = 0
+    # quest_template_addon.MaxLevel: a quester over it is refused the take
+    # (SatisfyQuestLevel). 0: no cap.
+    max_level: int = 0
     # quest_template_addon.PrevQuestID as stored: positive, rewarded first;
     # negative, held first.
     prev: int = 0
@@ -780,6 +785,7 @@ def catalogue(
             zone=zones[qid],
             level=max(_int(r.get("level")), quest.min_level, 1),
             classes=_int(r.get("classes")),
+            max_level=_int(r.get("max_level")),
             prev=_int(r.get("prev_signed")),
             giver_named=qid in named,
             ender_npcs=qid in npc_enders,
@@ -1532,6 +1538,8 @@ def open_to(cat: Catalogue, member, quest_id, broken=frozenset()) -> bool:
     if quest.starters and not friendly_starters(cat, member, quest):
         return False
     if int(member.level) < quest.min_level:
+        return False
+    if facts.max_level and int(member.level) > facts.max_level:
         return False
     if facts.level > int(member.level) + levelroute.ABOVE:
         return False
