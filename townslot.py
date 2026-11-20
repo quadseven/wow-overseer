@@ -1974,7 +1974,8 @@ class Slot:
         if at is None or now - at >= window + SPENT_CEILING_SECONDS:
             self._strikes[key] = 1
         elif now - at >= window:
-            self._strikes[key] = self._strikes.get(key, 1) + 1
+            # Capped: the window is at its ceiling long before this.
+            self._strikes[key] = min(self._strikes.get(key, 1) + 1, 16)
         self._spent[key] = now
 
     def gave_up(self, decision: Decision, released: bool, now: float) -> None:
