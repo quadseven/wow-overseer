@@ -912,3 +912,38 @@ class HealerLevelsCard(unittest.TestCase):
     def test_no_healers_reads_zero(self):
         card = raidready.healer_levels_card([])
         self.assertEqual((card["at_50"], card["at_60"]), (0, 0))
+
+
+class HealerPaceProjection(unittest.TestCase):
+    """The date for the healer quorum at 50 is read from recent level-ups."""
+
+    HEALERS = [
+        {"name": "a", "role": "healer", "level": 55},
+        {"name": "b", "role": "healer", "level": 50},
+        {"name": "c", "role": "healer", "level": 40},
+    ]
+
+    def test_pace_from_crossings_states_its_basis(self):
+        rows = [
+            {"name": "a", "old_level": 49, "new_level": 50},
+            {"name": "b", "old_level": 49, "new_level": 50},
+            {"name": "zz", "old_level": 49, "new_level": 50},
+            {"name": "c", "old_level": 40, "new_level": 41},
+        ]
+        got = raidready.healer_projection(self.HEALERS, 8, rows)
+        self.assertEqual((got["crossed"], got["need"], got["weeks"]), (2, 6, 6))
+        self.assertIn("2 healer(s) reached 50 in the last 14 days", got["line"])
+
+    def test_no_crossing_gives_no_date(self):
+        got = raidready.healer_projection(self.HEALERS, 8, [])
+        self.assertIsNone(got["weeks"])
+        self.assertIn("No date", got["line"])
+
+    def test_reached_quorum_needs_no_date(self):
+        got = raidready.healer_projection(self.HEALERS[:2], 2, [])
+        self.assertEqual(got["need"], 0)
+        self.assertIn("has 2 healers at 50", got["line"])
+
+    def test_card_carries_the_projection(self):
+        card = raidready.healer_levels_card(self.HEALERS, [])
+        self.assertIn("projection", card)
