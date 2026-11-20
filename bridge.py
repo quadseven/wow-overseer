@@ -39518,6 +39518,38 @@ def _job_deaths(cur, names: list) -> list:
         (*names, deathloop.SLOW_READ_SECONDS))
 
 
+_RIDING_PRICES_READ = False
+
+_RIDING_PRICES_SQL = (
+    "SELECT SpellId, MAX(MoneyCost) AS MoneyCost, MAX(ReqLevel) AS ReqLevel "
+    "FROM acore_world.trainer_spell WHERE ReqSkillLine = %s "
+    "AND SpellId IN (%s, %s) GROUP BY SpellId"
+)
+
+
+def _install_riding_prices(cur) -> None:
+    """Read the riding ranks' price and level off the trainer table once per
+    process (#2625). A read this realm cannot answer keeps purse's constants
+    and is tried again on the next pass."""
+    global _RIDING_PRICES_READ
+    if _RIDING_PRICES_READ:
+        return
+    rows = _planner_rows(
+        cur,
+        _RIDING_PRICES_SQL,
+        (purse.RIDING_SKILL, *(r.spell for r in purse.RIDING_RANKS)),
+        "the riding trainer prices",
+    )
+    if not rows:
+        return
+    ranks = purse.install_trainer_rows(rows)
+    _RIDING_PRICES_READ = True
+    log.info(
+        "purse: riding prices read from the trainer table: %s",
+        ", ".join("%s %s" % (r.name, purse.money(r.cost)) for r in ranks),
+    )
+
+
 def _fetch_job_facts(family_names: list) -> dict:
     """Everything guildjobs.plan reads, on one connection; no judgement here."""
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
@@ -39530,6 +39562,7 @@ def _fetch_job_facts(family_names: list) -> dict:
         skill_rows = _job_read(cur, "skills", _JOB_SKILLS_SQL.format(
             guids=everyone, skills=ids(_JOB_SKILL_IDS)))
         book = _class_book()
+        _install_riding_prices(cur)
         spell_reagents = _fetch_spell_reagents(cur)
         reagent_spells = sorted(
             classreagents.relevant_spells(spell_reagents, guildjobs.CRAFT_SPELLS))
