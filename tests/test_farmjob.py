@@ -735,6 +735,51 @@ class FamilyWideFarmIgnoresOperatorHold(unittest.IsolatedAsyncioTestCase):
         fake._farm_act.assert_awaited_once()
 
 
+class CraftPassHonoursScopedOperatorHold(unittest.IsolatedAsyncioTestCase):
+    """A hold whose scope names `craft` stands the craft pass down (#2560).
+
+    A default hold leaves crafting running, as the operatorhold docstring says.
+    """
+
+    async def _run(self, scope):
+        import asyncio
+        import time
+        import types
+        from unittest import mock
+        import campaignqueue
+        import operatorhold
+
+        rows = [{"family": "family_a", "reason": "x", "scope": scope, "live": 1}]
+        reads = mock.MagicMock(side_effect=RuntimeError("past the hold"))
+        ns = {
+            "asyncio": asyncio,
+            "time": time,
+            "campaignqueue": campaignqueue,
+            "operatorhold": operatorhold,
+            "log": mock.MagicMock(),
+            "_fetch_operator_holds": mock.MagicMock(return_value=rows),
+            "_crafting_roster": mock.MagicMock(return_value=["Mizu"]),
+            "_fetch_trade_skills": reads,
+        }
+        _load_bridge_farm_methods(ns, extra_methods=("_craft_once",))
+        fake = types.SimpleNamespace(_operator_hold_notice=operatorhold.Notice())
+        fake._operator_held = types.MethodType(ns["_operator_held"], fake)
+        cohort = types.SimpleNamespace(key="family_a", solo=False)
+        try:
+            await ns["_craft_once"](fake, cohort)
+        except RuntimeError:
+            pass
+        return reads
+
+    async def test_a_craft_scoped_hold_stops_the_craft_pass(self):
+        reads = await self._run("craft")
+        reads.assert_not_called()
+
+    async def test_a_default_hold_leaves_the_craft_pass_running(self):
+        reads = await self._run("")
+        reads.assert_called_once()
+
+
 class RenewedOrderKeepsDeathStrikes(unittest.IsolatedAsyncioTestCase):
     """Renewing a farm order resets its time box and baseline, not its zone strikes."""
 
