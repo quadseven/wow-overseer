@@ -6868,7 +6868,12 @@ def _regroup_wait(head: dict, parked: dict | None, leader: str, names: list):
     positions = {} if running else _fetch_positions(list(names))
     verdict = dungeonstall.restart_after_hold(
         parked, running, leader, names, positions)
-    if verdict.reason in (dungeonstall.TOGETHER, dungeonstall.RUNNING):
+    if verdict.reason == dungeonstall.CEILING:
+        log.info("stall: the order held for an unassembled party has waited "
+                 "%d minute(s) past its backoff with nobody closing the gap, "
+                 "so it runs again", dungeonstall.REGROUP_CEILING_SECONDS // 60)
+    if verdict.reason in (dungeonstall.TOGETHER, dungeonstall.RUNNING,
+                          dungeonstall.CEILING):
         if len(_REGROUP_SPENT) > 256:
             _REGROUP_SPENT.clear()
         _REGROUP_SPENT[hold_id] = True
@@ -27148,6 +27153,9 @@ class Bridge(discord.Client):
             log.info("stall: %s: the order for %s is held, not cancelled; it %s; %s",
                      campaignqueue._family(key), door, until, after)
         if not rest:
+            # The queue's hold line reads this, so it never says a hold with
+            # no reason.
+            _STALL_STOOD_DOWN[key] = "the order for %s is held, not cancelled" % door
             return True
         rows[:] = rest
         return False
