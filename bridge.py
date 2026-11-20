@@ -21477,6 +21477,9 @@ class Bridge(discord.Client):
                 getattr(self, "_train_walks", ()))
         busy -= self._stranded_knights_freed(members)
         cap = self._guild_walk_cap()
+        walking = standstill.walking(self._guild_still, members)
+        for m in members:
+            m.moving = str(m.name) in walking
         self._guild_still = standstill.track(self._guild_still, members, now)
         spawn_walks = now >= self._job_walks_unsupported.get("spawn", 0.0)
         # The hunt slots the realm has free (classhunt.py); none while this

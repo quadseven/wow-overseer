@@ -694,6 +694,10 @@ class Member:
     # Bag slots free in the backpack and the worn bags; None when unread, which
     # keeps no quest waiting on room (class_room_needed).
     free_slots: int | None = None
+    # True when the last reading is away from where the pass before it read this
+    # member (standstill.walking): its own AI is walking it, and the module
+    # refuses a cast then, so no craft step is written (#2401).
+    moving: bool = False
     # Maps the module has refused to cross this member to for good, with its
     # reason (class_walls): classquest then names a MAP blocker, not a CROSS.
     no_crossing: dict = field(default_factory=dict)
@@ -2597,6 +2601,8 @@ def _craft_or_room(m, kept, recent, cap, crafters, master):
     ladder a class quest uses, and the craft comes the pass after. Bags not
     read (free_slots None) keep the old behaviour.
     """
+    if m.moving:
+        return None, ""
     step = _craft_step(m)
     if step is None or m.free_slots is None or int(m.free_slots) >= 1:
         return step, ""
