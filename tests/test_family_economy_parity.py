@@ -307,7 +307,10 @@ def _mail_ns(world, log):
             "_mail_range_refusals": lambda names, minutes: set(),
             "_fetch_free_slots": lambda names: {n: 10 for n in names},
             "_fetch_positions": lambda names: {n: {"map_id": 1} for n in names},
-            "_nearest_mailbox": lambda leader: world.setdefault("mailbox_for", leader),
+            "_nearest_mailbox": lambda leader, skip=None: world.setdefault(
+                "mailbox_for", leader
+            ),
+            "time": types.SimpleNamespace(monotonic=lambda: 0.0),
             "_spawn_yards": lambda spawn: None,
             "_mail_takes_in_reach": lambda takes, spawn, positions, yards, aim: takes,
             "_insert_mail": lambda take, command: (
