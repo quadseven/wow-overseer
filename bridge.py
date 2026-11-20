@@ -6326,7 +6326,25 @@ def _silent_stall(head: dict, names: list):
         # was held off it. A bridge restart forgets this and falls back to the
         # database clock, which can only make the breaker fire later.
         seconds = min(seconds, int(time.monotonic() - off_at))
-    return dungeonstall.silent_run(str(head.get("keyword") or ""), seconds)
+    # Looked up: the silence tests load this function in isolation.
+    story = globals().get("_job_story")
+    return dungeonstall.silent_run(
+        str(head.get("keyword") or ""), seconds,
+        story(names) if story is not None else "")
+
+
+def _job_story(names: list) -> str:
+    """What the family's job is and who wrote it last, for a stall reason."""
+    try:
+        held = sorted({job or jobs.DEFAULT for job in _jobs_of(names).values()})
+        writers = sorted({src for src in (_last_job_source(n) for n in names)
+                          if src})
+    except pymysql.err.MySQLError:
+        log.warning("stall: the family's job story could not be read; the "
+                    "reason is recorded without it", exc_info=True)
+        return ""
+    return "jobs now %s; last written by %s" % (
+        ", ".join(held) or "unread", ", ".join(writers) or "unrecorded")
 
 
 # --- the wedge at the door (#2151) ---------------------------------------------
@@ -6860,6 +6878,9 @@ def _regroup_wait(head: dict, parked: dict | None, leader: str, names: list):
 # (family key, door) -> the id of the pace row whose hold was last said, so
 # the held-door line is logged once per door per hold window (#1078).
 _STALL_HOLD_SAID: dict = {}
+# family key -> why the stall breaker last stood the family's run down. The
+# queue's hold line carries it, and the pace row it is written with keeps it.
+_STALL_STOOD_DOWN: dict = {}
 
 
 def _stall_write(key: str, leave) -> None:
@@ -23880,6 +23901,17 @@ class Bridge(discord.Client):
             state, now=now, in_run=in_run, mail_gear=mail_gear, facts=facts,
             stalled=stalled, bag_pressure_needed=bag_pressure_needed,
             floor_sale=floor_sale, loop_why=loop_why)
+        # ONE ERRAND PER RUN ATTEMPT: a family whose errand ended is not
+        # claimed again while its queued run has not opened, unless a member
+        # has no free slot at all. The queue's dungeon job stands meanwhile.
+        wait_until = townerrand.run_wait_until(
+            state, now, run_queued=bool(campaign_waiting),
+            no_room=any(int(free or 0) <= 0 for free in free_slots.values()))
+        if wait_until:
+            if why:
+                _say_errand_waits_for_run(names, state, why, wait_until - now,
+                                          label)
+            return state
         if (not why and not in_run
                 and stalled < townerrand.HOLD_CEILING_SECONDS
                 and not (state.ended and now - state.ended
@@ -26997,7 +27029,8 @@ class Bridge(discord.Client):
         if breaker is not None:
             try:
                 if await breaker(key, rows, fam):
-                    globals().get("_say_queue_hold", lambda *a: None)(key, "stall breaker")
+                    why = globals().get("_STALL_STOOD_DOWN", {}).get(key, "")
+                    globals().get("_say_queue_hold", lambda *a: None)(key, "stall breaker", why)
                     return True
             except Exception:
                 log.exception("stall: the pass for %s failed; the queue steps as "
@@ -27075,6 +27108,8 @@ class Bridge(discord.Client):
         ):
             return self._stall_step_past(key, rows, leave, held)
         await asyncio.to_thread(_stall_write, key, leave)
+        # THE REASON IS KEPT WHERE THE QUEUE'S HOLD IS SAID (#1374).
+        _STALL_STOOD_DOWN[key] = leave.why
         # The cancellation and its pace record are durable before the job
         # changes, so a failed write cannot leave the family on quest.
         said = await asyncio.to_thread(_apply_queue_move, campaignqueue.Move(
@@ -42546,6 +42581,9 @@ _MAIL_SQL = (
 TOWN_ERRAND_CLAIMANT = "town errand"
 TOWN_ERRAND_SOURCE = "overseer:town-errand"
 TOWN_ERRAND_CYCLE_SECONDS = 30.0
+for _name, _raw in townerrand.ENV_REJECTED:
+    log.warning("town errand: %s=%r is not a non-negative number of seconds; "
+                "the default stands", _name, _raw)
 # THE LOOP SAYS IT RAN (wow-dev 2026-10-05). An errand is due only now and
 # then, so a loop with nothing to run wrote nothing for two hours and the
 # "town errand loop has gone quiet" monitor could not tell idle from hung. One
@@ -42640,6 +42678,9 @@ TOWN_ERRAND_FUND_SOURCE = "economy:fund"
 # Heads whose absence the errand has already reported, so a head away for an
 # evening is one log line and not one every cycle.
 _TOWN_ERRAND_HEAD_AWAY: set = set()
+# family key -> the `ended` stamp of the errand whose wait for the queued run
+# was last said, so the line comes once per window, not once per poll.
+_TOWN_ERRAND_WAIT_SAID: dict = {}
 
 
 def _town_errand_active(names) -> bool:
@@ -42928,6 +42969,19 @@ def _town_errand_jobs(names: list) -> int:
             _insert_job(name, jobs.TOWN_RUN, TOWN_ERRAND_SOURCE)
             written += 1
     return written
+
+
+def _say_errand_waits_for_run(names, state, why: str, left: float,
+                              label: str = "") -> None:
+    """Say once per window that the errand waits for the queued run."""
+    said = globals().setdefault("_TOWN_ERRAND_WAIT_SAID", {})
+    key = tuple(sorted(names))
+    if said.get(key) == state.ended:
+        return
+    said[key] = state.ended
+    log.info("town errand: %s%s, but the family's last errand ended and its "
+             "queued run has not opened; the errand waits for the run, for up "
+             "to %d more minutes", why, label, int(left // 60) + 1)
 
 
 def _town_errand_release_jobs(names: list) -> str:

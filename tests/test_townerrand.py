@@ -625,6 +625,7 @@ class TheAdapter(unittest.TestCase):
             body=_functions(
                 "_town_errand_once",
                 "_town_errand_start",
+                "_say_errand_waits_for_run",
                 "_town_errand_release_trainer",
                 "_town_errand_aim",
                 "_town_errand_step",
@@ -668,6 +669,59 @@ class TheAdapter(unittest.TestCase):
         self.assertEqual(["town run"], self.jobs)
         self.assertIn("town errand", self.fam.slot.reserved)
         self.assertEqual(("town errand", "Grug", "at:0:100,100,10"), self.fam.aims[-1])
+
+    def ended_errand_start(self, ended_ago, ran_since=False, free=None, said=None):
+        """Try to start an errand for a family whose last one ended
+        `ended_ago` seconds ago, while a run is queued for it."""
+        # The profession loop asks for the errand, a path the ordinary
+        # two-hour cooldown does not hold back.
+        names, leader = self.ns["_family_of"](None)
+        self.ns["_PROF_LOOP_TOWN"] = {tuple(sorted(names)): "profession loop: bags low"}
+        self.ns["_campaign_waiting"] = lambda names: True
+        self.ns["_fetch_free_slots"] = lambda names: dict(free or {n: 5 for n in names})
+        self.ns["_bag_hold_stuck"] = lambda names, free_slots, claim_store=None: False
+        if said is not None:
+            self.ns["log"] = types.SimpleNamespace(
+                info=lambda fmt, *a: said.append(fmt % a if a else fmt)
+            )
+        state = te.State(ended=self.now - ended_ago, ran_since=ran_since)
+        return asyncio.run(
+            self.fam._town_errand_start(state, names, leader, False, self.now, "")
+        )
+
+    def free_with(self, first):
+        names, _leader = self.ns["_family_of"](None)
+        return {n: (first if i == 0 else 5) for i, n in enumerate(names)}
+
+    def test_an_ended_errand_does_not_reclaim_the_family_while_a_run_is_queued(self):
+        state = self.ended_errand_start(ended_ago=120)
+        self.assertFalse(state.active)
+        self.assertEqual([], self.jobs)
+
+    def test_the_errand_may_claim_again_once_the_queued_run_opened(self):
+        state = self.ended_errand_start(ended_ago=120, ran_since=True)
+        self.assertTrue(state.active)
+        self.assertEqual(["town run"], self.jobs)
+
+    def test_the_errand_may_claim_again_after_the_window(self):
+        state = self.ended_errand_start(ended_ago=te.RUN_WAIT_SECONDS + 1)
+        self.assertTrue(state.active)
+
+    def test_a_member_with_no_free_slot_still_triggers_the_errand(self):
+        state = self.ended_errand_start(ended_ago=120, free=self.free_with(first=0))
+        self.assertTrue(state.active)
+
+    def test_a_member_below_the_comfortable_floor_does_not(self):
+        state = self.ended_errand_start(ended_ago=120, free=self.free_with(first=2))
+        self.assertFalse(state.active)
+
+    def test_the_wait_is_said_once_per_window(self):
+        said = []
+        for ago in (120, 150, 180):
+            self.now = 1000.0 + ago
+            self.ended_errand_start(ended_ago=ago, said=said)
+        waits = [line for line in said if "waits for the run" in line]
+        self.assertEqual(1, len(waits), said)
 
     def test_a_bag_room_errand_inside_an_instance_goes_to_the_door_continent(self):
         # wow-dev 2026-10-24: the family in Razorfen Downs (map 129), the head
@@ -1964,3 +2018,54 @@ class TheBridgeCountsALostAim(unittest.TestCase):
     def test_only_an_empty_column_after_our_own_aim_is_a_lost_aim(self):
         self.assertIn("state.go_aimed", BRIDGE)
         self.assertIn("aim_lost = not await asyncio.to_thread(column, leader)", BRIDGE)
+
+
+class TheRunWait(unittest.TestCase):
+    def ended(self, **kw):
+        return te.State(ended=100.0, **kw)
+
+    def test_waits_until_the_window_ends_while_a_run_is_queued(self):
+        until = te.run_wait_until(self.ended(), 200.0, run_queued=True)
+        self.assertEqual(100.0 + te.RUN_WAIT_SECONDS, until)
+
+    def test_no_wait_without_a_queued_run_or_after_the_run_opened(self):
+        self.assertEqual(0.0, te.run_wait_until(self.ended(), 200.0, run_queued=False))
+        self.assertEqual(
+            0.0,
+            te.run_wait_until(self.ended(ran_since=True), 200.0, run_queued=True),
+        )
+
+    def test_no_wait_for_a_member_with_no_room_or_a_family_never_sent(self):
+        self.assertEqual(
+            0.0, te.run_wait_until(self.ended(), 200.0, run_queued=True, no_room=True)
+        )
+        self.assertEqual(0.0, te.run_wait_until(te.State(), 200.0, run_queued=True))
+
+    def test_the_window_is_thirty_minutes_and_env_tunable(self):
+        self.assertEqual(1800.0, te.RUN_WAIT_SECONDS)
+
+    def reloaded(self, value):
+        """RUN_WAIT_SECONDS and the refused reads after a reload with the
+        environment variable set to `value` (None: unset)."""
+        import importlib
+        import os
+        from unittest import mock
+
+        env = {} if value is None else {"TOWN_ERRAND_RUN_WAIT_SECONDS": value}
+        try:
+            with mock.patch.dict(os.environ, env):
+                if value is None:
+                    os.environ.pop("TOWN_ERRAND_RUN_WAIT_SECONDS", None)
+                module = importlib.reload(te)
+                return module.RUN_WAIT_SECONDS, list(module.ENV_REJECTED)
+        finally:
+            importlib.reload(te)
+
+    def test_the_environment_sets_the_window(self):
+        self.assertEqual((600.0, []), self.reloaded("600"))
+
+    def test_a_bad_or_negative_value_keeps_the_default_and_is_noted(self):
+        for raw in ("soon", "-5", "nan"):
+            seconds, rejected = self.reloaded(raw)
+            self.assertEqual(1800.0, seconds, raw)
+            self.assertEqual([("TOWN_ERRAND_RUN_WAIT_SECONDS", raw)], rejected)
