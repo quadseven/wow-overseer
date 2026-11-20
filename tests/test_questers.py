@@ -2340,3 +2340,58 @@ class ASummonedObjectEnder(unittest.TestCase):
         p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
         self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+class TheTroggThreat(unittest.TestCase):
+    """Quest 267 'The Trogg Threat' in Loch Modan: collect 8x Trogg Stone Tooth
+    (item 2536) from troggs 1161-1167, 1197, 1393."""
+
+    TROGG_TOOTH = 2536
+    TROGGS = (1161, 1162, 1163, 1164, 1165, 1166, 1167, 1197, 1393)
+    LOCH_MODAN = 38
+    WANTED = 8
+
+    def _cat(self):
+        ttt = quest(267, self.LOCH_MODAN, 12, min_level=10, title="The Trogg Threat")
+        ttt.update(item1=self.TROGG_TOOTH, item_count1=self.WANTED)
+        return world(
+            extra_quests=[ttt],
+            extra_givers=[
+                giver(267, "start", 20000, 10001, -4800, -3000, name="Mountaineer Stormpike"),
+                giver(267, "end", 20000, 10001, -4800, -3000, name="Mountaineer Stormpike"),
+            ],
+            extra_spawns=[
+                spawn(2000 + i, entry, -4700 + i * 50, -3100, level=12)
+                for i, entry in enumerate(self.TROGGS, start=1)
+            ],
+            extra_loot=[{"item": self.TROGG_TOOTH, "entry": entry} for entry in self.TROGGS],
+        )
+
+    def _holder(self, progress=0, status=questers.STATUS_INCOMPLETE):
+        return mirra(
+            level=12,
+            race=3,
+            zone_id=self.LOCH_MODAN,
+            x=-4800.0,
+            y=-3000.0,
+            quest_log={267: status},
+            quest_progress={267: progress},
+            quest_objectives={267: {self.TROGG_TOOTH: progress}},
+            quests_done=frozenset(),
+        )
+
+    def test_each_hunt_is_for_a_trogg_still_short(self):
+        cat = self._cat()
+        progress = 0
+        while progress < self.WANTED:
+            move = questers.plan(cat, self._holder(progress), questers.Clock(), 0.0).move
+            self.assertEqual((move.kind, move.quest), (classquest.HUNT, 267))
+            self.assertIn(move.spot.entry, self.TROGGS)
+            progress += 1
+        move = questers.plan(cat, self._holder(progress), questers.Clock(), 0.0).move
+        self.assertEqual((move.kind, move.quest), (classquest.TURN_IN, 267))
+
+    def test_the_full_tooth_count_is_handed_in(self):
+        member = self._holder(self.WANTED, status=questers.STATUS_COMPLETE)
+        move = questers.plan(self._cat(), member, questers.Clock(), 0.0).move
+        self.assertEqual((move.kind, move.quest), (classquest.TURN_IN, 267))
