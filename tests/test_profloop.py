@@ -852,12 +852,35 @@ class AFruitlessTownVisitIsNotRepeated(unittest.TestCase):
         step = profloop.decide(
             state,
             facts(
-                state.fruitless_at + profloop.FRUITLESS_SECONDS + 1,
+                dict(state.fruitless_stamps)["Og"] + profloop.FRUITLESS_SECONDS + 1,
                 free_slots=self.slots(Og=2),
             ),
         )
         self.assertTrue(step.moved)
         self.assertEqual(step.state.phase, profloop.TOWN)
+
+    def test_a_later_member_does_not_extend_an_earlier_ones_bound(self):
+        # Og is found fruitless at one visit; Bork at a later one. Og's bound
+        # runs from his own stamp, so he is tried again when it ends even
+        # though Bork was added since.
+        state = self.run_town_and_back(self.slots(Og=2))
+        og_at = dict(state.fruitless_stamps)["Og"]
+        later = dataclasses.replace(
+            state,
+            fruitless=("Bork", "Og"),
+            fruitless_stamps=(("Bork", og_at + 1000.0), ("Og", og_at)),
+        )
+        step = profloop.decide(
+            later,
+            facts(
+                og_at + profloop.FRUITLESS_SECONDS + 1,
+                free_slots=self.slots(Og=2, Bork=2),
+            ),
+        )
+        self.assertTrue(step.moved)
+        self.assertEqual(step.state.phase, profloop.TOWN)
+        self.assertIn("Og (2)", step.line)
+        self.assertNotIn("Bork", step.line)
 
     def test_a_sale_not_yet_in_the_saved_bags_is_waited_for(self):
         step = profloop.decide(

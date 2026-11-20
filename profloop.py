@@ -216,10 +216,12 @@ class State:
     town_seen: bool = False
     # name -> free slots read when the family went to town for low bags.
     entered: tuple = ()
-    # Members a town visit left no roomier than it found them, and when that
-    # was read. They do not send the family back to town (see FRUITLESS_SECONDS).
+    # Members a town visit left no roomier than it found them. They do not
+    # send the family back to town (see FRUITLESS_SECONDS).
     fruitless: tuple = ()
-    fruitless_at: float = 0.0
+    # (name, when that member was found fruitless): each member expires on its
+    # own clock, so a later visit adding another name never extends an earlier one.
+    fruitless_stamps: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -424,10 +426,15 @@ def _low(facts: Facts, skip=()) -> list:
 def _live_fruitless(state: State, facts: Facts) -> tuple:
     """The members still left out of the low-bag trigger: still below the bar,
     and not for longer than FRUITLESS_SECONDS."""
-    if not state.fruitless or facts.now - state.fruitless_at >= FRUITLESS_SECONDS:
+    if not state.fruitless:
         return ()
     low = _low_slots(facts)
-    return tuple(name for name in state.fruitless if name in low)
+    stamps = dict(state.fruitless_stamps)
+    return tuple(
+        name
+        for name in state.fruitless
+        if name in low and facts.now - stamps.get(name, 0.0) < FRUITLESS_SECONDS
+    )
 
 
 def _fruitless_after(state: State, facts: Facts) -> tuple:
@@ -490,18 +497,21 @@ def _after_craft(facts: Facts) -> tuple:
 def _move(state: State, facts: Facts, to: str, why: str, ask_town: str = "") -> Step:
     """A phase change, its job and its one log line."""
     job = phase_job(to, facts)
-    fruitless, fruitless_at = state.fruitless, state.fruitless_at
+    fruitless, stamps = state.fruitless, state.fruitless_stamps
     if state.phase == TOWN:
         after = _fruitless_after(state, facts)
         if after != fruitless:
-            fruitless, fruitless_at = after, facts.now
+            # Members already waiting keep their own stamp; new ones start now.
+            kept = dict(stamps)
+            fruitless = after
+            stamps = tuple((n, kept.get(n, facts.now)) for n in after)
     new = State(
         phase=to,
         since=facts.now,
         asserted=facts.now if job else 0.0,
         entered=tuple(sorted(_low_slots(facts).items())) if to == TOWN else (),
         fruitless=fruitless,
-        fruitless_at=fruitless_at,
+        fruitless_stamps=stamps,
     )
     line = "%s -> %s: %s" % (state.phase or "joined", to, why)
     if job:
@@ -552,7 +562,13 @@ def _join(state: State, facts: Facts) -> Step:
 def _gather(state: State, facts: Facts, elapsed: float) -> Step:
     live = _live_fruitless(state, facts)
     if live != state.fruitless:
-        state = replace(state, fruitless=live)
+        state = replace(
+            state,
+            fruitless=live,
+            fruitless_stamps=tuple(
+                (n, at) for n, at in state.fruitless_stamps if n in live
+            ),
+        )
     low = _low(facts, skip=live)
     if low:
         why = "%s below %d free bag slots" % (", ".join(low), TOWN_FREE_SLOTS)
