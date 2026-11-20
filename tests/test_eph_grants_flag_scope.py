@@ -1,8 +1,9 @@
 """The rehearsal grant flag lives only in the ephemeral example and its guard.
 
-The organic deployment (the Dockerfiles, the systemd units, every env example
-and the workflows) must never carry the harness grants line or the variable
-that carries it, so a copy of one of those files cannot enable grants there.
+No tracked file outside the ephemeral package, its example config and the
+tests (so the Dockerfiles, units, env examples and workflows too) may carry the
+harness grants line or the variable that carries it, so a copy of one of those
+files cannot enable grants there.
 """
 
 import pathlib
@@ -14,8 +15,8 @@ FLAG_TEXT = "grants: enabled"
 FLAG_NAME = "EPH_HARNESS_GRANTS"
 # The one place the flag is allowed: the ephemeral world's own example config.
 ALLOWED = {"data/ephemeral/config.example.env"}
-DEPLOYMENT_SUFFIXES = (".service", ".timer", ".env", ".example", ".yml", ".yaml")
-DEPLOYMENT_NAMES = ("Dockerfile", "docker-compose.yml")
+# Not deployment files: the guard and its tests name the flag by design.
+EXEMPT_PREFIXES = ("ephemeral/", "tests/")
 
 
 def tracked_files():
@@ -30,13 +31,18 @@ def tracked_files():
 
 
 def is_deployment_file(rel):
-    if rel.startswith(("ephemeral/", "tests/", "data/decrees/")):
-        return False
-    name = rel.rsplit("/", 1)[-1]
-    return name in DEPLOYMENT_NAMES or name.endswith(DEPLOYMENT_SUFFIXES)
+    """Every tracked file outside the guard's own package and the tests."""
+    return not rel.startswith(EXEMPT_PREFIXES)
 
 
-def carriers(files, read):
+def read_file(rel):
+    path = ROOT / rel
+    if not path.is_file():  # a submodule entry
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def carriers(files, read_file):
     """The deployment files, outside the allowed one, whose text carries the flag."""
     bad = []
     for rel in files:
@@ -50,15 +56,12 @@ def carriers(files, read):
 
 class GrantsFlagScopeTest(unittest.TestCase):
     def test_no_organic_deployment_file_carries_the_grants_line(self):
-        def read(rel):
-            return (ROOT / rel).read_text(encoding="utf-8", errors="replace")
-
         files = tracked_files()
         self.assertTrue(
             [f for f in files if is_deployment_file(f)],
-            "the scan found no deployment file at all",
+            "the scan found no file at all",
         )
-        self.assertEqual(carriers(files, read), [])
+        self.assertEqual(carriers(files, read_file), [])
 
     def test_the_allowed_file_is_the_one_that_carries_it(self):
         text = (ROOT / "data/ephemeral/config.example.env").read_text(encoding="utf-8")
