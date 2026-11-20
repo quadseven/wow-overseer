@@ -20,22 +20,17 @@ IDLE = {"doing": "Idle", "waiting": "no errand and no hold found", "line": "Idle
 
 
 def session(level, leveled_at=None):
-    def rows_of(words, rows):
-        return (words, rows)
-
+    leveled = [{"name": "Grug", "at": leveled_at}] if leveled_at else []
     rules = [
-        rows_of(("FROM characters",), [{"name": "Grug", "level": level}]),
-        rows_of(
-            ("overseer_level",),
-            [{"name": "Grug", "at": leveled_at}] if leveled_at else [],
-        ),
-        rows_of(("UNIX_TIMESTAMP() AS now_at",), [{"now_at": NOW_AT}]),
+        (("FROM characters",), [{"name": "Grug", "level": level}]),
+        (("overseer_level",), leveled),
+        (("UNIX_TIMESTAMP() AS now_at",), [{"now_at": NOW_AT}]),
     ]
     return realmread.Session(lambda: FakeConn(rules, []))
 
 
 class TheBannerReread(unittest.TestCase):
-    def test_a_low_member_with_no_level_for_a_day_reads_stalled_like_the_roster(self):
+    def test_a_low_member_with_no_level_for_a_day_reads_stalled(self):
         with session(30) as rd:
             got = members.reread_idle(rd, "Grug", dict(IDLE, stalled_s=None))
         self.assertEqual(got["doing"], nowstatus.STALLED)
@@ -52,9 +47,10 @@ class TheBannerReread(unittest.TestCase):
             self.assertEqual(members.reread_idle(rd, "Grug", busy), busy)
 
     def test_a_failed_side_read_leaves_the_member_as_composed(self):
-        with session(30) as rd, mock.patch.object(
+        down = mock.patch.object(
             members.guildrun, "active_names", side_effect=RuntimeError("down")
-        ):
+        )
+        with session(30) as rd, down:
             self.assertEqual(members.reread_idle(rd, "Grug", dict(IDLE)), IDLE)
 
 
