@@ -11263,6 +11263,17 @@ class Bridge(discord.Client):
             _crafting_roster, getattr(cohort, "key", None))
         if not names:
             return
+        # THE OPERATOR HOLD, BY SCOPE (#2560): only a hold whose scope names
+        # `craft` (or `all`) stands the craft pass down; a default hold leaves it.
+        operator_held = getattr(self, "_operator_held", None)
+        if operator_held is not None:
+            if cohort is not None:
+                hold_key = getattr(cohort, "key", "")
+            else:
+                hold_key = await asyncio.to_thread(
+                    _cohort_of, bonds.head_of_family())
+            if await operator_held({hold_key or ""}, "craft"):
+                return
         skills = await asyncio.to_thread(_fetch_trade_skills, names)
         primaries = _primaries_for(cohort, names, skills)
         bags_wanted = await asyncio.to_thread(_bags_wanted_for, cohort)
