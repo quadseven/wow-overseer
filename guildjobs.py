@@ -9217,10 +9217,6 @@ def _class_move_step(
             return None, move.said, _join(note, held)
         return _item_take_step(m, move, note)
     spot = _class_spot(move)
-    boat = class_boat_step(m, move, spot, recent, hunts, now)
-    if boat is not None:
-        step, said, why = boat
-        return step, said, _join(note, why)
     # A pack tried without progress is left, so a member is "at" the next one
     # only within a pack's width, not the whole field's.
     tried = class_avoid(m, book, recent, hunts, now)[0].get(move.quest)
@@ -9232,6 +9228,10 @@ def _class_move_step(
     held = _class_held(m, move, spot, cap, recent, hunts, now, far, book)
     if held is not None:
         return None, move.said, _join(note, held)
+    boat = class_boat_step(m, move, spot, recent, hunts, now)
+    if boat is not None:
+        step, said, why = boat
+        return step, said, _join(note, why)
     if move.kind == classquest.HUNT:
         step, wait = _hunt_step(m, move, spot, book, cap, hunts, arrived)
         if step is None:

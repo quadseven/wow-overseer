@@ -198,7 +198,7 @@ def _chain(book, key, last, learned: bool, look: tuple) -> dict:
 
 def _learned(key, rewards, known: set, done: set) -> bool:
     """classquest.has_reward's rule: the spell is known, or any quest that
-    grants it was rewarded."""
+    grants it was rewarded, among this race's quests."""
     return any(s in known for s in key[1]) or any(q in done for q in rewards)
 
 
@@ -209,8 +209,12 @@ def race_groups(book, klass: int, race: int):
     for key, rewards in book.groups.items():
         if key[0] != klass or book.trained.intersection(key[1]):
             continue
-        if race < 1 or any(book.quests[q].admits(race) for q in rewards):
+        if race < 1:
             yield key, rewards
+        else:
+            admitted = [q for q in rewards if book.quests[q].admits(race)]
+            if admitted:
+                yield key, tuple(admitted)
 
 
 def chains(book, char: dict, status: dict, done: set, known: set, blocked: int) -> list:
@@ -218,7 +222,7 @@ def chains(book, char: dict, status: dict, done: set, known: set, blocked: int) 
     look = (status, done, blocked, int(char.get("level") or 0))
     out = []
     for key, rewards in race_groups(book, klass, race):
-        last = _variant(book, rewards, race, status, done)
+        last = _variant(book, list(rewards), race, status, done)
         if last is not None:
             out.append(
                 _chain(book, key, last, _learned(key, rewards, known, done), look)

@@ -108,11 +108,13 @@ def _quest_done(book, klass: int, rewarded: set, known: set, race: int) -> bool:
     (classquest's own rule), and a group no quest offers the member's race is
     one that race cannot take, so those groups are left out.
     """
+    any_group = False
     for key, quests in classchain.race_groups(book, klass, race):
+        any_group = True
         spells, got = key[1], rewarded
         if not any(s in known for s in spells) and not any(q in got for q in quests):
             return False
-    return True
+    return any_group
 
 
 def _class_quest_map(rd, names: list) -> dict | None:

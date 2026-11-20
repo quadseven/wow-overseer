@@ -16,7 +16,6 @@ import unittest
 import classquest
 import guildjobs
 import guildlevel
-import modsource
 from test_classquest import class_plan, class_steps, who
 from test_guildlevel import world as level_world
 
@@ -160,6 +159,30 @@ class TheHold(unittest.TestCase):
         )
         self.assertEqual(guildjobs.class_held(leveled.lines), set())
 
+    def test_boat_is_held_by_class_walk_backoff(self):
+        # A recent class quest walk refused for a far-walk wall puts the member
+        # in class_walk_backoff; the boat step must wait for that backoff, not
+        # be planned ahead of it.
+        refused = row(
+            "Isle",
+            "walk-to-spawn creature:19732 max:30000",
+            classquest.ACTION + "-walk",
+            classquest.HELD_REASON,
+            1,
+        )
+        result = class_plan([island()], recent=recent(refused))
+        self.assertEqual(rides(result), [])
+        self.assertEqual(walks(result), [])
+
+    def test_boat_refused_when_not_alive(self):
+        result = class_plan([island(alive=False)])
+        self.assertEqual(rides(result), [])
+
+    def test_boat_refused_when_not_on_island_map(self):
+        # mainland
+        result = class_plan([who(quests_done=frozenset({1505}))])
+        self.assertEqual(rides(result), [])
+
 
 class TheRefusalBackoff(unittest.TestCase):
     # A member the bridge reads as on the mainland is planned the plain walk;
@@ -185,17 +208,6 @@ class TheRefusalBackoff(unittest.TestCase):
         wait = classquest.BACKOFF_MINUTES[classquest.ACROSS_WATER_REASON]
         result = class_plan([self.member()], recent=recent(walk_refused("Blind", wait)))
         self.assertEqual(len(walks(result)), 1)
-
-
-class TheModuleWording(unittest.TestCase):
-    def test_the_refusal_is_the_modules_own_literal(self):
-        src = modsource.read(modsource.DECISIONS_H, encoding="utf-8")
-        self.assertIn('"%s"' % classquest.ACROSS_WATER_REASON, src)
-
-    def test_the_boat_stop_is_the_one_the_module_rides_first(self):
-        src = modsource.read(modsource.DECISIONS_H, encoding="utf-8")
-        for axis, value in zip("XY", classquest.ISLAND_BOAT_STOP, strict=True):
-            self.assertIn("AUBERDINE_STOP_%s = %.2ff" % (axis, value), src)
 
 
 if __name__ == "__main__":

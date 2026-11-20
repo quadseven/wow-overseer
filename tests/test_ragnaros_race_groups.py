@@ -74,6 +74,19 @@ class TheMilestoneRace(unittest.TestCase):
         self.assertFalse(ragnaros._quest_done(book(), WARRIOR, {1, 3}, set(), 0))
         self.assertTrue(ragnaros._quest_done(book(), WARRIOR, {1, 2, 3}, set(), 0))
 
+    def test_a_race_with_no_admitted_quest_for_any_group_is_not_done(self):
+        # If the race has no quests in any race group it can take, nothing is
+        # "done" by checking nothing (race 4/Dwarf not allowed by any quest).
+        races_all_human_orc = HUMAN_BIT | ORC_BIT
+        quests = [
+            quest(1, 71, races=races_all_human_orc),
+            quest(2, 72, races=ORC_BIT),
+            quest(3, 73, races=HUMAN_BIT),
+            quest(4, 74),
+        ]
+        b = classchain.book_of(quests, {1, 2, 3, 4}, [{"spell": 74}])
+        self.assertFalse(ragnaros._quest_done(b, WARRIOR, {1, 2, 3}, set(), 4))
+
     def test_the_chain_view_and_the_milestone_agree(self):
         # The view lists exactly the human's takeable groups; rewarding the
         # last quest of each listed chain satisfies the milestone, and
