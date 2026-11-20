@@ -319,6 +319,34 @@ class ReportTest(unittest.TestCase):
         )
         self.assertEqual(self._writes()[0][0], "PATCH")
 
+    def test_two_complete_batches_meet_the_standard_when_every_pair_passes(self):
+        records = [
+            batch(3, batch_id=batch_id, expected_pairs=3)
+            for batch_id in ("abc123", "def456")
+        ]
+        result_maps, jobs = [], []
+        for rec in records:
+            self._save(rec)
+            result_rows, job_rows = result(rec)
+            result_maps.extend(result_rows)
+            jobs.extend(job_rows)
+        self.fg.answers[("GET", f"repos/{REPO}/issues/{ISSUE}")] = {
+            "state": "open",
+            "body": BODY,
+            "labels": [],
+        }
+        reporter = report.Reporter(
+            self.cfg,
+            FakeCluster(result_maps, jobs),
+            self.gh,
+            env=ENV,
+            out=self.logs.append,
+        )
+        preview = reporter.run([rec["batch"] for rec in records])
+        self.assertTrue(preview["standard_met"])
+        self.assertEqual(len([r for r in preview["rows"] if r["arm"] == "control"]), 6)
+        self.assertEqual(self._writes()[0][0], "PATCH")
+
 
 if __name__ == "__main__":
     unittest.main()

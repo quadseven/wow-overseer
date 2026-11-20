@@ -184,8 +184,8 @@ def build_report(record, results, job_starts, issue_body, private_names=()):
                 )
     standard_met = bool(
         pair_count
-        and len(verdicts["control"]) == pair_count
-        and len(verdicts["treatment"]) == pair_count
+        and len(verdicts["control"]) >= pair_count
+        and len(verdicts["treatment"]) >= pair_count
         and all(v == "FAIL" for v in verdicts["control"])
         and all(v == "PASS" for v in verdicts["treatment"])
     )
