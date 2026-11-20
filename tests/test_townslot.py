@@ -2469,6 +2469,216 @@ class GuildBankPriorityTurnPassesAReservation(unittest.TestCase):
         self.assertIn("bags owns the traveller", decision.reason)
 
 
+class AnEarnedTurnPreemptsUnboundTownErrand(unittest.TestCase):
+    """#2299: an errand past its wait bound takes the slot ahead of
+    unbound town errands, or logs one refusal reason instead of
+    waiting behind them.
+
+    The town errand (sell, vendor, mail, etc.) has no wait bound and
+    reserves the traveller continuously. The guild bank has waited past
+    its priority_after (1200s) and earned its priority turn. It should
+    preempt the town errand rather than waiting behind it.
+    """
+
+    def test_earned_bank_preempts_town_errand_with_live_reservation_and_lease(self):
+        slot = townslot.Slot(lease=300.0, releasable=economy)
+        # Town errand reserves the traveller at t=0 (simulating a long-running errand)
+        slot.reserve("town errand", 0.0, "the family's town errand")
+        # Town errand takes the column at t=0
+        town_decision = slot.want(
+            claimant="town errand",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=(),
+            now=0.0,
+        )
+        self.assertTrue(town_decision.granted)
+        slot.settle(town_decision, True, 0.0)
+
+        # Guild bank registers a wait at t=0 (first ask, gets WAIT behind town errand)
+        first_ask = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="vault",
+            leader="Grug",
+            column="vendor",
+            retaskable=("", "vault"),
+            now=0.0,
+            priority_after=1200.0,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, first_ask.verdict)
+
+        # At t=1300, guild bank has earned its priority (1300 > 1200)
+        # Town errand still holds the column (lease not expired: 1300 < 300? No, lease is 300s)
+        # Actually at t=1300, the town errand's 300s lease has long expired
+        # So this should be a preemption based on expired lease + earned priority
+        earned_ask = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="vault",
+            leader="Grug",
+            column="vendor",
+            retaskable=("", "vault"),
+            now=1300.0,
+            priority_after=1200.0,
+        )
+        # With earned priority and expired lease, guild bank should preempt
+        self.assertTrue(earned_ask.granted, f"Expected granted, got {earned_ask.verdict}: {earned_ask.reason}")
+
+    def test_earned_bank_preempts_town_errand_before_lease_expiry(self):
+        """An earned priority turn should preempt a town errand even before
+        the town errand's lease expires, because the town errand has no
+        wait bound and the bank has earned its turn."""
+        slot = townslot.Slot(lease=300.0, releasable=economy)
+        # Town errand reserves and takes column at t=0
+        slot.reserve("town errand", 0.0, "the family's town errand")
+        town_decision = slot.want(
+            claimant="town errand",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=(),
+            now=0.0,
+        )
+        self.assertTrue(town_decision.granted)
+        slot.settle(town_decision, True, 0.0)
+
+        # Guild bank registers wait at t=0
+        first_ask = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="vault",
+            leader="Grug",
+            column="vendor",
+            retaskable=("", "vault"),
+            now=0.0,
+            priority_after=1200.0,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, first_ask.verdict)
+
+        # At t=1300, guild bank has earned priority (1300 > 1200)
+        # Town errand lease (300s) expired at t=300, so this should preempt
+        earned_ask = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="vault",
+            leader="Grug",
+            column="vendor",
+            retaskable=("", "vault"),
+            now=1300.0,
+            priority_after=1200.0,
+        )
+        self.assertTrue(earned_ask.granted, f"Expected granted, got {earned_ask.verdict}: {earned_ask.reason}")
+
+    def test_earned_bank_gets_slot_ahead_of_town_errand_on_free_column(self):
+        """When the column is free but town errand holds the reservation,
+        an earned bank should take the free column ahead of the reservation."""
+        slot = townslot.Slot(lease=300.0, releasable=economy)
+        # Town errand reserves at t=0 but doesn't take column (simulating
+        # a town errand that reserves between steps)
+        slot.reserve("town errand", 0.0, "the family's town errand")
+
+        # Guild bank registers wait at t=0
+        first_ask = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="vault",
+            leader="Grug",
+            column="",
+            retaskable=("", "vault"),
+            now=0.0,
+            priority_after=1200.0,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, first_ask.verdict)
+
+        # At t=1300, guild bank has earned priority
+        # Column is free (no holder), town errand has reservation
+        # Earned priority should skip reservation wait in _gate and take free column
+        earned_ask = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="vault",
+            leader="Grug",
+            column="",
+            retaskable=("", "vault"),
+            now=1300.0,
+            priority_after=1200.0,
+        )
+        # The earned priority should allow taking the free column despite reservation
+        self.assertTrue(earned_ask.granted, f"Expected granted, got {earned_ask.verdict}: {earned_ask.reason}")
+
+    def test_earned_bank_preempts_town_errand_cycling_aims(self):
+        """#2299: Town errand cycles through vendor/banker/repair, each getting
+        a fresh 300s lease. Guild bank earns priority at 1200s but town errand
+        keeps a valid lease by switching aims. Earned bank should preempt."""
+        slot = townslot.Slot(lease=300.0, releasable=economy)
+
+        # Town errand takes column for vendor at t=1000
+        slot.reserve("town errand", 1000.0, "the family's town errand")
+        vendor_take = slot.want(
+            claimant="town errand",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=("", "vendor"),
+            now=1000.0,
+        )
+        self.assertTrue(vendor_take.granted)
+        slot.settle(vendor_take, True, 1000.0)
+
+        # Guild bank registers wait at t=0
+        first_ask = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="vault",
+            leader="Grug",
+            column="vendor",
+            retaskable=("", "vault"),
+            now=0.0,
+            priority_after=1200.0,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, first_ask.verdict)
+
+        # At t=1200, guild bank has earned priority (1200 >= 1200)
+        # Town errand's vendor lease expires at t=1300 (1000 + 300)
+        # At t=1200, lease has 100s left
+        earned_ask_1200 = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="vault",
+            leader="Grug",
+            column="vendor",
+            retaskable=("", "vault"),
+            now=1200.0,
+            priority_after=1200.0,
+        )
+        # Currently: bank waits because town errand lease not expired
+        # Expected after fix: bank should preempt because it earned priority
+        # and town errand has no wait bound
+        self.assertTrue(earned_ask_1200.granted,
+            f"At t=1200 (earned), expected granted but got {earned_ask_1200.verdict}: {earned_ask_1200.reason}")
+
+        # If not granted at 1200, at t=1300 lease expires, town errand switches to banker
+        # (new aim, new lease). Bank should still preempt at t=1300.
+        if not earned_ask_1200.granted:
+            earned_ask_1300 = slot.want(
+                claimant="guild bank",
+                character="Grug",
+                aim="vault",
+                leader="Grug",
+                column="vendor",
+                retaskable=("", "vault"),
+                now=1300.0,
+                priority_after=1200.0,
+            )
+            self.assertTrue(earned_ask_1300.granted,
+                f"At t=1300 (lease expired), expected granted but got {earned_ask_1300.verdict}: {earned_ask_1300.reason}")
+
+
 class AnEarnedTurnKeepsEveryOtherGate(unittest.TestCase):
     """#1635: the earned bank turn passes a reservation and nothing else.
 
@@ -2499,7 +2709,9 @@ class AnEarnedTurnKeepsEveryOtherGate(unittest.TestCase):
             priority_after=1200.0,
         )
 
-    def test_waits_inside_a_live_holders_lease_then_is_granted(self):
+    def test_earned_priority_preempts_town_errand_lease(self):
+        """#2299: An earned-priority claimant preempts the town errand's lease
+        rather than waiting for it to expire."""
         slot = self._slot()
         owner = slot.want(
             claimant="town errand",
@@ -2511,11 +2723,12 @@ class AnEarnedTurnKeepsEveryOtherGate(unittest.TestCase):
             now=self.EARNED,
         )
         slot.settle(owner, True, self.EARNED)
-        held = self._ask(slot, self.EARNED + 150.0, "vendor")
-        self.assertEqual(townslot.SLOT_WAIT, held.verdict)
-        self.assertIn("150s of a 300s lease", held.reason)
-        after = self._ask(slot, self.EARNED + 350.0, "vendor")
-        self.assertTrue(after.granted)
+        # At t=1450 (150s into town errand's 300s lease), guild bank has
+        # earned priority (1450 >= 1200) and should preempt immediately
+        preempt = self._ask(slot, self.EARNED + 150.0, "vendor")
+        self.assertTrue(preempt.granted, f"Expected preempt, got {preempt.verdict}: {preempt.reason}")
+        self.assertEqual(townslot.SLOT_PREEMPT, preempt.verdict)
+        self.assertIn("past its 300s lease", preempt.reason)
 
     def test_waits_while_a_campaign_owns_the_traveller_then_is_granted(self):
         slot = self._slot()

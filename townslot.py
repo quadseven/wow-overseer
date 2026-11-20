@@ -893,6 +893,7 @@ def decide(
     want_fresh: float = WANT_FRESH_SECONDS,
     releasable=None,
     stop: bool = False,
+    bound_claimants: frozenset[str] | None = None,
 ) -> Decision:
     """May this pass have the traveller, and what has to happen first.
 
@@ -1245,7 +1246,18 @@ def _held_column(
             character=character,
         )
 
-    if held_for < allowed:
+    # AN EARNED PRIORITY TURN PREEMPTS AN UNBOUND TOWN ERRAND (#2299).
+    # The town errand (RESERVE_ORDER[0]) has no wait bound and cycles through
+    # vendor/banker/repair, each getting a fresh lease. A claimant that has
+    # earned its priority (waited past its priority_after) should not wait
+    # behind the town errand's rolling lease.
+    earned_priority_preempts_town_errand = (
+        priority
+        and holder.claimant == RESERVE_ORDER[0]
+        and releasable(holder.aim)
+    )
+
+    if held_for < allowed and not earned_priority_preempts_town_errand:
         return Decision(
             verdict=SLOT_WAIT,
             reason="%s waits for %s's %r on %s, held %ds of a %ds lease "
