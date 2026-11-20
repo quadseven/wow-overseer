@@ -26903,7 +26903,7 @@ class Bridge(discord.Client):
             fam = fams.get(key)
             if fam is not None and rows:
                 try:
-                    if key in _PROF_LOOP_YIELD:
+                    if key in globals().get("_PROF_LOOP_YIELD", ()):
                         # The profession loop's slice for this queued run is
                         # spent: the dungeon job stands, no turn is given.
                         pass
