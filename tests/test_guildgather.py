@@ -91,8 +91,8 @@ class OtherSidesGround(unittest.TestCase):
         self.assertEqual({}, seen)
 
     def test_the_bridge_reads_race_and_zone_into_the_seat(self):
-        self.assertIn("race=int(r[\"race\"] or 0)", BRIDGE)
-        self.assertIn("zone_id=int(r[\"zone_id\"] or 0)", BRIDGE)
+        self.assertIn('race=int(r["race"] or 0)', BRIDGE)
+        self.assertIn('zone_id=int(r["zone_id"] or 0)', BRIDGE)
 
 
 class Rows(unittest.TestCase):
