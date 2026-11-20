@@ -407,8 +407,18 @@ def _quorum_blockers(raiders: list, min_level) -> list:
         "The module holds a raid at the door unless %d seats, %d tanks and %d "
         "healers stand there (Overseer.Raid.QuorumSeats, QuorumTanks, "
         "QuorumHealers); %d seats, %d tanks and %d healers "
-        "are at level %d or more."
-        % (*want, have["seats"], have["tanks"], have["healers"], have["gate"])
+        "are at level %d or more. %s"
+        % (
+            *want,
+            have["seats"],
+            have["tanks"],
+            have["healers"],
+            have["gate"],
+            "Numbers set on the bridge to match the realm."
+            if raidrun.door_quorum_overridden()
+            else "Numbers are the module defaults; the bridge has no "
+            "RAID_DOOR_QUORUM_* set, so a realm that overrides them is not shown.",
+        )
     ]
 
 
