@@ -622,9 +622,7 @@ class FamilyWideFarmIgnoresOperatorHold(unittest.IsolatedAsyncioTestCase):
         import campaignqueue
         import operatorhold
 
-        hold_rows = [
-            {"family": "grug_clan", "reason": "x", "scope": "farm", "live": 1}
-        ]
+        hold_rows = [{"family": "grug_clan", "reason": "x", "scope": "farm", "live": 1}]
         ns = self._ns(
             {
                 "time": time,

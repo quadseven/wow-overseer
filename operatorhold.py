@@ -69,9 +69,7 @@ EVERY_FAMILY = "*"
 
 # The writers an empty scope forbids: every writer this module's docstring says
 # a hold stops. Farm and craft are named by a scope, never by the default.
-DEFAULT_SCOPE = (
-    "queue", "council", "activity", "levelroute", "gearrouting", "lending"
-)
+DEFAULT_SCOPE = ("queue", "council", "activity", "levelroute", "gearrouting", "lending")
 
 # The scope word that names every writer.
 ALL_SCOPE = "all"

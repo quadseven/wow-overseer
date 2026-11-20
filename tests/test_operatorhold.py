@@ -476,4 +476,3 @@ class TheScopeNamesWhatAHoldForbids(unittest.TestCase):
         held, _me, _log, _clock = _held_method([_row("Grug")])
         self.assertEqual(set(), asyncio.run(held({"Grug"}, "farm")))
         self.assertEqual({"Grug"}, asyncio.run(held({"Grug"}, "gearrouting")))
-
