@@ -127,6 +127,7 @@ import craft_rhythm
 import craft_supply
 import dungeonpath
 import gearup
+import corpstickets
 import guildcorps
 import guildlevel
 import guildroute
@@ -1058,6 +1059,12 @@ def passing_hearth_row(r) -> bool:
     )
 
 
+def _refused_for_room(r) -> bool:
+    """Whether the module refused this row for bag room."""
+    said = "%s %s %s" % (r.result, r.reason, r.refusal)
+    return any(w in said for w in corpstickets.BAG_REASONS)
+
+
 def _step_row_wait(r, minutes: int, passing_wait: int | None = None) -> int:
     """Keep long waits for completed walks and persistent failures.
 
@@ -1074,6 +1081,10 @@ def _step_row_wait(r, minutes: int, passing_wait: int | None = None) -> int:
         and (r.refusal or r.reason) in PASSING_TRAIN_REASONS
     ):
         return min(minutes, LEVEL_TRANSIENT_RETRY_MINUTES)
+    if r.action == "collect" and not r.walk and _refused_for_room(r):
+        # Bags do not empty by themselves: a collect the module refused for
+        # bag room waits as long as a corps collect does (#2633).
+        return max(minutes, guildcorps.FULL_BAGS_COLLECT_MINUTES)
     if r.action == "train" and passing_train_row(r):
         # A profession errand asks again on the next pass (passing_wait); any
         # other trainer walk waits the base hour.
