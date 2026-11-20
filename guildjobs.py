@@ -3160,8 +3160,16 @@ def family_mount_step(m, facts, recent, kept=None, book=None, crafters=None, mas
         crafters=crafters,
         master=master,
     )
-    if getattr(m, "follows", False) and (step is None or step.walk is not None):
-        return None, ""
+    if step is not None and (step.action != mountbuy.ACTION or step.walk is not None):
+        # The module refuses every walk-to-vendor for a roster character ("aim
+        # it through travel_npc"), as it does walk-to-trainer, and a make-room
+        # step exists only for that walk. Planning either writes a row that
+        # errors on every cooldown and never buys; only the in-place use of a
+        # carried mount can work.
+        return None, (
+            "%s waits to buy a mount: the module walks no roster character to a "
+            "vendor" % m.name
+        )
     return step, note
 
 
