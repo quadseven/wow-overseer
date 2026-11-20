@@ -477,3 +477,61 @@ class BridgeTrainerCrossingWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PassingRefusalRetry(unittest.TestCase):
+    """A refusal that passes holds a member for minutes, not the 3-hour wait (#771)."""
+
+    def _row(self, result, age, status="error", name="Payer"):
+        return {
+            "target_name": name,
+            "source": f"{classtrain.SOURCE}:{name}",
+            "age": age,
+            "status": status,
+            "result": json.dumps(result),
+        }
+
+    def test_held_by_another_verb_is_asked_again_after_a_short_pause(self):
+        row = self._row(
+            {
+                "outcome": "refused",
+                "reason": "character is held by another verb",
+                "retryable": True,
+                "transient": True,
+            },
+            age=classtrain.TRANSIENT_RETRY_MINUTES + 1,
+        )
+        self.assertNotIn("Payer", classtrain.recent_walkers([row]))
+
+    def test_a_passing_refusal_still_holds_for_the_short_pause(self):
+        row = self._row(
+            {"outcome": "entered_combat", "retryable": True, "transient": True}, age=2
+        )
+        self.assertIn("Payer", classtrain.recent_walkers([row]))
+
+    def test_a_dead_member_is_asked_again_after_a_short_pause(self):
+        row = self._row(
+            {"outcome": "refused", "reason": "character is dead", "retryable": True},
+            age=classtrain.TRANSIENT_RETRY_MINUTES + 1,
+        )
+        self.assertNotIn("Payer", classtrain.recent_walkers([row]))
+
+    def test_a_walk_that_ran_still_holds_for_the_full_cooldown(self):
+        row = self._row(
+            {"outcome": "stalled", "retryable": True},
+            age=classtrain.TRANSIENT_RETRY_MINUTES + 1,
+            status="unchanged",
+        )
+        self.assertIn("Payer", classtrain.recent_walkers([row]))
+
+    def test_a_non_transient_refusal_keeps_the_full_cooldown(self):
+        row = self._row(
+            {
+                "outcome": "refused",
+                "reason": "the road to the trainer crosses ground far above its level",
+                "retryable": False,
+                "transient": False,
+            },
+            age=60,
+        )
+        self.assertIn("Payer", classtrain.recent_walkers([row]))
