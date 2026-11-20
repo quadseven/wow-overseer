@@ -745,6 +745,7 @@ class RenewedOrderKeepsDeathStrikes(unittest.IsolatedAsyncioTestCase):
                 "_gather_danger": lambda map_id, x, y: 55,
                 "_farm_deaths": fake_farm_deaths,
                 "_fetch_free_slots": lambda names: {name: 20 for name in FAMILY},
+                "_released_for_gathering": lambda names, free: frozenset(),
                 "_current_travel_npc": lambda leader: "",
             },
             extra_methods=("_farm_job_now", "_farm_state_for"),

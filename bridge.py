@@ -3334,6 +3334,18 @@ def _floor_release(names, free_slots: dict) -> dict:
     return out
 
 
+def _released_for_gathering(names, free_slots: dict) -> frozenset:
+    """The members of `free_slots` the bag-floor release lets a gathering walk
+    ignore (#1261): at the floor, and no vendor can clear them.
+
+    A gathering walk yields the column to the vendor trip for a member at the
+    floor, but a member `_floor_release` drops is one that trip cannot lift, so
+    the walk waited for ever on a trip that changed nothing. Blocking.
+    """
+    kept = _floor_release(names, free_slots)
+    return frozenset(set(free_slots) - set(kept))
+
+
 def _note_vendor_sellable(names, sellable: dict) -> None:
     """Record the stacks a vendor would buy from each member, as the vendor
     pass counted them for its trip decision."""
@@ -29249,12 +29261,14 @@ class Bridge(discord.Client):
             else:
                 names = sorted(cohort.names)
             free = await asyncio.to_thread(_fetch_free_slots, names)
+            released = await asyncio.to_thread(
+                _released_for_gathering, names, free)
         except Exception:
             # An unreadable bag is a reason not to walk, and it is said: an
             # empty reading makes `bags_block_gathering` refuse and yield.
             log.exception("gather: the family's free bag slots could not be read")
-            free = {}
-        full = gatheraim.bags_block_gathering(free)
+            free, released = {}, frozenset()
+        full = gatheraim.bags_block_gathering(free, released=released)
         got = getattr(choice, "chosen", None)
         if full or got is None:
             # A refusal is already a sentence, and `skillgoal.plan` has just
@@ -43561,8 +43575,8 @@ def _farm_reads_for(state: dict, got: dict, gathered: int):
         spawns=tuple(got["spawns"]), zone_levels=got["zone_levels"],
         deaths=tuple(got["deaths"]),
         zone_deaths=tuple(got.get("zone_deaths", got["deaths"])),
-        free_slots=got["free"], gathered=gathered,
-        creatures=tuple(got.get("creatures", ())),
+        free_slots=got["free"], released=got.get("released", frozenset()),
+        gathered=gathered, creatures=tuple(got.get("creatures", ())),
         walking=walking, visited=state["visited"], now=time.time(),
         stood_since=state["stand"][1])
 
@@ -43603,6 +43617,7 @@ def _farm_reads(names: list, leader: str, item: int, skill: str, since: float,
         top = _gather_danger(near.map_id, near.x, near.y)
         if top is not None:
             zone_levels[zone] = top
+    free = _fetch_free_slots(names)
     deaths = _farm_deaths(names, since)
     zone_deaths = (
         deaths if zone_since is None or float(zone_since) == float(since)
@@ -43617,7 +43632,8 @@ def _farm_reads(names: list, leader: str, item: int, skill: str, since: float,
         "zone_levels": zone_levels,
         "deaths": deaths,
         "zone_deaths": zone_deaths,
-        "free": _fetch_free_slots(names),
+        "free": free,
+        "released": _released_for_gathering(names, free),
         "held": int(held),
         "name": name,
         "column": _current_travel_npc(leader),
