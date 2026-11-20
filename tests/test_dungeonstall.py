@@ -2462,3 +2462,33 @@ class TheErrandARunWaitsOn(unittest.TestCase):
         self.assertEqual(
             (2, ["Bork", "Grog"]), bag_pressure_pass(recalled={"Grog": 940.0}, now=over)
         )
+
+
+class ARegroupWaitIsBounded(unittest.TestCase):
+    """A hold waiting for a party nothing is gathering must not wait for ever."""
+
+    NAMES = ("Zug", "Oz", "Bork")
+
+    def apart(self):
+        return {
+            "Zug": standing(0, 100.0, 100.0),
+            "Oz": standing(0, 145.0, 100.0),
+            "Bork": standing(0, 100.0, 175.0),
+        }
+
+    def judge(self, left_s):
+        hold = {"id": 9, "left_s": left_s, "target": stall.REGROUP}
+        return stall.restart_after_hold(hold, False, "Zug", self.NAMES, self.apart())
+
+    def test_a_party_spread_past_the_range_holds_inside_the_ceiling(self):
+        got = self.judge(-(stall.REGROUP_CEILING_SECONDS - 1))
+        self.assertFalse(got.allowed)
+        self.assertEqual(stall.APART, got.reason)
+
+    def test_the_same_party_runs_once_the_ceiling_is_spent(self):
+        got = self.judge(-stall.REGROUP_CEILING_SECONDS)
+        self.assertTrue(got.allowed)
+        self.assertEqual(stall.CEILING, got.reason)
+
+    def test_a_backoff_still_running_holds_whatever_the_ceiling(self):
+        self.assertEqual(stall.BACKOFF, self.judge(60).reason)

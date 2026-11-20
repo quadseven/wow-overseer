@@ -207,6 +207,74 @@ class StandingTests(unittest.TestCase):
         stats = {i: {} for i in trinkets}
         self.assertIsNone(gs.next_target("mage-dps", "trinket", {}, stats))
 
+    def test_a_worn_piece_the_score_cannot_read_aims_up_the_guides_order(self):
+        # Every listed trinket scores 0.0 when its worth is a proc or a "Use:"
+        # (#2208). A worn trinket that also scores 0.0 used to get no target
+        # (`0 > 0`); the guide's own order now names the piece ahead of it.
+        pre = gs.slot_list("mage-dps", "preraid", "trinket")
+        stats = {i: {} for i in pre}
+        # An unlisted worn piece: the guide's first piece.
+        self.assertEqual(
+            gs.next_target("mage-dps", "trinket", {}, stats, worn_id=999999),
+            ("preraid", pre[0], 0.0),
+        )
+        # The guide's second piece worn: its first.
+        self.assertEqual(
+            gs.next_target("mage-dps", "trinket", {}, stats, worn_id=pre[1]),
+            ("preraid", pre[0], 0.0),
+        )
+        # The guide's first piece worn: nothing pre-raid is ahead of it.
+        self.assertIsNone(
+            gs.next_target("mage-dps", "trinket", {}, stats, worn_id=pre[0])
+        )
+
+    def test_the_guides_order_moves_on_to_the_raid_list(self):
+        pre = gs.slot_list("mage-dps", "preraid", "trinket")
+        raid = gs.slot_list("mage-dps", "mc", "trinket")
+        self.assertNotIn(raid[0], pre)
+        stats = {i: {} for i in pre + raid}
+        # The pre-raid first piece worn: the raid list's first piece is next.
+        self.assertEqual(
+            gs.next_target("mage-dps", "trinket", {}, stats, worn_id=pre[0]),
+            ("raid", raid[0], 0.0),
+        )
+        # A piece the pre-raid list puts behind the worn one is not ahead of
+        # it on the raid list either (the worn piece is on the first only).
+        only_pre = next(i for i in pre if i not in raid)
+        after = [i for i in pre[pre.index(only_pre) + 1 :] if i in raid]
+        self.assertTrue(after)
+        self.assertIsNone(
+            gs.next_target(
+                "mage-dps", "trinket", {}, {i: {} for i in after}, worn_id=only_pre
+            )
+        )
+        # A raid-only piece worn is never sent back to the pre-raid list.
+        self.assertIsNone(
+            gs.next_target("mage-dps", "trinket", {}, stats, worn_id=raid[0])
+        )
+
+    def test_the_guides_order_never_overrules_a_score(self):
+        pre = gs.slot_list("mage-dps", "preraid", "trinket")
+        stats = {i: {} for i in pre}
+        # A worn piece that scores above every listed piece keeps no target,
+        # listed or not: the list is a shopping list, never the score.
+        worn = {"spell_power": 10}
+        self.assertIsNone(
+            gs.next_target("mage-dps", "trinket", worn, stats, worn_id=999999)
+        )
+        # A listed piece that scores is still taken on its score, not its place.
+        stats[pre[2]] = {"spell_power": 20}
+        self.assertEqual(
+            gs.next_target("mage-dps", "trinket", {}, stats, worn_id=pre[1])[:2],
+            ("preraid", pre[2]),
+        )
+        # Equal scores above zero are a tie the score did read: no target.
+        self.assertIsNone(
+            gs.next_target(
+                "mage-dps", "trinket", {"spell_power": 20}, stats, worn_id=999999
+            )
+        )
+
     def test_an_empty_slot_still_takes_the_best_scoring_piece(self):
         tgt = gs.next_target("mage-dps", "head", None, self.stats)
         self.assertEqual(tgt[:2], ("preraid", self.best))

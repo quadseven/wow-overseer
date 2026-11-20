@@ -766,6 +766,12 @@ REGROUP = "regroup"
 # well inside the range a follower holds, far outside a member in another
 # town.
 REGROUP_YARDS = 40.0
+# HOW LONG PAST ITS BACKOFF A REGROUP HOLD MAY WAIT FOR THE PARTY. Nothing
+# closes a gap between a leader and a follower on a job that does not walk the
+# party together, so a family spread wider than REGROUP_YARDS stayed apart for
+# ever and the order waited with it, the hold line saying only that it waited.
+# A wait with no one working to end it is bounded: past this the order runs.
+REGROUP_CEILING_SECONDS = 3600
 
 # Why `restart_after_hold` allowed or held the restart.
 BACKOFF = "backoff"
@@ -774,6 +780,7 @@ RUNNING = "running"
 UNREAD = "unread"
 APART = "apart"
 TOGETHER = "together"
+CEILING = "ceiling"
 
 _UNSEEN = "not seen in the world"
 
@@ -850,6 +857,8 @@ def restart_after_hold(
         return Restart(True, NOT_REGROUP)
     if running:
         return Restart(True, RUNNING)
+    if -int(hold.get("left_s") or 0) >= REGROUP_CEILING_SECONDS:
+        return Restart(True, CEILING)
     spots = {n: _spot((positions or {}).get(n)) for n in names}
     if not any(spots.values()):
         return Restart(True, UNREAD)
