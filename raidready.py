@@ -402,9 +402,13 @@ HEALER_GATE = 50
 # of the slowest seat, #2572). The window is applied here and again in Python.
 HEALER_CROSSINGS_SQL = (
     "SELECT character_name AS name, old_level, new_level FROM overseer_level "
-    "WHERE character_name IN ({holes}) AND old_level < " + str(HEALER_GATE)
-    + " AND new_level >= " + str(HEALER_GATE)
-    + " AND created_at > NOW() - INTERVAL " + str(HEALER_PACE_DAYS) + " DAY"
+    "WHERE character_name IN ({holes}) AND old_level < "
+    + str(HEALER_GATE)
+    + " AND new_level >= "
+    + str(HEALER_GATE)
+    + " AND created_at > NOW() - INTERVAL "
+    + str(HEALER_PACE_DAYS)
+    + " DAY"
 )
 
 
@@ -439,8 +443,13 @@ def healer_projection(healers: list, want: int, level_rows) -> dict:
             HEALER_GATE,
             basis,
         )
-    return {"crossed": len(crossed), "need": need, "weeks": weeks,
-            "basis": basis, "line": line}
+    return {
+        "crossed": len(crossed),
+        "need": need,
+        "weeks": weeks,
+        "basis": basis,
+        "line": line,
+    }
 
 
 def healer_levels_card(raiders: list, level_rows=()) -> dict:
