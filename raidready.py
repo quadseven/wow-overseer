@@ -397,16 +397,16 @@ def first_kill_card(raiders: list, min_level) -> dict:
 
 def _quorum_blockers(raiders: list, min_level) -> list:
     """HARD: the module holds the raid at the door below its quorum. The
-    numbers are raidrun's copy of the module's defaults."""
+    numbers are raidrun.door_quorum: the realm's override, else the defaults."""
     have = _eligible_counts(raiders, min_level)
-    want = (raidrun.QUORUM_SEATS, raidrun.QUORUM_TANKS, raidrun.QUORUM_HEALERS)
+    want = raidrun.door_quorum()
     got = (have["seats"], have["tanks"], have["healers"])
     if all(h >= w for h, w in zip(got, want, strict=True)):
         return []
     return [
         "The module holds a raid at the door unless %d seats, %d tanks and %d "
         "healers stand there (Overseer.Raid.QuorumSeats, QuorumTanks, "
-        "QuorumHealers, at their defaults); %d seats, %d tanks and %d healers "
+        "QuorumHealers); %d seats, %d tanks and %d healers "
         "are at level %d or more."
         % (*want, have["seats"], have["tanks"], have["healers"], have["gate"])
     ]

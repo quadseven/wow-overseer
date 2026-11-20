@@ -54,6 +54,13 @@ MIN_LEVEL = {MOLTEN_CORE: 50, UPPER_SPIRE: 56}
 QUORUM_SEATS = 36
 QUORUM_TANKS = 3
 QUORUM_HEALERS = 8
+# The realm's override of the three defaults above, set to the same values as the
+# worldserver's Overseer.Raid.Quorum* keys. Unset or unreadable: the default.
+DOOR_QUORUM_ENV = (
+    "RAID_DOOR_QUORUM_SEATS",
+    "RAID_DOOR_QUORUM_TANKS",
+    "RAID_DOOR_QUORUM_HEALERS",
+)
 
 # THE FIRST-KILL ORDER (#2570): an explicit order mode that forms the raid
 # from the eligible approved seats only. Its quorum is the bridge's own refusal
@@ -447,6 +454,23 @@ def first_kill_quorum(environ=None) -> tuple:
             value = default
         out.append(value)
     return _positive_quorum(tuple(out))
+
+
+def door_quorum(environ=None) -> tuple:
+    """(seats, tanks, healers) the module holds a raid at the door for: the
+    bridge's env override of each module default, else the default. A value
+    that is unset, unreadable or below 1 falls back to its default."""
+    env = os.environ if environ is None else environ
+    out = []
+    for key, default in zip(
+        DOOR_QUORUM_ENV, (QUORUM_SEATS, QUORUM_TANKS, QUORUM_HEALERS), strict=True
+    ):
+        try:
+            value = int(str(env.get(key, "")).strip())
+        except ValueError:
+            value = default
+        out.append(value if value >= 1 else default)
+    return tuple(out)
 
 
 def strip_first_kill(words: list) -> tuple:
