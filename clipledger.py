@@ -451,11 +451,6 @@ def expired_reasons(
     return out
 
 
-def expired_ids(rows: Iterable[Mapping], **kwargs) -> list:
-    """Ids of ready ledger rows that fall outside the retention bounds."""
-    return list(expired_reasons(rows, **kwargs))
-
-
 def plan_requests(
     *,
     loot_rows: Iterable[Mapping],
