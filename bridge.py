@@ -3348,7 +3348,18 @@ def _bag_hold_reads(names: list, leader: str) -> tuple:
     read together in one worker thread for the dungeon-quest bag hold (#1243).
     """
     here = _present_members(names, leader)
-    return here, _fetch_free_slots(here), _current_travel_npc(leader)
+    free = _fetch_free_slots(here)
+    # A MEMBER NO VENDOR CAN CLEAR DOES NOT HOLD THE QUEST WALK EITHER. The
+    # campaign gate and the town errand drop a member released from the floor
+    # (#1261) from their reading, but this hold read the raw slots: a member
+    # released for fruitless vendor visits still read as at the floor, the
+    # hold kept waiting on a trip that could not lift it, and the family sat
+    # at "waits for bag room" for hours. Looked up: the hold tests load this
+    # function in isolation.
+    release = globals().get("_floor_release")
+    if release is not None:
+        free = release(here, free)
+    return here, free, _current_travel_npc(leader)
 
 
 def _at_floor(names, free_slots: dict) -> list:
