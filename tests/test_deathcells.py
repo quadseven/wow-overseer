@@ -700,6 +700,34 @@ class AGoalStandingHighOverThePool(unittest.TestCase):
         self.assertFalse(dc._goal_over_the_liquid(falls[0], STORMWIND_WALKER, BANKER))
 
 
+# A walker that fell through the floor stands near z -505 under a lava field
+# whose deaths sit at z 128. Its ground aim to a ledge inside the disc, 160
+# yards over the liquid, was waved through as "a counter over the pool from
+# lower ground" and the recovery walk went on to die again.
+STEPPES_LAVA = [row(x, -1245.0, z=129.3) for x in range(-8165, -7500, 100)]
+VOID_WALKER = {"map_id": 0, "x": -7600.0, "y": -876.0, "z": -505.0}
+LEDGE_AIM = "at:0:-7524.7,-1228.4,287.2"
+
+
+class AWalkerUnderTheWorldIsNotOnLowerGround(unittest.TestCase):
+    def setUp(self):
+        self.discs = dc.discs(STEPPES_LAVA)
+
+    def test_a_walker_under_the_world_is_refused_a_ledge_inside_the_disc(self):
+        self.assertIn("lava", dc.aim_refusal(self.discs, VOID_WALKER, LEDGE_AIM))
+
+    def test_a_walker_on_lower_ground_still_may_walk_to_that_ledge(self):
+        walker = dict(VOID_WALKER, z=0.0)
+        self.assertEqual(dc.aim_refusal(self.discs, walker, LEDGE_AIM), "")
+
+    def test_the_cut_is_the_distance_under_the_surface(self):
+        surface = self.discs[0].surface_z
+        near = dict(VOID_WALKER, z=surface - dc.UNDER_WORLD_YARDS + 1)
+        far = dict(VOID_WALKER, z=surface - dc.UNDER_WORLD_YARDS)
+        self.assertEqual(dc.aim_refusal(self.discs, near, LEDGE_AIM), "")
+        self.assertIn("lava", dc.aim_refusal(self.discs, far, LEDGE_AIM))
+
+
 class AKeywordHolderIsOneTheWalkersSideMayUse(unittest.TestCase):
     """The nearest banker is judged for the walker's own side: a Horde family in
     the Badlands was judged against the Ironforge bankers, the other side's
