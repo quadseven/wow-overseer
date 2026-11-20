@@ -600,6 +600,32 @@ class TheRealBlockerIsLevelAndTheQuorum(unittest.TestCase):
         hard = [b["text"] for b in card["blockers"] if b["tone"] == "hard"]
         self.assertFalse([t for t in hard if "holds a raid at the door" in t], hard)
 
+    def test_the_quorum_row_says_whether_it_shows_defaults_or_an_override(self):
+        keys = raidrun.DOOR_QUORUM_ENV
+        clean = {k: v for k, v in os.environ.items() if k not in keys}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            self.assertFalse(raidrun.door_quorum_overridden())
+            _, card = self._card_with(low=10)
+        text = [
+            b["text"]
+            for b in card["blockers"]
+            if "holds a raid at the door" in b["text"]
+        ][0]
+        self.assertIn("module defaults", text)
+        self.assertIn("RAID_DOOR_QUORUM_", text)
+        self.assertTrue(raidrun.door_quorum_overridden({keys[0]: "30"}))
+        self.assertFalse(raidrun.door_quorum_overridden({keys[0]: ""}))
+        env = dict(clean, **{keys[0]: "40", keys[1]: "3", keys[2]: "8"})
+        with mock.patch.dict(os.environ, env, clear=True):
+            _, card = self._card_with(low=10)
+        text = [
+            b["text"]
+            for b in card["blockers"]
+            if "holds a raid at the door" in b["text"]
+        ][0]
+        self.assertIn("set on the bridge", text)
+        self.assertNotIn("module defaults", text)
+
     def test_the_card_counts_the_seats_below_fifty_by_role(self):
         lowered, card = self._card_with(low=10)
         below = card["seats_below_level"]

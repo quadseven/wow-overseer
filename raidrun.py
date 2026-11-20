@@ -473,6 +473,16 @@ def door_quorum(environ=None) -> tuple:
     return tuple(out)
 
 
+def door_quorum_overridden(environ=None) -> bool:
+    """Whether any door quorum number comes from the bridge's env rather than
+    the module default, so a card can say which one it is showing."""
+    env = os.environ if environ is None else environ
+    defaults = (QUORUM_SEATS, QUORUM_TANKS, QUORUM_HEALERS)
+    return door_quorum(env) != defaults or any(
+        str(env.get(k, "")).strip() for k in DOOR_QUORUM_ENV
+    )
+
+
 def strip_first_kill(words: list) -> tuple:
     """(words without the first-kill phrase, whether it was said)."""
     text = " ".join(words)
