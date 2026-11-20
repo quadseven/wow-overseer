@@ -14,8 +14,9 @@ reach of a quester when:
 
   * its zone is the quester's zone (a starting area counts as the zone it lies
     in, `START_AREAS`: Northshire Valley is Elwynn Forest);
-  * its race and class masks hold the quester's, its minimum level is met and
-    its own level is at most levelroute.ABOVE over the quester's;
+  * its race and class masks hold the quester's, its minimum level is met, its
+    maximum level (MaxLevel, 0 for none) is not passed, and its own level is
+    at most levelroute.ABOVE over the quester's;
   * the quest before it is rewarded (or held, for a negative PrevQuestID), and
     no quest of its exclusive group is rewarded or held. "The quest before it"
     is the world's list, not the row's: its own PrevQuestID or any quest whose
@@ -75,7 +76,8 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     while it is the quest the quester's last move was for, or while it is in
     its log, of the zone it stands in, and has no objective spawn the quester
     could hunt (`_working`): nothing works that one, so its clock is the
-    world's, not the quester's;
+    world's, not the quester's. A quest whose objective spawns are on its map
+    but all over its level is waiting for its levels, and its clock waits too;
   * GIVER_MISSING: a creature is named as its giver, none is spawned, and
     no gameobject or item starts it either;
   * ENDER_MISSING: nothing is named to hand it in to, or the creature named is
@@ -147,6 +149,7 @@ import bag_pressure
 import classquest
 import guildcorps
 import guildjobs
+import guildlevel
 import guildroute
 import levelroute
 import questlog
@@ -249,6 +252,7 @@ def _quest_complete(quest, status, progress=0) -> bool:
 FAILED = "the quest failed in the log"
 STALLED = "its objectives did not move for 2 hours of play"
 NO_OBJECTIVES = "the world defines no required objectives to complete"
+SCRIPTED_EVENT = "the quest completes only by a scripted event no lone quester drives"
 GIVER_MISSING = "the quest giver is not in the world"
 # Further Concerns and Report to Gryan Stoutmantle require speaking to an NPC
 # for objective credit. Questers can hunt and use quest verbs, but cannot speak
@@ -374,7 +378,10 @@ _ITEM_OBJECTIVES = "".join(
 QUESTS_SQL = (
     "SELECT q.ID AS id, q.LogTitle AS title, q.QuestSortID AS sort, "  # noqa: S608
     "q.QuestSortID AS zone, q.QuestLevel AS level, q.QuestInfoID AS info, "
-    "q.MinLevel AS min_level, q.AllowableRaces AS races, "
+    "q.MinLevel AS min_level, COALESCE(a.MaxLevel, 0) AS max_level, "
+    "COALESCE(a.SpecialFlags, 0) AS special, "
+    "q.ID IN (SELECT quest FROM acore_world.areatrigger_involvedrelation) AS area_trigger, "
+    "q.AllowableRaces AS races, "
     "COALESCE(a.AllowableClasses, 0) AS classes, "
     "COALESCE(a.PrevQuestID, 0) AS prev_signed, "
     "COALESCE(a.PrevQuestID, 0) AS prev, "
@@ -663,6 +670,9 @@ class Facts:
     zone: int
     level: int
     classes: int = 0
+    # quest_template_addon.MaxLevel: a quester over it is refused the take
+    # (SatisfyQuestLevel). 0: no cap.
+    max_level: int = 0
     # quest_template_addon.PrevQuestID as stored: positive, rewarded first;
     # negative, held first.
     prev: int = 0
@@ -697,6 +707,7 @@ class Facts:
     # None (SatisfyQuestReputation).
     min_rep: tuple | None = None
     max_rep: tuple | None = None
+    scripted_event: bool = False
 
 
 @dataclass(frozen=True)
@@ -779,6 +790,7 @@ def catalogue(
             zone=zones[qid],
             level=max(_int(r.get("level")), quest.min_level, 1),
             classes=_int(r.get("classes")),
+            max_level=_int(r.get("max_level")),
             prev=_int(r.get("prev_signed")),
             giver_named=qid in named,
             ender_npcs=qid in npc_enders,
@@ -793,6 +805,7 @@ def catalogue(
             breadcrumbs=tuple(sorted(links.breadcrumbs.get(qid, ()))),
             min_rep=_rep(r, "min"),
             max_rep=_rep(r, "max"),
+            scripted_event=guildlevel.scripted_event_quest(r),
         )
         kept[qid] = quest
         band_rows.append(
@@ -1532,6 +1545,8 @@ def open_to(cat: Catalogue, member, quest_id, broken=frozenset()) -> bool:
         return False
     if int(member.level) < quest.min_level:
         return False
+    if facts.max_level and int(member.level) > facts.max_level:
+        return False
     if facts.level > int(member.level) + levelroute.ABOVE:
         return False
     if facts.before and not any(
@@ -1647,23 +1662,35 @@ def _unhuntable(
     it leaves for now, or on a map `_hunt` crosses to: the other classic
     continent, or the starting isles its side's boat reaches, which
     classquest.cross_map knows and far_map does not) and no chest to open
-    for an item of it (`chest_spots`)."""
+    for an item of it (`chest_spots`).
+
+    A quest whose objective spawns stand on the quester's map but every one
+    over its level is not unhuntable: it waits for the quester's levels, so
+    its clock waits too. A quester may take a quest levelroute.ABOVE levels
+    over itself, and quest 25 (Stonetalon Standstill), taken three levels
+    under it, was dropped as stalled by five questers (#1728)."""
     quest = cat.quest(qid)
     if quest is None:
         return True
     if _nearest_chest(member, qid, quest, object_left) is not None:
         return False
-    fields = tuple(
-        s
-        for s in classquest.within_level(member, classquest.solo_fields(quest))
-        if s.entry not in idle
-    )
+    solo = tuple(s for s in classquest.solo_fields(quest) if s.entry not in idle)
+    fields = classquest.within_level(member, solo)
     if _nearest(member, fields, left) is not None:
+        return False
+    if _nearest(member, _over_level(solo, fields), left) is not None:
         return False
     if member.placed:
         routable = tuple(s for s in fields if s.guid not in left)
         return classquest.cross_map(member, routable) < 0
     return True
+
+
+def _over_level(spawns, within) -> tuple:
+    """The spawns of `spawns` that classquest.within_level left out of
+    `within`: the ones too far over the quester's level to hunt yet."""
+    kept = {s.guid for s in within}
+    return tuple(s for s in spawns if s.guid not in kept)
 
 
 def _chested(quest) -> bool:
@@ -1872,10 +1899,14 @@ def _refused_words(reason, words) -> str:
 
 
 def _giver_failure(cat: Catalogue, member, qid, gone, refused):
-    """The reason a quest in reach cannot be taken, "" when it can or when what
-    stands in the way is no fault of the quest (a giver on another map, or a
-    quest a gameobject or an item starts, which no verb takes)."""
+    """A ledger reason for skipping a quest in reach, or "" to leave it unrecorded.
+
+    A giver on another map or a quest started by an object or item may be
+    out of reach for the current take verb without warranting a ledger entry.
+    """
     quest, facts = cat.quest(qid), cat.facts[qid]
+    if facts.scripted_event:
+        return SCRIPTED_EVENT
     if int(qid) in (35, 109):
         return UNSUPPORTED_OBJECTIVE
     count, words = refused.get(("take", qid), (0, ""))
@@ -1972,7 +2003,7 @@ def next_zone(
     """(zone, its open quest ids) of the zone the quester goes to next, or
     (0, []) when no zone holds a quest in reach for it: the lowest band of
     its side among those zones, the most quests first on a tie. A quest counts
-    only when a giver of it is one the quester can go to (`_giver_to_go_to`):
+    when it has no scripted event gate and the quester can go to its giver:
     a zone whose open quests an item or a gameobject starts, or whose givers
     are all gone or left, is passed over, not chosen and then found to have no
     way there, pass after pass. A giver on a continent in `unsailed` (the maps
@@ -1991,7 +2022,8 @@ def next_zone(
         opens = [
             qid
             for qid in in_reach(cat, member, zone, broken)
-            if _giver_to_go_to(cat, member, qid, gone, unsailed)
+            if not cat.facts[qid].scripted_event
+            and _giver_to_go_to(cat, member, qid, gone, unsailed)
         ]
         if not opens:
             continue

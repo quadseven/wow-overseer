@@ -145,6 +145,15 @@ QUEUED_FALLBACK = "quest"
 # "Reagents for the next crafts in hand" is the craft rhythm's own stocked bar.
 READY_CASTS = craft_rhythm.STOCK_CASTS
 
+# A TOWN VISIT THAT DID NOT LIFT A MEMBER'S BAGS IS NOT REPEATED FOR THAT MEMBER.
+# Every stack such a member carries is one a vendor will not buy (kept, a trade
+# tool, a quest item, or routed to a bank that is out of reach), so the next
+# visit changes nothing either, and the loop went gather -> town -> gather ->
+# town for hours (the bag-floor release counts these visits). The
+# member is left out of the low-bag trigger until its bags rise to the bar on
+# their own, or this long has passed and the visit is tried once more.
+FRUITLESS_SECONDS = 2 * 3600.0
+
 # The node trades a farm job can name (#2417), in the order a tie is broken.
 FARM_TRADES = ("mining", "herbalism")
 
@@ -214,6 +223,14 @@ class State:
     since: float = 0.0
     asserted: float = 0.0
     town_seen: bool = False
+    # name -> free slots read when the family went to town for low bags.
+    entered: tuple = ()
+    # Members a town visit left no roomier than it found them. They do not
+    # send the family back to town (see FRUITLESS_SECONDS).
+    fruitless: tuple = ()
+    # (name, when that member was found fruitless): each member expires on its
+    # own clock, so a later visit adding another name never extends an earlier one.
+    fruitless_stamps: tuple = ()
     # When the loop first held a family that had a run queued ('' when no run
     # is queued), and whether it has yielded the slice for that run.
     queued_since: float = 0.0
@@ -403,13 +420,49 @@ def _joined(facts: Facts) -> str:
     return GATHER
 
 
-def _low(facts: Facts) -> list:
-    """'Name (N)' for each member below TOWN_FREE_SLOTS free bag slots."""
-    return [
-        "%s (%d)" % (name, slots)
+def _low_slots(facts: Facts) -> dict:
+    """name -> free slots for each member below TOWN_FREE_SLOTS."""
+    return {
+        name: int(slots)
         for name, slots in sorted((facts.free_slots or {}).items())
         if slots is not None and int(slots) < TOWN_FREE_SLOTS
+    }
+
+
+def _low(facts: Facts, skip=()) -> list:
+    """'Name (N)' for each member below TOWN_FREE_SLOTS free bag slots, except
+    the members a town visit could not help (`skip`)."""
+    return [
+        "%s (%d)" % (name, slots)
+        for name, slots in _low_slots(facts).items()
+        if name not in skip
     ]
+
+
+def _live_fruitless(state: State, facts: Facts) -> tuple:
+    """The members still left out of the low-bag trigger: still below the bar,
+    and not for longer than FRUITLESS_SECONDS."""
+    if not state.fruitless:
+        return ()
+    low = _low_slots(facts)
+    stamps = dict(state.fruitless_stamps)
+    return tuple(
+        name
+        for name in state.fruitless
+        if name in low and facts.now - stamps.get(name, 0.0) < FRUITLESS_SECONDS
+    )
+
+
+def _fruitless_after(state: State, facts: Facts) -> tuple:
+    """`state.fruitless` plus the members the town phase that ends now did not
+    lift: still below the bar and no roomier than when it began."""
+    low = _low_slots(facts)
+    new = {
+        name
+        for name, before in state.entered
+        if name in low and low[name] <= int(before)
+    }
+    return tuple(sorted(set(state.fruitless) | new))
 
 
 def _due(facts: Facts) -> list:
@@ -460,7 +513,22 @@ def _after_craft(facts: Facts) -> tuple:
 def _move(state: State, facts: Facts, to: str, why: str, ask_town: str = "") -> Step:
     """A phase change, its job and its one log line."""
     job = phase_job(to, facts)
-    new = State(phase=to, since=facts.now, asserted=facts.now if job else 0.0)
+    fruitless, stamps = state.fruitless, state.fruitless_stamps
+    if state.phase == TOWN:
+        after = _fruitless_after(state, facts)
+        if after != fruitless:
+            # Members already waiting keep their own stamp; new ones start now.
+            kept = dict(stamps)
+            fruitless = after
+            stamps = tuple((n, kept.get(n, facts.now)) for n in after)
+    new = State(
+        phase=to,
+        since=facts.now,
+        asserted=facts.now if job else 0.0,
+        entered=tuple(sorted(_low_slots(facts).items())) if to == TOWN else (),
+        fruitless=fruitless,
+        fruitless_stamps=stamps,
+    )
     line = "%s -> %s: %s" % (state.phase or "joined", to, why)
     if job:
         line += "; job %s" % job
@@ -508,7 +576,16 @@ def _join(state: State, facts: Facts) -> Step:
 
 
 def _gather(state: State, facts: Facts, elapsed: float) -> Step:
-    low = _low(facts)
+    live = _live_fruitless(state, facts)
+    if live != state.fruitless:
+        state = replace(
+            state,
+            fruitless=live,
+            fruitless_stamps=tuple(
+                (n, at) for n, at in state.fruitless_stamps if n in live
+            ),
+        )
+    low = _low(facts, skip=live)
     if low:
         why = "%s below %d free bag slots" % (", ".join(low), TOWN_FREE_SLOTS)
         return _move(state, facts, TOWN, why, _town_ask(why))
@@ -539,6 +616,15 @@ def _town(state: State, facts: Facts, elapsed: float) -> Step:
             # took out of a bank is not in them yet. A craft phase started on
             # that guess ended within minutes with every crafter at zero casts
             # (#2501), so the loop waits one refresh and judges the bags.
+            return Step(replace(state, town_seen=True))
+        if (
+            state.entered
+            and facts.errand_ended > 0
+            and facts.now - facts.errand_ended < BAGS_REFRESH_SECONDS
+        ):
+            # The same lag, for the bag count: a sale just made is not in the
+            # saved bags yet, and judging now would call a visit that worked
+            # fruitless.
             return Step(replace(state, town_seen=True))
         to, why = _after_town(facts)
         said = "the town errand ended; " + why
@@ -629,7 +715,14 @@ def _decide_phase(state: State, facts: Facts) -> Step:
         return _join(state, facts)
     if facts.errand_active and state.phase != TOWN:
         return Step(
-            State(phase=TOWN, since=facts.now, town_seen=True),
+            replace(
+                state,
+                phase=TOWN,
+                since=facts.now,
+                asserted=0.0,
+                town_seen=True,
+                entered=tuple(sorted(_low_slots(facts).items())),
+            ),
             line="%s -> town: the town errand started on its own (%s)"
             % (state.phase, facts.errand_why or "no reason given"),
             moved=True,

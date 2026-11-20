@@ -599,8 +599,40 @@ def is_resistance_only(
     return has_res and not _has_other_item_bonus(row, resolved)
 
 
+def _ahead_in_guide(spec, phase, slot, worn_id, rows):
+    """The first row of `rows` that scores 0.0 and that the guide puts ahead
+    of the worn piece in this phase's list, or None.
+
+    Ahead means earlier in the list when the list names the worn piece, and
+    anywhere in it when no list from this phase on names it. A piece only a
+    later list names (a raid piece) has nothing ahead of it here, and a piece
+    an earlier list puts behind the worn one is never ahead of it later."""
+    at = PREFER_PHASES.index(phase)
+    listed = slot_list(spec, phase, slot)
+    if worn_id in listed:
+        ahead = set(listed[: listed.index(worn_id)])
+    else:
+        later = PREFER_PHASES[at + 1 :]
+        if any(worn_id in slot_list(spec, p, slot) for p in later):
+            return None
+        ahead = set(listed)
+    for earlier in PREFER_PHASES[:at]:
+        before = slot_list(spec, earlier, slot)
+        if worn_id in before:
+            ahead.difference_update(before[before.index(worn_id) + 1 :])
+    for row in rows:
+        if row[1] == 0.0 and row[0] in ahead:
+            return row
+    return None
+
+
 def next_target(
-    spec: str, slot: str, worn: dict | None, stats_by_id: dict, level: int = 60
+    spec: str,
+    slot: str,
+    worn: dict | None,
+    stats_by_id: dict,
+    level: int = 60,
+    worn_id: int | None = None,
 ) -> tuple | None:
     """The list item to aim for: `(phase, item_id, score)`, or None.
 
@@ -609,16 +641,28 @@ def next_target(
     unknown stats are skipped.
 
     An empty slot (`worn` is None) is beaten by any known list piece, a piece
-    that scores 0.0 included (#2208): a trinket's worth is its equip effect,
-    which the template stats do not carry, so every listed trinket scores 0.0
-    and `0 > 0` left an empty trinket slot with no target at all. The tie is
-    the guide's own order (`_phase_scores`). A worn piece that scores nothing
-    (stats `{}`) is not an empty slot: nothing is known to beat it.
+    that scores 0.0 included (#2208): a trinket's worth is often a proc or a
+    "Use:" effect, which no stat carries, so such a piece scores 0.0 and
+    `0 > 0` left an empty trinket slot with no target at all. The tie is the
+    guide's own order (`_phase_scores`).
+
+    A worn piece that scores 0.0 is the same blind spot from the other side
+    (#2208): the score reads nothing in it and nothing in the listed pieces
+    that also score 0.0, so it cannot rank them. When the caller says which
+    piece is worn (`worn_id`), the guide's order breaks that tie and no
+    other: the target is the first 0.0 piece the guide puts ahead of the worn
+    one (`_ahead_in_guide`). A piece that scores above zero is still taken or
+    refused on its score alone, so the list stays a shopping list. Without
+    `worn_id` a worn piece that scores nothing has no target, as before.
     """
     empty = worn is None
     old = score(worn, spec, level, slot) if worn else 0.0
+    blind = worn_id is not None and not empty and old == 0.0
     for phase in PREFER_PHASES:
         rows = _phase_scores(spec, phase, slot, stats_by_id, level)
         if rows and (empty or rows[0][1] > old):
             return (PHASE_LABEL[phase], rows[0][0], rows[0][1])
+        ahead = _ahead_in_guide(spec, phase, slot, worn_id, rows) if blind else None
+        if ahead is not None:
+            return (PHASE_LABEL[phase], ahead[0], ahead[1])
     return None

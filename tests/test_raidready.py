@@ -587,6 +587,19 @@ class TheRealBlockerIsLevelAndTheQuorum(unittest.TestCase):
             (raidrun.QUORUM_SEATS, raidrun.QUORUM_TANKS, raidrun.QUORUM_HEALERS),
         )
 
+    def test_a_changed_quorum_value_changes_the_card(self):
+        env = {"RAID_DOOR_QUORUM_SEATS": "12", "RAID_DOOR_QUORUM_TANKS": "x"}
+        self.assertEqual((12, 3, 8), raidrun.door_quorum(env))
+        self.assertEqual((36, 3, 8), raidrun.door_quorum({}))
+        self.assertEqual(
+            (36, 3, 8), raidrun.door_quorum({"RAID_DOOR_QUORUM_SEATS": "0"})
+        )
+        # 20 seats stand at level 50 here: short of 36, enough for 12.
+        with mock.patch.dict(os.environ, {"RAID_DOOR_QUORUM_SEATS": "12"}):
+            _, card = self._card_with(low=10)
+        hard = [b["text"] for b in card["blockers"] if b["tone"] == "hard"]
+        self.assertFalse([t for t in hard if "holds a raid at the door" in t], hard)
+
     def test_the_card_counts_the_seats_below_fifty_by_role(self):
         lowered, card = self._card_with(low=10)
         below = card["seats_below_level"]
