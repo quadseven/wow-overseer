@@ -286,6 +286,11 @@ GREEN_HILLS_CHAPTERS = (
     "is the reward of its own quest (quests 339 to 342), so the chapters come "
     "from finishing those four quests first"
 )
+FLAGON_OF_MEAD = (
+    "The Third Fleet (quest 288) requires Flagon of Mead (item 2594), which "
+    "only Malgin Barleybrew drops: one vendor spawn on another continent than "
+    "the quest's zone, and questers cannot buy the item from a vendor"
+)
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
@@ -1899,6 +1904,13 @@ def _broken_reason(
         and played >= STALL_SECONDS
     ):
         return GREEN_HILLS_CHAPTERS
+    if (
+        quest.id == 288
+        and status == STATUS_INCOMPLETE
+        and (2594, 1) in quest.items
+        and played >= STALL_SECONDS
+    ):
+        return FLAGON_OF_MEAD
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that

@@ -1260,6 +1260,40 @@ class Broken(unittest.TestCase):
         self.assertIn("quests 339 to 342", reason)
         self.assertNotEqual(reason, questers.STALLED_UNSOURCED)
 
+    def test_flagon_of_mead_ledger_names_the_vendor_source(self):
+        fleet = classquest.Quest(
+            288,
+            "The Third Fleet",
+            0,
+            27,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((2594, 1),),
+            enders=(classquest.Spawn(2000, 11, 0, 0.0, 0.0, name="Ender"),),
+        )
+        facts = questers.Facts(zone=11, level=27, ender_npcs=True)
+
+        early = questers._broken_reason(
+            fleet, facts, questers.STATUS_INCOMPLETE, 0, frozenset(), {}
+        )
+        self.assertEqual(early, "")
+
+        reason = questers._broken_reason(
+            fleet,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertIn("Flagon of Mead (item 2594)", reason)
+        self.assertIn("Malgin Barleybrew", reason)
+        self.assertIn("cannot buy", reason)
+
     def test_an_unsourced_item_quest_names_no_invented_cause(self):
         # Quest 64 once carried a hard-coded reason that no creature drops its
         # item. The world rows say a wardrobe holds it (test_questers_chests),
