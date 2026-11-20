@@ -1,95 +1,145 @@
-"""Test quest 263: In Defense of the King's Lands.
+"""Quest 263: In Defense of the King's Lands (#2349).
 
-Quest 263 is broken because its quest giver is not on a classic map.
-The quest giver is on a classic map, but the GIVERS_SQL query is incorrect.
+World rows: required creatures 1197 (Stonesplinter Shaman) x10 and 1164
+(Stonesplinter Bonesnapper) x10 have 0 spawn(s) on the quest's map and
+23/17 spawns total. With no objective spawn on the quest's map a quester
+cannot finish the quest; this is named from those rows.
 """
 
-from unittest.mock import MagicMock
+import unittest
 
-import questcatalogue
-from importlib import reload
-import classic
+import questers
+from test_questers import giver, mirra, quest, spawn
 
-
-def test_quest_263_givers_sql():
-    """Quest 263's quest giver should be correctly identified.
-
-    The quest giver is on map 0 (Eastern Kingdoms), but the current
-    GIVERS_SQL query might return the wrong map.
-    """
-
-    def read(sql):
-        if sql.startswith("SELECT t.ID"):
-            return [
-                {
-                    "quest": 263,
-                    "title": "In Defense of the King's Lands",
-                    "level": 15,
-                    "min_level": 10,
-                    "sort": 28,  # Loch Modan
-                    "races": 0,  # All races
-                    "classes": 0,  # All classes
-                    "follows": 237,
-                }
-            ]
-        elif sql.startswith("SELECT DISTINCT c.quest"):
-            # Simulate new GIVERS_SQL - queries creature directly
-            return [
-                {"quest": 263, "role": "start", "map_id": 0},  # Eastern Kingdoms
-            ]
-        return []
-
-    reload(questcatalogue)
-    catalogue = questcatalogue.load(read)
-    quest = questcatalogue.select(catalogue, zone=28, level_min=10, level_max=15)
-
-    assert len(quest) > 0, "Quest 263 should be in the catalogue"
-    found = next((q for q in quest if q.id == 263), None)
-    assert found is not None, "Found quest 263"
-    assert found.title == "In Defense of the King's Lands"
+LOCH_MODAN = 38
+EASTERN_KINGDOMS = 0
+KALIMDOR = 1
+HUMAN = 1
+QUEST = 263
+PREV = 237
+SHAMAN = 1197
+BONESNAPPER = 1164
 
 
-def test_quest_263_fixed_givers_sql():
-    """Quest 263's quest giver should be correctly identified.
+def defence_catalogue(on_map=0, off_map_shaman=23, off_map_bonesnapper=17):
+    row = quest(
+        QUEST,
+        LOCH_MODAN,
+        15,
+        min_level=10,
+        prev=PREV,
+        kill=SHAMAN,
+        count=10,
+        title="In Defense of the King's Lands",
+    )
+    row.update(kill2=BONESNAPPER, count2=10)
+    spawns = []
+    for i in range(on_map):
+        spawns.append(
+            spawn(
+                8100 + i,
+                SHAMAN,
+                -5000.0 + 10 * i,
+                -3000.0,
+                level=14,
+                map_id=EASTERN_KINGDOMS,
+                name="Stonesplinter Shaman",
+            )
+        )
+        spawns.append(
+            spawn(
+                8200 + i,
+                BONESNAPPER,
+                -5020.0 + 10 * i,
+                -3020.0,
+                level=14,
+                map_id=EASTERN_KINGDOMS,
+                name="Stonesplinter Bonesnapper",
+            )
+        )
+    for i in range(off_map_shaman):
+        spawns.append(
+            spawn(
+                9100 + i,
+                SHAMAN,
+                1000.0 + 10 * i,
+                1000.0,
+                level=14,
+                map_id=KALIMDOR,
+                name="Stonesplinter Shaman",
+            )
+        )
+    for i in range(off_map_bonesnapper):
+        spawns.append(
+            spawn(
+                9200 + i,
+                BONESNAPPER,
+                1100.0 + 10 * i,
+                1100.0,
+                level=14,
+                map_id=KALIMDOR,
+                name="Stonesplinter Bonesnapper",
+            )
+        )
+    return questers.catalogue(
+        [row],
+        [
+            giver(
+                QUEST,
+                "start",
+                90263,
+                1092,
+                -4821.0,
+                -2695.0,
+                map_id=EASTERN_KINGDOMS,
+                name="Mountaineer Cobbleflint",
+            ),
+            giver(
+                QUEST,
+                "end",
+                90263,
+                1092,
+                -4821.0,
+                -2695.0,
+                map_id=EASTERN_KINGDOMS,
+                name="Mountaineer Cobbleflint",
+            ),
+        ],
+        spawns,
+        [],
+        [{"quest": QUEST, "kind": "creature", "entry": 1092}],
+        [{"quest": QUEST, "kind": "creature", "entry": 1092}],
+    )
 
-    The correct fix is to query the quest giver map from the quest_template table,
-    not from the creature table.
-    """
 
-    def read(sql):
-        if sql.startswith("SELECT t.ID"):
-            return [
-                {
-                    "quest": 263,
-                    "title": "In Defense of the King's Lands",
-                    "level": 15,
-                    "min_level": 10,
-                    "sort": 28,  # Loch Modan
-                    "races": 0,  # All races
-                    "classes": 0,  # All classes
-                    "follows": 237,
-                }
-            ]
-        elif sql.startswith("SELECT DISTINCT c.quest"):
-            # Simulate FIXED GIVERS_SQL - query creature directly
-            return [
-                {"quest": 263, "role": "start", "map_id": 0},  # Eastern Kingdoms
-            ]
-        return []
+def bromli(**kw):
+    base = dict(
+        name="Bromli",
+        level=15,
+        race=HUMAN,
+        map_id=EASTERN_KINGDOMS,
+        zone_id=LOCH_MODAN,
+        x=-4800.0,
+        y=-2700.0,
+        quests_done=frozenset({PREV}),
+    )
+    base.update(kw)
+    return mirra(**base)
 
-    reload(questcatalogue)
-    catalogue = questcatalogue.load(read)
-    quest = questcatalogue.select(catalogue, zone=28, level_min=10, level_max=15)
 
-    assert len(quest) > 0, "Quest 263 should be in the catalogue"
-    found = next((q for q in quest if q.id == 263), None)
-    assert found is not None, "Found quest 263"
-    assert found.title == "In Defense of the King's Lands"
+class Quest263InDefenseOfTheKingsLands(unittest.TestCase):
+    def test_objectives_off_the_quest_map_cannot_be_finished(self):
+        cat = defence_catalogue(on_map=0, off_map_shaman=23, off_map_bonesnapper=17)
+        member = bromli(quest_log={QUEST: questers.STATUS_INCOMPLETE})
+        clock = questers.Clock()
+        broken = []
+        for i in range(14):
+            plan = questers.plan(cat, member, clock, 600.0 * i)
+            broken.extend(plan.broken)
+        reasons = " ".join(str(b.reason) for b in broken)
+        self.assertTrue(broken)
+        self.assertIn("no spawn on the quest's map", reasons)
 
 
 if __name__ == "__main__":
-    test_quest_263_givers_sql()
-    print("Test 1 passed")
-
-    test_quest_263_fixed_givers_sql()
-    print("Test 2 passed")
+    unittest.main()

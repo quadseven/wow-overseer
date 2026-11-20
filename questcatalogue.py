@@ -127,22 +127,18 @@ OBJECT_COUNTS_SQL = (
 # Every map a quest's starters and enders stand on. creature.id, not id1, as
 # everywhere else on this world.
 GIVERS_SQL = (
-    "SELECT DISTINCT c.quest AS quest, 'start' AS role, c.map AS map_id "
-    "FROM acore_world.creature c "
-    "JOIN acore_world.creature_queststarter s ON c.id = s.id "
-    "WHERE c.map IS NOT NULL "
-    "UNION SELECT DISTINCT g.quest AS quest, 'start' AS role, g.map AS map_id "
-    "FROM acore_world.gameobject g "
-    "JOIN acore_world.gameobject_queststarter s ON g.id = s.id "
-    "WHERE g.map IS NOT NULL "
-    "UNION SELECT DISTINCT c.quest AS quest, 'end' AS role, c.map AS map_id "
-    "FROM acore_world.creature c "
-    "JOIN acore_world.creature_questender e ON c.id = e.id "
-    "WHERE c.map IS NOT NULL "
-    "UNION SELECT DISTINCT g.quest AS quest, 'end' AS role, g.map AS map_id "
-    "FROM acore_world.gameobject g "
-    "JOIN acore_world.gameobject_questender e ON g.id = e.id "
-    "WHERE g.map IS NOT NULL"
+    "SELECT DISTINCT s.quest AS quest, 'start' AS role, c.map AS map_id "
+    "FROM acore_world.creature_queststarter s "
+    "JOIN acore_world.creature c ON c.id = s.id "
+    "UNION SELECT DISTINCT s.quest, 'start', g.map "
+    "FROM acore_world.gameobject_queststarter s "
+    "JOIN acore_world.gameobject g ON g.id = s.id "
+    "UNION SELECT DISTINCT e.quest, 'end', c.map "
+    "FROM acore_world.creature_questender e "
+    "JOIN acore_world.creature c ON c.id = e.id "
+    "UNION SELECT DISTINCT e.quest, 'end', g.map "
+    "FROM acore_world.gameobject_questender e "
+    "JOIN acore_world.gameobject g ON g.id = e.id"
 )
 
 

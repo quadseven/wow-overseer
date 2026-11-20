@@ -1751,6 +1751,20 @@ def _fields_gone(quest, gone) -> bool:
     return bool(quest.fields) and all(s.guid in gone for s in quest.fields)
 
 
+def _objective_off_quest_map(quest: classquest.Quest) -> str:
+    """A required kill objective has spawns, but none on the quest's map."""
+    quest_maps = {int(s.map_id) for s in quest.starters} | {
+        int(s.map_id) for s in quest.enders
+    }
+    if not quest_maps:
+        return ""
+    for entry, _count in quest.kills:
+        spawns = [s for s in quest.fields if int(s.entry) == int(entry)]
+        if spawns and not any(int(s.map_id) in quest_maps for s in spawns):
+            return "a required objective has no spawn on the quest's map"
+    return ""
+
+
 def _ender_missing(quest, facts: Facts, gone, object_gone=frozenset()) -> str:
     """Why there is nothing to hand the quest in to, "" when there is: no
     named creature is spawned and no named gameobject is either (or every
@@ -1874,6 +1888,10 @@ def _broken_reason(
         return missing
     if not complete and _fields_gone(quest, gone):
         return SOURCE_MISSING
+    if not complete:
+        off = _objective_off_quest_map(quest)
+        if off:
+            return off
     if quest.id in (final or {}):
         return _refused_words(CANNOT_TURN_IN, final[quest.id])
     count, words = refused.get(("turnin", quest.id), (0, ""))
