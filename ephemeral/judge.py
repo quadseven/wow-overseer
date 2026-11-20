@@ -835,9 +835,36 @@ def _read_log(path):
         raise JudgeError(f"worldserver log unreadable: {exc}") from exc
 
 
+def log_reader(decree, log_path, bridge_log_path=None):
+    """The callable the log assertions read: the worldserver log, plus the bridge log on a bridge-on decree.
+
+    The bridge sidecar writes its own file, so a line it logs is never in the
+    worldserver log. A bridge-on decree reads both; an unreadable or unnamed
+    bridge log refuses, so a forbidden line can never read as absent for want of a file.
+    """
+    world = decree.get("world") if isinstance(decree, dict) else None
+    bridge_on = isinstance(world, dict) and world.get("bridge") == "on"
+
+    def read():
+        text = _read_log(log_path)
+        if not bridge_on:
+            return text
+        if not bridge_log_path:
+            raise JudgeError("no bridge log file was given")
+        try:
+            extra = pathlib.Path(bridge_log_path).read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except OSError as exc:
+            raise JudgeError(f"bridge log unreadable: {exc}") from exc
+        return text + "\n" + extra
+
+    return read
+
+
 def run(
     decree_path, env, connect=None, store=None, log_path=None, out=print,
-    clock=None, anchors_path=None,
+    clock=None, anchors_path=None, bridge_log_path=None,
 ):  # fmt: skip
     """Returns 0 once a verdict is written (INVALID included), 2 when the harness broke."""
     clock = clock or _Wall
@@ -859,7 +886,9 @@ def run(
         result = _invalid("", env, "", f"decree unreadable: {exc}")
     else:
         sha = hashlib.sha256(raw).hexdigest()
-        result = _judge(raw, sha, env, connect, log_path, clock, anchors_path)
+        result = _judge(
+            raw, sha, env, connect, log_path, clock, anchors_path, bridge_log_path
+        )
     out(
         f"{result['verdict']}: {result['decree'] or decree_path} "
         + "; ".join(result["reasons"])
@@ -873,7 +902,7 @@ def run(
     return 0
 
 
-def _judge(raw, sha, env, connect, log_path, clock, anchors_path):
+def _judge(raw, sha, env, connect, log_path, clock, anchors_path, bridge_log_path=None):
     try:
         decree = loads(raw.decode("utf-8"))
         anchors_doc = loads(
@@ -918,7 +947,7 @@ def _judge(raw, sha, env, connect, log_path, clock, anchors_path):
         g.set_query_timeout(QUERY_TIMEOUT_SECONDS)
         return Judge(
             decree, GuardedWorldDb(g, live), handoff,
-            log_text=lambda: _read_log(log_path),
+            log_text=log_reader(decree, log_path, bridge_log_path),
             clock=clock.monotonic, sleep=clock.sleep,
             run_id=env.get("EPH_RUN_ID", ""), sha=sha, arm=env.get("EPH_ARM", ""),
             schema=live, start_wait=start_wait_from_env(env),

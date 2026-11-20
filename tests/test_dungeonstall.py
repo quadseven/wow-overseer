@@ -307,6 +307,12 @@ class ActiveRunSilence(unittest.TestCase):
         self.assertIn("no quest, level, gear, or boss progress event", got.why)
         self.assertIn("no stall reason recorded", got.why)
 
+    def test_the_reason_says_what_the_family_was_doing(self):
+        got = stall.silent_run(
+            "gnomeregan", 2 * 60 * 60, "jobs now town run; last written by errand"
+        )
+        self.assertIn("jobs now town run; last written by errand", got.why)
+
     def test_silence_does_not_trip_early_or_without_a_clock(self):
         self.assertIsNone(stall.silent_run("gnomeregan", 7199))
         self.assertIsNone(stall.silent_run("gnomeregan", None))
@@ -537,6 +543,8 @@ class StallWorld(FakeWorld):
         self.park_at = None
         self.ordered_after = set()
         self.hold_said = {}
+        self.stood_down = {}
+        self.hold_lines = []
         self.silent_seconds = None
         self.wedge = None
         self.dungeonquest_held = set()
@@ -576,6 +584,7 @@ def _pass(world):
             "_regroup_wait",
             "_stall_write",
             "_silent_stall",
+            "_job_story",
             "_stuck_doors",
             "_planner_rows",
         ],
@@ -594,6 +603,11 @@ def _pass(world):
             "_OFF_DUNGEON_JOB_AT": {},
             "_door_wedge": lambda head, names, leader: world.wedge,
             "_jobs_of": lambda names: {n: world.member_job(n) for n in names},
+            "_last_job_source": lambda name: "town-errand",
+            "_STALL_STOOD_DOWN": world.stood_down,
+            "_say_queue_hold": lambda key, hold, why="": world.hold_lines.append(
+                (hold, why)
+            ),
             "_fetch_positions": lambda names: dict(world.positions),
             "_REGROUP_SPENT": world.regroup_spent,
             "_fetch_queue_rows": world.fetch_queue,
@@ -702,6 +716,21 @@ class TheCampaignDoesNotStartAThirdRun(unittest.TestCase):
         self.assertEqual({jobs.DEFAULT}, self.zug_jobs(w))
         self.assertIn("no stall reason recorded", w.records[0][7])
         self.assertTrue([line for line in lines if "no stall reason recorded" in line])
+
+    def test_the_silent_stand_down_records_what_the_family_was_doing(self):
+        w = self.silent_family()
+
+        _pass(w)
+
+        reason = w.records[0][7]
+        self.assertIn("jobs now dungeon:gnomeregan", reason)
+        self.assertIn("last written by town-errand", reason)
+        # Kept where the queue's hold is said, not only in the pace row.
+        self.assertEqual(reason[:255], w.stood_down[w.queue[0]["family"]][:255])
+        # And the queue's hold line says it.
+        self.assertIn(
+            ("stall breaker", w.stood_down[w.queue[0]["family"]]), w.hold_lines
+        )
 
     def test_silent_head_is_checked_before_a_dungeon_quest_hold(self):
         w = self.silent_family()
@@ -2433,3 +2462,33 @@ class TheErrandARunWaitsOn(unittest.TestCase):
         self.assertEqual(
             (2, ["Bork", "Grog"]), bag_pressure_pass(recalled={"Grog": 940.0}, now=over)
         )
+
+
+class ARegroupWaitIsBounded(unittest.TestCase):
+    """A hold waiting for a party nothing is gathering must not wait for ever."""
+
+    NAMES = ("Zug", "Oz", "Bork")
+
+    def apart(self):
+        return {
+            "Zug": standing(0, 100.0, 100.0),
+            "Oz": standing(0, 145.0, 100.0),
+            "Bork": standing(0, 100.0, 175.0),
+        }
+
+    def judge(self, left_s):
+        hold = {"id": 9, "left_s": left_s, "target": stall.REGROUP}
+        return stall.restart_after_hold(hold, False, "Zug", self.NAMES, self.apart())
+
+    def test_a_party_spread_past_the_range_holds_inside_the_ceiling(self):
+        got = self.judge(-(stall.REGROUP_CEILING_SECONDS - 1))
+        self.assertFalse(got.allowed)
+        self.assertEqual(stall.APART, got.reason)
+
+    def test_the_same_party_runs_once_the_ceiling_is_spent(self):
+        got = self.judge(-stall.REGROUP_CEILING_SECONDS)
+        self.assertTrue(got.allowed)
+        self.assertEqual(stall.CEILING, got.reason)
+
+    def test_a_backoff_still_running_holds_whatever_the_ceiling(self):
+        self.assertEqual(stall.BACKOFF, self.judge(60).reason)

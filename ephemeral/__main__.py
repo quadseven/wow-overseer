@@ -69,6 +69,7 @@ def _judge(args):
         args.decree,
         podpaths.with_vars_file(os.environ),
         log_path=podpaths.log_path(args.log, os.environ),
+        bridge_log_path=podpaths.bridge_log_path(os.environ),
         anchors_path=args.anchors,
     )
 
