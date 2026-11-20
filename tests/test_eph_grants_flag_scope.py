@@ -42,7 +42,7 @@ def read_file(rel):
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def carriers(files, read_file):
+def carriers(files, read):
     """The deployment files, outside the allowed one, whose text carries the flag."""
     bad = []
     for rel in files:
