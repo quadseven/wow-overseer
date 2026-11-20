@@ -10114,6 +10114,11 @@ def stood_still_step(m, still_for, recent, leveling=None):
     minutes = int(still_for or 0)
     if minutes < standstill.STILL_MINUTES:
         return None
+    # A seat levelling first is left to its dungeon asks with no step, so it
+    # stands waiting for a party by design: its hearth waits three times as
+    # long, as a stuck one is still got moving.
+    if levelling_first(m) and minutes < standstill.SEAT_STILL_MINUTES:
+        return None
     if not (m.online and m.alive and not m.in_combat):
         return None
     if int(m.level) >= guildlevel.LEVEL_CAP:
