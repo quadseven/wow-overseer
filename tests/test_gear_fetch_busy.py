@@ -12,7 +12,6 @@ import unittest
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
-DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
 WALKS = 'getattr(self, "_gear_fetch_walks", ())'
 
@@ -45,9 +44,9 @@ class TheFetchWalkIsBusy(unittest.TestCase):
             with self.subTest(name):
                 self.assertIn(WALKS, method(name))
 
-    def test_the_image_carries_the_module_the_bridge_imports(self):
+    def test_the_bridge_imports_the_module(self):
+        # Image membership is pinned centrally by test_image_closure.
         self.assertIn("import gearfetch", BRIDGE)
-        self.assertIn("gearfetch.py", DOCKERFILE)
 
 
 if __name__ == "__main__":
