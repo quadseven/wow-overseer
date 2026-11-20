@@ -74,6 +74,17 @@ class TheShelf(unittest.TestCase):
         m = self.draw({"data": {"clips": bare, "empty": "none"}, "loading": False})
         self.assertNotIn("clip-subject", m)
 
+    def test_a_repeat_of_one_item_says_which_one_it_is(self):
+        twice = [
+            dict(CLIPS[1], id=4, nth=2, of=2),
+            dict(CLIPS[1], id=3, nth=1, of=2),
+        ]
+        m = self.draw({"data": {"clips": twice, "empty": "none"}, "loading": False})
+        self.assertIn("2 of 2", m)
+        self.assertIn("1 of 2", m)
+        once = self.draw({"data": {"clips": CLIPS, "empty": "none"}, "loading": False})
+        self.assertNotIn("clip-nth", once)
+
     def test_a_day_footer_counts_missed_moments_and_adds_no_card(self):
         missed = [
             {"day": "2026-11-10", "no_view": 2, "failed": 1},
