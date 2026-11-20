@@ -462,5 +462,32 @@ class Quest120MessengerToStormwind(unittest.TestCase):
         )
 
 
+class Quest131DeliveringDaffodils(unittest.TestCase):
+    """SatisfyQuestLevel: the world refuses a take over the quest's MaxLevel
+    (quest_template_addon.MaxLevel, 0 for no cap) as it refuses one under its
+    MinLevel. The mirror read MinLevel only, so a quester over the cap walked
+    to the giver, was refused "not eligible" three times, and filed Delivering
+    Daffodils broken. The level 25 cap below is a fixture value, not read off
+    the live world row."""
+
+    def test_a_quester_over_the_max_level_does_not_walk_to_the_giver(self):
+        cat = catalogue(
+            [row(131, "Delivering Daffodils", REDRIDGE, 15, 13, ALLIANCE, max_level=25)]
+        )
+        over = member("Bromli", DWARF, 26, REDRIDGE)
+        self.assertNotIn(131, questers.in_reach(cat, over, REDRIDGE))
+        at_cap = member("Bromli", DWARF, 25, REDRIDGE)
+        self.assertIn(131, questers.in_reach(cat, at_cap, REDRIDGE))
+
+    def test_no_max_level_is_no_cap(self):
+        cat = catalogue([row(131, "Delivering Daffodils", REDRIDGE, 15, 13, ALLIANCE)])
+        self.assertIn(
+            131, questers.in_reach(cat, member("Bromli", DWARF, 60, REDRIDGE), REDRIDGE)
+        )
+
+    def test_the_quest_read_carries_max_level(self):
+        self.assertIn("a.MaxLevel, 0) AS max_level", questers.QUESTS_SQL)
+
+
 if __name__ == "__main__":
     unittest.main()

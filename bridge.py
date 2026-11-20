@@ -6326,7 +6326,25 @@ def _silent_stall(head: dict, names: list):
         # was held off it. A bridge restart forgets this and falls back to the
         # database clock, which can only make the breaker fire later.
         seconds = min(seconds, int(time.monotonic() - off_at))
-    return dungeonstall.silent_run(str(head.get("keyword") or ""), seconds)
+    # Looked up: the silence tests load this function in isolation.
+    story = globals().get("_job_story")
+    return dungeonstall.silent_run(
+        str(head.get("keyword") or ""), seconds,
+        story(names) if story is not None else "")
+
+
+def _job_story(names: list) -> str:
+    """What the family's job is and who wrote it last, for a stall reason."""
+    try:
+        held = sorted({job or jobs.DEFAULT for job in _jobs_of(names).values()})
+        writers = sorted({src for src in (_last_job_source(n) for n in names)
+                          if src})
+    except pymysql.err.MySQLError:
+        log.warning("stall: the family's job story could not be read; the "
+                    "reason is recorded without it", exc_info=True)
+        return ""
+    return "jobs now %s; last written by %s" % (
+        ", ".join(held) or "unread", ", ".join(writers) or "unrecorded")
 
 
 # --- the wedge at the door (#2151) ---------------------------------------------
@@ -6756,6 +6774,14 @@ def _door_wedge(head: dict, names: list, leader: str):
             verdict = dungeonstall.member_dead(keyword, name, age)
             if verdict is not None:
                 return verdict
+    # The restart slope speaks before the breaker (#2636): a walk at
+    # three quarter-hour restarts is left now, with the same stand-down,
+    # instead of being reissued until the breaker's bound trips. The
+    # slope verdict is None at the breaker's bound, so a wedged walk is
+    # still left once, by the breaker.
+    verdict = dungeonstall.door_restart_slope(keyword, restarts)
+    if verdict is not None:
+        return verdict
     verdict = dungeonstall.door_unreachable(keyword, restarts)
     if verdict is not None:
         return verdict
@@ -6842,7 +6868,12 @@ def _regroup_wait(head: dict, parked: dict | None, leader: str, names: list):
     positions = {} if running else _fetch_positions(list(names))
     verdict = dungeonstall.restart_after_hold(
         parked, running, leader, names, positions)
-    if verdict.reason in (dungeonstall.TOGETHER, dungeonstall.RUNNING):
+    if verdict.reason == dungeonstall.CEILING:
+        log.info("stall: the order held for an unassembled party has waited "
+                 "%d minute(s) past its backoff with nobody closing the gap, "
+                 "so it runs again", dungeonstall.REGROUP_CEILING_SECONDS // 60)
+    if verdict.reason in (dungeonstall.TOGETHER, dungeonstall.RUNNING,
+                          dungeonstall.CEILING):
         if len(_REGROUP_SPENT) > 256:
             _REGROUP_SPENT.clear()
         _REGROUP_SPENT[hold_id] = True
@@ -6852,6 +6883,9 @@ def _regroup_wait(head: dict, parked: dict | None, leader: str, names: list):
 # (family key, door) -> the id of the pace row whose hold was last said, so
 # the held-door line is logged once per door per hold window (#1078).
 _STALL_HOLD_SAID: dict = {}
+# family key -> why the stall breaker last stood the family's run down. The
+# queue's hold line carries it, and the pace row it is written with keeps it.
+_STALL_STOOD_DOWN: dict = {}
 
 
 def _stall_write(key: str, leave) -> None:
@@ -11574,6 +11608,14 @@ class Bridge(discord.Client):
         held = globals().get("_economy_aim_hold", lambda *_a: "")
         if await asyncio.to_thread(held, claimant, character):
             return False
+        # NO AUCTIONEER IN REACH IS NOT AN ERRAND. The keyword resolves only
+        # to a counter of the family's side within a town walk; the module
+        # releases it at once otherwise, and writing it again every cycle
+        # held the column and the lease for a walk that could never start.
+        # Looked up like the hold above: the check is advisory.
+        unreachable = globals().get("_auctioneer_reach_refusal")
+        if unreachable and await asyncio.to_thread(unreachable, leader, aim):
+            return False
         # GROUND THE FAMILY DIED ON TWICE IS NOT A WALK (#2457): a ground aim
         # whose line from the leader crosses a death disc is not written.
         # Looked up like _fetch_family_death_spots above: the check is advisory.
@@ -11703,6 +11745,7 @@ class Bridge(discord.Client):
                     else _release_trade_errand,
                     decision.release.character, decision.release.aim,
                 )
+            slot.let_go(decision.release, released, now)
             if not released:
                 # Not a failure, and not a reason to stop. The column changed
                 # hands between the read and this write, so there was nothing
@@ -20618,7 +20661,12 @@ class Bridge(discord.Client):
             if needs_crossing else ()
         )
         walks, notes = classtrain.plan(
-            trainees, walkers, classtrain.recent_walkers(recent), busy,
+            trainees, walkers,
+            classtrain.recent_walkers(
+                recent,
+                knights=[t.name for t in trainees
+                         if t.class_id == classquest.DEATH_KNIGHT]),
+            busy,
             cap=self._guild_walk_cap(), stranded=stranded,
             trainer_spawns=trainer_spawns, cross_recent=cross_recent)
         _log_capped("guild training", notes)
@@ -23858,6 +23906,17 @@ class Bridge(discord.Client):
             state, now=now, in_run=in_run, mail_gear=mail_gear, facts=facts,
             stalled=stalled, bag_pressure_needed=bag_pressure_needed,
             floor_sale=floor_sale, loop_why=loop_why)
+        # ONE ERRAND PER RUN ATTEMPT: a family whose errand ended is not
+        # claimed again while its queued run has not opened, unless a member
+        # has no free slot at all. The queue's dungeon job stands meanwhile.
+        wait_until = townerrand.run_wait_until(
+            state, now, run_queued=bool(campaign_waiting),
+            no_room=any(int(free or 0) <= 0 for free in free_slots.values()))
+        if wait_until:
+            if why:
+                _say_errand_waits_for_run(names, state, why, wait_until - now,
+                                          label)
+            return state
         if (not why and not in_run
                 and stalled < townerrand.HOLD_CEILING_SECONDS
                 and not (state.ended and now - state.ended
@@ -26850,7 +26909,7 @@ class Bridge(discord.Client):
         last = await asyncio.to_thread(_fetch_last_run_end, leader)
         mid_run = False
         trades: dict = {}
-        if tradeturn.needs_facts(last, turn):
+        if tradeturn.needs_facts(last, turn, now):
             mid_run = await self._mid_run(names)
             if not mid_run:
                 trades = await asyncio.to_thread(_fetch_trade_skills, names)
@@ -26902,7 +26961,8 @@ class Bridge(discord.Client):
             return False
         if said.action == tradeturn.SKIP:
             await asyncio.to_thread(
-                _save_trade_turn, key, tradeturn.Turn(last, now, True))
+                _save_trade_turn, key,
+                tradeturn.Turn(int(last or 0), now, True))
             log.info("trade turn: %s skips - %s", label, said.reason)
             return False
         if said.action != tradeturn.START:
@@ -26974,7 +27034,8 @@ class Bridge(discord.Client):
         if breaker is not None:
             try:
                 if await breaker(key, rows, fam):
-                    globals().get("_say_queue_hold", lambda *a: None)(key, "stall breaker")
+                    why = globals().get("_STALL_STOOD_DOWN", {}).get(key, "")
+                    globals().get("_say_queue_hold", lambda *a: None)(key, "stall breaker", why)
                     return True
             except Exception:
                 log.exception("stall: the pass for %s failed; the queue steps as "
@@ -27052,6 +27113,8 @@ class Bridge(discord.Client):
         ):
             return self._stall_step_past(key, rows, leave, held)
         await asyncio.to_thread(_stall_write, key, leave)
+        # THE REASON IS KEPT WHERE THE QUEUE'S HOLD IS SAID (#1374).
+        _STALL_STOOD_DOWN[key] = leave.why
         # The cancellation and its pace record are durable before the job
         # changes, so a failed write cannot leave the family on quest.
         said = await asyncio.to_thread(_apply_queue_move, campaignqueue.Move(
@@ -27090,6 +27153,9 @@ class Bridge(discord.Client):
             log.info("stall: %s: the order for %s is held, not cancelled; it %s; %s",
                      campaignqueue._family(key), door, until, after)
         if not rest:
+            # The queue's hold line reads this, so it never says a hold with
+            # no reason.
+            _STALL_STOOD_DOWN[key] = "the order for %s is held, not cancelled" % door
             return True
         rows[:] = rest
         return False
@@ -35495,6 +35561,16 @@ async def _log_sale_reading(holder: str, standing, refused_age) -> None:
         log.exception("economy: the sale reading for %s failed", holder)
 
 
+# HOLDERS THE LAST VENDOR PASS COULD NOT QUEUE FOR, AND WHEN EACH WAS LAST
+# NAMED. A row written for the one holder at a counter is a sale, but it is
+# not the family's relief while the others stand out of reach, so
+# `_report_vendor_claim` reads the count and does not call that trip
+# productive; the log line is said once per window, not once per poll.
+_VENDOR_STRANDED: dict = {"count": 0}
+_VENDOR_REACH_SAID: dict = {}
+_VENDOR_REACH_SAID_SECONDS = 600.0
+
+
 async def _queue_vendor_sales(
     candidates, leader: str, aimed: bool, mode: str, attempts,
     route_sales=(),
@@ -35550,6 +35626,10 @@ async def _queue_vendor_sales(
     route_fn = globals().get("_queue_route_sales")
     refusals = await asyncio.to_thread(
         _recent_range_refusals, item_plan.RANGE_BACKOFF_SECONDS)
+    # Looked up: the economy tests load this pass in isolation.
+    said_at = globals().setdefault("_VENDOR_REACH_SAID", {})
+    window = globals().get("_VENDOR_REACH_SAID_SECONDS", 600.0)
+    stranded = 0
     for holder in sorted(by_holder):
         holder_candidates = tuple(by_holder[holder])
         town = holder_town[holder]
@@ -35568,11 +35648,15 @@ async def _queue_vendor_sales(
                     len(holder_candidates), holder,
                 )
                 continue
-            log.info(
-                "economy: %d carried candidate(s) for %s but no vendor "
-                "within reach - leader=%s aim taken=%s",
-                len(holder_candidates), holder, leader, aimed,
-            )
+            stranded += 1
+            now = (globals().get("time") or __import__("time")).monotonic()
+            if now - said_at.get(holder, -1e9) >= window:
+                said_at[holder] = now
+                log.info(
+                    "economy: %d carried candidate(s) for %s but no vendor "
+                    "within reach - leader=%s aim taken=%s",
+                    len(holder_candidates), holder, leader, aimed,
+                )
             continue
         # The world has already answered some of these. A sale that was
         # delivered, or refused with a reason retrying cannot change, must
@@ -35621,6 +35705,7 @@ async def _queue_vendor_sales(
             candidates)
         inserted += wrote
         considered += asked
+    globals().setdefault("_VENDOR_STRANDED", {"count": 0})["count"] = stranded
     log.info("economy: queued %d/%d vendor sale(s) across %d holder(s), "
              "one errand on leader=%s (taken=%s)",
              inserted, considered, len(by_holder), leader, aimed)
@@ -35646,7 +35731,12 @@ def _report_vendor_claim(slot, aimed: bool, inserted: int) -> None:
     """
     if not aimed:
         return
-    if inserted:
+    # A SALE FOR ONE HOLDER IS NOT A TRIP THAT RELIEVED THE FAMILY. While
+    # holders with goods stand out of reach of any counter, the rows written
+    # for the one that is in reach left the rest of the bags full, so the
+    # claim backs off exactly like one that wrote nothing and the travel
+    # column goes to the next job instead of straight back here.
+    if inserted and not globals().get("_VENDOR_STRANDED", {}).get("count"):
         slot.productive("economy")
         return
     until = slot.fruitless("economy", time.monotonic())
@@ -42499,6 +42589,9 @@ _MAIL_SQL = (
 TOWN_ERRAND_CLAIMANT = "town errand"
 TOWN_ERRAND_SOURCE = "overseer:town-errand"
 TOWN_ERRAND_CYCLE_SECONDS = 30.0
+for _name, _raw in townerrand.ENV_REJECTED:
+    log.warning("town errand: %s=%r is not a non-negative number of seconds; "
+                "the default stands", _name, _raw)
 # THE LOOP SAYS IT RAN (wow-dev 2026-10-05). An errand is due only now and
 # then, so a loop with nothing to run wrote nothing for two hours and the
 # "town errand loop has gone quiet" monitor could not tell idle from hung. One
@@ -42593,6 +42686,9 @@ TOWN_ERRAND_FUND_SOURCE = "economy:fund"
 # Heads whose absence the errand has already reported, so a head away for an
 # evening is one log line and not one every cycle.
 _TOWN_ERRAND_HEAD_AWAY: set = set()
+# family key -> the `ended` stamp of the errand whose wait for the queued run
+# was last said, so the line comes once per window, not once per poll.
+_TOWN_ERRAND_WAIT_SAID: dict = {}
 
 
 def _town_errand_active(names) -> bool:
@@ -42881,6 +42977,19 @@ def _town_errand_jobs(names: list) -> int:
             _insert_job(name, jobs.TOWN_RUN, TOWN_ERRAND_SOURCE)
             written += 1
     return written
+
+
+def _say_errand_waits_for_run(names, state, why: str, left: float,
+                              label: str = "") -> None:
+    """Say once per window that the errand waits for the queued run."""
+    said = globals().setdefault("_TOWN_ERRAND_WAIT_SAID", {})
+    key = tuple(sorted(names))
+    if said.get(key) == state.ended:
+        return
+    said[key] = state.ended
+    log.info("town errand: %s%s, but the family's last errand ended and its "
+             "queued run has not opened; the errand waits for the run, for up "
+             "to %d more minutes", why, label, int(left // 60) + 1)
 
 
 def _town_errand_release_jobs(names: list) -> str:
@@ -47522,6 +47631,46 @@ def _nearest_keyword_spawn(name: str, aim: str):
                     "walk is not checked against it", aim, exc.args[:1])
         return None
     return dict(row) if row else None
+
+
+# What each leader was last found to have in reach of an auctioneer (see
+# auction.CounterRefusals). Process memory, like _ERRAND_HOLD_SAID: a restart
+# only costs one read of the spawn table.
+_AUCTION_COUNTER_REFUSALS = auction.CounterRefusals()
+
+
+def _auctioneer_reach_refusal(leader: str, aim: str) -> str:
+    """Why the `auctioneer` keyword cannot resolve for `leader`, or "".
+
+    Only the bare keyword is judged: a counter's creature entry is a far trip
+    the gear pass already priced, and any other aim is not this one's. A read
+    that fails, or a leader whose position or side is unknown, is not a
+    refusal. A refusal is remembered for auction.COUNTER_REFUSAL_SECONDS and
+    said once per change."""
+    if aim != auction.AUCTIONEER_ROLE:
+        return ""
+    here = bag_pressure.standing_from_rows(
+        _fetch_bag_trip_facts([leader])).get(leader)
+    if here is None or here.map_id is None:
+        return ""
+    now = time.monotonic()
+    standing = _AUCTION_COUNTER_REFUSALS.standing(leader, here.map_id, now)
+    if standing:
+        return standing
+    rows = _fetch_auctioneer_spawns(here)
+    if rows is None:
+        return ""
+    ok, why = auction.counter_in_reach(
+        _fetch_teams([leader]).get(leader, ""), rows, map_id=here.map_id)
+    if ok:
+        _AUCTION_COUNTER_REFUSALS.forget(leader)
+        return ""
+    if _AUCTION_COUNTER_REFUSALS.remember(leader, here.map_id, why, now):
+        log.info(
+            "auction: %s is not aimed at an auctioneer - %s, so the keyword "
+            "cannot resolve. Not asked again for %d minutes",
+            leader, why, int(auction.COUNTER_REFUSAL_SECONDS // 60))
+    return why
 
 
 def _death_disc_refusal(leader: str, aim: str) -> str:

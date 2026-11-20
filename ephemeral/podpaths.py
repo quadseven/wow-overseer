@@ -12,6 +12,8 @@ the same on both (the infra manifest tests hold that).
     EPH_LOG_FILE    the worldserver log the judge's log assertions read
     EPH_LOGS_DIR    the worldserver log directory the pod mounts; the log is
                     LOG_NAME inside it when EPH_LOG_FILE is not set
+    EPH_BRIDGE_LOG_FILE  the bridge sidecar's log, read on a bridge-on decree
+                    (default: BRIDGE_LOG_NAME inside EPH_LOGS_DIR)
 """
 
 import posixpath
@@ -21,6 +23,9 @@ import posixpath
 VARS_FILE = "/tmp/eph-vars.json"  # noqa: S108
 LOG_NAME = (
     "Module.log"  # the file appender submit adds to every world (submit.BASELINE)
+)
+BRIDGE_LOG_NAME = (
+    "Bridge.log"  # the bridge sidecar tees its output here (world-template job)
 )
 
 
@@ -40,4 +45,13 @@ def log_path(flag, env):
         return env["EPH_LOG_FILE"]
     if env.get("EPH_LOGS_DIR"):
         return posixpath.join(env["EPH_LOGS_DIR"], LOG_NAME)
+    return None
+
+
+def bridge_log_path(env):
+    """The bridge sidecar's log, the way the judge finds the worldserver's; None if none is known."""
+    if env.get("EPH_BRIDGE_LOG_FILE"):
+        return env["EPH_BRIDGE_LOG_FILE"]
+    if env.get("EPH_LOGS_DIR"):
+        return posixpath.join(env["EPH_LOGS_DIR"], BRIDGE_LOG_NAME)
     return None

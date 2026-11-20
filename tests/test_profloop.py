@@ -560,16 +560,31 @@ class CraftAndTrainReach(unittest.TestCase):
         )
         self.assertEqual(step.state.phase, profloop.TOWN)
 
-    def test_town_end_crafts_when_the_errand_just_fetched_a_crafters_reagents(self):
+    def test_town_end_waits_one_refresh_before_judging_fetched_reagents(self):
         # The saved bags trail the world: vials bought and a bank withdrawal
-        # made in town are not in the database yet, so casts reads 0 for a
-        # crafter whose every short reagent is one the errand fetches.
+        # made in town are not in the database yet. No craft phase starts on
+        # that guess; the loop stays in town for one refresh of the bags.
         step = profloop.decide(
             at(profloop.TOWN, since=100, town_seen=True),
             facts(1500, errand_ended=1400, casts={"Uzza": 0}, fetch=("Uzza",)),
         )
+        self.assertFalse(step.moved)
+        self.assertEqual(step.state.phase, profloop.TOWN)
+
+    def test_no_craft_phase_starts_on_bags_that_still_show_no_cast(self):
+        late = 1400 + profloop.BAGS_REFRESH_SECONDS
+        step = profloop.decide(
+            at(profloop.TOWN, since=100, town_seen=True),
+            facts(late, errand_ended=1400, casts={"Uzza": 0}, fetch=("Uzza",)),
+        )
+        self.assertEqual(step.state.phase, profloop.GATHER)
+
+    def test_a_refreshed_bag_with_a_cast_starts_the_craft_phase(self):
+        step = profloop.decide(
+            at(profloop.TOWN, since=100, town_seen=True),
+            facts(1500, errand_ended=1400, casts={"Uzza": 3}, fetch=("Uzza",)),
+        )
         self.assertEqual(step.state.phase, profloop.CRAFT)
-        self.assertIn("Uzza", step.line)
 
     def test_town_end_without_casts_or_fetch_still_gathers(self):
         step = profloop.decide(

@@ -23,7 +23,7 @@ import unittest
 import guildjobs
 import guildroute
 from test_guildjobs_death_loop import NAME, loop_of, plain_world
-from test_guildlevel_open_quests import member
+from test_guildlevel_open_quests import HILLSBRAD, member
 
 
 def plan(members=(), loops=None, **kw):
@@ -35,6 +35,11 @@ def plan(members=(), loops=None, **kw):
         loops=loops if loops is not None else {NAME: loop_of()},
         **kw,
     )
+
+
+# A hearthstone bound in the loop's zone leaves the level walk as the only
+# escape, which these fixtures leave unread.
+BOUND = dict(home_map=0, home_x=3000.0, home_y=3000.0, home_zone=HILLSBRAD)
 
 
 class TheEscapeIssuedLeavesNoReasonLine(unittest.TestCase):
@@ -53,13 +58,13 @@ class EveryOtherListedMemberHasOneLine(unittest.TestCase):
         return line
 
     def test_in_combat(self):
-        result = plan([member(NAME, in_combat=True)])
+        result = plan([member(NAME, in_combat=True, **BOUND)])
         self.assertIn("in combat", self.only_line(result))
 
     def test_the_line_survives_a_pass_full_of_other_notes(self):
         # The bridge caps plan.notes; loop_lines is its own field.
         others = [member("Other%d" % i, in_combat=True, zone_id=1) for i in range(12)]
-        result = plan([member(NAME, in_combat=True)] + others)
+        result = plan([member(NAME, in_combat=True, **BOUND)] + others)
         self.assertIn("in combat", self.only_line(result))
 
     def test_a_step_the_pass_refused_names_the_refusal(self):
@@ -90,7 +95,7 @@ class AMemberOutsideTheLineupIsOfferedTheEscape(unittest.TestCase):
         self.assertEqual(result.loop_lines, ())
 
     def test_an_unassigned_looper_that_cannot_escape_gets_a_line(self):
-        m = member(NAME, role=guildjobs.UNASSIGNED, in_combat=True)
+        m = member(NAME, role=guildjobs.UNASSIGNED, in_combat=True, **BOUND)
         result = plan([], class_candidates=[m])
         self.assertEqual(result.steps, ())
         self.assertIn("in combat", result.loop_lines[0])

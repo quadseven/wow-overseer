@@ -1,0 +1,42 @@
+# Start at the Rut'theran flight master to isolate the same-map ride from the
+# separate walk out of Darnassus. The requested Auberdine point is the island
+# boat's stop used by the module.
+decree: v1
+id: teldrassil-same-map-ride-to-auberdine
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1481, criterion: "a roster member's same-map ride-to-stop from Teldrassil is applied and the member reaches the Auberdine stop"}
+fix: {repo: quadseven/mod-overseer, commit: "315494a46401c356059efee5071100566ddf1419"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 1h
+cast:
+  - who: Ugga
+    set: {alive: true, at: {creature: "Vesprystus"}}
+    ceiling: "position only; nothing granted"
+act:
+  - at: 0s
+    command: {who: Ugga, kind: job, text: "ride-to-stop map:1 x:6341.38 y:557.68"}
+observe:
+  - name: member-starts-on-teldrassil
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters WHERE guid = @Ugga AND map = 1 AND zone = 141
+    expect: {scalar: "= 1"}
+  - name: same-map-ride-command-was-applied
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command
+      WHERE target_name = 'Ugga' AND kind = 'job'
+        AND command = 'ride-to-stop map:1 x:6341.38 y:557.68'
+        AND status = 'applied' AND created_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: member-reaches-auberdine
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM characters
+      WHERE guid = @Ugga AND map = 1
+        AND POW(position_x - 6341.38, 2) + POW(position_y - 557.68, 2) <= 2500
+    expect: {scalar: "= 1"}

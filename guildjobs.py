@@ -6885,6 +6885,11 @@ def _in_loop_zone(m, loop) -> bool:
 # level, and gained no level. Every spirit healer and corpse run put it back
 # where its own AI kept choosing to quest. A player in that loop stops, goes to
 # town to repair, sell and train, and quests somewhere else.
+# What marks a death loop's hearth step among the hearth steps; _step_refusal
+# reads it so only this step, and no other hearth, is asked in a fight.
+LOOP_HEARTH_ERRAND = " for a town errand"
+
+
 def death_loop_hearth(m, loop, recent, world=None, cap=None):
     """The hearth home of a member in its death loop's zone, or None.
 
@@ -6898,12 +6903,18 @@ def death_loop_hearth(m, loop, recent, world=None, cap=None):
         return None
     if home_in_loop_zone(m, loop):
         return None
-    if not (m.online and m.alive and not m.in_combat) or not _in_the_open(m):
+    # IN A FIGHT TOO (#2152). A looper is in combat at most passes: a member
+    # left idle in a hostile camp dies again and again with the combat flag
+    # set, and an escape that gave up on the flag never issued at all. The module refuses the cast for the fight
+    # at no cost and the hearth is asked again (PASSING_HEARTH_REASONS), so the
+    # ask that lands is the one in a gap, as the stranded knight's recall is.
+    if not (m.online and m.alive) or not _in_the_open(m):
         return None
     if _cooling(m, "hearth", recent):
         return None
-    said = "%s hearths home to town for a town errand (repair, sell, train): %s" % (
+    said = "%s hearths home to town%s (repair, sell, train): %s" % (
         m.name,
+        LOOP_HEARTH_ERRAND,
         loop.reason(),
     )
     rows = (guildcorps.Row("hearth", "use", "", source_for("hearth", m.name)),)
@@ -7063,6 +7074,17 @@ def home_in_loop_zone(m, loop) -> bool:
     return home is not None and int(home) == int(loop.zone)
 
 
+def _on_start_map_knight(m) -> bool:
+    """A death knight standing on the start map (Acherus and the ground below
+    it), where the hearth and the level walk do not run: its way out is the
+    class walk (classtrain, the module's gryphon click), which is asked every
+    classtrain.KNIGHT_COOLDOWN_MINUTES while it stays."""
+    return (
+        int(m.class_id) == classquest.DEATH_KNIGHT
+        and m.map_id == classquest.DEATH_KNIGHT_START_MAP
+    )
+
+
 def _death_loop_reason(m, loop, leveling, recent, campaign="", level_note=""):
     """Why the death loop's escape issued no step for `m`, as one phrase.
 
@@ -7073,12 +7095,15 @@ def _death_loop_reason(m, loop, leveling, recent, campaign="", level_note=""):
     hearth's own blocks (its cooldown, a hearthstone bound in the loop's
     zone), then the level walk's cooldown, and last the hub choice
     itself: no reachable hub (#2152)."""
-    if m.in_combat:
-        return "in combat"
     if not m.online:
         return "not online"
     if not m.alive:
         return "dead"
+    if _on_start_map_knight(m):
+        return (
+            "death knight on the start map: the class walk's gryphon click "
+            "is its way out"
+        )
     if not _in_the_open(m):
         return "not in the open world"
     if leveling is not None and m.name in leveling.roster:
@@ -7091,9 +7116,13 @@ def _death_loop_reason(m, loop, leveling, recent, campaign="", level_note=""):
     if _cooling(m, "hearth", recent):
         return "hearth cooling"
     if home_in_loop_zone(m, loop):
-        return "hearthstone bound in the loop zone"
+        return "hearthstone bound in the loop zone" + (
+            ", in combat" if m.in_combat else ""
+        )
     if _cooling(m, guildlevel.ACTION, recent):
         return "level walk cooling"
+    if m.in_combat:
+        return "in combat"
     return "no reachable hub"
 
 
@@ -10273,13 +10302,26 @@ def _is_recall(step) -> bool:
     return bool(rows) and rows[0].kind == "hearth" and rows[0].command == "recall"
 
 
+def _is_loop_hearth(step) -> bool:
+    """Whether the step is a death loop's hearth home (death_loop_hearth), asked
+    in a fight because the module refuses it for the fight at no cost (#2152)."""
+    rows = getattr(step, "rows", None) or ()
+    return (
+        getattr(step, "action", "") == "hearth"
+        and LOOP_HEARTH_ERRAND in str(getattr(step, "said", ""))
+        and bool(rows)
+        and rows[0].kind == "hearth"
+        and rows[0].command == "use"
+    )
+
+
 def _step_refusal(m, busy, started, per_guild, step=None):
     if not m.online:
         return "%s is offline" % m.name
     # A recall is asked in a fight too (2026-10-08): the module refuses the cast
     # for the fight at no cost, and the ask that lands is the one in a gap. A
     # stranded knight fights almost without a pause.
-    if m.in_combat and not _is_recall(step):
+    if m.in_combat and not (_is_recall(step) or _is_loop_hearth(step)):
         return "%s is in combat" % m.name
     if m.name in busy:
         return "%s is already on another guild walk" % m.name

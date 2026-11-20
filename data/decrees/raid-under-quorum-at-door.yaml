@@ -1,0 +1,54 @@
+# Five seats are intentionally below the default Molten Core quorum. This checks only
+# the under-quorum hold and end path, not the 40-seat entry case.
+decree: v1
+id: raid-under-quorum-at-door
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1457, criterion: "a five-seat Molten Core order ends for want of quorum at the door and emits no ENTER event"}
+fix: {repo: quadseven/mod-overseer, commit: "9d25f1d0a8bcf1bb96984d37273ac3bcff0d6d80"}
+world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 45m
+cast:
+  - who: family:grug
+    set: {alive: true, at: {areatrigger: 2886}}
+    ceiling: "position only; nothing granted"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "raid:moltencore"}
+observe:
+  - name: cast-is-at-the-molten-core-door
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters c
+      JOIN acore_world.areatrigger a ON a.entry = 2886
+      WHERE c.guid IN (@cast) AND c.map = a.map
+        AND POW(c.position_x - a.x, 2) + POW(c.position_y - a.y, 2) <= 1600
+    expect: {scalar: "= 5"}
+  - name: five-raid-seats-were-written
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_raid_seat
+      WHERE family = 'Grug' AND keyword = 'moltencore'
+        AND name IN (SELECT name FROM characters WHERE guid IN (@cast))
+    expect: {scalar: "= 5"}
+  - name: the-order-ends-for-want-of-quorum
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run_event
+      WHERE family = 'Grug' AND portal = 'moltencore' AND kind = 'phase'
+        AND phase = 'IDLE' AND created_at >= @t0
+        AND detail LIKE '%never reached a quorum at the door%'
+    expect: {scalar: ">= 1"}
+  - name: no-enter-event-was-written
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run_event
+      WHERE family = 'Grug' AND portal = 'moltencore' AND kind = 'enter'
+        AND created_at >= @t0
+    expect: {scalar: "= 0"}

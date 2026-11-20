@@ -117,6 +117,16 @@ SQL are checked against a snapshot of the game databases
   `creature`, `gameobject`, `areatrigger`, `graveyard`, `with`, or `captured`
   (a key in `data/decrees/anchors.yaml`). A coordinate column compared to a number
   in observation SQL is also an error.
+- `at_each` places a `family:<name>` selector's members at separate named
+  `creature`, `gameobject` or `areatrigger` anchors. Give it at least two unique
+  anchors, one for each resolved family member. The order follows the resolver's
+  family order (lead first, then character GUID); the compiler refuses a count
+  mismatch or anchors that resolve to the same map position. `at_each` cannot
+  be combined with `at`. A `with` anchor (in `at`, `homebind` or `corpse_at`)
+  may not name a family placed by `at_each`: its members have separate
+  positions, so lint refuses it with the entry's path. Anchor positions come
+  from existing spawn or point data;
+  coordinates are never written in the decree.
 - `kind: gm` is rejected: bot sessions are SEC_PLAYER, so it silently does nothing.
 - Auction rows and the auction house bot are refused unless the decree sets
   `family: auction-house`.
@@ -211,6 +221,10 @@ volume both containers mount), and the judge reads the worldserver log from
 world adds, which carries the module's and the bots' lines at trace and info
 level); `--log` overrides both. With none of them it reports a log that
 could not be read, which is INVALID.
+On a `bridge: on` decree the log assertions also read the bridge sidecar's own log, the
+worldserver log followed by `EPH_BRIDGE_LOG_FILE`, else `$EPH_LOGS_DIR/Bridge.log` (the sidecar
+tees its output there); a bridge log that is missing is INVALID, so a forbidden line can never
+read as absent for want of a file.
 It reads the variables and resolved cast the seed left in `EPH_VARS_FILE`, runs
 the `act` steps (by time, or when a named observation first holds), samples the
 `observe` entries and decides one of three verdicts:

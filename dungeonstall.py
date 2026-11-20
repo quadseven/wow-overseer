@@ -285,12 +285,14 @@ class Stuck:
         )
 
 
-def silent_run(keyword: str, seconds) -> Stuck | None:
+def silent_run(keyword: str, seconds, doing: str = "") -> Stuck | None:
     """Name a dungeon job with no progress evidence for two hours.
 
     `seconds` is measured from the queue head's start or the family's newest
     quest, level, equip, or boss progress event. The run table's presence
-    heartbeat is deliberately not accepted as progress.
+    heartbeat is deliberately not accepted as progress. `doing` is what the
+    family's job was and who last wrote it (bridge._job_story): the reason
+    then says what the family was doing, not only that nothing was recorded.
     """
     if seconds is None or float(seconds) < NO_PROGRESS_AFTER.total_seconds():
         return None
@@ -301,6 +303,8 @@ def silent_run(keyword: str, seconds) -> Stuck | None:
         "no quest, level, gear, or boss progress event and no stall reason "
         "recorded for at least 2 hours"
     )
+    if doing:
+        reason += " (%s)" % doing
     stall = Stall(0, 0, reason)
     return Stuck(door, stall, stall)
 
@@ -386,6 +390,46 @@ def door_unreachable(keyword: str, restarts) -> Stuck | None:
             "left" % (spread, DOOR_RESTART_WINDOW // 60),
         )
     return None
+
+
+# The restart slope, before the wedge (#2636). The breaker's bounds above
+# judge a walk that has already failed ten times in a quarter hour (or
+# four times in an hour): by then the run has sat split across its door
+# for as long as the wedge takes to form. The climb is visible far
+# earlier: a walk restarted this many times inside the same quarter-hour
+# fold, on the same walk, is not staging either, and reissuing it
+# identically until the bound trips is not a plan. The slope verdict
+# leaves the door with the breaker's own stand-down, only sooner; the
+# breaker's bounds and verdict are untouched, and at its bound the
+# breaker speaks, not the slope.
+SLOPE_RESTART_BOUND = 3
+
+
+def door_restart_slope(keyword: str, restarts) -> Stuck | None:
+    """The leader's walk to this door is restarting on the slope.
+
+    `restarts` is the same fold `door_unreachable` reads: a bare count is
+    the quarter-hour count, and a pair is (quarter-hour count, hour
+    count). Only the quarter-hour count speaks here: restarts spread over
+    the hour, or over different walks (which the fold keeps apart), are
+    the breaker's wider window or no slope at all. Below SLOPE_RESTART_BOUND
+    the walk is staging; at RESTART_BOUND the breaker owns the verdict,
+    so this returns None there and the run is left once, by the breaker.
+    """
+    if restarts is None:
+        return None
+    if isinstance(restarts, (tuple, list)):
+        quick = int(restarts[0] or 0)
+    else:
+        quick = int(restarts)
+    if quick < SLOPE_RESTART_BOUND or quick >= RESTART_BOUND:
+        return None
+    return _wedged(
+        keyword,
+        "the leader's walk to the door ended and restarted %d times without "
+        "arriving, on the climb to the wedge; the run is stood down and "
+        "the door left before the wedge forms" % quick,
+    )
 
 
 ERRAND_STATE = "on an errand of its own"
@@ -722,6 +766,12 @@ REGROUP = "regroup"
 # well inside the range a follower holds, far outside a member in another
 # town.
 REGROUP_YARDS = 40.0
+# HOW LONG PAST ITS BACKOFF A REGROUP HOLD MAY WAIT FOR THE PARTY. Nothing
+# closes a gap between a leader and a follower on a job that does not walk the
+# party together, so a family spread wider than REGROUP_YARDS stayed apart for
+# ever and the order waited with it, the hold line saying only that it waited.
+# A wait with no one working to end it is bounded: past this the order runs.
+REGROUP_CEILING_SECONDS = 3600
 
 # Why `restart_after_hold` allowed or held the restart.
 BACKOFF = "backoff"
@@ -730,6 +780,7 @@ RUNNING = "running"
 UNREAD = "unread"
 APART = "apart"
 TOGETHER = "together"
+CEILING = "ceiling"
 
 _UNSEEN = "not seen in the world"
 
@@ -806,6 +857,8 @@ def restart_after_hold(
         return Restart(True, NOT_REGROUP)
     if running:
         return Restart(True, RUNNING)
+    if -int(hold.get("left_s") or 0) >= REGROUP_CEILING_SECONDS:
+        return Restart(True, CEILING)
     spots = {n: _spot((positions or {}).get(n)) for n in names}
     if not any(spots.values()):
         return Restart(True, UNREAD)

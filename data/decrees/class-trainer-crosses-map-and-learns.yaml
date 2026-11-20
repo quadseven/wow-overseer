@@ -1,0 +1,56 @@
+# A level 60 Druid cannot find a class trainer on the Eastern Kingdom map. Its
+# highest Regrowth rank is removed in the throwaway world, then the family runs
+# the quest drive so the training stop walks it to a trainer on another map.
+# The start check requires a funded Druid; otherwise the scenario is INVALID.
+# Scope: this checks the Regrowth rank and the cross-map class trainer walk, not
+# all classes or all travel routes.
+# Fix: mod-overseer PR 1586.
+decree: v1
+id: class-trainer-crosses-map-and-learns
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1480, criterion: "a funded level 60 Druid on a map without its class trainer crosses to another map, reaches a Druid trainer and learns Regrowth rank 10"}
+fix: {repo: quadseven/mod-overseer, commit: "fa16ae7af24e7f0f5fb861a08c565f3c22117f21"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 3h
+cast:
+  - who: family:grug
+    set: {alive: true, at: {areatrigger: 1466}, spells_remove: [26980]}
+    ceiling: "only Regrowth rank 10 is removed; no levels, items, gold or gear granted"
+  - who: family:zug
+    set: {alive: true, at: {areatrigger: 1466}, spells_remove: [26980]}
+    ceiling: "only Regrowth rank 10 is removed; no levels, items, gold or gear granted"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+  - group: {members: family:zug, leader: Zug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "quest"}
+  - at: 0s
+    roster: {who: family:zug, job: "quest"}
+observe:
+  - name: a-funded-level-60-druid-is-present
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot s JOIN characters c ON c.guid = s.guid
+      WHERE s.guid IN (@cast) AND s.map_id = 0 AND c.class = 11 AND c.level >= 60
+        AND c.money >= (SELECT MAX(MoneyCost) FROM acore_world.trainer_spell WHERE SpellId = 26980)
+        AND EXISTS (SELECT 1 FROM character_spell cs WHERE cs.guid = c.guid AND cs.spell = 9858)
+    expect: {scalar: ">= 1"}
+  - name: the-target-rank-starts-missing
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_spell WHERE guid IN (@cast) AND spell = 26980
+    expect: {scalar: "= 0"}
+  - name: a-cross-map-class-trainer-walk-was-issued
+    role: check
+    log: {pattern: "class trainer walk .* crosses toward trainer spawn .* on map 1", expect: {at_least: 1}}
+  - name: a-druid-learned-regrowth-rank-10
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM character_spell cs JOIN characters c ON c.guid = cs.guid
+      WHERE cs.guid IN (@cast) AND c.class = 11 AND cs.spell = 26980
+    expect: {scalar: ">= 1"}

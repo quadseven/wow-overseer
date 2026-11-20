@@ -360,7 +360,8 @@ def submit(
         for arm in arms
         if n <= decree["runs"][arm]
     ]
-    free = [r for r in REALM_RANGE if r not in _used_realms(kube)]
+    taken = _used_realms(kube)
+    free = [r for r in REALM_RANGE if r not in taken]
     if len(free) < len(plan):
         raise SubmitError("no free realm ids")
     nodecfg = cfg.nodes[node]

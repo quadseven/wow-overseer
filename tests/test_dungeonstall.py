@@ -307,6 +307,12 @@ class ActiveRunSilence(unittest.TestCase):
         self.assertIn("no quest, level, gear, or boss progress event", got.why)
         self.assertIn("no stall reason recorded", got.why)
 
+    def test_the_reason_says_what_the_family_was_doing(self):
+        got = stall.silent_run(
+            "gnomeregan", 2 * 60 * 60, "jobs now town run; last written by errand"
+        )
+        self.assertIn("jobs now town run; last written by errand", got.why)
+
     def test_silence_does_not_trip_early_or_without_a_clock(self):
         self.assertIsNone(stall.silent_run("gnomeregan", 7199))
         self.assertIsNone(stall.silent_run("gnomeregan", None))
@@ -537,6 +543,8 @@ class StallWorld(FakeWorld):
         self.park_at = None
         self.ordered_after = set()
         self.hold_said = {}
+        self.stood_down = {}
+        self.hold_lines = []
         self.silent_seconds = None
         self.wedge = None
         self.dungeonquest_held = set()
@@ -576,6 +584,7 @@ def _pass(world):
             "_regroup_wait",
             "_stall_write",
             "_silent_stall",
+            "_job_story",
             "_stuck_doors",
             "_planner_rows",
         ],
@@ -594,6 +603,11 @@ def _pass(world):
             "_OFF_DUNGEON_JOB_AT": {},
             "_door_wedge": lambda head, names, leader: world.wedge,
             "_jobs_of": lambda names: {n: world.member_job(n) for n in names},
+            "_last_job_source": lambda name: "town-errand",
+            "_STALL_STOOD_DOWN": world.stood_down,
+            "_say_queue_hold": lambda key, hold, why="": world.hold_lines.append(
+                (hold, why)
+            ),
             "_fetch_positions": lambda names: dict(world.positions),
             "_REGROUP_SPENT": world.regroup_spent,
             "_fetch_queue_rows": world.fetch_queue,
@@ -702,6 +716,21 @@ class TheCampaignDoesNotStartAThirdRun(unittest.TestCase):
         self.assertEqual({jobs.DEFAULT}, self.zug_jobs(w))
         self.assertIn("no stall reason recorded", w.records[0][7])
         self.assertTrue([line for line in lines if "no stall reason recorded" in line])
+
+    def test_the_silent_stand_down_records_what_the_family_was_doing(self):
+        w = self.silent_family()
+
+        _pass(w)
+
+        reason = w.records[0][7]
+        self.assertIn("jobs now dungeon:gnomeregan", reason)
+        self.assertIn("last written by town-errand", reason)
+        # Kept where the queue's hold is said, not only in the pace row.
+        self.assertEqual(reason[:255], w.stood_down[w.queue[0]["family"]][:255])
+        # And the queue's hold line says it.
+        self.assertIn(
+            ("stall breaker", w.stood_down[w.queue[0]["family"]]), w.hold_lines
+        )
 
     def test_silent_head_is_checked_before_a_dungeon_quest_hold(self):
         w = self.silent_family()
@@ -1334,6 +1363,42 @@ class TheWedgeAtTheDoor(unittest.TestCase):
     def test_a_bare_count_still_reads_as_the_quarter_hour_fold(self):
         self.assertIsNone(stall.door_unreachable("shadowfang", 3))
 
+    def test_the_restart_slope_leaves_the_door_at_three_quick_restarts(self):
+        """The pre-wedge slope (#2636, second slice): three restarts of the
+        leader's walk inside the quarter-hour fold, below the breaker's
+        bound, already leave the door with the breaker's own stand-down,
+        instead of reissuing the same walk until the bound trips."""
+        got = stall.door_restart_slope("shadowfang", stall.SLOPE_RESTART_BOUND)
+        self.assertIsNotNone(got)
+        self.assertEqual("shadowfang", got.door)
+        self.assertIn("restarted 3 times", got.why)
+
+    def test_the_restart_slope_is_silent_below_three_quick_restarts(self):
+        self.assertIsNone(
+            stall.door_restart_slope("shadowfang", stall.SLOPE_RESTART_BOUND - 1)
+        )
+
+    def test_the_restart_slope_reads_only_the_quarter_hour_count(self):
+        """Restarts spread over the hour are the breaker's wider fold, not
+        the slope: a pair whose quarter-hour count is low stays silent here
+        however the hour count reads below the breaker's own bound."""
+        self.assertIsNone(stall.door_restart_slope("shadowfang", (1, 3)))
+        got = stall.door_restart_slope("shadowfang", (3, 3))
+        self.assertIsNotNone(got)
+        self.assertIn("restarted 3 times", got.why)
+
+    def test_the_restart_slope_does_not_duplicate_the_breaker(self):
+        """At the breaker's own bound the breaker speaks, not the slope:
+        the slope verdict is for the climb below it."""
+        self.assertIsNone(stall.door_restart_slope("shadowfang", stall.RESTART_BOUND))
+        self.assertIsNone(
+            stall.door_restart_slope("shadowfang", stall.RESTART_BOUND + 5)
+        )
+
+    def test_a_slope_verdict_needs_a_real_door_and_a_count(self):
+        self.assertIsNone(stall.door_restart_slope("nowhere", 3))
+        self.assertIsNone(stall.door_restart_slope("shadowfang", None))
+
     def test_an_unreachable_verdict_needs_a_real_door_and_a_count(self):
         self.assertIsNone(stall.door_unreachable("nowhere", 500))
         self.assertIsNone(stall.door_unreachable("shadowfang", None))
@@ -1523,6 +1588,27 @@ class TheDoorWedgeReads(unittest.TestCase):
         got = judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
         self.assertIsNotNone(got)
         self.assertIn("restarted 38 times", got.why)
+
+    def test_slope_restarts_are_a_verdict_on_the_first_pass(self):
+        """The bridge asks the slope verdict too (#2636): a leader's walk
+        at three quarter-hour restarts leaves the door on this pass, not
+        after the breaker's bound trips."""
+        judge = self.judge(((3, 0), ()), [1000.0])
+        got = judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("restarted 3 times", got.why)
+        self.assertIn("before the wedge forms", got.why)
+
+    def test_two_quick_restarts_are_no_verdict(self):
+        judge = self.judge(((2, 0), ()), [1000.0])
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+
+    def test_restarts_at_the_breaker_bound_speak_with_the_breaker(self):
+        judge = self.judge(((stall.RESTART_BOUND, 0), ()), [1000.0])
+        got = judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("restarted %d times" % stall.RESTART_BOUND, got.why)
+        self.assertNotIn("before the wedge forms", got.why)
 
     def test_the_walk_is_counted_for_the_queue_entry_being_judged(self):
         judge = self.judge((0, ()), [1000.0])
@@ -2376,3 +2462,33 @@ class TheErrandARunWaitsOn(unittest.TestCase):
         self.assertEqual(
             (2, ["Bork", "Grog"]), bag_pressure_pass(recalled={"Grog": 940.0}, now=over)
         )
+
+
+class ARegroupWaitIsBounded(unittest.TestCase):
+    """A hold waiting for a party nothing is gathering must not wait for ever."""
+
+    NAMES = ("Zug", "Oz", "Bork")
+
+    def apart(self):
+        return {
+            "Zug": standing(0, 100.0, 100.0),
+            "Oz": standing(0, 145.0, 100.0),
+            "Bork": standing(0, 100.0, 175.0),
+        }
+
+    def judge(self, left_s):
+        hold = {"id": 9, "left_s": left_s, "target": stall.REGROUP}
+        return stall.restart_after_hold(hold, False, "Zug", self.NAMES, self.apart())
+
+    def test_a_party_spread_past_the_range_holds_inside_the_ceiling(self):
+        got = self.judge(-(stall.REGROUP_CEILING_SECONDS - 1))
+        self.assertFalse(got.allowed)
+        self.assertEqual(stall.APART, got.reason)
+
+    def test_the_same_party_runs_once_the_ceiling_is_spent(self):
+        got = self.judge(-stall.REGROUP_CEILING_SECONDS)
+        self.assertTrue(got.allowed)
+        self.assertEqual(stall.CEILING, got.reason)
+
+    def test_a_backoff_still_running_holds_whatever_the_ceiling(self):
+        self.assertEqual(stall.BACKOFF, self.judge(60).reason)
