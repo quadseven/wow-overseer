@@ -397,8 +397,12 @@ class TheScan(unittest.TestCase):
 
     def test_a_burst_over_the_count_cap_keeps_the_newest_and_touches_no_file(self):
         ready = [
-            {"id": i, "event_key": "loot:%d" % i, "state": "ready",
-             "created_at": NOW - timedelta(minutes=i)}
+            {
+                "id": i,
+                "event_key": "loot:%d" % i,
+                "state": "ready",
+                "created_at": NOW - timedelta(minutes=i),
+            }
             for i in range(1, 7)
         ]
         store = FakeStore(ready=ready)
