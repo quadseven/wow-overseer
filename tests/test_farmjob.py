@@ -225,6 +225,54 @@ class AWalkToARefusedSpawnMovesOn(unittest.TestCase):
         self.assertEqual(step.spawn, near)
 
 
+class AFieldTheColumnRefusedWhollyYieldsToAnother(unittest.TestCase):
+    """A refusal that rests on where the leader stands refuses every spawn of
+    the field, so rotating inside it never moves the farm; another field must
+    be asked once every spawn of the nearest one was tried."""
+
+    def spawns(self):
+        near = (spawn(900, 0, zone=490), spawn(950, 0, zone=490))
+        far = (spawn(3000, 0, zone=361),)
+        return near, far
+
+    def test_a_field_with_every_spawn_tried_ranks_after_a_fresh_field(self):
+        near, far = self.spawns()
+        tried = {farmjob.spawn_key(s): 50.0 for s in near}
+        ranked = farmjob.fields(near + far, leader_at(), tried, 60.0)
+        self.assertEqual([row[1] for row in ranked], [361, 490])
+
+    def test_the_walk_goes_to_the_fresh_field(self):
+        near, far = self.spawns()
+        tried = {farmjob.spawn_key(s): 50.0 for s in near}
+        step = farmjob.decide(
+            order(),
+            reads(spawns=near + far, visited=tried, zone_levels={490: 55, 361: 55}),
+        )
+        self.assertEqual(step.action, farmjob.WALK)
+        self.assertEqual(step.spawn, far[0])
+
+    def test_a_field_with_a_spawn_left_keeps_its_place(self):
+        near, far = self.spawns()
+        tried = {farmjob.spawn_key(near[0]): 50.0}
+        ranked = farmjob.fields(near + far, leader_at(), tried, 60.0)
+        self.assertEqual([row[1] for row in ranked], [490, 361])
+        self.assertEqual(ranked[0][3], near[1])
+
+    def test_every_field_tried_keeps_the_nearest_first(self):
+        near, far = self.spawns()
+        tried = {farmjob.spawn_key(s): 50.0 for s in near + far}
+        ranked = farmjob.fields(near + far, leader_at(), tried, 60.0)
+        self.assertEqual([row[1] for row in ranked], [490, 361])
+
+    def test_the_danger_read_ranks_fields_by_the_same_visited_map(self):
+        source = (ROOT / "bridge.py").read_text(encoding="utf-8")
+        body = source.split("def _farm_reads(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn(
+            "farmjob.fields(open_, leader_at, visited or {}, time.time())", body
+        )
+        self.assertIn("state.get(\"visited\"),\n        )", source)
+
+
 class InTheFieldItHops(unittest.TestCase):
     def standing(self, x=1000.0, y=0.0):
         return leader_at(x, y, zone=490)

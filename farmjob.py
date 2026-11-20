@@ -471,7 +471,11 @@ def fields(spawns, leader_at, visited=None, now=0.0) -> list:
 
     The spawn named for a field is the nearest one not tried within
     REVISIT_SECONDS (`visited`), so a spawn the travel column refused is not
-    asked for again every pass; when every spawn was tried, the nearest."""
+    asked for again every pass; when every spawn was tried, the nearest. A field
+    whose every spawn was tried lately comes after every field with a spawn not
+    tried, however near it is: a refusal that rests on where the leader stands
+    refuses the whole field, and asking its nearest spawn again would never
+    reach another field."""
     if not leader_at or leader_at.get("map_id") is None:
         return []
     here = int(leader_at["map_id"])
@@ -484,7 +488,7 @@ def fields(spawns, leader_at, visited=None, now=0.0) -> list:
         if int(spawn.map_id) != here or not int(spawn.zone_id or 0):
             continue
         per_zone.setdefault(int(spawn.zone_id), []).append(spawn)
-    out = []
+    out, spent = [], set()
     for zone, rows in per_zone.items():
         fresh = [
             r
@@ -493,8 +497,10 @@ def fields(spawns, leader_at, visited=None, now=0.0) -> list:
             >= REVISIT_SECONDS
         ]
         near = min(fresh or rows, key=lambda s: gatheraim.yards(s, origin))
+        if not fresh:
+            spent.add(zone)
         out.append((gatheraim.yards(near, origin), zone, len(rows), near))
-    out.sort(key=lambda r: (r[0], -r[2], r[1]))
+    out.sort(key=lambda r: (r[1] in spent, r[0], -r[2], r[1]))
     return out
 
 
