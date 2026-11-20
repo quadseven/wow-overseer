@@ -2065,7 +2065,7 @@ class TheRunWait(unittest.TestCase):
         self.assertEqual((600.0, []), self.reloaded("600"))
 
     def test_a_bad_or_negative_value_keeps_the_default_and_is_noted(self):
-        for raw in ("soon", "-5"):
+        for raw in ("soon", "-5", "nan"):
             seconds, rejected = self.reloaded(raw)
             self.assertEqual(1800.0, seconds, raw)
             self.assertEqual([("TOWN_ERRAND_RUN_WAIT_SECONDS", raw)], rejected)

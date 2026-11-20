@@ -144,7 +144,7 @@ def _env_seconds(name: str, default: float) -> float:
         value = float(raw)
     except (TypeError, ValueError):
         value = -1.0
-    if value < 0:
+    if not value >= 0:
         ENV_REJECTED.append((name, raw))
         return default
     return value
