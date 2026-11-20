@@ -173,9 +173,7 @@ class InTheFamilyPlan(unittest.TestCase):
 
     def test_family_switch_off_holds_the_mount_step(self):
         with mock.patch.dict(os.environ, {familyclass.ENV_SWITCH: "off"}):
-            plan = self.plan(
-                [mount_seat(carried=(CARRIED,))], mounts={"Grugg": FACTS}
-            )
+            plan = self.plan([mount_seat(carried=(CARRIED,))], mounts={"Grugg": FACTS})
         self.assertEqual(plan.steps, ())
 
 
