@@ -181,6 +181,84 @@ class TheSlotsReadAgainstTheLists(unittest.TestCase):
         self.assertEqual(slot_of(one, "trinket 1")["next_status"], "none_known")
         self.assertEqual(slot_of(one, "trinket 2")["next_status"], "named")
 
+    def test_a_worn_trinket_the_score_cannot_read_names_the_guides_next_piece(self):
+        # A worn trinket scoring 0.0 against listed trinkets that all score
+        # 0.0 (procs and "Use:" effects are not read) said none_known although
+        # the guide lists pieces the member does not wear (#2208).
+        first, second, third = gearscore.slot_list("mage-dps", "preraid", "trinket")[:3]
+        trinkets = {i: row(i) for i in (first, second, third)}
+        out = build([worn("trinket 1", 9001, 0)], MAGE, trinkets)
+        one = slot_of(out, "trinket 1")
+        self.assertEqual(one["next"]["entry"], first)
+        self.assertEqual(one["next"]["ranked_by"], "guide_order")
+        self.assertEqual(one["next"]["gain"], 0.0)
+        self.assertEqual(one["next"]["where"], gearupgrades.where(first))
+        self.assertEqual(one["next_status"], "named")
+        # The guide's second piece worn in one slot, its third in the other:
+        # the first is next for both, and neither is told to wear the other's.
+        both = build(
+            [worn("trinket 1", second, 0), worn("trinket 2", third, 0)], MAGE, trinkets
+        )
+        self.assertEqual(slot_of(both, "trinket 1")["next"]["entry"], first)
+        self.assertEqual(slot_of(both, "trinket 2")["next"]["entry"], first)
+        # The guide's first two worn: the third is behind both, none is known.
+        top = build(
+            [worn("trinket 1", first, 0), worn("trinket 2", second, 0)], MAGE, trinkets
+        )
+        for name in ("trinket 1", "trinket 2"):
+            self.assertIsNone(slot_of(top, name)["next"])
+            self.assertEqual(slot_of(top, name)["next_status"], "none_known")
+
+    def test_a_next_piece_taken_on_its_score_says_so(self):
+        head = slot_of(build([worn("head", 9001, 12)]), "head")
+        self.assertEqual(head["next"]["ranked_by"], "score")
+        self.assertEqual(slot_of(build([]), "head")["next"]["ranked_by"], "score")
+
+    def test_a_next_piece_says_whether_its_source_is_known(self):
+        # 17064 is on a raid trinket list and has no source row; 22267 drops
+        # in a dungeon. The payload says which, not an empty list alone.
+        self.assertEqual(gearupgrades.where(17064), [])
+        head = slot_of(build([]), "head")
+        self.assertEqual(head["next"]["source_status"], "named")
+        block = gearupgrades._target(17064, 0.0, {})
+        self.assertEqual(block["where"], [])
+        self.assertEqual(block["source_status"], "none_known")
+
+    def test_every_slot_names_a_next_piece_and_source_or_says_none_known(self):
+        # Box 3 of #2208 over every spec: each of the 17 rows, empty or worn
+        # with a piece the score cannot read, either names a next piece (with
+        # its source, or that no source is known) or says none is known.
+        for spec in gearscore.spec_ids():
+            ids = gearupgrades.all_list_ids(spec)
+            rows = {i: row(i) for i in ids}
+            names = list(armory.EQUIPPED_SLOTS)
+            wearing = [
+                worn(name, 9000 + n, 0)
+                for n, (name, _label, _key) in enumerate(gearupgrades.ROWS)
+            ]
+            for equipment in ([], wearing):
+                with mock.patch.object(
+                    gearupgrades, "choose_spec", return_value=(spec, "")
+                ):
+                    out = gearupgrades.build(MAGE, equipment, rows, names)
+                self.assertEqual(len(out["slots"]), len(gearupgrades.ROWS))
+                for slot in out["slots"]:
+                    where = (spec, slot["slot"], bool(equipment))
+                    nxt = slot["next"]
+                    if nxt is None:
+                        self.assertEqual(slot["next_status"], "none_known", where)
+                        # None known only where the guide lists nothing.
+                        self.assertFalse(any(slot["targets"].values()), where)
+                        continue
+                    self.assertEqual(slot["next_status"], "named", where)
+                    self.assertTrue(nxt["entry"] and nxt["name"], where)
+                    self.assertIn(nxt["ranked_by"], ("score", "guide_order"), where)
+                    self.assertEqual(
+                        nxt["source_status"],
+                        "named" if nxt["where"] else "none_known",
+                        where,
+                    )
+
     def test_a_trinket_scores_its_equip_spell_so_a_worn_one_gets_a_next_piece(self):
         # Spell 13881 reads "Increases spell power by 29." Trinket value is
         # almost all equip spell, so a list trinket carrying only that spell
