@@ -104,13 +104,13 @@ class FoodBeforeTheWayOut(unittest.TestCase):
         result = plan(
             town,
             loops={NAME: loop_of()},
-            still={NAME: standstill.STILL_MINUTES + 5},
+            still={NAME: standstill.SEAT_STILL_MINUTES + 5},
         )
         self.assertEqual(actions(result), [restsupply.ACTION])
 
     def test_without_a_loop_the_stood_still_hearth_keeps_its_place(self):
         town = member(zone_id=85)
-        result = plan(town, still={NAME: standstill.STILL_MINUTES + 5})
+        result = plan(town, still={NAME: standstill.SEAT_STILL_MINUTES + 5})
         self.assertEqual(actions(result), ["hearth"])
 
     def test_a_looper_with_food_and_drink_takes_the_way_out(self):
