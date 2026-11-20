@@ -1227,6 +1227,39 @@ class Broken(unittest.TestCase):
         self.assertIn("Heart of Mokk (item 2797)", reason)
         self.assertIn("quest 349 is turned in", reason)
 
+    def test_green_hills_ledger_names_the_chapter_quests(self):
+        hills = classquest.Quest(
+            338,
+            "The Green Hills of Stranglethorn",
+            0,
+            40,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((2756, 1), (2757, 1), (2758, 1), (2759, 1)),
+            enders=(classquest.Spawn(1449, 33, 0, 0.0, 0.0, name="Unbagwa"),),
+        )
+        facts = questers.Facts(zone=33, level=40, ender_npcs=True)
+
+        early = questers._broken_reason(
+            hills, facts, questers.STATUS_INCOMPLETE, 0, frozenset(), {}
+        )
+        self.assertEqual(early, "")
+
+        reason = questers._broken_reason(
+            hills,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertIn("quests 339 to 342", reason)
+        self.assertNotEqual(reason, questers.STALLED_UNSOURCED)
+
     def test_flagon_of_mead_ledger_names_the_vendor_source(self):
         fleet = classquest.Quest(
             288,
