@@ -28,6 +28,7 @@ import pymysql
 
 import achievements
 import apiv2
+from apiv2 import members as v2_members
 from apiv2 import operator as v2_operator
 from apiv2 import presence as v2_presence
 from apiv2._context import Context as _V2Context
@@ -4241,7 +4242,10 @@ def _leader_now(name: str | None):
         "combat": False,
         "life": life,
     }
-    return nowstatus.compose(member, (facts or {}).get(name), None)
+    now = nowstatus.compose(member, (facts or {}).get(name), None)
+    # The roster's re-read of an Idle member (#2192): one function words it.
+    with realmread.Session(_connect) as rd:
+        return v2_members.reread_idle(rd, name, now)
 
 
 def _fetch_agenda(names=None) -> dict:
