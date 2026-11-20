@@ -111,6 +111,11 @@ def seat_names(include_old: bool = False) -> frozenset:
     return frozenset(out)
 
 
+def on_other_sides_ground(seat: Seat) -> bool:
+    """True when the seat stands in a zone that is only the other side's."""
+    return int(seat.zone_id or 0) in HOSTILE_ZONES.get(side_of(int(seat.race or 0)), ())
+
+
 def refusal(seat: Seat) -> str:
     """Why this seat is not sent the pair now, or "" when it is."""
     if not seat.online:
@@ -125,7 +130,7 @@ def refusal(seat: Seat) -> str:
         return "it is inside an instance"
     if seat.in_combat:
         return "it is in combat"
-    if int(seat.zone_id or 0) in HOSTILE_ZONES.get(side_of(int(seat.race or 0)), ()):
+    if on_other_sides_ground(seat):
         return "it stands on the other side's ground, where its guards kill it"
     held = [int(seat.skills.get(s, 0) or 0) for s in NODE_SKILLS]
     if not any(0 < v for v in held):
