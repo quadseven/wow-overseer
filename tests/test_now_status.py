@@ -346,6 +346,32 @@ class TheSentenceNamesTheWork(unittest.TestCase):
         got = line_of("Grug", legs)
         self.assertNotIn("restarted", got["line"])
 
+    def test_the_quest_drive_resuming_after_each_hand_over_is_not_a_restart(self):
+        # The quest drive is what the leader falls back to whenever a higher
+        # walk ends, so it "takes over" once per hand-back. Nine of them
+        # between a dungeon-door walk and town trips read as a stuck walk.
+        legs = [
+            step(
+                "Zug",
+                "the quest drive took over: working its quests",
+                kind="intent",
+                times=9,
+                first=2300,
+                last=100,
+            ),
+            step(
+                "Zug",
+                "the town trip took over: walking to the vendor on a town errand",
+                kind="intent",
+                times=1,
+                first=500,
+                last=100,
+            ),
+        ]
+        self.assertEqual(nowstatus._walk_restarts(legs, NOW), 1)
+        self.assertIsNone(nowstatus._first_restart(legs[:1], NOW))
+        self.assertNotIn("restarted", line_of("Zug", legs)["line"])
+
     def test_one_walk_restarted_three_times_still_says_so(self):
         legs = [
             step(
