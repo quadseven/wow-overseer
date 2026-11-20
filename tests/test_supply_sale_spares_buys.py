@@ -12,7 +12,6 @@ import unittest
 
 import guildjobs
 import restsupply
-from test_guildsocial_bridge import bridge
 from test_classquest_follow_up import _Loop
 
 
