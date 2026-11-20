@@ -10676,7 +10676,9 @@ def _refusal_of(row) -> dict:
     result = str(row.get("result") or "")
     if '"outcome":"refused"' not in result:
         return {}
-    found = re.search(r'"reason":"((?:[^"\\]|\\.)*)"', result)
+    # The closing quote may be missing: the read keeps the head of `result`,
+    # and a crossing's per-transport reason can run past it (#2994).
+    found = re.search(r'"reason":"((?:[^"\\]|\\.)*)(?:"|$)', result)
     refusal = found.group(1) if found else ""
     raw_refusal = ""
     if "no trainer" in refusal.lower() and refusal != NO_TRAINER_ON_MAP_REFUSAL:
