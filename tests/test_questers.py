@@ -1194,6 +1194,39 @@ class Broken(unittest.TestCase):
             "which no spawned creature drops",
         )
 
+    def test_heart_of_mokk_ledger_names_the_summoned_source(self):
+        fever = classquest.Quest(
+            348,
+            "Stranglethorn Fever",
+            0,
+            45,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((2797, 1),),
+            enders=(classquest.Spawn(1449, 33, 0, 0.0, 0.0, name="Unbagwa"),),
+        )
+        facts = questers.Facts(zone=33, level=45, ender_npcs=True)
+
+        early = questers._broken_reason(
+            fever, facts, questers.STATUS_INCOMPLETE, 0, frozenset(), {}
+        )
+        self.assertEqual(early, "")
+
+        reason = questers._broken_reason(
+            fever,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertIn("Heart of Mokk (item 2797)", reason)
+        self.assertIn("quest 349 is turned in", reason)
+
     def test_an_unsourced_item_quest_names_no_invented_cause(self):
         # Quest 64 once carried a hard-coded reason that no creature drops its
         # item. The world rows say a wardrobe holds it (test_questers_chests),
