@@ -594,6 +594,12 @@ def standing_loop(name: str, loops: dict, rows: dict):
     loop = (loops or {}).get(name)
     if loop is None:
         return None
+    # A slow loop (#2615) dies once or twice an hour, so between deaths the
+    # member is routinely out of the zone (at its graveyard, on a corpse run,
+    # on the road back): a zone gate would hide most slow loops at any moment.
+    # It clears on its quiet clock or a level gain, as deathloop.loops judges.
+    if loop.slow:
+        return loop
     reading = rows["readings"].get(name) or {}
     snap = rows["snaps"].get(name) if reading.get("online") else None
     if not snap:
