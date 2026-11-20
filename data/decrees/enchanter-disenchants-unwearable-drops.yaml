@@ -1,7 +1,8 @@
 # A family with an Enchanter in the party runs the Deadmines with LootRollDisenchant on. A green or blue
 # drop nobody can use is voted Disenchant and the Enchanter ends with enchanting materials in the bags.
 # Scope: which drop falls is the core's own luck, so the check is the outcome (materials appeared in the
-# Enchanter's bags, which only a disenchant produces here) and the window is long. A run that never credits
+# Enchanter's bags, which only a disenchant produces here, and a start-of-run precondition holds the
+# bags empty of them so the end count cannot be stock that was already there) and the window is long. A run that never credits
 # an encounter is INVALID. The party-chat Need and Greed wording (the criterion's third box) is log text
 # and is not asserted here. Og holds Enchanting only as a grant, legal in the throwaway world.
 decree: v1
@@ -46,6 +47,13 @@ observe:
     sql: |
       SELECT COUNT(*) FROM character_skills WHERE guid = @cast1 AND skill = 333
     expect: {scalar: "= 1"}
+  - name: enchanter-starts-with-no-enchanting-materials
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM item_instance
+      WHERE owner_guid = @cast1 AND itemEntry IN (10940, 10938, 10939, 10978, 11083)
+    expect: {scalar: "= 0"}
   - name: enchanting-materials-in-the-enchanters-bags
     role: check
     when: end
