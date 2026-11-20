@@ -387,8 +387,7 @@ def _passing_refusal(row) -> bool:
     if result.get("outcome") not in ("refused", "entered_combat"):
         return False
     return (
-        result.get("transient") is True
-        or result.get("reason") == "character is dead"
+        result.get("transient") is True or result.get("reason") == "character is dead"
     )
 
 
