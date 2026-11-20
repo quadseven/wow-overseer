@@ -864,3 +864,25 @@ class TheTopLine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HealerLevelsCard(unittest.TestCase):
+    """The Raid tab states healers at 50 and at 60 against the door quorum."""
+
+    def test_counts_healers_at_fifty_and_sixty_only(self):
+        raiders = [
+            {"name": "a", "role": "healer", "level": 60},
+            {"name": "b", "role": "healer", "level": 50},
+            {"name": "c", "role": "healer", "level": 49},
+            {"name": "d", "role": "tank", "level": 60},
+            {"name": "e", "role": "dps", "level": 60},
+        ]
+        card = raidready.healer_levels_card(raiders)
+        self.assertEqual((card["at_50"], card["at_60"]), (2, 1))
+        self.assertEqual(card["want"], raidrun.door_quorum()[2])
+        self.assertIn("Healers at 50: 2 of", card["line"])
+        self.assertIn("At 60: 1 of", card["line"])
+
+    def test_no_healers_reads_zero(self):
+        card = raidready.healer_levels_card([])
+        self.assertEqual((card["at_50"], card["at_60"]), (0, 0))
