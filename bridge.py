@@ -5939,6 +5939,51 @@ def _fetch_last_run_end(leader: str):
     return int(ended) if ended is not None else None
 
 
+def _queued_run_door(family: str) -> tuple:
+    """(a run is queued, its door) for a family: the door is (map, x, y) from
+    the committed entrances, or None when the head's door is not known. An
+    unreadable queue is read as no run queued, so the loop is never held back
+    by a read it could not make."""
+    try:
+        rows = campaignqueue.pending_by_family(_fetch_queue_rows()).get(family)
+    except Exception:
+        log.exception("profession loop: the queue could not be read")
+        return False, None
+    if not rows:
+        return False, None
+    keyword = str(rows[0].get("keyword") or "")
+    map_id = (council.DUNGEON_KEYWORDS.get(keyword) or (None,))[0]
+    if map_id is None:
+        map_id = raidrun.MAPS.get(keyword)
+    door = guildjobs.entrances().get(str(map_id)) if map_id is not None else None
+    if not door:
+        return True, None
+    return True, (int(door["map"]), float(door["x"]), float(door["y"]))
+
+
+def _farm_job_near_door(job: str, door, skills: dict) -> bool:
+    """Whether a farm job's nodes lie within the family's regroup reach
+    (farmjob.REACH_YARDS) of the queued run's door. No door, no node spawn or
+    a skill nobody holds is False: nothing is guessed."""
+    if not door:
+        return False
+    item, skill = farmjob.order_of(job)
+    try:
+        if item:
+            spawns = _farm_item_spawns(item)
+        else:
+            best = farmjob.best_skills(skills).get(skill)
+            if best is None:
+                return False
+            spawns = _survey_job_nodes(door[0], farmjob.skill_locks(skill, best))
+    except Exception:
+        log.exception("profession loop: the spawns for %s could not be read", job)
+        return False
+    return any(int(s.map_id) == door[0]
+               and gatheraim.yards(s, door[1:]) <= farmjob.REACH_YARDS
+               for s in spawns)
+
+
 def _queue_owns_job(family: str | None = None, dungeon: bool = False) -> bool:
     """Whether a family's campaign queue owns its job now.
 
@@ -5958,7 +6003,8 @@ def _queue_owns_job(family: str | None = None, dungeon: bool = False) -> bool:
             # not own the job then, so the craft rhythm and the skill goal
             # get the family's time back.
             return False
-        if not dungeon and family in globals().get("_TRADE_TURN", ()):
+        if (not dungeon and family in globals().get("_TRADE_TURN", ())
+                and family not in globals().get("_PROF_LOOP_YIELD", ())):
             # A TRADE TURN (tradeturn.py, #2262): between two queued runs the
             # queue yields the job, so the craft rhythm, craft supply and the
             # learn trips see a family with an empty queue until it ends.
@@ -12715,10 +12761,15 @@ class Bridge(discord.Client):
         skills = await asyncio.to_thread(_fetch_trade_skills, names)
         errand = _TOWN_ERRANDS.get(tuple(sorted(names)), townerrand.State())
         facts = await self._prof_loop_facts(key, names, skills, errand)
-        facts = dataclasses.replace(facts, jobs=on_job)
+        door_known, door = await asyncio.to_thread(_queued_run_door, key)
+        facts = dataclasses.replace(facts, jobs=on_job, run_queued=door_known)
         gather_why = facts.gather_why
         step = profloop.decide(_PROF_LOOPS.get(key, profloop.State()), facts)
         _PROF_LOOPS[key] = step.state
+        if step.state.yielded:
+            _PROF_LOOP_YIELD.add(key)
+        else:
+            _PROF_LOOP_YIELD.discard(key)
         town_key = tuple(sorted(names))
         if step.ask_town:
             _PROF_LOOP_TOWN[town_key] = step.ask_town
@@ -12734,6 +12785,11 @@ class Bridge(discord.Client):
                 targets = individual.gather_targets(
                     on_job, skills, key, step.job, exempt=_standin_out(),
                     member_orders=facts.member_orders)
+            if door_known:
+                # A RUN IS QUEUED: only fields the family can regroup from.
+                base = targets or {n: step.job for n in running}
+                targets = profloop.queued_targets(
+                    base, lambda job: _farm_job_near_door(job, door, skills))
             await self._prof_loop_write(key, running, step.job, targets)
         await asyncio.to_thread(_record_production, names, skills)
 
@@ -26847,7 +26903,11 @@ class Bridge(discord.Client):
             fam = fams.get(key)
             if fam is not None and rows:
                 try:
-                    if await self._trade_turn_family(
+                    if key in _PROF_LOOP_YIELD:
+                        # The profession loop's slice for this queued run is
+                        # spent: the dungeon job stands, no turn is given.
+                        pass
+                    elif await self._trade_turn_family(
                             key, fam, turns.get(key), TRADE_TURN_SECONDS,
                             TRADE_TURN_TOWN_SECONDS):
                         in_turn.add(key)
@@ -42622,6 +42682,9 @@ _PROF_LOOPS: dict = {}
 # The town errand's family key (sorted names) -> the loop's reason to go, read
 # by _town_errand_start.
 _PROF_LOOP_TOWN: dict = {}
+# Families whose queued-run slice ended (profloop.QUEUED_SLICE_SECONDS): the
+# queue takes the job back from a trade turn for them, until their run opens.
+_PROF_LOOP_YIELD: set = set()
 # (what, family key) -> the last "stands down" or "waits" line, said once.
 _PROF_LOOP_SAID: dict = {}
 # name -> the recipe craft_rhythm last chose for it, which the loop plans.

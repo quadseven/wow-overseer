@@ -672,6 +672,8 @@ class ProfLoopBridgeWiring(unittest.TestCase):
             "townerrand": townerrand,
             "_PROF_LOOPS": {},
             "_PROF_LOOP_SAID": {},
+            "_PROF_LOOP_YIELD": set(),
+            "_queued_run_door": lambda key: (False, None),
             "_PROF_LOOP_TOWN": {},
             "_PROF_LOOP_TOWN_SOURCES": (
                 reagentplan.BANK,
@@ -769,6 +771,120 @@ class ProfLoopBridgeWiring(unittest.TestCase):
     def test_a_family_not_individual_stays_family_wide_under_the_loop(self):
         got = self._gather_writes("")
         self.assertEqual(got, {"Grug": "farm:mining", "Og": "farm:mining"})
+
+    def test_a_queued_run_keeps_the_family_off_far_farm_jobs(self):
+        import os
+
+        writes = []
+        bridge_obj, ns = self._make_bridge(set(), writes)
+        ns["_plan_craft_reagents"] = lambda names, spells, skills: {}
+        ns["_fetch_trade_skills"] = lambda names: {
+            "Grug": {"mining": 150},
+            "Og": {"herbalism": 200},
+        }
+        ns["_queued_run_door"] = lambda key: (True, (0, 1.0, 2.0))
+        ns["_farm_job_near_door"] = lambda job, door, skills: job == "farm:mining"
+        with mock.patch.dict(os.environ, {individual.ENV: "grug"}):
+            asyncio.run(bridge_obj._prof_loop_for("grug", ["Grug", "Og"]))
+        self.assertEqual(
+            dict((n, m) for n, m, _ in writes),
+            {"Grug": "farm:mining", "Og": profloop.QUEUED_FALLBACK},
+        )
+
+    def test_the_yield_marks_the_family_for_the_queue(self):
+        writes = []
+        bridge_obj, ns = self._make_bridge(set(), writes)
+        ns["_queued_run_door"] = lambda key: (True, None)
+        ns["_PROF_LOOPS"]["grug"] = profloop.State(
+            phase=profloop.GATHER, since=0.0, queued_since=1.0
+        )
+        asyncio.run(bridge_obj._prof_loop_for("grug", ["Grug", "Og"]))
+        self.assertEqual(writes, [])
+        self.assertIn("grug", ns["_PROF_LOOP_YIELD"])
+
+
+class TheQueuedRunSlice(unittest.TestCase):
+    """While a run is queued the loop holds a family for a bounded slice."""
+
+    def test_holds_inside_the_slice_and_keeps_its_clock(self):
+        state = at(profloop.GATHER, since=0.0)
+        first = profloop.decide(state, facts(100.0, run_queued=True))
+        self.assertFalse(first.yielded)
+        self.assertEqual(first.state.queued_since, 100.0)
+        later = profloop.decide(
+            first.state,
+            facts(100.0 + profloop.QUEUED_SLICE_SECONDS - 1, run_queued=True),
+        )
+        self.assertFalse(later.yielded)
+        self.assertEqual(later.state.queued_since, 100.0)
+
+    def test_yields_at_the_bound_and_the_dungeon_job_stands(self):
+        state = at(profloop.GATHER, since=0.0, queued_since=100.0)
+        step = profloop.decide(
+            state, facts(100.0 + profloop.QUEUED_SLICE_SECONDS, run_queued=True)
+        )
+        self.assertTrue(step.yielded)
+        self.assertEqual(step.job, "")
+        self.assertIn("a campaign run is queued", step.line)
+        again = profloop.decide(
+            step.state,
+            facts(100.0 + 2 * profloop.QUEUED_SLICE_SECONDS, run_queued=True),
+        )
+        self.assertEqual((again.job, again.line, again.yielded), ("", "", False))
+        self.assertTrue(again.state.yielded)
+
+    def test_the_yield_is_logged_once(self):
+        state = at(profloop.GATHER, since=0.0, queued_since=1.0)
+        step = profloop.decide(state, facts(1.0 + H, run_queued=True))
+        lines = [profloop.line("Grug", step)]
+        for n in range(1, 4):
+            step = profloop.decide(
+                step.state, facts(1.0 + H + n * 600, run_queued=True)
+            )
+            lines.append(profloop.line("Grug", step))
+        self.assertEqual([x for x in lines if x].__len__(), 1)
+
+    def test_no_run_queued_behaves_as_before(self):
+        state = at(profloop.GATHER, since=0.0)
+        step = profloop.decide(state, facts(5 * H))
+        self.assertFalse(step.yielded)
+        self.assertEqual(step.state.queued_since, 0.0)
+        # a long stretch with nothing queued is never cut by the slice
+        self.assertEqual(step.state.phase, profloop.GATHER)
+
+    def test_a_run_opening_starts_a_fresh_slice(self):
+        state = at(profloop.GATHER, since=0.0, queued_since=1.0, yielded=True)
+        step = profloop.decide(state, facts(9000.0, run_queued=True, in_run=True))
+        self.assertFalse(step.state.yielded)
+        self.assertEqual(step.state.queued_since, 0.0)
+
+    def test_a_far_farm_job_is_not_issued_while_a_run_is_queued(self):
+        targets = {
+            "Bork": "farm:mining",
+            "Grog": "farm:herbalism",
+            "Grug": "farm:13463",
+            "Og": "quest",
+        }
+        near = {"farm:mining"}
+        out = profloop.queued_targets(targets, lambda job: job in near)
+        self.assertEqual(out["Bork"], "farm:mining")
+        self.assertEqual(out["Grog"], profloop.QUEUED_FALLBACK)
+        self.assertEqual(out["Grug"], profloop.QUEUED_FALLBACK)
+        self.assertEqual(out["Og"], "quest")
+
+    def test_no_run_queued_still_splits_members(self):
+        skills = {
+            "Bork": {"mining": 100},
+            "Grog": {"herbalism": 100},
+        }
+        got = individual.gather_targets(
+            {n: "farm:mining" for n in skills},
+            skills,
+            "bork",
+            "farm:mining",
+            environ={individual.ENV: "bork"},
+        )
+        self.assertEqual(got, {"Bork": "farm:mining", "Grog": "farm:herbalism"})
 
 
 if __name__ == "__main__":

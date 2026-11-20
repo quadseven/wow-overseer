@@ -133,6 +133,15 @@ TRAIN_SECONDS = 45 * 60.0
 # does not cut every gathering stretch short (#2501).
 GATHER_TRAIN_SECONDS = 60 * 60.0
 REASSERT_SECONDS = 10 * 60.0
+# THE QUEUED-RUN SLICE. While a campaign run is queued for a family, the loop
+# may hold the family (a trade turn, a questing pace, a released bag hold all
+# hand it the job) for at most this long. Past it the loop yields, and the
+# queue's dungeon job stands until the run opens or the queue's own stall
+# breaker fires. With no run queued the loop is unbounded, as it always was.
+QUEUED_SLICE_SECONDS = 20 * 60.0
+# The job a member out of reach of the queued run's door is given instead of a
+# far farm job: it roams where it stands, and the family stays together.
+QUEUED_FALLBACK = "quest"
 # "Reagents for the next crafts in hand" is the craft rhythm's own stocked bar.
 READY_CASTS = craft_rhythm.STOCK_CASTS
 
@@ -205,6 +214,10 @@ class State:
     since: float = 0.0
     asserted: float = 0.0
     town_seen: bool = False
+    # When the loop first held a family that had a run queued ('' when no run
+    # is queued), and whether it has yielded the slice for that run.
+    queued_since: float = 0.0
+    yielded: bool = False
 
 
 @dataclass(frozen=True)
@@ -231,6 +244,8 @@ class Facts:
     errand_why: str = ""
     in_run: bool = False
     queue_owns: bool = False
+    # A campaign run is queued or active for this family, whoever holds the job.
+    run_queued: bool = False
     gather_job: str = "quest"
     gather_why: str = ""
     # name -> kill-drop job that crafter's own plan needs (#2502); read only
@@ -249,6 +264,7 @@ class Step:
     ask_town: str = ""
     line: str = ""
     moved: bool = False
+    yielded: bool = False  # the queued-run slice ended on this step
 
 
 def _kill_drop_gap(p):
@@ -577,9 +593,38 @@ _PHASE_STEP = {GATHER: _gather, TOWN: _town, CRAFT: _craft, TRAIN: _train}
 def decide(state: State, facts: Facts) -> Step:
     """The loop's next step for one family (or, later, one member)."""
     if facts.in_run:
-        return Step(state, line="waits: a dungeon run is under way")
+        # A run opened: the slice did its work, and the next one starts after it.
+        return Step(
+            replace(state, queued_since=0.0, yielded=False),
+            line="waits: a dungeon run is under way",
+        )
+    if not facts.run_queued:
+        if state.queued_since or state.yielded:
+            state = replace(state, queued_since=0.0, yielded=False)
+    elif state.yielded:
+        return Step(state)  # said once; the dungeon job stands
     if facts.queue_owns:
         return Step(state, line="waits: the campaign queue owns the job")
+    if facts.run_queued:
+        started = state.queued_since or facts.now
+        held = facts.now - started
+        if held >= QUEUED_SLICE_SECONDS:
+            return Step(
+                replace(state, queued_since=started, yielded=True),
+                line="yields: a campaign run is queued and the loop has held "
+                "the family %d minutes (the slice is %d); the dungeon job "
+                "stands until the run opens or the queue's stall breaker "
+                "fires" % (held // 60, QUEUED_SLICE_SECONDS // 60),
+                yielded=True,
+            )
+        state = replace(state, queued_since=started)
+    step = _decide_phase(state, facts)
+    if facts.run_queued and not step.state.queued_since:
+        step = replace(step, state=replace(step.state, queued_since=state.queued_since))
+    return step
+
+
+def _decide_phase(state: State, facts: Facts) -> Step:
     if not state.phase:
         return _join(state, facts)
     if facts.errand_active and state.phase != TOWN:
@@ -593,6 +638,18 @@ def decide(state: State, facts: Facts) -> Step:
     if step is None:
         return _move(state, facts, GATHER, "unknown phase %r" % state.phase)
     return step(state, facts, facts.now - state.since)
+
+
+def queued_targets(targets: dict, reachable) -> dict:
+    """The gather targets while a run is queued: a farm job whose field is out
+    of reach of the run's door (`reachable(job)` is False) becomes the roaming
+    fallback, so no member is sent where the family cannot regroup from. A job
+    that is not a farm job is left as it is."""
+    out = {}
+    for name, job in (targets or {}).items():
+        farm = bool(job) and jobs.is_farm_job(job)
+        out[name] = QUEUED_FALLBACK if farm and not reachable(job) else job
+    return out
 
 
 def line(family: str, step: Step) -> str:
