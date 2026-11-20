@@ -374,27 +374,17 @@ def load(read) -> tuple:
         for quest in found:
             source = by_id[quest.id]
             items, objectives = [], []
-            for i in range(1, 7):
-                item = int(source.get("item%d" % i) or 0)
-                if item:
-                    items.append(
-                        {
-                            "id": item,
-                            "count": int(source.get("item_count%d" % i) or 0),
-                            "name": item_names.get(item, ""),
-                            "provided": int(source.get("provided_item") or 0) == item,
-                            "droppers": sorted(drop_by_item.get(item, ())),
-                            "rewards": sorted(reward_by_item.get(item, ())),
-                            "vendors": sorted(vendor_by_item.get(item, ())),
-                            "objects": sorted(object_by_item.get(item, ())),
-                        }
-                    )
+            quest_maps = set(quest.maps)  # Start with existing maps
+            
             for i in range(1, 5):
                 signed_entry = int(source.get("objective%d" % i) or 0)
                 entry = abs(signed_entry)
                 if entry:
                     kind = "object" if signed_entry < 0 else "creature"
                     counts = spawn_by_entry.get((entry, kind), ())
+                    # Include maps where this creature/objective spawns
+                    for r in counts:
+                        quest_maps.add(int(r["map"]))
                     objectives.append(
                         {
                             "entry": entry,
@@ -406,13 +396,13 @@ def load(read) -> tuple:
                             "map_count": sum(
                                 int(r["n"])
                                 for r in counts
-                                if int(r["map"]) in quest.maps
+                                if int(r["map"]) in quest_maps
                             ),
                             "total_count": sum(int(r["n"]) for r in counts),
                         }
                     )
             enriched.append(
-                replace(quest, items=tuple(items), objectives=tuple(objectives))
+                replace(quest, items=tuple(items), objectives=tuple(objectives), maps=frozenset(quest_maps))
             )
         found = tuple(enriched)
     if quest_rows and giver_rows:
