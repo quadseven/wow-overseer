@@ -54,6 +54,21 @@ function card(c) {
   return html`<article class="card clip-card"><div class="clip-head"><span class="tag tag-outline">${kindWord(c.kind)}</span><span class="clip-who">${c.character}</span>${c.subject ? html`<span class="clip-subject">${c.subject}</span>` : ""}<span class="muted g-when">${since(c.at)}</span></div>${body}</article>`;
 }
 
+// The footer under the shelf: per day, how many moments left no clip and why.
+// Counts only; a missed moment is never a card.
+export function missedLine(d) {
+  const parts = [];
+  if (d.no_view) parts.push(`${d.no_view} with no streamed member in view`);
+  if (d.failed) parts.push(`${d.failed} where recording failed`);
+  return `${d.day}: ${parts.join(", ")}.`;
+}
+
+function missedFooter(missed) {
+  const days = (missed || []).filter((d) => d.no_view || d.failed);
+  if (!days.length) return "";
+  return html`<footer class="clip-missed muted">${days.map((d) => html`<p>${missedLine(d)}</p>`)}</footer>`;
+}
+
 // The shelf section's body, from the /api/clips read.
 export function shelf(read) {
   const wait = pendingRead(read, 2);
@@ -65,8 +80,9 @@ export function shelf(read) {
       kept.delete(url);
     }
   }
-  if (!clips.length) return state("empty", "No clips yet", (read.data && read.data.empty) || "No clips have been saved yet.");
-  return html`<div class="clip-grid">${clips.map(card)}</div>`;
+  const foot = missedFooter(read.data && read.data.missed);
+  if (!clips.length && !foot) return state("empty", "No clips yet", (read.data && read.data.empty) || "No clips have been saved yet.");
+  return html`<div class="clip-grid">${clips.map(card)}</div>${foot}`;
 }
 
 // Run after every draw. A slot gets back the kept element of its clip; a Play

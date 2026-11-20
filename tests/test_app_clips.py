@@ -74,6 +74,26 @@ class TheShelf(unittest.TestCase):
         m = self.draw({"data": {"clips": bare, "empty": "none"}, "loading": False})
         self.assertNotIn("clip-subject", m)
 
+    def test_a_day_footer_counts_missed_moments_and_adds_no_card(self):
+        missed = [
+            {"day": "2026-11-10", "no_view": 2, "failed": 1},
+            {"day": "2026-11-09", "no_view": 0, "failed": 0},
+        ]
+        m = self.draw(
+            {"data": {"clips": CLIPS, "missed": missed, "empty": "x"}, "loading": False}
+        )
+        self.assertEqual(m.count('class="card clip-card"'), 2)
+        self.assertIn("2026-11-10: 2 with no streamed member in view", m)
+        self.assertIn("1 where recording failed", m)
+        self.assertNotIn("2026-11-09", m)
+
+    def test_only_missed_moments_still_show_the_footer(self):
+        missed = [{"day": "2026-11-10", "no_view": 1, "failed": 0}]
+        m = self.draw(
+            {"data": {"clips": [], "missed": missed, "empty": "x"}, "loading": False}
+        )
+        self.assertIn("1 with no streamed member in view", m)
+
     def test_no_video_is_loaded_until_play(self):
         m = self.draw({"data": {"clips": CLIPS, "empty": "none"}, "loading": False})
         self.assertNotIn("<video", m)

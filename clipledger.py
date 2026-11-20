@@ -681,6 +681,7 @@ NO_VIEW_LINE = "No live view was up, so no clip was saved."
 FAILED_LINE = "No clip was saved."
 SHELF_EMPTY = "No clips have been saved yet."
 SHELF_LIMIT = 100
+MISSED_LIMIT = 1000
 
 
 def clip_url(file_name: str) -> str:
@@ -744,8 +745,27 @@ def failed_line(row: Mapping) -> str:
     return "%s: %s." % (FAILED_LINE[:-1], "; ".join(parts).rstrip(". "))
 
 
+MISSED_STATES = ("no_view", "failed")
+
+
+def missed(rows: Iterable[Mapping]) -> list:
+    """The moments that left no clip, counted per event day, newest day first.
+
+    A no_view row had no live view up; a failed row was recorded but not cut.
+    Each is counted, never listed as a card: [{day, no_view, failed}]. A row
+    with no event time has no day and is not counted."""
+    days: dict = {}
+    for r in rows:
+        state, at = r.get("state"), _iso(r.get("event_at"))
+        if state in MISSED_STATES and at:
+            days.setdefault(str(at)[:10], dict.fromkeys(MISSED_STATES, 0))[state] += 1
+    return [{"day": day, **days[day]} for day in sorted(days, reverse=True)]
+
+
 def shelf(rows: Iterable[Mapping]) -> dict:
-    """The /api/clips payload: ready rows with a file, newest event first."""
+    """The /api/clips payload: ready rows with a file, newest event first, and
+    the moments missed per day (`missed`)."""
+    rows = list(rows)
     ready = [r for r in rows if r.get("state") == "ready" and r.get("file_name")]
     ready.sort(
         key=lambda r: (str(_iso(r.get("event_at")) or ""), r["id"]), reverse=True
@@ -763,6 +783,7 @@ def shelf(rows: Iterable[Mapping]) -> dict:
             }
             for r in ready[:SHELF_LIMIT]
         ],
+        "missed": missed(rows),
         "empty": SHELF_EMPTY,
     }
 

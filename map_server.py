@@ -4660,6 +4660,12 @@ _CLIP_SHELF_SQL = (
     " ORDER BY event_at DESC, id DESC LIMIT %s"
 )
 
+_CLIP_MISSED_SQL = (
+    "SELECT state, event_at FROM overseer_clip"
+    " WHERE state IN ('no_view', 'failed') AND event_at IS NOT NULL"
+    " ORDER BY event_at DESC, id DESC LIMIT %s"
+)
+
 _LEDGER_DOWN = object()
 
 
@@ -7631,7 +7637,9 @@ class Handler(BaseHTTPRequestHandler):
         """
         rows = ctx.read.rows(_CLIP_SHELF_SQL, (clipledger.SHELF_LIMIT,),
                              what="the clip shelf")
-        return 200, clipledger.shelf(rows)
+        lost = ctx.read.rows(_CLIP_MISSED_SQL, (clipledger.MISSED_LIMIT,),
+                             what="the clip shelf")
+        return 200, clipledger.shelf([*rows, *lost])
 
     def _cutter_refused(self) -> bool:
         """True after answering a cutter call that lacks the cutter token."""
