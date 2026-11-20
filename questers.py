@@ -272,6 +272,11 @@ GHOST_HAIR_THREAD = (
     "Ghost Hair Thread (quest 149) requires Spectral Comb (item 1453), "
     "which no spawned creature drops"
 )
+HEART_OF_MOKK = (
+    "Stranglethorn Fever (quest 348) requires Heart of Mokk (item 2797), "
+    "which only Mokk the Savage drops; he has no spawn and a script summons "
+    "him when quest 349 is turned in"
+)
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
@@ -1865,6 +1870,13 @@ def _broken_reason(
         and played >= STALL_SECONDS
     ):
         return GHOST_HAIR_THREAD
+    if (
+        quest.id == 348
+        and status == STATUS_INCOMPLETE
+        and (2797, 1) in quest.items
+        and played >= STALL_SECONDS
+    ):
+        return HEART_OF_MOKK
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that
