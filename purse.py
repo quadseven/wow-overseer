@@ -43,7 +43,7 @@ PURE MODULE: facts in, an order and a sentence out. No MySQL, no clock.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 SPELLS = "class spells"
 RIDING = "riding"
@@ -71,6 +71,43 @@ class Rank:
 APPRENTICE = Rank(33388, "Apprentice Riding", 20, 40000, 75)
 JOURNEYMAN = Rank(33391, "Journeyman Riding", 40, 500000, 150)
 RIDING_RANKS = (APPRENTICE, JOURNEYMAN)
+
+# The trainer's own price and level gate for the ranks above, read from the
+# world database once per process (see bridge._install_riding_prices). The
+# constants stay the fallback for a realm whose table cannot be read.
+_ranks = RIDING_RANKS
+
+
+def current_ranks() -> tuple:
+    """The riding ranks with the trainer table's price and level when read."""
+    return _ranks
+
+
+def trainer_ranks(rows) -> tuple:
+    """RIDING_RANKS with `MoneyCost` and `ReqLevel` taken from trainer_spell rows
+    (SpellId, MoneyCost, ReqLevel). A rank with no usable row keeps its constant;
+    a zero or negative cost is not a price and is ignored."""
+    found = {}
+    for row in rows or ():
+        spell, cost, level = (
+            _int(row.get("SpellId")),
+            _int(row.get("MoneyCost")),
+            _int(row.get("ReqLevel")),
+        )
+        if cost > 0:
+            found[spell] = (cost, level)
+    out = []
+    for rank in RIDING_RANKS:
+        cost, level = found.get(rank.spell, (rank.cost, rank.level))
+        out.append(replace(rank, cost=cost, level=level or rank.level))
+    return tuple(out)
+
+
+def install_trainer_rows(rows) -> tuple:
+    """Make the trainer table's prices the ones riding_due and order use."""
+    global _ranks
+    _ranks = trainer_ranks(rows)
+    return _ranks
 
 LOG_PREFIX = "purse:"
 
@@ -112,7 +149,7 @@ def riding_due(level, riding_max) -> Rank | None:
     0 when it has no Riding): 75 after Apprentice, 150 after Journeyman.
     """
     level, ceiling = _int(level), _int(riding_max)
-    for rank in RIDING_RANKS:
+    for rank in current_ranks():
         if level >= rank.level and ceiling < rank.ceiling:
             return rank
     return None
