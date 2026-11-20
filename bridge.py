@@ -12804,8 +12804,9 @@ class Bridge(discord.Client):
             if door_known:
                 # A RUN IS QUEUED: only fields the family can regroup from.
                 base = targets or {n: step.job for n in running}
-                targets = profloop.queued_targets(
-                    base, lambda job: _farm_job_near_door(job, door, skills))
+                targets = await asyncio.to_thread(
+                    profloop.queued_targets, base,
+                    lambda job: _farm_job_near_door(job, door, skills))
             await self._prof_loop_write(key, running, step.job, targets)
         await asyncio.to_thread(_record_production, names, skills)
 
