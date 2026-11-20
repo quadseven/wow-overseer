@@ -59,6 +59,7 @@ online.
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 import agenda
@@ -71,6 +72,8 @@ from panel import _CLASS_NAMES, _RACE_NAMES
 
 from . import activity
 from ._scope import holes
+
+log = logging.getLogger(__name__)
 
 # A class quest ask newer than this means the blocker still stands: the bridge
 # asks again every pass it stands, ASK_COOLDOWN_MINUTES (15) apart at the most
@@ -199,6 +202,16 @@ def fetch(ctx) -> dict:
     return dict(rows, families=families, facts=facts or {})
 
 
+def _side_read(read, empty, what: str):
+    """`read()`, or `empty` when it raises: a read that only re-words an idle
+    member must degrade that one field, not turn the roster into a 503."""
+    try:
+        return read()
+    except Exception:
+        log.exception("%s could not be read; the roster is served without it", what)
+        return empty
+
+
 def _read(ctx, names: list) -> dict:
     server = ctx.server
     rd = ctx.read
@@ -247,8 +260,12 @@ def _read(ctx, names: list) -> dict:
         (*everyone, deathloop.SLOW_READ_SECONDS),
         what="overseer_death",
     )
-    leveled = rd.rows(
-        LEVELED_SQL.format(holes=h), (*everyone, LEVEL_DAYS), what="overseer_level"
+    leveled = _side_read(
+        lambda: rd.rows(
+            LEVELED_SQL.format(holes=h), (*everyone, LEVEL_DAYS), what="overseer_level"
+        ),
+        [],
+        "overseer_level",
     )
     clock = rd.must("SELECT UNIX_TIMESTAMP() AS now_at")
     now_at = int(clock[0]["now_at"]) if clock else 0
@@ -266,8 +283,8 @@ def _read(ctx, names: list) -> dict:
             if r.get("at")
         },
         "deaths": deaths or [],
-        "in_run": guildrun.active_names(rd),
-        "run_of": guildrun.inside_runs(rd),
+        "in_run": _side_read(lambda: guildrun.active_names(rd), set(), "guild runs"),
+        "run_of": _side_read(lambda: guildrun.inside_runs(rd), {}, "guild runs"),
         "leveled": {r["name"]: int(r["at"]) for r in leveled or () if r.get("at")},
         "now_at": now_at,
     }
