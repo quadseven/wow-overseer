@@ -22228,6 +22228,10 @@ class Bridge(discord.Client):
                 log.info("guild jobs: %s", step.said)
             for row in step.rows:
                 if not await self._run_step_row(step, row, cap):
+                    if guildjobs.sale_spares_step(step, row):
+                        log.info("guild jobs: %s's %s row was not sold; the %s "
+                                 "buys go on", step.holder, row.kind, step.action)
+                        continue
                     return
             if step.action == classquest.ACTION and any(
                 guildjobs.is_chain_row(r.command) or classuse.is_use_row(r.command)

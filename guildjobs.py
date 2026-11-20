@@ -2888,6 +2888,18 @@ def junk_sales(member, kept, action="gear") -> tuple:
     )
 
 
+def sale_spares_step(step, row) -> bool:
+    """Whether a sell row that was not served leaves the rest of `step` to run.
+
+    A supply trip sells junk first to make room, then buys. The guild loot
+    policy refuses a sell row for any stack it files for a route other than the
+    vendor, and a refused row is not written at all; if that ended the step,
+    the walk to the vendor would arrive and nothing would be bought. The sale is
+    only room-making: a buy that finds no room is refused by the world itself.
+    Every other step keeps its rule that a row which fails ends it."""
+    return step.action == restsupply.ACTION and row.kind == "sell"
+
+
 def sale_notes(stacks) -> tuple:
     """One vendorsale.Sale per stack sold on a `guid:<n>` row, for the step's
     `sales`: what the bridge names when the world delivers each row (#1592)."""
