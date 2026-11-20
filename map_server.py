@@ -3158,6 +3158,9 @@ def _fetch_raidgoals() -> dict:
             _RAID_HOLDINGS.format(holes=rholes),  # noqa: S608
             tuple(roster), what="character_inventory")
         list_items = _list_items(rd)
+        crossings = rd.rows(
+            raidready.HEALER_CROSSINGS_SQL.format(holes=rholes),  # noqa: S608
+            tuple(roster), what="overseer_level healer pace")
         worn = rd.rows(_RAID_WORN.format(holes=rholes),  # noqa: S608
                        (len(armory.EQUIPPED_SLOTS), *roster),
                        fallback=_RAID_WORN_OLD.format(holes=rholes),  # noqa: S608
@@ -3202,7 +3205,7 @@ def _fetch_raidgoals() -> dict:
             "trainer_rows": trainer, "char_rows": chars,
             "skill_rows": skills, "spell_rows": known,
             "holding_rows": holdings, "worn_rows": worn,
-            "list_items": list_items,
+            "list_items": list_items, "level_rows": crossings,
             "vendor_rows": vendor, "creature_rows": creature,
             "object_rows": objects, "guild_rows": guild,
             "attuned_rows": attuned, "quest_rows": quest_log,
@@ -6202,6 +6205,7 @@ class Handler(BaseHTTPRequestHandler):
         snapshots = _metric_snapshots()
         prep = fetched.pop("preraid")
         list_items = fetched.pop("list_items")
+        level_rows = fetched.pop("level_rows")
         # ONE CARD PER GUILD. raidgoals counts one roster at a time, so it
         # is handed one guild's rows and that guild's family as the
         # fallback; handed both guilds at once it would see a family split
@@ -6215,7 +6219,7 @@ class Handler(BaseHTTPRequestHandler):
                 group, fetched["char_rows"], fetched["worn_rows"],
                 attuned, min_level, goals, quest_rows=quest_rows,
                 holding_rows=fetched["holding_rows"],
-                item_rows=list_items,
+                item_rows=list_items, level_rows=level_rows,
                 supply=dict(supply.get(group["guildid"]) or {},
                             snapshots=snapshots),
                 preraid=preraid.family_view(
