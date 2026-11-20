@@ -773,3 +773,107 @@ class ProfLoopBridgeWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AFruitlessTownVisitIsNotRepeated(unittest.TestCase):
+    """A visit that left a member's bags no roomier must not send the family
+    straight back: every stack that member carries is one no vendor buys, so
+    the loop would go gather -> town -> gather -> town for hours."""
+
+    def slots(self, **low):
+        out = {n: 15 for n in FAMILY}
+        out.update(low)
+        return out
+
+    def run_town_and_back(self, after, ended_at=1000.0, now=2000.0):
+        """Gather -> town with Og at 2 free slots, then the errand ends with the
+        bags reading `after`. Returns the state the loop is in after leaving."""
+        step = profloop.decide(
+            at(profloop.GATHER), facts(600, free_slots=self.slots(Og=2))
+        )
+        self.assertEqual(step.state.phase, profloop.TOWN)
+        seen = profloop.decide(
+            step.state,
+            facts(700, free_slots=self.slots(Og=2), errand_active=True),
+        )
+        out = profloop.decide(
+            seen.state,
+            facts(
+                now,
+                free_slots=after,
+                errand_ended=ended_at,
+                errand_why=townerrand.LOOP_WHY,
+            ),
+        )
+        self.assertEqual(out.state.phase, profloop.GATHER)
+        return out.state
+
+    def test_a_member_the_visit_did_not_lift_does_not_send_the_family_back(self):
+        state = self.run_town_and_back(self.slots(Og=2))
+        self.assertEqual(state.fruitless, ("Og",))
+        step = profloop.decide(
+            state, facts(state.since + 1800, free_slots=self.slots(Og=2))
+        )
+        self.assertFalse(step.moved)
+        self.assertEqual(step.state.phase, profloop.GATHER)
+
+    def test_a_member_the_visit_lifted_still_counts_next_time(self):
+        state = self.run_town_and_back(self.slots(Og=5))
+        self.assertEqual(state.fruitless, ())
+        step = profloop.decide(
+            state, facts(state.since + 1800, free_slots=self.slots(Og=3))
+        )
+        self.assertTrue(step.moved)
+        self.assertEqual(step.state.phase, profloop.TOWN)
+
+    def test_another_low_member_still_sends_the_family(self):
+        state = self.run_town_and_back(self.slots(Og=2))
+        step = profloop.decide(
+            state,
+            facts(state.since + 1800, free_slots=self.slots(Og=2, Bork=1)),
+        )
+        self.assertTrue(step.moved)
+        self.assertIn("Bork (1)", step.line)
+        self.assertNotIn("Og", step.line)
+
+    def test_room_made_by_other_means_clears_the_member(self):
+        state = self.run_town_and_back(self.slots(Og=2))
+        roomy = profloop.decide(
+            state, facts(state.since + 600, free_slots=self.slots())
+        )
+        self.assertEqual(roomy.state.fruitless, ())
+        step = profloop.decide(
+            roomy.state, facts(state.since + 1200, free_slots=self.slots(Og=2))
+        )
+        self.assertTrue(step.moved)
+
+    def test_the_visit_is_tried_again_after_the_bound(self):
+        state = self.run_town_and_back(self.slots(Og=2))
+        step = profloop.decide(
+            state,
+            facts(
+                state.fruitless_at + profloop.FRUITLESS_SECONDS + 1,
+                free_slots=self.slots(Og=2),
+            ),
+        )
+        self.assertTrue(step.moved)
+        self.assertEqual(step.state.phase, profloop.TOWN)
+
+    def test_a_sale_not_yet_in_the_saved_bags_is_waited_for(self):
+        step = profloop.decide(
+            at(profloop.GATHER), facts(600, free_slots=self.slots(Og=2))
+        )
+        seen = profloop.decide(
+            step.state,
+            facts(700, free_slots=self.slots(Og=2), errand_active=True),
+        )
+        early = profloop.decide(
+            seen.state,
+            facts(
+                1000 + profloop.BAGS_REFRESH_SECONDS - 10,
+                free_slots=self.slots(Og=2),
+                errand_ended=1000.0,
+            ),
+        )
+        self.assertEqual(early.state.phase, profloop.TOWN)
+        self.assertFalse(early.moved)
