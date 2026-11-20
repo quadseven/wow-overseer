@@ -10130,6 +10130,15 @@ def hearth_step(m):
 # reached them: no job was left, no zone was outgrown and the pass read no
 # position history (standstill.py). A player whose character will not move uses
 # the hearthstone, and its own AI starts again at the inn.
+def _still_minutes_for(m) -> int:
+    """How long a member stands before its hearth. A seat levelling first is
+    left to its dungeon asks with no step, so it stands waiting for a party by
+    design: it waits longer, and a stuck one is still got moving."""
+    if levelling_first(m):
+        return standstill.SEAT_STILL_MINUTES
+    return standstill.STILL_MINUTES
+
+
 def stood_still_step(m, still_for, recent, leveling=None):
     """The hearth of a member that has stood on one spot (standstill.track)
     for standstill.STILL_MINUTES with nothing asked of it, or None.
@@ -10140,7 +10149,7 @@ def stood_still_step(m, still_for, recent, leveling=None):
     its own hearth written for it while it stood, and no hearth inside the
     hearth cooldown."""
     minutes = int(still_for or 0)
-    if minutes < standstill.STILL_MINUTES:
+    if minutes < _still_minutes_for(m):
         return None
     if not (m.online and m.alive and not m.in_combat):
         return None

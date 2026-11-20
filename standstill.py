@@ -40,6 +40,11 @@ STILL_YARDS = situation.STILL_YARDS
 # reads every member about every fifteen, so an hour is four readings or more.
 STILL_MINUTES = 60
 
+# A raid seat below the cap that levels first (guildjobs.levelling_first) is
+# given no step while it waits for its dungeon group, so it stands by design;
+# the hearth for it comes after this long.
+SEAT_STILL_MINUTES = 3 * STILL_MINUTES
+
 # A member no pass has read for this long is dropped: two guilds' passes share
 # the anchors, and each reads only its own members.
 FORGET_SECONDS = 3 * 3600.0
