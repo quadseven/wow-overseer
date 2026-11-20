@@ -7048,6 +7048,21 @@ RESUME_MINUTES = 90
 RESUME_HELD_RETRIES = 3
 
 
+def _held_since_hearth(m, hearths, recent) -> int:
+    """How many level walks of `m` the module refused as held by another verb
+    since its newest landed hearth (`hearths`, the applied hearth rows)."""
+    landed = min(int(r.age_minutes) for r in hearths)
+    return sum(
+        1
+        for r in recent or ()
+        if r.name == m.name
+        and r.action == guildlevel.ACTION
+        and r.status == "error"
+        and guildrun.HEARTH_HELD_WORDS in (r.refusal or r.reason or "")
+        and int(r.age_minutes) <= landed
+    )
+
+
 def death_loop_resume(m, loop, recent, world, cap):
     """The walk on to a hub of another zone, for a member that hearthed out of
     its death loop and was not walked on, or None.
@@ -7070,17 +7085,7 @@ def death_loop_resume(m, loop, recent, world, cap):
         return None
     if _cooling(m, guildlevel.ACTION, recent):
         return None
-    landed = min(int(r.age_minutes) for r in hearths)
-    held = [
-        r
-        for r in recent or ()
-        if r.name == m.name
-        and r.action == guildlevel.ACTION
-        and r.status == "error"
-        and guildrun.HEARTH_HELD_WORDS in (r.refusal or r.reason or "")
-        and int(r.age_minutes) <= landed
-    ]
-    if len(held) >= RESUME_HELD_RETRIES:
+    if _held_since_hearth(m, hearths, recent) >= RESUME_HELD_RETRIES:
         return None
     onward = death_loop_onward(m, loop, world, recent, cap)
     if onward is None:
