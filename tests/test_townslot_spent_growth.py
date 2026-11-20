@@ -43,6 +43,14 @@ class TheRefusalGrows(unittest.TestCase):
             now += slot.spent_window(WHO, AIM) + 1
         self.assertEqual(townslot.SPENT_CEILING_SECONDS, slot.spent_window(WHO, AIM))
 
+    def test_the_count_is_capped_so_the_window_never_overflows(self):
+        slot = _slot()
+        now = 0.0
+        for _ in range(5000):
+            slot.abandon(WHO, AIM, False, now)
+            now += slot.spent_window(WHO, AIM) + 1
+        self.assertEqual(townslot.SPENT_CEILING_SECONDS, slot.spent_window(WHO, AIM))
+
     def test_a_give_up_long_after_the_ceiling_starts_over(self):
         slot = _slot()
         slot.abandon(WHO, AIM, False, 0.0)
