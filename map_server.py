@@ -6122,9 +6122,17 @@ class Handler(BaseHTTPRequestHandler):
             # The tiles still draw; each says its sentence is unavailable.
             log.exception("wall status feed failed")
             facts = False
-        payload = watchwall.build_heads(built, family.build_observers(
-            _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,)),
-            facts=facts)
+        observers = family.build_observers(
+            _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,))
+        # The roster's re-read of an Idle member (#2192): one function words it.
+        try:
+            with realmread.Session(_connect) as rd:
+                payload = watchwall.build_heads(
+                    built, observers, facts=facts,
+                    reread=lambda name, now: v2_members.reread_idle(rd, name, now))
+        except (pymysql.err.MySQLError, OSError):
+            log.exception("wall idle re-read failed")
+            payload = watchwall.build_heads(built, observers, facts=facts)
         return 200, payload
 
     def _auras(self, query: dict) -> None:
