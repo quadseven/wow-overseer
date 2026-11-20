@@ -795,8 +795,12 @@ class ProfLoopBridgeWiring(unittest.TestCase):
         writes = []
         bridge_obj, ns = self._make_bridge(set(), writes)
         ns["_queued_run_door"] = lambda key: (True, None)
+        # The bridge reads time.monotonic(), which on a freshly booted runner
+        # is smaller than the slice: anchor the clocks to it instead of to a
+        # literal, so the slice is spent however long the host has been up.
+        spent = time.monotonic() - profloop.QUEUED_SLICE_SECONDS - 1.0
         ns["_PROF_LOOPS"]["grug"] = profloop.State(
-            phase=profloop.GATHER, since=0.0, queued_since=1.0
+            phase=profloop.GATHER, since=spent, queued_since=spent
         )
         asyncio.run(bridge_obj._prof_loop_for("grug", ["Grug", "Og"]))
         self.assertEqual(writes, [])
