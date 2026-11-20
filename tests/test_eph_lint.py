@@ -105,6 +105,36 @@ class CleanTest(unittest.TestCase):
         self.assertEqual(out[0].rule, "yaml")
 
 
+class CastOnlineLintTest(unittest.TestCase):
+    def decree(self):
+        d = doc()
+        d["observe"][0] = {
+            "name": "cast-online",
+            "role": "precondition",
+            "when": "start",
+            "online": "cast",
+        }
+        return d
+
+    def test_cast_online_is_a_valid_start_precondition(self):
+        self.assertEqual(errors(self.decree()), [])
+
+    def test_cast_online_must_be_a_start_precondition(self):
+        d = self.decree()
+        d["observe"][0]["when"] = "end"
+        self.assertIn("online", rules(d))
+
+    def test_cast_online_must_have_precondition_role(self):
+        d = self.decree()
+        d["observe"][0]["role"] = "check"
+        self.assertIn("online", rules(d))
+
+    def test_cast_online_cannot_also_declare_sql(self):
+        d = self.decree()
+        d["observe"][0]["sql"] = "SELECT guid FROM characters WHERE online = 1"
+        self.assertIn("online", rules(d))
+
+
 class CoordinatesTest(unittest.TestCase):
     def test_family_at_each_anchor_forms_are_accepted(self):
         self.assertEqual(errors(scattered_doc()), [])
