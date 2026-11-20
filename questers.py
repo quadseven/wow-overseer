@@ -277,6 +277,12 @@ HEART_OF_MOKK = (
     "which only Mokk the Savage drops; he has no spawn and a script summons "
     "him when quest 349 is turned in"
 )
+GREEN_HILLS_CHAPTERS = (
+    "The Green Hills of Stranglethorn (quest 338) requires four chapter items "
+    "(items 2756 to 2759), which no creature drops and no vendor sells; each "
+    "is the reward of its own quest (quests 339 to 342), so the chapters come "
+    "from finishing those four quests first"
+)
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
@@ -1877,6 +1883,13 @@ def _broken_reason(
         and played >= STALL_SECONDS
     ):
         return HEART_OF_MOKK
+    if (
+        quest.id == 338
+        and status == STATUS_INCOMPLETE
+        and (2756, 1) in quest.items
+        and played >= STALL_SECONDS
+    ):
+        return GREEN_HILLS_CHAPTERS
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that
