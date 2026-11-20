@@ -384,10 +384,13 @@ class TheScan(unittest.TestCase):
         result = scan(store, Realm())
         (sql, params) = store.many[0]
         self.assertEqual(
-            "UPDATE overseer_clip SET state = 'expired' WHERE id = %s AND state = 'ready'",
+            "UPDATE overseer_clip SET state = 'expired', detail = "
+            "CONCAT_WS('; ', NULLIF(detail, ''), NULLIF(%s, ''))"
+            " WHERE id = %s AND state = 'ready'",
             sql,
         )
-        self.assertEqual([(3,), (4,)], params)
+        why = "expired: age cap (30 days)"
+        self.assertEqual([(why, 3), (why, 4)], params)
         self.assertEqual(2, result["expired"])
         self.assertFalse(any("DELETE" in s[0].upper() for s in store.statements))
 

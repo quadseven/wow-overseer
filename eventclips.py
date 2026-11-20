@@ -8,8 +8,34 @@ from typing import Mapping
 PRE_ROLL = timedelta(seconds=30)
 TAIL = timedelta(seconds=15)
 EQUIP_WAIT = timedelta(minutes=5)
-MAX_CLIPS = 100
+MAX_CLIPS = 200
 MAX_AGE = timedelta(days=30)
+COUNT_ENV = "CLIP_MAX_COUNT"
+AGE_ENV = "CLIP_MAX_AGE_DAYS"
+
+
+def retention_caps(environ: Mapping) -> tuple[int, timedelta, list[str]]:
+    """(max_count, max_age, lines) from the environment.
+
+    A missing value uses the default silently; an invalid one (not a whole
+    number of at least one) uses the default and adds one line to log."""
+    lines: list[str] = []
+    values = []
+    for name, default in ((COUNT_ENV, MAX_CLIPS), (AGE_ENV, MAX_AGE.days)):
+        raw = environ.get(name)
+        if raw is None or not str(raw).strip():
+            values.append(default)
+            continue
+        try:
+            value = int(str(raw).strip())
+        except ValueError:
+            value = 0
+        if value < 1:
+            lines.append("clip retention: %s=%r is not a whole number of 1 or more, "
+                         "using %d" % (name, raw, default))
+            value = default
+        values.append(value)
+    return values[0], timedelta(days=values[1]), lines
 
 
 def trigger_kind(event: Mapping) -> str | None:

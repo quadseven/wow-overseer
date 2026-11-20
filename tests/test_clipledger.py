@@ -774,6 +774,18 @@ class RetentionTests(unittest.TestCase):
         ]
         self.assertEqual([5], clipledger.expired_ids(rows, now=NOW))
 
+    def test_a_burst_over_the_count_cap_expires_the_oldest_with_the_cap_named(self):
+        rows = [self.ledger_row(i, timedelta(minutes=i)) for i in range(1, 8)]
+        why = clipledger.expired_reasons(rows, now=NOW, max_count=4)
+        self.assertEqual([5, 6, 7], sorted(why))
+        self.assertEqual({"expired: count cap (4)"}, set(why.values()))
+        self.assertTrue(all(r["state"] == "ready" for r in rows))
+
+    def test_an_old_row_names_the_age_cap(self):
+        rows = [self.ledger_row(1, timedelta(days=9)), self.ledger_row(2, timedelta(days=1))]
+        why = clipledger.expired_reasons(rows, now=NOW, max_age=timedelta(days=7))
+        self.assertEqual({1: "expired: age cap (7 days)"}, why)
+
     def test_retention_returns_ids_only_and_leaves_the_rows_alone(self):
         rows = [self.ledger_row(1, timedelta(days=40))]
         clipledger.expired_ids(rows, now=NOW)
