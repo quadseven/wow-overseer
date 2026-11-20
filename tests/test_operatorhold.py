@@ -51,8 +51,11 @@ class _Log:
     warning = exception = debug = info
 
 
-def _row(family, reason="manual control", live=1, expires_at=None, source="sql"):
+def _row(
+    family, reason="manual control", live=1, expires_at=None, source="sql", scope=""
+):
     return {
+        "scope": scope,
         "family": family,
         "reason": reason,
         "live": live,
@@ -423,3 +426,54 @@ class TheLevelingRouteWalksNoHeldFamily(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- the typed scope (#2560) ---------------------------------------------------
+
+
+class TheScopeNamesWhatAHoldForbids(unittest.TestCase):
+    def test_a_default_hold_covers_the_drives_and_not_the_farm(self):
+        hold = operatorhold.read([_row("Grug")])["grug"]
+        for writer in ("queue", "council", "activity", "levelroute", "lending"):
+            self.assertTrue(hold.covers(writer), writer)
+        self.assertFalse(hold.covers("farm"))
+        self.assertFalse(hold.covers("craft"))
+
+    def test_a_farm_scope_covers_the_farm(self):
+        hold = operatorhold.read([_row("Grug", scope="Farm, craft")])["grug"]
+        self.assertTrue(hold.covers("farm"))
+        self.assertTrue(hold.covers("craft"))
+        self.assertFalse(hold.covers("queue"))
+
+    def test_the_all_scope_covers_every_writer(self):
+        hold = operatorhold.read([_row("Grug", scope="all")])["grug"]
+        for writer in ("queue", "lending", "farm", "craft"):
+            self.assertTrue(hold.covers(writer), writer)
+
+    def test_held_is_asked_per_writer(self):
+        holds = operatorhold.read([_row("Grug", scope="farm")])
+        self.assertIsNotNone(operatorhold.held(holds, "Grug", "farm"))
+        self.assertIsNone(operatorhold.held(holds, "Grug", "queue"))
+        self.assertIsNotNone(operatorhold.held(holds, "Grug"))
+
+    def test_a_family_row_that_misses_the_writer_leaves_the_star_row(self):
+        holds = operatorhold.read(
+            [_row("Grug", scope="farm"), _row("*", scope="queue")]
+        )
+        self.assertEqual("*", operatorhold.held(holds, "Grug", "queue").family)
+
+    def test_the_select_names_the_column_and_the_alter_adds_it(self):
+        self.assertIn("scope", operatorhold.SELECT_SQL)
+        self.assertIn("scope", operatorhold.CREATE_SQL)
+        self.assertIn("ADD COLUMN scope", operatorhold.ALTER_SQL)
+
+    def test_the_bridge_stands_down_only_the_writer_the_scope_names(self):
+        held, _me, _log, _clock = _held_method([_row("Grug", scope="farm")])
+        self.assertEqual({"Grug"}, asyncio.run(held({"Grug"}, "farm")))
+        self.assertEqual(set(), asyncio.run(held({"Grug"}, "queue")))
+
+    def test_a_default_hold_does_not_stand_the_farm_down(self):
+        held, _me, _log, _clock = _held_method([_row("Grug")])
+        self.assertEqual(set(), asyncio.run(held({"Grug"}, "farm")))
+        self.assertEqual({"Grug"}, asyncio.run(held({"Grug"}, "gearrouting")))
+

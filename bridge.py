@@ -5020,6 +5020,11 @@ def _ensure_queue_store() -> None:
     try:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(operatorhold.CREATE_SQL)
+            try:
+                cur.execute(operatorhold.ALTER_SQL)
+            except pymysql.err.MySQLError as exc:
+                if not (exc.args and exc.args[0] == 1060):
+                    raise
     except pymysql.err.MySQLError:
         log.exception("operator hold: the hold store is unavailable, so no "
                       "family can be held without a restart")
@@ -15053,7 +15058,7 @@ class Bridge(discord.Client):
                          for r in rows}
             stood = await self._operator_held(
                 {family_of[r.wearer] for r, _t, _g in routes
-                 if family_of.get(r.wearer)}, "gear routing")
+                 if family_of.get(r.wearer)}, "gearrouting")
             routes = tuple(x for x in routes
                            if family_of.get(x[0].wearer) not in stood)
         return (time.monotonic(), routes, guilds)
@@ -15092,7 +15097,7 @@ class Bridge(discord.Client):
                      for r in rows}
         stood = await self._operator_held(
             {family_of[w.holder] for w in waiting if family_of.get(w.holder)},
-            "gear routing")
+            "gearrouting")
         held = {w.holder for w in waiting if family_of.get(w.holder) in stood}
         routes, notes = gearroutingexec.walkable(waiting, busy=busy, held=held)
         _log_capped("gear routing", notes)
@@ -28124,7 +28129,7 @@ class Bridge(discord.Client):
         now = time.monotonic()
         out = set()
         for key in sorted(keys, key=str):
-            hold = operatorhold.held(holds, key)
+            hold = operatorhold.held(holds, key, writer)
             if hold is None:
                 continue
             out.add(key)
@@ -29333,9 +29338,20 @@ class Bridge(discord.Client):
         if found is None:
             return
         job, names, who = found
-        # NO OPERATOR HOLD HERE: a hold stops quest drives and dungeon lending,
-        # and the hold row names nothing it allows, so farming (gathering) is
-        # never stood down by one.
+        # THE OPERATOR HOLD, BY SCOPE (#2560): a default hold stops quest drives
+        # and dungeon lending and leaves gathering; only a hold whose scope names
+        # `farm` (or `all`) stands the farm pass down.
+        operator_held = getattr(self, "_operator_held", None)
+        if operator_held is not None:
+            if getattr(cohort, "solo", False):
+                hold_key = getattr(cohort, "family", "")
+            elif cohort is not None:
+                hold_key = getattr(cohort, "key", "")
+            else:
+                hold_key = await asyncio.to_thread(
+                    _cohort_of, bonds.head_of_family())
+            if await operator_held({hold_key or ""}, "farm"):
+                return
         item, skill = farmjob.order_of(job)
         if not (item or skill):
             log.info("farm: %s end: job=%s names no material", who, job)

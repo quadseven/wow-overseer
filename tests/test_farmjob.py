@@ -563,8 +563,8 @@ def _load_bridge_farm_methods(ns: dict, extra_methods=(), extra_funcs=()) -> dic
 class FamilyWideFarmIgnoresOperatorHold(unittest.IsolatedAsyncioTestCase):
     """An operator hold stops quest drives and dungeon lending, not gathering.
 
-    The hold table has no field that says what a hold forbids, so the farm
-    pass never consults it: a held family still farms.
+    A default hold does not name the farm, so a held family still farms. Only a
+    hold whose scope names `farm` stands the pass down (#2560).
     """
 
     def _ns(self, extra=None):
@@ -604,16 +604,50 @@ class FamilyWideFarmIgnoresOperatorHold(unittest.IsolatedAsyncioTestCase):
             _farm_job_now=mock.AsyncMock(
                 return_value=("farm:4306", ["Mizu"], "family_a")
             ),
-            _operator_held=mock.AsyncMock(return_value={"family_a"}),
+            _operator_held=mock.AsyncMock(return_value=set()),
             _end_farm=mock.AsyncMock(),
             _farm_state_for=mock.AsyncMock(return_value={"started": 1.0}),
             _farm_count=mock.AsyncMock(return_value=0),
             _farm_act=mock.AsyncMock(),
         )
         await ns["_farm_once"](fake, cohort)
-        fake._operator_held.assert_not_awaited()
+        fake._operator_held.assert_awaited_once_with({"family_a"}, "farm")
         fake._farm_state_for.assert_awaited_once()
         fake._farm_act.assert_awaited_once()
+
+    async def test_a_farm_scoped_hold_row_stops_the_farm_pass(self):
+        import time
+        import types
+        from unittest import mock
+        import campaignqueue
+        import operatorhold
+
+        hold_rows = [
+            {"family": "grug_clan", "reason": "x", "scope": "farm", "live": 1}
+        ]
+        ns = self._ns(
+            {
+                "time": time,
+                "campaignqueue": campaignqueue,
+                "operatorhold": operatorhold,
+                "_fetch_operator_holds": mock.MagicMock(return_value=hold_rows),
+            }
+        )
+        fake = types.SimpleNamespace(
+            _operator_hold_notice=operatorhold.Notice(),
+            _farm_individual=mock.AsyncMock(return_value=False),
+            _farm_job_now=mock.AsyncMock(
+                return_value=("farm:4306", ["Grug"], "this family")
+            ),
+            _end_farm=mock.AsyncMock(),
+            _farm_state_for=mock.AsyncMock(return_value={"started": 1.0}),
+            _farm_count=mock.AsyncMock(return_value=0),
+            _farm_act=mock.AsyncMock(),
+        )
+        fake._operator_held = types.MethodType(ns["_operator_held"], fake)
+        await ns["_farm_once"](fake, None)
+        fake._farm_state_for.assert_not_awaited()
+        fake._farm_act.assert_not_awaited()
 
     async def test_no_cohort_family_with_a_real_hold_row_still_farms(self):
         import time
