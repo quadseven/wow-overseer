@@ -79,7 +79,8 @@ the key; a run in the family's band before one whose bosses top out well
 under its weakest member (BELOW_BAND, #2715), unless that run drops a
 planned fire resistance piece; then the most expected item levels, halved
 for a run across a continent crossing; the least of its target done; path
-order. Each dungeon is still
+order. While a run in the band is only held back as stalled, a run below
+the band is not offered in its place (#2715). Each dungeon is still
 run AT_CAP_RUNS times a round before the next round starts, so the family
 works through the dungeons as it outgrows their loot rather than living in
 one.
@@ -1040,7 +1041,8 @@ def options(facts: Facts) -> list:
     _who, level = facts.weakest
     if not level:
         return []
-    refused = refusals(facts)
+    kinds = refusal_kinds(facts)
+    refused = {keyword: why for keyword, (_k, why) in kinds.items()}
     open_runs = [r for r in RUNS if r.keyword not in refused]
     rounds = _rounds(facts, [r for r in open_runs if r.ceiling >= LEVEL_CAP])
     out = []
@@ -1089,7 +1091,27 @@ def options(facts: Facts) -> list:
                 **_history_facts(facts, run),
             )
         )
+    if _band_is_held(facts, kinds, level):
+        out = [o for o in out if not o.below_band or o.fire or o.progress_rank]
     return _without_poor_doors(out)
+
+
+def _band_is_held(facts: Facts, kinds: dict, level: int) -> bool:
+    """Whether a capped family has a run in its band that is only held back,
+    its two latest runs having stalled (REFUSED_STALLED), so a run below the
+    band is not a stand-in for it (#2715). Ranking alone cannot say that:
+    with the band's runs refused, a below-band run is the only one left to
+    rank, and the family would spend hours in a dungeon its loot cannot
+    justify until the stall window passes. Better to plan nothing then."""
+    if level < LEVEL_CAP or not facts.bosses:
+        return False
+    for run in RUNS:
+        if kinds.get(run.keyword, ("", ""))[0] != REFUSED_STALLED:
+            continue
+        found = None if shares_map(run) else facts.bosses.get(run.map_id)
+        if not found or level - found[1] < BELOW_BAND:
+            return True
+    return False
 
 
 def _without_poor_doors(opts: list) -> list:

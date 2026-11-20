@@ -398,6 +398,56 @@ class WhichOne(unittest.TestCase):
         pick = campaignplan.heuristic(opts)
         self.assertEqual(pick.keyword, "sunken-temple")
 
+    def test_at_the_cap_a_held_band_is_not_filled_by_a_run_below_it(self):
+        """With every run in the band refused as stalled, a below-band run is
+        the only one left to rank, and the family was sent to it for hours
+        (#2715). The band is held, not finished, so nothing is planned."""
+        stalled = {
+            r.keyword: "stalled twice"
+            for r in campaignplan.RUNS
+            if r.ceiling >= campaignplan.LEVEL_CAP
+        }
+        upgrades = {
+            "sunken-temple": (preraid.Gain("Grug", 3, 0.6, 30.0, "a helm"),),
+        }
+        opts = campaignplan.options(
+            facts(
+                ALLIANCE,
+                EASTERN_KINGDOMS,
+                keys=SHADOWFORGE,
+                bosses=self.CAP_BOSSES,
+                upgrades=upgrades,
+                stalled=stalled,
+            )
+        )
+        self.assertNotIn("sunken-temple", keywords(opts))
+        self.assertIsNone(campaignplan.heuristic(opts))
+
+    def test_a_held_band_still_lets_a_fire_piece_in_from_below(self):
+        stalled = {
+            r.keyword: "stalled twice"
+            for r in campaignplan.RUNS
+            if r.ceiling >= campaignplan.LEVEL_CAP
+        }
+        upgrades = {
+            "sunken-temple": (
+                preraid.Gain(
+                    "Grug", 3, 0.6, 30.0, "a helm", 10.0, "Emberplate Armguards"
+                ),
+            ),
+        }
+        opts = campaignplan.options(
+            facts(
+                ALLIANCE,
+                EASTERN_KINGDOMS,
+                keys=SHADOWFORGE,
+                bosses=self.CAP_BOSSES,
+                upgrades=upgrades,
+                stalled=stalled,
+            )
+        )
+        self.assertEqual(campaignplan.heuristic(opts).keyword, "sunken-temple")
+
     def test_nothing_to_choose_is_none(self):
         self.assertIsNone(campaignplan.heuristic([]))
 
