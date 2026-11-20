@@ -35,6 +35,19 @@ class Store:
     def broken(self):
         return [dict(r) for r in self.rows if r.get("state", ql.BROKEN) == ql.BROKEN]
 
+    def completed(self):
+        return [r["quest"] for r in self.rows if r.get("state") == ql.COMPLETED]
+
+    def completion_summary(self, quest):
+        rows = [
+            r
+            for r in self.rows
+            if r.get("state") == ql.COMPLETED and r["quest"] == quest
+        ]
+        return len(rows), max(
+            (r.get("finished") for r in rows if r.get("finished")), default=None
+        )
+
     def ticket(self, quest):
         for r in self.rows:
             if r["quest"] == quest and r.get("ticket") is not None:
@@ -69,7 +82,6 @@ class Store:
         for r in self.rows:
             if r["quest"] == quest and r.get("ticket") == ticket:
                 r["ticket"] = None
-                break
 
 
 class FakeGitHub:
@@ -318,6 +330,60 @@ class Filing(unittest.TestCase):
         self.assertFalse(qt._is_timeout(ValueError("bad format")))
 
 
+class Plumbing(unittest.TestCase):
+    def test_holes_refuses_an_empty_list(self):
+        with self.assertRaises(ValueError):
+            ql.holes(0)
+
+    def test_no_credential_means_no_client(self):
+        self.assertIsNone(qt.client_from_env(env={"QUEST_TICKET_APP_ID": "1"}))
+
+    def test_the_token_asks_for_issues_only(self):
+        env = {
+            "QUEST_TICKET_APP_ID": "1",
+            "QUEST_TICKET_INSTALLATION_ID": "2",
+            "QUEST_TICKET_KEY_PATH": "/k",
+        }
+        self.assertEqual(
+            qt.client_from_env(env=env).github.token.permissions, {"issues": "write"}
+        )
+
+    def test_the_column_is_added_once(self):
+        for have, adds in ((0, 1), (1, 0)):
+            cur = mock.Mock()
+            cur.fetchone.return_value = {"n": have}
+            qt.ensure_column(cur)
+            done = [c.args[0] for c in cur.execute.call_args_list]
+            self.assertEqual(done.count(qt.ADD_COLUMN_SQL), adds)
+
+    def test_ticket_of_skips_a_filing_in_flight(self):
+        self.assertIsNone(qt.ticket_of([row(1, ticket=qt.FILING)]))
+        self.assertEqual(qt.ticket_of([row(1, ticket=9)])["number"], 9)
+
+    def test_sql_store_ticket_reads_from_any_row(self):
+        cur = mock.Mock()
+        cur.fetchone.return_value = {"ticket": 42}
+        store = qt.SqlStore(cur)
+        self.assertEqual(store.ticket(10), 42)
+        self.assertIn(qt.TICKET_SQL, [c.args[0] for c in cur.execute.call_args_list])
+
+    def test_sql_store_pass_time_round_trips(self):
+        cur = mock.Mock()
+        cur.fetchone.return_value = {"since": 12345.0}
+        store = qt.SqlStore(cur)
+        self.assertEqual(store.last_pass(), 12345.0)
+        store.record_pass(67890.0)
+        self.assertIn(
+            qt.RECORD_PASS_SQL, [c.args[0] for c in cur.execute.call_args_list]
+        )
+
+    def test_bridge_wires_delay_and_last_pass(self):
+        bridge_src = (HERE / "bridge.py").read_text(encoding="utf-8")
+        self.assertIn("initial_delay", bridge_src)
+        self.assertIn("_read_last_quest_tickets_pass", bridge_src)
+        self.assertIn("SqlStore(cur).last_pass()", bridge_src)
+
+
 class QuesterBoundRefusalTest(unittest.TestCase):
     """A quest another quester completed is not filed for one quester's refusal."""
 
@@ -330,6 +396,7 @@ class QuesterBoundRefusalTest(unittest.TestCase):
         r = row(quest, guid=guid, name="Otherer")
         r["reason"] = ql.FAILED_REASON
         r["state"] = ql.COMPLETED
+        r["finished"] = "2026-11-19 10:00:00"
         return r
 
     def test_completed_quest_with_only_refusals_files_nothing(self):
@@ -367,77 +434,87 @@ class RetireTest(unittest.TestCase):
         r = row(quest, guid=guid, name="Otherer")
         r["reason"] = ql.FAILED_REASON
         r["state"] = ql.COMPLETED
+        r["finished"] = "2026-11-19 10:00:00"
         return r
 
     def test_plan_returns_completed_quests_with_only_quester_bound_tickets(self):
         rows = [
             self.refused(221, "the quest giver would not give it: not eligible", 7),
             self.refused(221, "the turn-in NPC would not take it: no object", 8),
-            self.completed_row(221, 9),
             self.refused(222, "the quest giver would not give it: not eligible", 7),
             self.refused(222, "the turn-in NPC would not take it: no object", 8),
-            self.completed_row(222, 9),
         ]
-        
+
         def ticket_lookup(quest):
             if quest == 221:
                 return 1001
             if quest == 222:
                 return 1002
             return None
-        
-        store = Store(rows)
-        store.completed = lambda: [221, 222]
-        out = qt.run(store, qt.Client(FakeGitHub()), [])
-        self.assertEqual(out["retired"], 2)
-        self.assertEqual(out["filed"], 0)
-        
+
+        p = qt.plan(rows, ticket_for={221: 1001, 222: 1002}, completed={221, 222})
+        self.assertEqual(p.retired, ((221, 1001), (222, 1002)))
+        mixed = rows + [self.refused(223, "objectives did not move")]
+        p = qt.plan(mixed, ticket_for={223: 1003}, completed={221, 222, 223})
+        self.assertNotIn((223, 1003), p.retired)
+
     def test_run_closes_tickets_with_comment(self):
         rows = [
             self.refused(221, "the quest giver would not give it: not eligible", 7),
             self.refused(221, "the turn-in NPC would not take it: no object", 8),
             self.completed_row(221, 9),
         ]
-        
+
         def ticket_lookup(quest):
             if quest == 221:
                 return 1001
             return None
-        
+
         store = Store(rows)
-        store.completed = lambda: [221]
-        
+        for r in store.rows:
+            if r.get("state") == ql.BROKEN:
+                r["ticket"] = 1001
+
         github = FakeGitHub()
         out = qt.run(store, qt.Client(github), [])
-        
+
         self.assertEqual(out["retired"], 1)
         self.assertEqual(out["filed"], 0)
-        
+
         comment_calls = [c for c in github.calls if "/issues/1001/comments" in c[1]]
         self.assertEqual(len(comment_calls), 1)
-        
-        patch_calls = [c for c in github.calls if c[1] == "/issues/1001" and c[0] == "PATCH"]
+
+        patch_calls = [
+            c for c in github.calls if c[1] == "/issues/1001" and c[0] == "PATCH"
+        ]
         self.assertEqual(len(patch_calls), 1)
         self.assertEqual(patch_calls[0][2]["state"], "closed")
-        
+        self.assertIn("Quest 221", comment_calls[0][2]["body"])
+        self.assertIn("1 quester", comment_calls[0][2]["body"])
+        self.assertIn("2026-11-19 10:00:00", comment_calls[0][2]["body"])
+        self.assertEqual(qt.run(store, qt.Client(FakeGitHub()), [])["retired"], 0)
+
     def test_retire_limited_to_max_per_pass(self):
         rows = []
         for i in range(1, 16):
-            rows.extend([
-                self.refused(i, "the quest giver would not give it: not eligible", 7),
-                self.refused(i, "the turn-in NPC would not take it: no object", 8),
-                self.completed_row(i, 9),
-            ])
-        
-        def ticket_lookup(quest):
-            return 1000 + quest
-        
+            rows.extend(
+                [
+                    self.refused(
+                        i, "the quest giver would not give it: not eligible", 7
+                    ),
+                    self.refused(i, "the turn-in NPC would not take it: no object", 8),
+                    self.completed_row(i, 9),
+                ]
+            )
+
         store = Store(rows)
-        store.completed = lambda: list(range(1, 16))
-        
+        for r in store.rows:
+            if r.get("state") == ql.BROKEN:
+                r["ticket"] = 1000 + r["quest"]
+
         github = FakeGitHub()
         out = qt.run(store, qt.Client(github), [])
-        
+
         self.assertEqual(out["retired"], 10)
         self.assertEqual(out["filed"], 0)
 

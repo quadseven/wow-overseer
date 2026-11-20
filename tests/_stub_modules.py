@@ -1,17 +1,16 @@
-
 """Stand-in modules for an import, put back afterwards (#1648).
 
 The parallel runner (#1290) loads several test modules in one process, so a
 stub one module leaves in sys.modules reaches every module in its batch, and
-a  around an import drops every module that
+a `mock.patch.dict(sys.modules)` around an import drops every module that
 import pulled in, so the next module imports a second copy of each.
 
- sets only the entries it is given and restores exactly those:
+`stub_modules` sets only the entries it is given and restores exactly those:
 
     with stub_modules(pymysql=PYMYSQL):
         import realmread
 
- makes a private copy of one module (bridge, whose module state
+`fresh_import` makes a private copy of one module (bridge, whose module state
 a test may change) under stubs, and leaves sys.modules[name] as it found it.
 The modules the copy imports stay registered, so every test shares one copy
 of each. tests/test_sys_modules_hygiene.py holds every test module to this.
@@ -26,10 +25,12 @@ import sys
 import types
 
 _ABSENT = object()
+
+
 def _pymysql_stub() -> types.ModuleType:
     """A driver stand-in with the real library's exception tree, so an
-     clause is a working clause, not an AttributeError.
-    It has no : a test that reaches the database fails loudly."""
+    `except pymysql.err.X` clause is a working clause, not an AttributeError.
+    It has no `connect`: a test that reaches the database fails loudly."""
     module = types.ModuleType("pymysql")
     err = types.ModuleType("pymysql.err")
 
@@ -85,15 +86,18 @@ def _pymysql_stub() -> types.ModuleType:
     module.err = err
     return module
 
+
 # One stand-in for the whole process: a module imported under it by one test
 # module and reused by another sees the same object either way.
 PYMYSQL = _pymysql_stub()
 
 # The private copies fresh_import made, which the hygiene test allows.
 FRESH_COPIES: list[types.ModuleType] = []
+
+
 @contextlib.contextmanager
 def stub_modules(**stubs: types.ModuleType):
-    """Put  in sys.modules for the block, then restore each of those
+    """Put `stubs` in sys.modules for the block, then restore each of those
     entries, and only those, to what it was (or to absent)."""
     saved = {name: sys.modules.get(name, _ABSENT) for name in stubs}
     sys.modules.update(stubs)
@@ -105,8 +109,10 @@ def stub_modules(**stubs: types.ModuleType):
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = prior
+
+
 def fresh_import(name: str, **stubs: types.ModuleType) -> types.ModuleType:
-    """A new copy of module , imported under ; sys.modules[name]
+    """A new copy of module `name`, imported under `stubs`; sys.modules[name]
     is left as it was."""
     prior = sys.modules.pop(name, _ABSENT)
     try:
