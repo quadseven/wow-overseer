@@ -270,7 +270,7 @@ class AFieldTheColumnRefusedWhollyYieldsToAnother(unittest.TestCase):
         self.assertIn(
             "farmjob.fields(open_, leader_at, visited or {}, time.time())", body
         )
-        self.assertIn("state.get(\"visited\"),\n        )", source)
+        self.assertIn('state.get("visited"),\n        )', source)
 
 
 class InTheFieldItHops(unittest.TestCase):
