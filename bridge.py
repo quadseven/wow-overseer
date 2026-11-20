@@ -35518,6 +35518,16 @@ async def _log_sale_reading(holder: str, standing, refused_age) -> None:
         log.exception("economy: the sale reading for %s failed", holder)
 
 
+# HOLDERS THE LAST VENDOR PASS COULD NOT QUEUE FOR, AND WHEN EACH WAS LAST
+# NAMED. A row written for the one holder at a counter is a sale, but it is
+# not the family's relief while the others stand out of reach, so
+# `_report_vendor_claim` reads the count and does not call that trip
+# productive; the log line is said once per window, not once per poll.
+_VENDOR_STRANDED: dict = {"count": 0}
+_VENDOR_REACH_SAID: dict = {}
+_VENDOR_REACH_SAID_SECONDS = 600.0
+
+
 async def _queue_vendor_sales(
     candidates, leader: str, aimed: bool, mode: str, attempts,
     route_sales=(),
@@ -35573,6 +35583,10 @@ async def _queue_vendor_sales(
     route_fn = globals().get("_queue_route_sales")
     refusals = await asyncio.to_thread(
         _recent_range_refusals, item_plan.RANGE_BACKOFF_SECONDS)
+    # Looked up: the economy tests load this pass in isolation.
+    said_at = globals().setdefault("_VENDOR_REACH_SAID", {})
+    window = globals().get("_VENDOR_REACH_SAID_SECONDS", 600.0)
+    stranded = 0
     for holder in sorted(by_holder):
         holder_candidates = tuple(by_holder[holder])
         town = holder_town[holder]
@@ -35591,11 +35605,15 @@ async def _queue_vendor_sales(
                     len(holder_candidates), holder,
                 )
                 continue
-            log.info(
-                "economy: %d carried candidate(s) for %s but no vendor "
-                "within reach - leader=%s aim taken=%s",
-                len(holder_candidates), holder, leader, aimed,
-            )
+            stranded += 1
+            now = (globals().get("time") or __import__("time")).monotonic()
+            if now - said_at.get(holder, -1e9) >= window:
+                said_at[holder] = now
+                log.info(
+                    "economy: %d carried candidate(s) for %s but no vendor "
+                    "within reach - leader=%s aim taken=%s",
+                    len(holder_candidates), holder, leader, aimed,
+                )
             continue
         # The world has already answered some of these. A sale that was
         # delivered, or refused with a reason retrying cannot change, must
@@ -35644,6 +35662,7 @@ async def _queue_vendor_sales(
             candidates)
         inserted += wrote
         considered += asked
+    globals().setdefault("_VENDOR_STRANDED", {"count": 0})["count"] = stranded
     log.info("economy: queued %d/%d vendor sale(s) across %d holder(s), "
              "one errand on leader=%s (taken=%s)",
              inserted, considered, len(by_holder), leader, aimed)
@@ -35669,7 +35688,12 @@ def _report_vendor_claim(slot, aimed: bool, inserted: int) -> None:
     """
     if not aimed:
         return
-    if inserted:
+    # A SALE FOR ONE HOLDER IS NOT A TRIP THAT RELIEVED THE FAMILY. While
+    # holders with goods stand out of reach of any counter, the rows written
+    # for the one that is in reach left the rest of the bags full, so the
+    # claim backs off exactly like one that wrote nothing and the travel
+    # column goes to the next job instead of straight back here.
+    if inserted and not globals().get("_VENDOR_STRANDED", {}).get("count"):
         slot.productive("economy")
         return
     until = slot.fruitless("economy", time.monotonic())
