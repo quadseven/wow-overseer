@@ -640,6 +640,35 @@ def _stuck_entry(member: dict, run: list, now_at: int, loop=None) -> dict | None
     return ask_blocker(run, now_at) or hold_blocker(member, now_at)
 
 
+# A member idle and level-less for this long is filed even with no blocker
+# recorded (#2248); the one-day stall reading alone files nothing.
+MEMBER_STALL_BOUND_SECONDS = 7 * 24 * 3600
+
+
+def member_stall_entry(member: dict, now_at: int | None) -> dict | None:
+    """The stuck entry for a member whose stall reading (nowstatus.idle_reading)
+    passed MEMBER_STALL_BOUND_SECONDS with no other blocker, or None.
+
+    The reason is `unknown` and says so, so the stall is a record with a name
+    rather than an empty blocker. A dead, offline or in-run member is not filed:
+    the reading only runs for a member with no job, and idle_reading clears it
+    for a member in a run."""
+    held = member.get("stalled_s")
+    if not held or not now_at or held < MEMBER_STALL_BOUND_SECONDS:
+        return None
+    if member["life"] in ("dead", "ghost") or not member.get("online"):
+        return None
+    return {
+        "step": member["doing"],
+        "blocker": (
+            "unknown: no level gained for %s, with no errand, hold or refusal "
+            "recorded." % agenda.span(int(held))
+        ),
+        "since": int(now_at) - int(held),
+        "kind": "stall",
+    }
+
+
 def _newest(rows) -> dict:
     """name -> the first row seen for it (the reads are newest first)."""
     out: dict = {}
@@ -826,7 +855,7 @@ def build(
         m = _member(name, guild_of.get(name, {}), rows)
         found[name] = _stuck_entry(
             m, streaks.get(name, []), rows["now_at"], standing_loop(name, loops, rows)
-        )
+        ) or member_stall_entry(m, rows["now_at"])
         followed = nowstatus.followed(rows["facts"].get(name), m)
         if followed and not _asking(found[name]):
             follows[name] = followed

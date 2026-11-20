@@ -128,3 +128,30 @@ class TheIdleLineIsEarned(unittest.TestCase):
 
 if __name__ == "__main__":
     sys.exit(unittest.main())
+
+
+class AStallForWeeksIsNamedAndFiled(unittest.TestCase):
+    """A member idle with no level for a week or more is a stuck record (#2248)."""
+
+    def test_a_week_long_stall_with_no_blocker_is_filed_as_unknown(self):
+        by, ctx = roster(levelled=[("Reed", NOW - 8 * 24 * HOUR)])
+        self.assertTrue(by["Reed"]["stuck"])
+        self.assertEqual(by["Reed"]["stuck_kind"], "stall")
+        self.assertEqual(by["Reed"]["since"], NOW - 8 * 24 * HOUR)
+        self.assertIn("unknown", by["Reed"]["blocker"])
+        _code, payload = members.stuck({}, ctx)
+        self.assertEqual([m["name"] for m in payload["members"]], ["Reed"])
+
+    def test_a_stall_under_the_bound_stays_unfiled(self):
+        by, _ = roster(levelled=[("Reed", NOW - 6 * 24 * HOUR)])
+        self.assertFalse(by["Reed"]["stuck"])
+
+    def test_a_member_with_no_level_on_record_is_not_filed(self):
+        by, _ = roster()
+        self.assertFalse(by["Reed"]["stuck"])
+
+    def test_a_member_in_a_guild_run_is_not_filed(self):
+        by, _ = roster(
+            runs=["Reed:tank:warrior:29"], levelled=[("Reed", NOW - 8 * 24 * HOUR)]
+        )
+        self.assertFalse(by["Reed"]["stuck"])
