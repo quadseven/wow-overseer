@@ -20628,6 +20628,10 @@ class Bridge(discord.Client):
                     log.info("%s %s could not take %s out (row %d, %s: %s)",
                              guildpost.LOG_PREFIX, take.receiver, take.name,
                              take_id, status or "no answer", detail)
+                    pause = guildpost.take_backoff(detail)
+                    if pause:
+                        self._post_held_until[take.receiver] = (
+                            time.monotonic() + pause)
                     break
                 taken += 1
             log.info("%s %s took %d of %d item(s) out of the mailbox",
