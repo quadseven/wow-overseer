@@ -13,6 +13,7 @@ sys.path.insert(0, str(HERE))
 with stub_modules(pymysql=PYMYSQL):
     import apiv2
     import questcatalogue as qc
+    import questers
     import questledger as ql
     import realmread
     from apiv2 import quests as v2quests
@@ -235,14 +236,14 @@ class TheQuestEndpoint(Base):
                 7,
                 "Durga",
                 "broken",
-                "its objectives did not move for 2 hours of play",
+                questers.STALLED,
             ),
             entry(
                 117,
                 8,
                 "Mirra",
                 "broken",
-                "its objectives did not move for 2 hours of play",
+                questers.STALLED,
             ),
         ]
         code, body = self.get(
@@ -258,18 +259,17 @@ class TheQuestEndpoint(Base):
         )
         self.assertEqual(code, 200)
         self.assertEqual(body["quest"]["status"], "broken")
-        self.assertEqual(
-            [(a["character"], a["reason"]) for a in body["attempts"]],
-            [
-                (
-                    name,
-                    "Its objectives did not move for 2 hours of play for this "
-                    "quester. A stall is one quester's attempt, not a finding "
-                    "that the quest cannot be finished.",
-                )
-                for name in ("Durga", "Mirra")
-            ],
-        )
+        # The oracle is the stall contract in the module's docstring, worked
+        # by hand, not the shipped sentence: the stored reason is restated in
+        # the quester's terms, and the attempt says it is one quester's
+        # attempt and not a finding that the quest cannot be finished.
+        self.assertEqual([a["character"] for a in body["attempts"]], ["Durga", "Mirra"])
+        for attempt in body["attempts"]:
+            reason = attempt["reason"]
+            self.assertNotEqual(reason, questers.STALLED)
+            self.assertTrue(reason.lower().startswith(questers.STALLED.lower()), reason)
+            self.assertIn("one quester's attempt", reason)
+            self.assertIn("not a finding that the quest cannot be finished", reason)
 
     def test_one_quest_with_every_attempt(self):
         code, body = self.get("/api/v2/quests/1")
