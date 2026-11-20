@@ -3346,6 +3346,24 @@ def _released_for_gathering(names, free_slots: dict) -> frozenset:
     return frozenset(set(free_slots) - set(kept))
 
 
+def _mail_gear_reachable(names, mail_gear: dict, free_slots: dict) -> dict:
+    """`mail_gear` without the members the bag-floor release dropped (#1261).
+
+    A letter of bought gear waits for a member with no bag room, and the
+    errand's mail step cannot hand it over, so "bought gear waits in the
+    mailbox" started a town errand for a need the town could not meet: the
+    letter stayed, the errand ended, and the next one began (every restart
+    forgets the cooldown). A member the release drops is one no vendor sale
+    will make room for, so its letter is not a reason to go. Blocking.
+    """
+    kept = _floor_release(names, free_slots)
+    return {
+        name: count
+        for name, count in (mail_gear or {}).items()
+        if name in kept or name not in free_slots
+    }
+
+
 def _note_vendor_sellable(names, sellable: dict) -> None:
     """Record the stacks a vendor would buy from each member, as the vendor
     pass counted them for its trip decision."""
@@ -23984,6 +24002,12 @@ class Bridge(discord.Client):
         mail_gear = await asyncio.to_thread(_mail_gear_holders, names)
         stalled = _queue_stall_floor(names)
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
+        # A LETTER FOR A MEMBER NO VENDOR CAN CLEAR IS NOT A REASON TO GO
+        # (#1261). Looked up: the adapter tests load this method in isolation.
+        reachable = globals().get("_mail_gear_reachable")
+        if reachable is not None:
+            mail_gear = await asyncio.to_thread(
+                reachable, names, mail_gear, free_slots)
         campaign_waiting = await asyncio.to_thread(_campaign_waiting, names)
         bag_pressure_needed = await asyncio.to_thread(
             _bag_errand_needed, names, free_slots, campaign_waiting,

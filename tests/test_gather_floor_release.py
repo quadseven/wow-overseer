@@ -63,7 +63,12 @@ class FarmDecision(unittest.TestCase):
 
 
 def _load(visits):
-    wanted = {"_released_for_gathering", "_at_floor", "_floor_release"}
+    wanted = {
+        "_released_for_gathering",
+        "_mail_gear_reachable",
+        "_at_floor",
+        "_floor_release",
+    }
     nodes = [
         n
         for n in ast.walk(ast.parse(BRIDGE))
@@ -95,6 +100,23 @@ class BridgeHelper(unittest.TestCase):
         self.assertEqual(
             frozenset(), ns["_released_for_gathering"](["A", "B"], {"A": 0, "B": 0})
         )
+
+    def test_a_letter_for_a_released_member_is_not_a_reason_to_go(self):
+        ns = _load({"A": bag_pressure.VENDOR_VISIT_LIMIT})
+        free = {"A": 0, "B": 0}
+        self.assertEqual(
+            {"B": 1}, ns["_mail_gear_reachable"](["A", "B"], {"A": 2, "B": 1}, free)
+        )
+
+    def test_a_letter_for_a_member_with_unread_bags_stays(self):
+        ns = _load({})
+        self.assertEqual(
+            {"C": 1}, ns["_mail_gear_reachable"](["A", "C"], {"C": 1}, {"A": 9})
+        )
+
+    def test_the_errand_start_reads_it(self):
+        start = BRIDGE[BRIDGE.index("async def _town_errand_start(") :][:3000]
+        self.assertIn('globals().get("_mail_gear_reachable")', start)
 
     def test_the_farm_and_gather_passes_read_it(self):
         self.assertIn('"released": _released_for_gathering(names, free)', BRIDGE)
