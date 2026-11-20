@@ -126,5 +126,32 @@ class TheIdleLineIsEarned(unittest.TestCase):
         self.assertEqual(health.stuck_findings(payload, NOW), [])
 
 
+def _fails(_params):
+    raise RuntimeError("the side read failed")
+
+
+class ASideReadThatFailsDegradesOneField(unittest.TestCase):
+    """The idle re-read adds two reads; neither may take the roster down (#2192)."""
+
+    def _roster_with(self, *words):
+        ruleset = [r for r in rules() if r[0] != words]
+        ctx, _log = ctx_for([(words, _fails)] + ruleset, server(guildmates=NAMES))
+        return members.roster({}, ctx)
+
+    def test_a_failed_run_read_leaves_the_roster_served(self):
+        code, payload = self._roster_with("FROM overseer_guild_run")
+        self.assertEqual(code, 200)
+        by = {m["name"]: m for m in payload["members"]}
+        self.assertEqual(len(by), len(NAMES))
+        self.assertNotEqual(by["Moss"]["doing"], "In a guild run")
+
+    def test_a_failed_level_read_leaves_the_roster_served(self):
+        code, payload = self._roster_with("FROM overseer_level")
+        self.assertEqual(code, 200)
+        by = {m["name"]: m for m in payload["members"]}
+        self.assertEqual(len(by), len(NAMES))
+        self.assertEqual(by["Fern"]["doing"], "Stalled")
+
+
 if __name__ == "__main__":
     sys.exit(unittest.main())
