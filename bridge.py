@@ -1504,13 +1504,14 @@ _BOT_HELD_SQL = (
 )
 
 _GATHER_SEATS_SQL = (
-    "SELECT s.name, s.level, s.map_id, s.in_combat, s.health, s.group_leader, "
+    "SELECT s.name, s.level, s.race, s.zone_id, s.map_id, s.in_combat, "
+    "  s.health, s.group_leader, "
     "  MAX(IF(k.skill = 182, k.value, 0)) AS herb, "
     "  MAX(IF(k.skill = 186, k.value, 0)) AS mining "
     "FROM overseer_snapshot s "
     "LEFT JOIN character_skills k ON k.guid = s.guid AND k.skill IN (182, 186) "
     "WHERE s.is_bot = 1 AND s.updated_at > NOW() - INTERVAL 60 SECOND "
-    "  AND s.name IN (%s) GROUP BY s.guid, s.name, s.level, s.map_id, "
+    "  AND s.name IN (%s) GROUP BY s.guid, s.name, s.level, s.race, s.zone_id, s.map_id, "
     "  s.in_combat, s.health, s.group_leader"
 )
 
@@ -1533,6 +1534,8 @@ def _fetch_gather_seats(names: list, instance_maps) -> list:
             grouped=bool(r["group_leader"]),
             in_instance=int(r["map_id"] or -1) in instance_maps,
             in_combat=bool(r["in_combat"]),
+            race=int(r["race"] or 0),
+            zone_id=int(r["zone_id"] or 0),
         )
         for r in rows
     ]
