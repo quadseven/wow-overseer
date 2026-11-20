@@ -782,7 +782,10 @@ class RetentionTests(unittest.TestCase):
         self.assertTrue(all(r["state"] == "ready" for r in rows))
 
     def test_an_old_row_names_the_age_cap(self):
-        rows = [self.ledger_row(1, timedelta(days=9)), self.ledger_row(2, timedelta(days=1))]
+        rows = [
+            self.ledger_row(1, timedelta(days=9)),
+            self.ledger_row(2, timedelta(days=1)),
+        ]
         why = clipledger.expired_reasons(rows, now=NOW, max_age=timedelta(days=7))
         self.assertEqual({1: "expired: age cap (7 days)"}, why)
 

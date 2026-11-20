@@ -31,8 +31,10 @@ def retention_caps(environ: Mapping) -> tuple[int, timedelta, list[str]]:
         except ValueError:
             value = 0
         if value < 1:
-            lines.append("clip retention: %s=%r is not a whole number of 1 or more, "
-                         "using %d" % (name, raw, default))
+            lines.append(
+                "clip retention: %s=%r is not a whole number of 1 or more, "
+                "using %d" % (name, raw, default)
+            )
             value = default
         values.append(value)
     return values[0], timedelta(days=values[1]), lines
