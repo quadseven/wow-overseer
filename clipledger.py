@@ -302,6 +302,12 @@ def boss_key(subject_id, family) -> str:
     return "boss_kill:%s:%s" % (subject_id, family)
 
 
+def clear_key(map_id, family) -> str:
+    """The ledger key of one family's first clear of a dungeon. The ledger
+    and the run card both build it here."""
+    return "clear:%s:%s" % (map_id, family)
+
+
 def level_key(character) -> str:
     """The ledger key of a character's level 60 moment."""
     return "level_60:%s" % character
@@ -382,21 +388,22 @@ def _event_requests(rows, roster, views, families=None):
     return out
 
 
-def _clear_requests(runs, roster, views):
+def _clear_requests(runs, roster, views, families=None):
     out = []
-    by_map = {}
+    groups = dict(families) if families else {ROSTER_FAMILY: roster}
+    by_key = {}
     for run in runs:
-        by_map.setdefault(run["map_id"], []).append(run)
-    for map_id, group in by_map.items():
+        for family, members in groups.items():
+            if run["leader"] in members:
+                by_key.setdefault((run["map_id"], family), []).append(run)
+    for (map_id, family), group in by_key.items():
         run = earliest(group, "at")
-        if run["leader"] not in roster:
-            continue
         kind = eventclips.trigger_kind(
             {"kind": "clear", "family_member": True, "first_clear": True}
         )
         out.append(
             _request(
-                "clear:%s" % map_id,
+                clear_key(map_id, family),
                 kind,
                 run["leader"],
                 views,
@@ -470,7 +477,7 @@ def plan_requests(
     )
     rows = _loot_requests(loot_rows, guilds, now, views)
     rows += _event_requests(event_rows, order, views, families)
-    rows += _clear_requests(list(cleared_runs), names, views)
+    rows += _clear_requests(list(cleared_runs), names, views, families)
     rows.sort(key=lambda r: r["event_at"])
     seen = set(existing_keys)
     out = []

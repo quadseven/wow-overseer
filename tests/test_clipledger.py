@@ -202,7 +202,7 @@ class OtherTriggerTests(unittest.TestCase):
         clear = {"map_id": 36, "dungeon": "Test Mines", "leader": "Alder", "at": at}
         rows = plan(cleared_runs=[clear])
         self.assertEqual(["clear"], [r["kind"] for r in rows])
-        self.assertEqual("clear:36", rows[0]["event_key"])
+        self.assertEqual("clear:36:roster", rows[0]["event_key"])
         self.assertEqual("Alder", rows[0]["character"])
         self.assertEqual(at + secs(15), rows[0]["window_end"])
 
@@ -220,6 +220,31 @@ class OtherTriggerTests(unittest.TestCase):
             "at": NOW - timedelta(minutes=3),
         }
         self.assertEqual([], plan(cleared_runs=[new, old]))
+
+    def test_two_families_each_land_their_own_first_clear_of_one_dungeon(self):
+        at = NOW - timedelta(minutes=3)
+        oaks = {"map_id": 36, "dungeon": "T", "leader": "Alder", "at": at}
+        pines = dict(oaks, leader="Cedar", at=at + secs(30))
+        rows = plan(
+            cleared_runs=[oaks, pines],
+            roster=["Alder", "Birch", "Cedar", "Dogwood"],
+            families={"oaks": ["Alder", "Birch"], "pines": ["Cedar", "Dogwood"]},
+        )
+        self.assertEqual(
+            ["clear:36:oaks", "clear:36:pines"], [r["event_key"] for r in rows]
+        )
+        self.assertEqual(["Alder", "Cedar"], [r["character"] for r in rows])
+
+    def test_a_later_clear_by_a_family_with_a_row_writes_nothing(self):
+        at = NOW - timedelta(minutes=3)
+        run = {"map_id": 36, "dungeon": "T", "leader": "Cedar", "at": at}
+        rows = plan(
+            cleared_runs=[run],
+            roster=["Alder", "Cedar"],
+            families={"oaks": ["Alder"], "pines": ["Cedar"]},
+            existing_keys=["clear:36:pines"],
+        )
+        self.assertEqual([], rows)
 
 
 class NoViewTests(unittest.TestCase):
