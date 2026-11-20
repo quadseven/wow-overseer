@@ -192,6 +192,32 @@ class StrandedTrainerCrossingPlan(unittest.TestCase):
             cross.source, guildjobs.source_for(guildjobs.TRAIN_CROSS_ACTION, "Shamy")
         )
 
+    def test_unreachable_trainer_refusal_strands_and_plans_a_crossing(self):
+        # The module's other no-trainer refusal (a trainer stands on the map,
+        # no safe crossing reaches one): it must strand the member too, or the
+        # bridge never plans the boat and the member is only held 3 hours.
+        row = self._refused_row("Shamy", age=5)
+        row["result"] = json.dumps(
+            {
+                "outcome": "refused",
+                "retryable": False,
+                "reason": classtrain.NO_REACHABLE_TRAINER_REASON,
+                "map": KALIMDOR,
+            }
+        )
+        self.assertEqual(classtrain.stranded([row]), {"Shamy": KALIMDOR})
+        self.assertNotIn("Shamy", classtrain.recent_walkers([row]))
+        planned, _notes = classtrain.plan(
+            [_trainee("Shamy")],
+            {"Shamy": _walker("Shamy", KALIMDOR, DARKSHORE)},
+            classtrain.recent_walkers([row]),
+            busy=frozenset(),
+            stranded=classtrain.stranded([row]),
+            trainer_spawns=_spawns(),
+        )
+        self.assertEqual(len(planned), 1)
+        self.assertIsInstance(planned[0], classtrain.Cross)
+
     def test_after_crossing_to_map_zero_shaman_walks_immediately_despite_recent_refusal(
         self,
     ):
@@ -358,6 +384,20 @@ bridge = _import_bridge()
 
 
 class BridgeTrainerCrossingWiring(unittest.TestCase):
+    def test_train_rows_read_both_no_trainer_refusals(self):
+        seen = {}
+
+        def fake(cur, what, sql, params):
+            seen["params"] = params
+            return []
+
+        with mock.patch.object(bridge, "_connect"):
+            with mock.patch.object(bridge, "_corps_read", side_effect=fake):
+                bridge._guild_train_rows()
+        joined = " ".join(map(str, seen["params"]))
+        self.assertIn(classtrain.NO_TRAINER_REASON, joined)
+        self.assertIn(classtrain.NO_REACHABLE_TRAINER_REASON, joined)
+
     def test_dues_members_sql_reads_race(self):
         self.assertIn("c.race", bridge._DUES_MEMBERS_SQL)
 

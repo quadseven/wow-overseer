@@ -38658,9 +38658,10 @@ def _guild_train_rows() -> list:
             "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
             "WHERE source LIKE %s AND (created_at > NOW() - INTERVAL 1 DAY "
             "OR (status = 'error' AND created_at > NOW() - INTERVAL %s DAY "
-            "AND result LIKE %s))",
+            "AND (result LIKE %s OR result LIKE %s)))",
             (classtrain.SOURCE + ":%", classtrain.STRANDED_READ_DAYS,
-             "%" + classtrain.NO_TRAINER_REASON + "%"))
+             "%" + classtrain.NO_TRAINER_REASON + "%",
+             "%" + classtrain.NO_REACHABLE_TRAINER_REASON + "%"))
 
 
 def _guild_cross_rows() -> tuple:
