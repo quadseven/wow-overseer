@@ -166,6 +166,8 @@ class TheSlotsReadAgainstTheLists(unittest.TestCase):
             self.assertEqual(slot["next"]["score"], 0.0)
             self.assertEqual(slot["next"]["gain"], 0.0)
             self.assertEqual(slot["next"]["where"], gearupgrades.where(first))
+            # A 0.0 piece for an empty slot is the guide's pick, not a score's.
+            self.assertEqual(slot["next"]["ranked_by"], "guide_order")
         self.assertTrue(gearupgrades.where(first))
         # A worn trinket that scores nothing keeps no target: nothing listed
         # is known to beat it, and the other slot is not told to buy it.

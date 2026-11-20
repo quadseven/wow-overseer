@@ -301,9 +301,10 @@ def _worn_block(spec, level, key, worn_row, pool, bonus=None) -> dict | None:
 def _next_block(spec, level, key, worn, worn_stats, pool, list_rows) -> dict | None:
     """The next upgrade by gearscore.next_target, with its gain over the worn.
 
-    `ranked_by` says how it was picked: "score" when it outscores what is
-    worn (or an empty slot), "guide_order" when the score reads nothing in
-    either piece and the guide's own order named it (#2208)."""
+    `ranked_by` says how it was picked: "score" when it scores above what
+    is worn, or above zero for an empty slot; "guide_order" when it does not,
+    which is a 0.0 piece the guide's own order named, for a worn 0.0 piece
+    and for an empty slot alike (#2208)."""
     worn_id = worn["entry"] if worn else None
     nxt = gearscore.next_target(spec, key, worn_stats, pool, level, worn_id)
     if not nxt:
