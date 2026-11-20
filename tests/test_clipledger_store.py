@@ -472,7 +472,7 @@ class TheCandidateRead(unittest.TestCase):
         scan(store, realm)
         self.assertEqual(1, realm.history_reads)
         (write,) = store.writes()
-        self.assertIn("clear:36", write[1])
+        self.assertIn("clear:36:one", write[1])
 
 
 TWO_FAMILIES = {"oaks": ["Alder", "Birch"], "pines": ["Cedar", "Dogwood"]}

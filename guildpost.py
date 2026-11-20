@@ -48,6 +48,23 @@ def is_held(said) -> bool:
     return HELD_WORDS in str(said or "")
 
 
+# A TAKE REFUSED FOR ROOM IS REMEMBERED TOO (#2971). A member whose bags are
+# full is refused "no room in the bags" by every take row; the pass broke out
+# of the visit and, with no backoff, walked the same member again next pass
+# (15 refusals of one member in a day). Bags do not empty on their own in a
+# few minutes, so the receiver is left alone for this long, and the bag pass
+# is the one that makes the room.
+NO_ROOM_WORDS = "no room in the bags"
+NO_ROOM_BACKOFF_SECONDS = 30 * 60
+
+
+def take_backoff(detail) -> float:
+    """Seconds to leave a receiver alone after a refused take, 0 for none."""
+    if NO_ROOM_WORDS in str(detail or ""):
+        return NO_ROOM_BACKOFF_SECONDS
+    return 0.0
+
+
 TAKE_SOURCE = "guildposttake"
 
 WALKS_PER_PASS = 3

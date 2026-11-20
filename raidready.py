@@ -395,20 +395,46 @@ def first_kill_card(raiders: list, min_level) -> dict:
     }
 
 
+def healer_levels_card(raiders: list) -> dict:
+    """Healers at level 50 and at level 60 against the door quorum's healer
+    count, so the slowest seat to fill reads as a number on the Raid tab."""
+    want = raidrun.door_quorum()[2]
+    healers = [m for m in raiders if m.get("role") == "healer"]
+    at_50 = len([m for m in healers if int(m.get("level") or 0) >= 50])
+    at_60 = len([m for m in healers if int(m.get("level") or 0) >= 60])
+    return {
+        "want": want,
+        "at_50": at_50,
+        "at_60": at_60,
+        "line": "Healers at 50: %d of %d. At 60: %d of %d."
+        % (at_50, want, at_60, want),
+    }
+
+
 def _quorum_blockers(raiders: list, min_level) -> list:
     """HARD: the module holds the raid at the door below its quorum. The
-    numbers are raidrun's copy of the module's defaults."""
+    numbers are raidrun.door_quorum: the realm's override, else the defaults."""
     have = _eligible_counts(raiders, min_level)
-    want = (raidrun.QUORUM_SEATS, raidrun.QUORUM_TANKS, raidrun.QUORUM_HEALERS)
+    want = raidrun.door_quorum()
     got = (have["seats"], have["tanks"], have["healers"])
     if all(h >= w for h, w in zip(got, want, strict=True)):
         return []
     return [
         "The module holds a raid at the door unless %d seats, %d tanks and %d "
         "healers stand there (Overseer.Raid.QuorumSeats, QuorumTanks, "
-        "QuorumHealers, at their defaults); %d seats, %d tanks and %d healers "
-        "are at level %d or more."
-        % (*want, have["seats"], have["tanks"], have["healers"], have["gate"])
+        "QuorumHealers); %d seats, %d tanks and %d healers "
+        "are at level %d or more. %s"
+        % (
+            *want,
+            have["seats"],
+            have["tanks"],
+            have["healers"],
+            have["gate"],
+            "Numbers set on the bridge to match the realm."
+            if raidrun.door_quorum_overridden()
+            else "Numbers are the module defaults; the bridge has no "
+            "RAID_DOOR_QUORUM_* set, so a realm that overrides them is not shown.",
+        )
     ]
 
 
@@ -1018,6 +1044,7 @@ def build_guild(
         "blockers": blockers,
         "seats_below_level": _below_level_card(raiders, min_level),
         "first_kill": first_kill_card(raiders, min_level),
+        "healer_levels": healer_levels_card(raiders),
         "blockers_line": (
             "Nothing stands between this guild and its first raid."
             if not blockers

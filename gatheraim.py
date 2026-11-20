@@ -176,7 +176,9 @@ def lowest_gatherer(skills):
     return worst if worst is not None else (None, 0)
 
 
-def bags_block_gathering(free_slots, minimum_free=GATHER_MIN_FREE_SLOTS) -> str:
+def bags_block_gathering(
+    free_slots, minimum_free=GATHER_MIN_FREE_SLOTS, released=()
+) -> str:
     """Why a gathering walk must not take the travel column now, or "" (#170).
 
     `free_slots` is {character: free bag slots}. Anybody at or below
@@ -184,6 +186,10 @@ def bags_block_gathering(free_slots, minimum_free=GATHER_MIN_FREE_SLOTS) -> str:
     would empty their bags needs the same column. An empty or unreadable
     reading refuses too: not knowing whether they can loot is not a reason to
     march them away from the vendor.
+
+    `released` names members the bag-floor release (#1261) judged no vendor
+    can clear: the trip a gathering walk would yield to cannot lift them, so
+    they do not block it. An unreadable reading still refuses.
     """
     readings = {}
     for name, free in (free_slots or {}).items():
@@ -196,8 +202,11 @@ def bags_block_gathering(free_slots, minimum_free=GATHER_MIN_FREE_SLOTS) -> str:
             "nobody's free bag slots could be read, so no gathering walk "
             "may take the travel column"
         )
+    let_go = {str(name) for name in (released or ())}
     full = sorted(
-        (free, name) for name, free in readings.items() if free <= int(minimum_free)
+        (free, name)
+        for name, free in readings.items()
+        if free <= int(minimum_free) and name not in let_go
     )
     if not full:
         return ""

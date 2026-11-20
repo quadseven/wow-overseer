@@ -275,6 +275,29 @@ class MovementTests(unittest.TestCase):
         self.assertTrue(result.progressed)
         self.assertEqual(result.split_seconds, 1200.0)
 
+    def test_split_clock_restarts_when_the_party_changes_while_still_split(self):
+        # A clock begun under another party is not this party's (#2568).
+        first = vendor_stall.family_progress(
+            None,
+            {
+                "Grug": {"map_id": 0, "pos_x": 0, "pos_y": 0},
+                "Ugga": {"map_id": 0, "pos_x": 2000, "pos_y": 0},
+            },
+            ("Grug", "Ugga"),
+            10.0,
+        )
+        later = vendor_stall.family_progress(
+            first.current,
+            {
+                "Grug": {"map_id": 0, "pos_x": 0, "pos_y": 0},
+                "Bork": {"map_id": 0, "pos_x": 2000, "pos_y": 0},
+            },
+            ("Grug", "Bork"),
+            5000.0,
+        )
+        self.assertTrue(later.split)
+        self.assertEqual(later.split_seconds, 0.0)
+
     def test_family_regrouping_resets_split_clock(self):
         first = vendor_stall.family_progress(
             None,

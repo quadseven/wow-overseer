@@ -68,9 +68,12 @@ NEVER_REASONS = (
 )
 ELSEWHERE_REASONS = ("character is inside an instance or battleground",)
 # A target out of reach: one walk toward it again may fix it.
+# A main-hand cast beside a spell focus names the forge it cannot reach in its own
+# words: the member is not near a Runeforge yet, so it walks to one again.
 OUT_OF_REACH = (
     "no such target within reach on this map",
     "the target is too far to use the item or object",
+    "no Runeforge is within spell range",
 )
 # A target that is not there yet: it respawns, so the wait is long.
 TARGET_DEAD = "the creature is dead"

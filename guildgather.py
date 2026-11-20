@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 import goals
+import levelroute
 import raidteams
 
 SOURCE = "overseer:guildgather"
@@ -47,6 +48,31 @@ SKILL_CAP = 300
 REASSERT_SECONDS = 30 * 60
 PER_PASS = 40
 
+# THE OTHER SIDE'S HOME GROUND (ticket 2624). `loot` walks a seat to a node it
+# sees, and a seat standing in a city or camp of the other side is killed by
+# that side's guards on the way (the dev realm's Alliance Draenei died to the
+# Barrens, Thunder Bluff and Mulgore guards while idle with this pair on). Only
+# zones that are one side's alone are listed; a contested zone (Ashenvale,
+# Stonetalon, Feralas) is in neither set. Side -> the zone ids that are the
+# OTHER side's: a seat of that side is not sent the pair while it stands there.
+_HORDE_HOME = frozenset({14, 17, 215, 1637, 1638, 85, 130, 1497})
+_ALLIANCE_HOME = frozenset(
+    {12, 1, 40, 38, 141, 148, 1519, 1537, 1657, 3524, 3525, 3557}
+)
+HOSTILE_ZONES = {
+    levelroute.ALLIANCE: _HORDE_HOME,
+    levelroute.HORDE: _ALLIANCE_HOME,
+}
+
+
+def side_of(race: int) -> str:
+    """The side of a character.race id, "" when it is neither."""
+    if race in levelroute.ALLIANCE_RACES:
+        return levelroute.ALLIANCE
+    if race in levelroute.HORDE_RACES:
+        return levelroute.HORDE
+    return ""
+
 
 @dataclass(frozen=True)
 class Seat:
@@ -58,6 +84,8 @@ class Seat:
     grouped: bool
     in_instance: bool
     in_combat: bool
+    race: int = 0
+    zone_id: int = 0
 
 
 def enabled(env=None) -> bool:
@@ -83,6 +111,11 @@ def seat_names(include_old: bool = False) -> frozenset:
     return frozenset(out)
 
 
+def on_other_sides_ground(seat: Seat) -> bool:
+    """True when the seat stands in a zone that is only the other side's."""
+    return int(seat.zone_id or 0) in HOSTILE_ZONES.get(side_of(int(seat.race or 0)), ())
+
+
 def refusal(seat: Seat) -> str:
     """Why this seat is not sent the pair now, or "" when it is."""
     if not seat.online:
@@ -97,6 +130,8 @@ def refusal(seat: Seat) -> str:
         return "it is inside an instance"
     if seat.in_combat:
         return "it is in combat"
+    if on_other_sides_ground(seat):
+        return "it stands on the other side's ground, where its guards kill it"
     held = [int(seat.skills.get(s, 0) or 0) for s in NODE_SKILLS]
     if not any(0 < v for v in held):
         return "it holds no gathering trade with a node"

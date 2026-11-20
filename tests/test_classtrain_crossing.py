@@ -194,6 +194,32 @@ class StrandedTrainerCrossingPlan(unittest.TestCase):
             cross.source, guildjobs.source_for(guildjobs.TRAIN_CROSS_ACTION, "Shamy")
         )
 
+    def test_unreachable_trainer_refusal_strands_and_plans_a_crossing(self):
+        # The module's other no-trainer refusal (a trainer stands on the map,
+        # no safe crossing reaches one): it must strand the member too, or the
+        # bridge never plans the boat and the member is only held 3 hours.
+        row = self._refused_row("Shamy", age=5)
+        row["result"] = json.dumps(
+            {
+                "outcome": "refused",
+                "retryable": False,
+                "reason": classtrain.NO_REACHABLE_TRAINER_REASON,
+                "map": KALIMDOR,
+            }
+        )
+        self.assertEqual(classtrain.stranded([row]), {"Shamy": KALIMDOR})
+        self.assertNotIn("Shamy", classtrain.recent_walkers([row]))
+        planned, _notes = classtrain.plan(
+            [_trainee("Shamy")],
+            {"Shamy": _walker("Shamy", KALIMDOR, DARKSHORE)},
+            classtrain.recent_walkers([row]),
+            busy=frozenset(),
+            stranded=classtrain.stranded([row]),
+            trainer_spawns=_spawns(),
+        )
+        self.assertEqual(len(planned), 1)
+        self.assertIsInstance(planned[0], classtrain.Cross)
+
     def test_after_crossing_to_map_zero_shaman_walks_immediately_despite_recent_refusal(
         self,
     ):
@@ -360,6 +386,20 @@ bridge = _import_bridge()
 
 
 class BridgeTrainerCrossingWiring(unittest.TestCase):
+    def test_train_rows_read_both_no_trainer_refusals(self):
+        seen = {}
+
+        def fake(cur, what, sql, params):
+            seen["params"] = params
+            return []
+
+        with mock.patch.object(bridge, "_connect"):
+            with mock.patch.object(bridge, "_corps_read", side_effect=fake):
+                bridge._guild_train_rows()
+        joined = " ".join(map(str, seen["params"]))
+        self.assertIn(classtrain.NO_TRAINER_REASON, joined)
+        self.assertIn(classtrain.NO_REACHABLE_TRAINER_REASON, joined)
+
     def test_dues_members_sql_reads_race(self):
         self.assertIn("c.race", bridge._DUES_MEMBERS_SQL)
 
@@ -503,3 +543,61 @@ class BridgeTrainerCrossingWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PassingRefusalRetry(unittest.TestCase):
+    """A refusal that passes holds a member for minutes, not the 3-hour wait (#771)."""
+
+    def _row(self, result, age, status="error", name="Payer"):
+        return {
+            "target_name": name,
+            "source": f"{classtrain.SOURCE}:{name}",
+            "age": age,
+            "status": status,
+            "result": json.dumps(result),
+        }
+
+    def test_held_by_another_verb_is_asked_again_after_a_short_pause(self):
+        row = self._row(
+            {
+                "outcome": "refused",
+                "reason": "character is held by another verb",
+                "retryable": True,
+                "transient": True,
+            },
+            age=classtrain.TRANSIENT_RETRY_MINUTES + 1,
+        )
+        self.assertNotIn("Payer", classtrain.recent_walkers([row]))
+
+    def test_a_passing_refusal_still_holds_for_the_short_pause(self):
+        row = self._row(
+            {"outcome": "entered_combat", "retryable": True, "transient": True}, age=2
+        )
+        self.assertIn("Payer", classtrain.recent_walkers([row]))
+
+    def test_a_dead_member_is_asked_again_after_a_short_pause(self):
+        row = self._row(
+            {"outcome": "refused", "reason": "character is dead", "retryable": True},
+            age=classtrain.TRANSIENT_RETRY_MINUTES + 1,
+        )
+        self.assertNotIn("Payer", classtrain.recent_walkers([row]))
+
+    def test_a_walk_that_ran_still_holds_for_the_full_cooldown(self):
+        row = self._row(
+            {"outcome": "stalled", "retryable": True},
+            age=classtrain.TRANSIENT_RETRY_MINUTES + 1,
+            status="unchanged",
+        )
+        self.assertIn("Payer", classtrain.recent_walkers([row]))
+
+    def test_a_non_transient_refusal_keeps_the_full_cooldown(self):
+        row = self._row(
+            {
+                "outcome": "refused",
+                "reason": "the road to the trainer crosses ground far above its level",
+                "retryable": False,
+                "transient": False,
+            },
+            age=60,
+        )
+        self.assertIn("Payer", classtrain.recent_walkers([row]))

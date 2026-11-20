@@ -28,14 +28,21 @@ every SAY_EVERY_SECONDS, "held by operator: <reason>":
 WHAT A HOLD LEAVES RUNNING. The farm pass (family-wide and per member), the
 bag, bank, mail, vendor and craft passes that act inside the job the family
 already has, and the craft rhythm, which only ever moves between gather and
-craft. A hold has no field that says what it forbids, so gathering is never
-stood down by one. A hold also undoes nothing: a job or aim
-already written stays. Set the job the family should hold from the console.
+craft, unless the row's `scope` names them (below). A hold also undoes
+nothing: a job or aim already written stays. Set the job the family should
+hold from the console.
 
 THE ENVIRONMENT SWITCHES STILL WORK. CAMPAIGN_PLANNER, ATTUNEMENT_STEP and
 JEV_MODE_ACTIVITY_CHOICE switched off still stop their writer for every family
 at start; a hold stops it for one family without a restart. Either one off is
 off.
+
+SCOPE NAMES WHAT A HOLD FORBIDS (#2560). The `scope` column is a comma list of
+writer names: `queue`, `council`, `activity`, `levelroute`, `gearrouting`, `lending`,
+`farm`.
+`all` names every writer. An empty scope is the default and stands for
+DEFAULT_SCOPE, today's meaning: the drives and lending, never gathering. A
+writer asks `covers`; nothing reads the free-text reason to decide.
 
 SET AND CLEAR IT WITH ONE STATEMENT on acore_characters:
 
@@ -60,6 +67,13 @@ TABLE = "overseer_operator_hold"
 # The family value that holds every family.
 EVERY_FAMILY = "*"
 
+# The writers an empty scope forbids: every writer this module's docstring says
+# a hold stops. Farm and craft are named by a scope, never by the default.
+DEFAULT_SCOPE = ("queue", "council", "activity", "levelroute", "gearrouting", "lending")
+
+# The scope word that names every writer.
+ALL_SCOPE = "all"
+
 # How often one writer repeats its line for one family while the hold stands.
 SAY_EVERY_SECONDS = 600.0
 
@@ -71,14 +85,22 @@ CREATE_SQL = (
     " reason VARCHAR(255) NOT NULL DEFAULT '',"
     " expires_at DATETIME NULL DEFAULT NULL,"
     " source VARCHAR(64) NOT NULL DEFAULT '',"
+    " scope VARCHAR(128) NOT NULL DEFAULT '',"
     " updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
     " ON UPDATE CURRENT_TIMESTAMP,"
     " PRIMARY KEY (family)"
     ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
 )
 
+# A table made before the scope column gets it here; the bridge ignores a
+# duplicate-column error (1060), so running it twice is harmless.
+ALTER_SQL = (
+    "ALTER TABLE overseer_operator_hold "
+    "ADD COLUMN scope VARCHAR(128) NOT NULL DEFAULT ''"
+)
+
 SELECT_SQL = (
-    "SELECT family, reason, source, expires_at, "
+    "SELECT family, reason, source, scope, expires_at, "
     "(expires_at IS NULL OR expires_at > UTC_TIMESTAMP()) AS live "
     "FROM overseer_operator_hold"
 )
@@ -92,6 +114,12 @@ class Hold:
     reason: str
     source: str = ""
     expires_at: object = None
+    scope: tuple = ()
+
+    def covers(self, writer: str) -> bool:
+        """True when this hold forbids `writer`. An empty scope is the default."""
+        names = self.scope or DEFAULT_SCOPE
+        return ALL_SCOPE in names or str(writer or "").lower() in names
 
 
 def _live(row: dict) -> bool:
@@ -99,6 +127,13 @@ def _live(row: dict) -> bool:
         return int(row.get("live", 1) or 0) == 1
     except (TypeError, ValueError):
         return False
+
+
+def _scope(raw) -> tuple:
+    """A scope cell as a tuple of lower-cased writer names."""
+    return tuple(
+        sorted({w.strip().lower() for w in str(raw or "").split(",") if w.strip()})
+    )
 
 
 def read(rows) -> dict:
@@ -113,18 +148,21 @@ def read(rows) -> dict:
             reason=str(row.get("reason") or "").strip(),
             source=str(row.get("source") or ""),
             expires_at=row.get("expires_at"),
+            scope=_scope(row.get("scope")),
         )
     return out
 
 
-def held(holds: dict, family: str):
+def held(holds: dict, family: str, writer: str = ""):
     """The Hold that covers `family`, or None. The family's own row first,
-    then the every-family row."""
+    then the every-family row. With a `writer`, only a hold whose scope covers
+    that writer counts; without one, any live hold does."""
     holds = holds or {}
     key = str(family or "").strip().lower()
-    if key and key in holds:
-        return holds[key]
-    return holds.get(EVERY_FAMILY)
+    for hold in (holds.get(key) if key else None, holds.get(EVERY_FAMILY)):
+        if hold is not None and (not writer or hold.covers(writer)):
+            return hold
+    return None
 
 
 def line(writer: str, who: str, hold: Hold) -> str:
