@@ -35,19 +35,6 @@ class Store:
     def broken(self):
         return [dict(r) for r in self.rows if r.get("state", ql.BROKEN) == ql.BROKEN]
 
-    def completed(self):
-        return [r["quest"] for r in self.rows if r.get("state") == ql.COMPLETED]
-
-    def completion_summary(self, quest):
-        rows = [
-            r
-            for r in self.rows
-            if r.get("state") == ql.COMPLETED and r["quest"] == quest
-        ]
-        return len(rows), max(
-            (r.get("finished") for r in rows if r.get("finished")), default=None
-        )
-
     def ticket(self, quest):
         for r in self.rows:
             if r["quest"] == quest and r.get("ticket") is not None:
@@ -78,11 +65,6 @@ class Store:
             if r["quest"] == quest and r["ticket"] == qt.FILING:
                 r["ticket"] = None
 
-    def retire(self, ticket, quest):
-        for r in self.rows:
-            if r["quest"] == quest and r.get("ticket") == ticket:
-                r["ticket"] = None
-
 
 class FakeGitHub:
     def __init__(self, refuse=None, timeout=None):
@@ -101,6 +83,28 @@ class FakeGitHub:
 
     def issues(self):
         return [c for c in self.calls if c[1] == "/issues"]
+
+
+class RetireStore(Store):
+    """Store behavior used only by tests of completed-ticket retirement."""
+
+    def completed(self):
+        return [r["quest"] for r in self.rows if r.get("state") == ql.COMPLETED]
+
+    def completion_summary(self, quest):
+        rows = [
+            r
+            for r in self.rows
+            if r.get("state") == ql.COMPLETED and r["quest"] == quest
+        ]
+        return len(rows), max(
+            (r.get("finished") for r in rows if r.get("finished")), default=None
+        )
+
+    def retire(self, ticket, quest):
+        for r in self.rows:
+            if r["quest"] == quest and r.get("ticket") == ticket:
+                r["ticket"] = None
 
 
 class Filing(unittest.TestCase):
@@ -445,13 +449,6 @@ class RetireTest(unittest.TestCase):
             self.refused(222, "the turn-in NPC would not take it: no object", 8),
         ]
 
-        def ticket_lookup(quest):
-            if quest == 221:
-                return 1001
-            if quest == 222:
-                return 1002
-            return None
-
         p = qt.plan(rows, ticket_for={221: 1001, 222: 1002}, completed={221, 222})
         self.assertEqual(p.retired, ((221, 1001), (222, 1002)))
         mixed = rows + [self.refused(223, "objectives did not move")]
@@ -465,12 +462,7 @@ class RetireTest(unittest.TestCase):
             self.completed_row(221, 9),
         ]
 
-        def ticket_lookup(quest):
-            if quest == 221:
-                return 1001
-            return None
-
-        store = Store(rows)
+        store = RetireStore(rows)
         for r in store.rows:
             if r.get("state") == ql.BROKEN:
                 r["ticket"] = 1001
@@ -507,7 +499,7 @@ class RetireTest(unittest.TestCase):
                 ]
             )
 
-        store = Store(rows)
+        store = RetireStore(rows)
         for r in store.rows:
             if r.get("state") == ql.BROKEN:
                 r["ticket"] = 1000 + r["quest"]
