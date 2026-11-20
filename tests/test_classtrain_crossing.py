@@ -391,10 +391,9 @@ class BridgeTrainerCrossingWiring(unittest.TestCase):
             seen["params"] = params
             return []
 
-        with mock.patch.object(bridge, "_connect"), mock.patch.object(
-            bridge, "_corps_read", side_effect=fake
-        ):
-            bridge._guild_train_rows()
+        with mock.patch.object(bridge, "_connect"):
+            with mock.patch.object(bridge, "_corps_read", side_effect=fake):
+                bridge._guild_train_rows()
         joined = " ".join(map(str, seen["params"]))
         self.assertIn(classtrain.NO_TRAINER_REASON, joined)
         self.assertIn(classtrain.NO_REACHABLE_TRAINER_REASON, joined)
