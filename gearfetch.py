@@ -154,6 +154,34 @@ def _meeting(holder, wearer, mailboxes, discs):
     return safe[0], ""
 
 
+def _pair_refusal(route, holder, wearer, taken, held, kept) -> str:
+    """Why this route is not fetched whatever the bounds, "" when it may be."""
+    if route.holder == gearrouting.BANK_HOLDER:
+        return "the guild bank is not walked"
+    if gearroutingexec._kept(route, kept):
+        return "kept (overseer_keep), not moved"
+    if wearer is not None and wearer.roster and holder is not None:
+        if holder.roster:
+            return "a family holder is not walked here"
+    for who in (holder, wearer):
+        if wearer is not None and wearer.roster and who is wearer:
+            continue
+        why = _member_refusal(who, taken, held)
+        if why:
+            return "%s %s" % (getattr(who, "name", "a member"), why)
+    return ""
+
+
+def _bound_refusal(started, running, spent, per_pass, per_day, at_once) -> str:
+    if started >= per_pass:
+        return "past the %d fetches a pass may start" % per_pass
+    if spent + started >= per_day:
+        return "the %d fetches a day are spent" % per_day
+    if running + started >= at_once:
+        return "%d fetches are already under way" % at_once
+    return ""
+
+
 def plan(
     routes,
     members,
@@ -187,55 +215,23 @@ def plan(
             route.item,
             route.guid,
         )
-        if route.holder == gearrouting.BANK_HOLDER:
-            notes.append("%s: the guild bank is not walked" % lead)
-            continue
-        if gearroutingexec._kept(route, kept):
-            notes.append("%s: kept (overseer_keep), not moved" % lead)
-            continue
         holder, wearer = members.get(route.holder), members.get(route.wearer)
-        if wearer is not None and wearer.roster and holder is not None:
-            if holder.roster:
-                notes.append("%s: a family holder is not walked here" % lead)
-                continue
-            why = _member_refusal(holder, taken, held_families)
-            if why:
-                notes.append("%s: %s %s" % (lead, holder.name, why))
-                continue
+        why = _pair_refusal(route, holder, wearer, taken, held_families, kept)
+        if not why and wearer.roster:
             fetches.append(Fetch(MAILBOX, route))
             taken.add(holder.name)
             continue
-        refusal = ""
-        for who in (holder, wearer):
-            why = _member_refusal(who, taken, held_families)
-            if why:
-                refusal = "%s %s" % (getattr(who, "name", "a member"), why)
-                break
-        if refusal:
-            notes.append("%s: %s" % (lead, refusal))
-            continue
-        if started >= per_pass:
-            notes.append("%s: past the %d fetches a pass may start" % (lead, per_pass))
-            continue
-        if spent + started >= per_day:
-            notes.append("%s: the %d fetches a day are spent" % (lead, per_day))
-            continue
-        if running + started >= at_once:
-            notes.append("%s: %d fetches are already under way" % (lead, at_once))
-            continue
-        box, why = _meeting(holder, wearer, mailboxes, discs)
+        if not why:
+            why = _bound_refusal(started, running, spent, per_pass, per_day, at_once)
+        box = None
+        if not why:
+            box, why = _meeting(holder, wearer, mailboxes, discs)
         if box is None:
             notes.append("%s: %s" % (lead, why))
             continue
         command = walk_command(box)
-        fetches.append(
-            Fetch(
-                MEET,
-                route,
-                box.spawn,
-                ((holder.name, command), (wearer.name, command)),
-            )
-        )
+        walks = ((holder.name, command), (wearer.name, command))
+        fetches.append(Fetch(MEET, route, box.spawn, walks))
         taken.update((holder.name, wearer.name))
         started += 1
     return Plan(tuple(fetches), tuple(notes))
