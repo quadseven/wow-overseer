@@ -29377,6 +29377,7 @@ class Bridge(discord.Client):
         got = await asyncio.to_thread(
             _farm_reads, names, leader, item, skill,
             state["started"], state.get("deaths_since", state["started"]),
+            state.get("visited"),
         )
         gathered = await self._farm_count(cohort, state, got, who)
         step = farmjob.decide(_farm_order(job, item, skill, got["name"], state),
@@ -43568,7 +43569,7 @@ def _farm_reads_for(state: dict, got: dict, gathered: int):
 
 
 def _farm_reads(names: list, leader: str, item: int, skill: str, since: float,
-                zone_since: float | None = None) -> dict:
+                zone_since: float | None = None, visited: dict | None = None) -> dict:
     """Everything farmjob.decide needs for one family, in one thread.
 
     The danger reading is the slow one (a creature scan per point), so only
@@ -43597,7 +43598,8 @@ def _farm_reads(names: list, leader: str, item: int, skill: str, since: float,
     open_, _refused = (farmjob.usable_kills(order, creatures, levels) if creatures
                        else farmjob.usable(order, spawns, skills))
     here = int((leader_at or {}).get("zone_id") or 0)
-    for rank, (_far, zone, _nodes, near) in enumerate(farmjob.fields(open_, leader_at)):
+    for rank, (_far, zone, _nodes, near) in enumerate(
+            farmjob.fields(open_, leader_at, visited or {}, time.time())):
         if rank >= GATHER_DANGER_CANDIDATES and zone != here:
             continue
         top = _gather_danger(near.map_id, near.x, near.y)
