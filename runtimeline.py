@@ -305,22 +305,29 @@ def _run_card(run: dict, latest: bool, now: datetime, told: dict | None = None) 
 _CLEAR_SLACK_SECONDS = 300
 
 
+def _is_clear_key(event_key, prefix: str) -> bool:
+    """True for the family-keyed clear key of this map, or the older
+    map-only key of a row written before the family joined the key."""
+    event_key = str(event_key or "")
+    return event_key.startswith(prefix) or event_key == prefix[:-1]
+
+
 def _clear_row(run: dict, report: dict, clips: list) -> dict | None:
     """The ledger row of the clear this run was, or None.
 
-    The ledger keys a clear by dungeon map ("clear:<map id>"), once, for the
-    family's first clear, so a run is that clear only when it cleared that
-    map, was led by the ledger row's character, and ended when the row's event
-    happened. The run's own outcome word does not veto the link: the ledger row
+    The ledger keys a clear by dungeon map and family
+    ("clear:<map id>:<family>"), once per family, for that family's first
+    clear, so a run is that clear only when it cleared that map, was led by the
+    ledger row's character, and ended when the row's event happened. The run's own outcome word does not veto the link: the ledger row
     is the record of the clear. A run with no such row carries nothing.
     """
     ended = run["ended"]
     if ended is None or ended.get("age_seconds") is None:
         return None
-    key = "clear:%s" % report.get("map_id")
+    key = clipledger.clear_key(report.get("map_id"), "")
     for row in clips:
         if (
-            row.get("event_key") == key
+            _is_clear_key(row.get("event_key"), key)
             and row.get("character") == report.get("leader")
             and row.get("age_seconds") is not None
             and abs(int(row["age_seconds"]) - int(ended["age_seconds"]))

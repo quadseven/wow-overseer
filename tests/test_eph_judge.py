@@ -335,6 +335,63 @@ class StartWaitTest(unittest.TestCase):
         )
 
 
+class CastOnlineWaitTest(unittest.TestCase):
+    def decree(self):
+        d = copy.deepcopy(GUZZLER)
+        d["observe"].append(
+            {
+                "name": "cast-online",
+                "role": "precondition",
+                "when": "start",
+                "online": "cast",
+            }
+        )
+        return d
+
+    def run_waiting(self, world, clock, wait=120):
+        return judge.Judge(
+            self.decree(),
+            world,
+            HANDOFF,
+            log_text=lambda: "",
+            clock=clock.monotonic,
+            sleep=clock.sleep,
+            poll=10,
+            run_id="run-1",
+            sha="a" * 64,
+            arm="control",
+            start_wait=wait,
+        ).run()
+
+    def test_acts_wait_until_every_cast_member_is_online(self):
+        clock = Clock()
+        world = guzzler_world(clock)
+        world.answer(
+            "FROM characters", lambda now: [(1,)] if now < 60 else [(1,), (2,)]
+        )
+        result = self.run_waiting(world, clock)
+        self.assertEqual(result["verdict"], "PASS", result["reasons"])
+        self.assertGreaterEqual(result["start_wait_s"], 60)
+        self.assertGreaterEqual(world.commands[0][0], 60)
+        online = named(result, "cast-online")
+        self.assertEqual(online["status"], "held")
+        self.assertEqual(online["missing_members"], [])
+        online_sql = next(sql for _, sql in world.selects if "FROM characters" in sql)
+        self.assertIn("guid IN (1, 2)", online_sql)
+        self.assertIn("online = 1", online_sql)
+
+    def test_timeout_is_invalid_and_names_the_member_who_never_logged_in(self):
+        clock = Clock()
+        world = guzzler_world(clock)
+        world.answer("FROM characters", [(1,)])
+        result = self.run_waiting(world, clock, wait=120)
+        self.assertEqual(result["verdict"], "INVALID")
+        self.assertTrue(any("Ugga" in reason for reason in result["reasons"]))
+        self.assertEqual(world.commands, [])
+        self.assertGreaterEqual(result["start_wait_s"], 120)
+        self.assertLess(result["start_wait_s"], 130)
+
+
 class ScalarAndCreditTest(unittest.TestCase):
     def test_an_ambiguous_scalar_makes_the_run_invalid(self):
         clock = Clock()

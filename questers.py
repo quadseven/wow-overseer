@@ -149,6 +149,7 @@ import bag_pressure
 import classquest
 import guildcorps
 import guildjobs
+import guildlevel
 import guildroute
 import levelroute
 import questlog
@@ -182,6 +183,9 @@ SELL_COOLDOWN_MINUTES = 20
 # sale step runs first; if it cannot make room, a three-hour window keeps the
 # same refusal from recurring every pass while still retrying in bounded time.
 BAG_HUNT_RETRY_MINUTES = 3 * 60
+# Refusals a free-slot read may release inside that window before it is
+# distrusted: the module refused with room read (#3042).
+BAG_HUNT_ROOM_RELEASES = 1
 # A quester's crossing row has its own source action (quest takes, hand-ins
 # and hunts are ACTION), so it shares the one crossing clock and the walls of
 # the class quest's and the level step's crossings (guildjobs.CROSS_ACTIONS).
@@ -251,6 +255,7 @@ def _quest_complete(quest, status, progress=0) -> bool:
 FAILED = "the quest failed in the log"
 STALLED = "its objectives did not move for 2 hours of play"
 NO_OBJECTIVES = "the world defines no required objectives to complete"
+SCRIPTED_EVENT = "the quest completes only by a scripted event no lone quester drives"
 GIVER_MISSING = "the quest giver is not in the world"
 # Further Concerns and Report to Gryan Stoutmantle require speaking to an NPC
 # for objective credit. Questers can hunt and use quest verbs, but cannot speak
@@ -269,6 +274,22 @@ DEFIAS_BROTHERHOOD = (
 GHOST_HAIR_THREAD = (
     "Ghost Hair Thread (quest 149) requires Spectral Comb (item 1453), "
     "which no spawned creature drops"
+)
+HEART_OF_MOKK = (
+    "Stranglethorn Fever (quest 348) requires Heart of Mokk (item 2797), "
+    "which only Mokk the Savage drops; he has no spawn and a script summons "
+    "him when quest 349 is turned in"
+)
+GREEN_HILLS_CHAPTERS = (
+    "The Green Hills of Stranglethorn (quest 338) requires four chapter items "
+    "(items 2756 to 2759), which no creature drops and no vendor sells; each "
+    "is the reward of its own quest (quests 339 to 342), so the chapters come "
+    "from finishing those four quests first"
+)
+FLAGON_OF_MEAD = (
+    "The Third Fleet (quest 288) requires Flagon of Mead (item 2594), which "
+    "only Malgin Barleybrew drops: one vendor spawn on another continent than "
+    "the quest's zone, and questers cannot buy the item from a vendor"
 )
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
@@ -377,6 +398,8 @@ QUESTS_SQL = (
     "SELECT q.ID AS id, q.LogTitle AS title, q.QuestSortID AS sort, "  # noqa: S608
     "q.QuestSortID AS zone, q.QuestLevel AS level, q.QuestInfoID AS info, "
     "q.MinLevel AS min_level, COALESCE(a.MaxLevel, 0) AS max_level, "
+    "COALESCE(a.SpecialFlags, 0) AS special, "
+    "q.ID IN (SELECT quest FROM acore_world.areatrigger_involvedrelation) AS area_trigger, "
     "q.AllowableRaces AS races, "
     "COALESCE(a.AllowableClasses, 0) AS classes, "
     "COALESCE(a.PrevQuestID, 0) AS prev_signed, "
@@ -703,6 +726,7 @@ class Facts:
     # None (SatisfyQuestReputation).
     min_rep: tuple | None = None
     max_rep: tuple | None = None
+    scripted_event: bool = False
 
 
 @dataclass(frozen=True)
@@ -800,6 +824,7 @@ def catalogue(
             breadcrumbs=tuple(sorted(links.breadcrumbs.get(qid, ()))),
             min_rep=_rep(r, "min"),
             max_rep=_rep(r, "max"),
+            scripted_event=guildlevel.scripted_event_quest(r),
         )
         kept[qid] = quest
         band_rows.append(
@@ -1354,18 +1379,24 @@ def bag_room_refused(name, tried) -> frozenset:
 def bags_full_hunt(name, tried, free_slots=None) -> bool:
     """Whether a full-bag hunt refusal still holds this quester.
 
-    A free slot releases the hold early after the sale step makes room. With
-    no room (or unread bags), the hold lasts through BAG_HUNT_RETRY_MINUTES so
-    the retry is bounded without repeating the same refusal every pass.
+    A free slot releases the hold early after the sale step makes room, but
+    only once: a second refusal inside the window means the room the bridge
+    read is not room the module can use (#3042), so the hold then lasts the
+    whole of BAG_HUNT_RETRY_MINUTES. With no room (or unread bags) the hold
+    lasts through it too, so the retry is bounded without repeating the same
+    refusal every pass.
     """
-    if free_slots is not None and int(free_slots) > 0:
-        return False
+    refusals_seen = 0
     for a in tried or ():
         if a.name != name or not a.failed or a.age_minutes >= BAG_HUNT_RETRY_MINUTES:
             continue
         if classhunt.is_hunt_row(a.command) and classhunt.BAGS_FULL_REASON in a.reason:
-            return True
-    return False
+            refusals_seen += 1
+    if not refusals_seen:
+        return False
+    if free_slots is not None and int(free_slots) > 0:
+        return refusals_seen >= BAG_HUNT_ROOM_RELEASES + 1
+    return True
 
 
 def cannot_turn_in(name, tried) -> dict:
@@ -1859,6 +1890,27 @@ def _broken_reason(
         and played >= STALL_SECONDS
     ):
         return GHOST_HAIR_THREAD
+    if (
+        quest.id == 348
+        and status == STATUS_INCOMPLETE
+        and (2797, 1) in quest.items
+        and played >= STALL_SECONDS
+    ):
+        return HEART_OF_MOKK
+    if (
+        quest.id == 338
+        and status == STATUS_INCOMPLETE
+        and (2756, 1) in quest.items
+        and played >= STALL_SECONDS
+    ):
+        return GREEN_HILLS_CHAPTERS
+    if (
+        quest.id == 288
+        and status == STATUS_INCOMPLETE
+        and (2594, 1) in quest.items
+        and played >= STALL_SECONDS
+    ):
+        return FLAGON_OF_MEAD
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that
@@ -1893,10 +1945,14 @@ def _refused_words(reason, words) -> str:
 
 
 def _giver_failure(cat: Catalogue, member, qid, gone, refused):
-    """The reason a quest in reach cannot be taken, "" when it can or when what
-    stands in the way is no fault of the quest (a giver on another map, or a
-    quest a gameobject or an item starts, which no verb takes)."""
+    """A ledger reason for skipping a quest in reach, or "" to leave it unrecorded.
+
+    A giver on another map or a quest started by an object or item may be
+    out of reach for the current take verb without warranting a ledger entry.
+    """
     quest, facts = cat.quest(qid), cat.facts[qid]
+    if facts.scripted_event:
+        return SCRIPTED_EVENT
     if int(qid) in (35, 109):
         return UNSUPPORTED_OBJECTIVE
     count, words = refused.get(("take", qid), (0, ""))
@@ -1993,7 +2049,7 @@ def next_zone(
     """(zone, its open quest ids) of the zone the quester goes to next, or
     (0, []) when no zone holds a quest in reach for it: the lowest band of
     its side among those zones, the most quests first on a tie. A quest counts
-    only when a giver of it is one the quester can go to (`_giver_to_go_to`):
+    when it has no scripted event gate and the quester can go to its giver:
     a zone whose open quests an item or a gameobject starts, or whose givers
     are all gone or left, is passed over, not chosen and then found to have no
     way there, pass after pass. A giver on a continent in `unsailed` (the maps
@@ -2012,7 +2068,8 @@ def next_zone(
         opens = [
             qid
             for qid in in_reach(cat, member, zone, broken)
-            if _giver_to_go_to(cat, member, qid, gone, unsailed)
+            if not cat.facts[qid].scripted_event
+            and _giver_to_go_to(cat, member, qid, gone, unsailed)
         ]
         if not opens:
             continue

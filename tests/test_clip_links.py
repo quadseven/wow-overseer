@@ -250,6 +250,10 @@ class TimelineEntries(unittest.TestCase):
         card = self.card([clear_row(age_seconds=90000)])
         self.assertNotIn("clip", card)
 
+    def test_a_family_keyed_clear_row_links_and_a_longer_map_id_does_not(self):
+        self.assertIn("clip", self.card([clear_row(event_key="clear:389:oaks")]))
+        self.assertNotIn("clip", self.card([clear_row(event_key="clear:3890:oaks")]))
+
     def test_a_clear_of_another_dungeon_is_not_this_run(self):
         card = self.card([clear_row(event_key="clear:33")])
         self.assertNotIn("clip", card)

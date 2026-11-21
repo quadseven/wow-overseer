@@ -184,6 +184,15 @@ class AHuntRefusedForBagRoomWaitsOnTheSale(unittest.TestCase):
         again = questers.plan(world(), member, questers.Clock(), 0.0, tried=refused)
         self.assertEqual(again.move.kind, classquest.HUNT)
 
+    def test_a_second_refusal_with_room_read_holds_the_whole_window(self):
+        member = mirra(**self.HUNTING, free_slots=2)
+        twice = [hunt_bags_full(age=3), hunt_bags_full(age=6)]
+        self.assertTrue(questers.bags_full_hunt("Mirra", twice, 2))
+        held = questers.plan(world(), member, questers.Clock(), 0.0, tried=twice)
+        self.assertIsNone(held.move)
+        old = [hunt_bags_full(age=questers.BAG_HUNT_RETRY_MINUTES + 1)] * 2
+        self.assertFalse(questers.bags_full_hunt("Mirra", old + twice[:1], 2))
+
     def test_a_refusal_of_another_kind_holds_nothing(self):
         other = questers.Attempt(
             "Mirra",

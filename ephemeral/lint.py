@@ -951,7 +951,10 @@ def _observe(lint, doc, whos, aliases):
     for i, o in enumerate(obs):
         path = f"decree.observe[{i}]"
         if lint.keys(
-            path, o, ("name", "role", "sql", "log", "expect", "when"), ("name", "role")
+            path,
+            o,
+            ("name", "role", "sql", "log", "expect", "when", "online"),
+            ("name", "role"),
         ):
             roles.append(o.get("role"))
             _observe_one(lint, path, o, seen, known_var)
@@ -980,6 +983,9 @@ def _observe_one(lint, path, o, seen, known_var):
         "schema",
         "must be precondition or check",
     )
+    if "online" in o:
+        _observe_online(lint, path, o)
+        return
     lint.ensure(
         ("sql" in o) != ("log" in o), path, "schema", "needs exactly one of sql or log"
     )
@@ -987,6 +993,27 @@ def _observe_one(lint, path, o, seen, known_var):
         _observe_sql(lint, path, o, known_var)
     if "log" in o:
         _observe_log(lint, path, o)
+
+
+def _observe_online(lint, path, o):
+    lint.ensure(
+        o.get("online") == "cast",
+        f"{path}.online",
+        "online",
+        "must be cast",
+    )
+    lint.ensure(
+        o.get("role") == "precondition" and o.get("when") == "start",
+        f"{path}.online",
+        "online",
+        "cast online is a start precondition",
+    )
+    lint.ensure(
+        not any(key in o for key in ("sql", "log", "expect")),
+        f"{path}.online",
+        "online",
+        "cannot be combined with sql, log or expect",
+    )
 
 
 def _observe_log(lint, path, o):

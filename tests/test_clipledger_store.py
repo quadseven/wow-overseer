@@ -4,6 +4,7 @@ The realm reads are patched out and `_connect` is a fake that records every
 statement, so a test sees exactly what would reach overseer_clip. No database.
 """
 
+import os
 import logging
 import pathlib
 import sys
@@ -384,11 +385,34 @@ class TheScan(unittest.TestCase):
         result = scan(store, Realm())
         (sql, params) = store.many[0]
         self.assertEqual(
-            "UPDATE overseer_clip SET state = 'expired' WHERE id = %s AND state = 'ready'",
+            "UPDATE overseer_clip SET state = 'expired', detail = "
+            "CONCAT_WS('; ', NULLIF(detail, ''), NULLIF(%s, ''))"
+            " WHERE id = %s AND state = 'ready'",
             sql,
         )
-        self.assertEqual([(3,), (4,)], params)
+        why = "expired: age cap (30 days)"
+        self.assertEqual([(why, 3), (why, 4)], params)
         self.assertEqual(2, result["expired"])
+        self.assertFalse(any("DELETE" in s[0].upper() for s in store.statements))
+
+    def test_a_burst_over_the_count_cap_keeps_the_newest_and_touches_no_file(self):
+        ready = [
+            {
+                "id": i,
+                "event_key": "loot:%d" % i,
+                "state": "ready",
+                "created_at": NOW - timedelta(minutes=i),
+            }
+            for i in range(1, 7)
+        ]
+        store = FakeStore(ready=ready)
+        with mock.patch.dict(os.environ, {"CLIP_MAX_COUNT": "4"}):
+            result = scan(store, Realm())
+        (sql, params) = store.many[0]
+        why = "expired: count cap (4)"
+        self.assertEqual([(why, 5), (why, 6)], params)
+        self.assertEqual(2, result["expired"])
+        self.assertNotIn("file_name", sql)
         self.assertFalse(any("DELETE" in s[0].upper() for s in store.statements))
 
 
@@ -472,7 +496,7 @@ class TheCandidateRead(unittest.TestCase):
         scan(store, realm)
         self.assertEqual(1, realm.history_reads)
         (write,) = store.writes()
-        self.assertIn("clear:36", write[1])
+        self.assertIn("clear:36:one", write[1])
 
 
 TWO_FAMILIES = {"oaks": ["Alder", "Birch"], "pines": ["Cedar", "Dogwood"]}

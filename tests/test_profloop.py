@@ -672,6 +672,8 @@ class ProfLoopBridgeWiring(unittest.TestCase):
             "townerrand": townerrand,
             "_PROF_LOOPS": {},
             "_PROF_LOOP_SAID": {},
+            "_PROF_LOOP_YIELD": set(),
+            "_queued_run_door": lambda key: (False, None),
             "_PROF_LOOP_TOWN": {},
             "_PROF_LOOP_TOWN_SOURCES": (
                 reagentplan.BANK,
@@ -770,6 +772,251 @@ class ProfLoopBridgeWiring(unittest.TestCase):
         got = self._gather_writes("")
         self.assertEqual(got, {"Grug": "farm:mining", "Og": "farm:mining"})
 
+    def test_a_queued_run_keeps_the_family_off_far_farm_jobs(self):
+        import os
+
+        writes = []
+        bridge_obj, ns = self._make_bridge(set(), writes)
+        ns["_plan_craft_reagents"] = lambda names, spells, skills: {}
+        ns["_fetch_trade_skills"] = lambda names: {
+            "Grug": {"mining": 150},
+            "Og": {"herbalism": 200},
+        }
+        ns["_queued_run_door"] = lambda key: (True, (0, 1.0, 2.0))
+        ns["_farm_job_near_door"] = lambda job, door, skills: job == "farm:mining"
+        with mock.patch.dict(os.environ, {individual.ENV: "grug"}):
+            asyncio.run(bridge_obj._prof_loop_for("grug", ["Grug", "Og"]))
+        self.assertEqual(
+            dict((n, m) for n, m, _ in writes),
+            {"Grug": "farm:mining", "Og": profloop.QUEUED_FALLBACK},
+        )
+
+    def test_the_yield_marks_the_family_for_the_queue(self):
+        writes = []
+        bridge_obj, ns = self._make_bridge(set(), writes)
+        ns["_queued_run_door"] = lambda key: (True, None)
+        # The bridge reads time.monotonic(), which on a freshly booted runner
+        # is smaller than the slice: anchor the clocks to it instead of to a
+        # literal, so the slice is spent however long the host has been up.
+        spent = time.monotonic() - profloop.QUEUED_SLICE_SECONDS - 1.0
+        ns["_PROF_LOOPS"]["grug"] = profloop.State(
+            phase=profloop.GATHER, since=spent, queued_since=spent
+        )
+        asyncio.run(bridge_obj._prof_loop_for("grug", ["Grug", "Og"]))
+        self.assertEqual(writes, [])
+        self.assertIn("grug", ns["_PROF_LOOP_YIELD"])
+
+
+class TheQueuedRunSlice(unittest.TestCase):
+    """While a run is queued the loop holds a family for a bounded slice."""
+
+    def test_holds_inside_the_slice_and_keeps_its_clock(self):
+        state = at(profloop.GATHER, since=0.0)
+        first = profloop.decide(state, facts(100.0, run_queued=True))
+        self.assertFalse(first.yielded)
+        self.assertEqual(first.state.queued_since, 100.0)
+        later = profloop.decide(
+            first.state,
+            facts(100.0 + profloop.QUEUED_SLICE_SECONDS - 1, run_queued=True),
+        )
+        self.assertFalse(later.yielded)
+        self.assertEqual(later.state.queued_since, 100.0)
+
+    def test_yields_at_the_bound_and_the_dungeon_job_stands(self):
+        state = at(profloop.GATHER, since=0.0, queued_since=100.0)
+        step = profloop.decide(
+            state, facts(100.0 + profloop.QUEUED_SLICE_SECONDS, run_queued=True)
+        )
+        self.assertTrue(step.yielded)
+        self.assertEqual(step.job, "")
+        self.assertIn("a campaign run is queued", step.line)
+        again = profloop.decide(
+            step.state,
+            facts(100.0 + 2 * profloop.QUEUED_SLICE_SECONDS, run_queued=True),
+        )
+        self.assertEqual((again.job, again.line, again.yielded), ("", "", False))
+        self.assertTrue(again.state.yielded)
+
+    def test_the_yield_is_logged_once(self):
+        state = at(profloop.GATHER, since=0.0, queued_since=1.0)
+        step = profloop.decide(state, facts(1.0 + H, run_queued=True))
+        lines = [profloop.line("Grug", step)]
+        for n in range(1, 4):
+            step = profloop.decide(
+                step.state, facts(1.0 + H + n * 600, run_queued=True)
+            )
+            lines.append(profloop.line("Grug", step))
+        self.assertEqual([x for x in lines if x].__len__(), 1)
+
+    def test_no_run_queued_behaves_as_before(self):
+        state = at(profloop.GATHER, since=0.0)
+        step = profloop.decide(state, facts(5 * H))
+        self.assertFalse(step.yielded)
+        self.assertEqual(step.state.queued_since, 0.0)
+        # a long stretch with nothing queued is never cut by the slice
+        self.assertEqual(step.state.phase, profloop.GATHER)
+
+    def test_a_run_opening_starts_a_fresh_slice(self):
+        state = at(profloop.GATHER, since=0.0, queued_since=1.0, yielded=True)
+        step = profloop.decide(state, facts(9000.0, run_queued=True, in_run=True))
+        self.assertFalse(step.state.yielded)
+        self.assertEqual(step.state.queued_since, 0.0)
+
+    def test_a_far_farm_job_is_not_issued_while_a_run_is_queued(self):
+        targets = {
+            "Bork": "farm:mining",
+            "Grog": "farm:herbalism",
+            "Grug": "farm:13463",
+            "Og": "quest",
+        }
+        near = {"farm:mining"}
+        out = profloop.queued_targets(targets, lambda job: job in near)
+        self.assertEqual(out["Bork"], "farm:mining")
+        self.assertEqual(out["Grog"], profloop.QUEUED_FALLBACK)
+        self.assertEqual(out["Grug"], profloop.QUEUED_FALLBACK)
+        self.assertEqual(out["Og"], "quest")
+
+    def test_no_run_queued_still_splits_members(self):
+        skills = {
+            "Bork": {"mining": 100},
+            "Grog": {"herbalism": 100},
+        }
+        got = individual.gather_targets(
+            {n: "farm:mining" for n in skills},
+            skills,
+            "bork",
+            "farm:mining",
+            environ={individual.ENV: "bork"},
+        )
+        self.assertEqual(got, {"Bork": "farm:mining", "Grog": "farm:herbalism"})
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AFruitlessTownVisitIsNotRepeated(unittest.TestCase):
+    """A visit that left a member's bags no roomier must not send the family
+    straight back: every stack that member carries is one no vendor buys, so
+    the loop would go gather -> town -> gather -> town for hours."""
+
+    def slots(self, **low):
+        out = {n: 15 for n in FAMILY}
+        out.update(low)
+        return out
+
+    def run_town_and_back(self, after, ended_at=1000.0, now=2000.0):
+        """Gather -> town with Og at 2 free slots, then the errand ends with the
+        bags reading `after`. Returns the state the loop is in after leaving."""
+        step = profloop.decide(
+            at(profloop.GATHER), facts(600, free_slots=self.slots(Og=2))
+        )
+        self.assertEqual(step.state.phase, profloop.TOWN)
+        seen = profloop.decide(
+            step.state,
+            facts(700, free_slots=self.slots(Og=2), errand_active=True),
+        )
+        out = profloop.decide(
+            seen.state,
+            facts(
+                now,
+                free_slots=after,
+                errand_ended=ended_at,
+                errand_why=townerrand.LOOP_WHY,
+            ),
+        )
+        self.assertEqual(out.state.phase, profloop.GATHER)
+        return out.state
+
+    def test_a_member_the_visit_did_not_lift_does_not_send_the_family_back(self):
+        state = self.run_town_and_back(self.slots(Og=2))
+        self.assertEqual(state.fruitless, ("Og",))
+        step = profloop.decide(
+            state, facts(state.since + 1800, free_slots=self.slots(Og=2))
+        )
+        self.assertFalse(step.moved)
+        self.assertEqual(step.state.phase, profloop.GATHER)
+
+    def test_a_member_the_visit_lifted_still_counts_next_time(self):
+        state = self.run_town_and_back(self.slots(Og=5))
+        self.assertEqual(state.fruitless, ())
+        step = profloop.decide(
+            state, facts(state.since + 1800, free_slots=self.slots(Og=3))
+        )
+        self.assertTrue(step.moved)
+        self.assertEqual(step.state.phase, profloop.TOWN)
+
+    def test_another_low_member_still_sends_the_family(self):
+        state = self.run_town_and_back(self.slots(Og=2))
+        step = profloop.decide(
+            state,
+            facts(state.since + 1800, free_slots=self.slots(Og=2, Bork=1)),
+        )
+        self.assertTrue(step.moved)
+        self.assertIn("Bork (1)", step.line)
+        self.assertNotIn("Og", step.line)
+
+    def test_room_made_by_other_means_clears_the_member(self):
+        state = self.run_town_and_back(self.slots(Og=2))
+        roomy = profloop.decide(
+            state, facts(state.since + 600, free_slots=self.slots())
+        )
+        self.assertEqual(roomy.state.fruitless, ())
+        step = profloop.decide(
+            roomy.state, facts(state.since + 1200, free_slots=self.slots(Og=2))
+        )
+        self.assertTrue(step.moved)
+
+    def test_the_visit_is_tried_again_after_the_bound(self):
+        state = self.run_town_and_back(self.slots(Og=2))
+        step = profloop.decide(
+            state,
+            facts(
+                dict(state.fruitless_stamps)["Og"] + profloop.FRUITLESS_SECONDS + 1,
+                free_slots=self.slots(Og=2),
+            ),
+        )
+        self.assertTrue(step.moved)
+        self.assertEqual(step.state.phase, profloop.TOWN)
+
+    def test_a_later_member_does_not_extend_an_earlier_ones_bound(self):
+        # Og is found fruitless at one visit; Bork at a later one. Og's bound
+        # runs from his own stamp, so he is tried again when it ends even
+        # though Bork was added since.
+        state = self.run_town_and_back(self.slots(Og=2))
+        og_at = dict(state.fruitless_stamps)["Og"]
+        later = dataclasses.replace(
+            state,
+            fruitless=("Bork", "Og"),
+            fruitless_stamps=(("Bork", og_at + 1000.0), ("Og", og_at)),
+        )
+        step = profloop.decide(
+            later,
+            facts(
+                og_at + profloop.FRUITLESS_SECONDS + 1,
+                free_slots=self.slots(Og=2, Bork=2),
+            ),
+        )
+        self.assertTrue(step.moved)
+        self.assertEqual(step.state.phase, profloop.TOWN)
+        self.assertIn("Og (2)", step.line)
+        self.assertNotIn("Bork", step.line)
+
+    def test_a_sale_not_yet_in_the_saved_bags_is_waited_for(self):
+        step = profloop.decide(
+            at(profloop.GATHER), facts(600, free_slots=self.slots(Og=2))
+        )
+        seen = profloop.decide(
+            step.state,
+            facts(700, free_slots=self.slots(Og=2), errand_active=True),
+        )
+        early = profloop.decide(
+            seen.state,
+            facts(
+                1000 + profloop.BAGS_REFRESH_SECONDS - 10,
+                free_slots=self.slots(Og=2),
+                errand_ended=1000.0,
+            ),
+        )
+        self.assertEqual(early.state.phase, profloop.TOWN)
+        self.assertFalse(early.moved)
