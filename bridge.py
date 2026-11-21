@@ -20800,7 +20800,8 @@ class Bridge(discord.Client):
         row_walks = now >= self._mail_walk_unsupported_until
         walkers = (await asyncio.to_thread(_route_walkers, candidates, names, row_walks)
                    if candidates else {})
-        stranded = classtrain.stranded(recent)
+        levels = {t.name: t.level for t in trainees}
+        stranded = classtrain.stranded(recent, levels=levels)
         needs_crossing = any(
             t.name in stranded for t in trainees
             if t.online and t.due.affords(t.money) and t.name not in busy
@@ -20818,7 +20819,8 @@ class Bridge(discord.Client):
             classtrain.recent_walkers(
                 recent,
                 knights=[t.name for t in trainees
-                         if t.class_id == classquest.DEATH_KNIGHT]),
+                         if t.class_id == classquest.DEATH_KNIGHT],
+                levels=levels, walkers=walkers),
             busy,
             cap=self._guild_walk_cap(), stranded=stranded,
             trainer_spawns=trainer_spawns, cross_recent=cross_recent)
@@ -20882,8 +20884,11 @@ class Bridge(discord.Client):
     async def _start_train_walk(self, walk, now: float) -> int:
         """Write one class trainer walk or crossing row; 1 when written."""
         self._train_walks[walk.name] = now
+        # The cast consumes no target_arg. Keep the queued level beside its
+        # result so a level change can release the refusal after a restart.
+        metadata = {"target_arg": str(walk.level)} if isinstance(walk, classtrain.Walk) else {}
         row_id = await asyncio.to_thread(
-            _insert_crafter_row, walk.name, walk.command, walk.kind, walk.source)
+            _insert_crafter_row, walk.name, walk.command, walk.kind, walk.source, **metadata)
         if not row_id:
             self._train_walks.pop(walk.name, None)
             return 0
@@ -36578,7 +36583,8 @@ def _on_roster(name: str) -> bool:
         return cur.fetchone() is not None
 
 
-def _insert_crafter_row(holder: str, command: str, kind: str, source: str) -> int:
+def _insert_crafter_row(holder: str, command: str, kind: str, source: str,
+                        *, target_arg: str = "") -> int:
     """One pickup row for a designated crafter (#248): a walk or a take."""
     if kind in _DISPOSAL_KINDS and _KEEP.blocks(holder, command):
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, holder)
@@ -36592,8 +36598,8 @@ def _insert_crafter_row(holder: str, command: str, kind: str, source: str) -> in
             cur.execute(
                 "INSERT INTO overseer_command "
                 "(target_name, command, kind, target_arg, source) "
-                "VALUES (%s, %s, %s, '', %s)",
-                (holder, command, kind, source),
+                "VALUES (%s, %s, %s, %s, %s)",
+                (holder, command, kind, target_arg, source),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1146, 1265):
@@ -38772,18 +38778,23 @@ def _respec_walk_rows() -> list:
 
 
 def _guild_train_rows() -> list:
-    """The class trainer walks of the last day, for classtrain."""
+    """The last day's class walks plus each member's latest older refusal."""
     with _connect() as conn, conn.cursor() as cur:
         return _corps_read(
             cur, "class trainer walks",
-            "SELECT target_name, source, status, detail, result, "
+            "SELECT id, target_name, source, status, detail, result, target_arg, "
             "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
             "WHERE source LIKE %s AND (created_at > NOW() - INTERVAL 1 DAY "
-            "OR (status = 'error' AND created_at > NOW() - INTERVAL %s DAY "
-            "AND (result LIKE %s OR result LIKE %s)))",
+            "OR (status = 'error' AND ((created_at > NOW() - INTERVAL %s DAY "
+            "AND (result LIKE %s OR result LIKE %s)) "
+            "OR (result REGEXP %s "
+            "AND id IN (SELECT MAX(id) FROM overseer_command "
+            "WHERE source LIKE %s GROUP BY source)))))",
             (classtrain.SOURCE + ":%", classtrain.STRANDED_READ_DAYS,
              "%" + classtrain.NO_TRAINER_REASON + "%",
-             "%" + classtrain.NO_REACHABLE_TRAINER_REASON + "%"))
+             "%" + classtrain.NO_REACHABLE_TRAINER_REASON + "%",
+             '"retryable"[[:space:]]*:[[:space:]]*false',
+             classtrain.SOURCE + ":%"))
 
 
 def _guild_cross_rows() -> tuple:
