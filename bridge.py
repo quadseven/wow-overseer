@@ -5796,6 +5796,10 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
                 holes=campaignplan.holes(len(guildrun.WENT_IN))),
             (campaignplan.CLEAR_RECORD_DAYS, *guildrun.WENT_IN),
             "the guilds' door record")
+        # A FAMILY WHOSE LAST ENTRIES FORMED NO RUN RESTS (#1261).
+        ended = _planner_rows(
+            cur, campaignplan.UNFORMED_SQL.format(holes=marks),
+            campaignplan.unformed_args(names, key), "the family's ended entries")
     done, failed = campaignplan.ledger(runs, names)
     quests = (None if quest_rows is None or rewarded is None
               else campaignplan.open_quests(quest_rows, rewarded, level_rows))
@@ -5810,7 +5814,8 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
         bosses=_PLANNER_BOSSES,
         keys=_read_or_none(campaignplan.keys_held, keys),
         stalled=stalled,
-        door_record=_read_or_none(guildrun.door_record, record))
+        door_record=_read_or_none(guildrun.door_record, record),
+        unformed=_read_or_none(campaignplan.unformed, ended))
 
 
 async def _planner_due(read: dict, key: str, fam: dict, rows: list,
