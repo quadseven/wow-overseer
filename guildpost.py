@@ -50,14 +50,12 @@ def is_held(said) -> bool:
 
 # A DEATH ON THE ROAD IS REMEMBERED UNTIL THE MEMBER IS STRONGER (#2152). The
 # module ends a mailbox walk "died on the way to the mailbox" when the member
-# dies between where it stands and the box. The pass forgot it and, ten minutes
-# later, walked the same member the same road again: on the dev realm a
-# dozen members died on a mailbox walk in a day, one of them four times. A
-# player who died on a road does not walk it again until something changed, so
-# the receiver is left alone until its level differs from the level it died at,
-# and at the longest for DIED_HOLD_SECONDS (a level-capped member gains no
-# level, so the level alone would bar it for ever, as deathloop.AVOID_SECONDS
-# says for a zone).
+# dies between where it stands and the box, and the pass forgot it and walked
+# the same road again next cycle. A player who died on a road does not walk it
+# again until something changed, so the receiver is left alone until its level
+# differs from the level it died at, and at the longest for DIED_HOLD_SECONDS
+# (a level-capped member gains no level, so the level alone would bar it for
+# ever, as deathloop.AVOID_SECONDS says for a zone).
 DIED_WORDS = "died on the way to the mailbox"
 DIED_HOLD_SECONDS = 24 * 3600
 

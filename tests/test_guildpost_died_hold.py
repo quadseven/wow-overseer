@@ -1,9 +1,4 @@
-"""A mailbox walk that ended in a death is not asked again until the member is stronger (#2152).
-
-Measured on the dev realm over a day: a dozen guild members ended a mailbox
-walk "died on the way to the mailbox", one of them four times, because the post
-pass remembered a refusal for being held but not a death on the road.
-"""
+"""A mailbox walk that ended in a death is not asked again until the member is stronger (#2152)."""
 
 import pathlib
 import unittest
@@ -52,7 +47,8 @@ class ADeathOnTheMailRoadIsRemembered(unittest.TestCase):
     def test_an_unread_level_keeps_the_hold(self):
         struck = {"Grakk": (None, 1000.0)}
         self.assertEqual(guildpost.died_names(struck, {"Grakk": 50}, 10.0), {"Grakk"})
-        self.assertEqual(guildpost.died_names({"Grakk": (50, 1000.0)}, {}, 10.0), {"Grakk"})
+        struck = {"Grakk": (50, 1000.0)}
+        self.assertEqual(guildpost.died_names(struck, {}, 10.0), {"Grakk"})
 
     def test_the_bridge_starts_and_reads_the_hold(self):
         self.assertIn("guildpost.is_died(answer.said)", BRIDGE)
