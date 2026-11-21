@@ -118,6 +118,7 @@ import nowstatus
 import guildcorps
 import guildjobs
 import guineapig
+import deathhold
 import deathloop
 import guildlevel
 import guildfacts
@@ -3546,6 +3547,43 @@ def _memo_delete(kind: str, subject: str) -> None:
                         (kind, subject))
     except pymysql.err.MySQLError:
         log.exception("bridge memo: could not delete %s memo for %s", kind, subject)
+
+
+def _death_hold_memos():
+    """name -> (value, since) of the unexpired death loop flags, or None when
+    they cannot be read: a pass that cannot see the standing rows writes none,
+    so it can never move a row's `since` and renew a hold."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT subject, value, since FROM overseer_bridge_memo "
+                        "WHERE kind=%s AND expires > %s", (deathhold.KIND, time.time()))
+            rows = cur.fetchall()
+        return {str(row["subject"]): (json.loads(row["value"]), float(row["since"]))
+                for row in rows}
+    except (pymysql.err.MySQLError, ValueError, TypeError, KeyError):
+        log.exception("death loop hold: the standing flags could not be read; "
+                      "none is written this pass")
+        return None
+
+
+def _flag_death_loop_holds(members, facts) -> None:
+    """Write and drop the death loop flags for one guild jobs pass (deathhold.plan)."""
+    memos = _death_hold_memos()
+    if memos is None:
+        return
+    levels = {str(m.name): int(getattr(m, "level", 0) or 0) for m in members or ()}
+    now = time.time()
+    flags = deathhold.plan(facts.get("death_loops") or {}, levels, memos, now,
+                           facts.get("roster") or ())
+    for write in flags.writes:
+        _memo_upsert(deathhold.KIND, write.name, write.value, write.since, write.expires)
+        log.info("death loop hold: %s is flagged in zone %d, so its own wandering is "
+                 "held off that zone for at most %d minutes", write.name,
+                 write.value["zone"], deathhold.HOLD_SECONDS // 60)
+    for name in flags.drops:
+        _memo_delete(deathhold.KIND, name)
+        log.info("death loop hold: %s's flag is dropped (a level gained, or a roster member)",
+                 name)
 
 
 STUCK_NOTE_MEMO_SECONDS = 30 * 24 * 3600
@@ -21549,6 +21587,9 @@ class Bridge(discord.Client):
             log.info("guild jobs: %s", line)
         plan = await self._plan_guild_jobs(
             members, facts, busy, cap, spawn_walks, cohort)
+        # The flag the module holds a death-looping member's own wandering by
+        # (deathhold.py, #2152), for this pass's members only.
+        await asyncio.to_thread(_flag_death_loop_holds, members, facts)
         self._log_guild_job_plan(members, plan)
         _log_capped("guild jobs", plan.notes)
         # The death loop's reasons are never capped (#2152): every listed
