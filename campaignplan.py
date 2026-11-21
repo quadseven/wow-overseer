@@ -250,10 +250,9 @@ IDLE_SECONDS = 600
 # (`Facts.stalled`) is per door: an entry the stall breaker gives up with no
 # run opened bars that door, and the planner queues the next one at once. When
 # the cause is the family (members scattered too far to gather, errands of
-# their own) and not the door, every door fails the same way. Measured on the
-# dev realm over 48 hours: four level 60 families spent about half their head
-# time on dungeon jobs and opened no run at all, one family stepping through
-# nine doors back to back, each held one to four hours. While a dungeon job
+# their own) and not the door, every door fails the same way, and a family can
+# step through door after door, each held for hours, and open no run at all.
+# While a dungeon job
 # stands, the profession loop, the craft rhythm and the quest drive wait for
 # it. So once the family's UNFORMED_LIMIT newest ended entries opened no run,
 # nothing is planned until UNFORMED_REST_SECONDS after the newest; then one
