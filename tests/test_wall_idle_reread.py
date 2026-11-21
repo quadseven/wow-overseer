@@ -11,7 +11,10 @@ with stub_modules(pymysql=PYMYSQL):
 
     import watchwall
     from apiv2 import members
+    import realmread
     from test_idle_reread_leader import session
+    from test_members_v2 import FakeConn
+    from test_roster_idle_reading import NOW, HOUR, roster, rules
 
 MEMBER = {"name": "Grug", "present": True, "broadcast_url": "x", "playable": True}
 
@@ -47,6 +50,21 @@ class TheWallReread(unittest.TestCase):
             )
         self.assertNotEqual(banner["doing"], "Idle")
         self.assertEqual(wall["tiles"][0]["now"], banner)
+
+    def test_the_roster_the_banner_and_the_wall_word_a_moved_member_the_same(self):
+        levelled = [("Reed", NOW - 30 * HOUR)]
+        by, _ = roster(levelled=levelled)
+        member = dict(MEMBER, name="Reed")
+        with realmread.Session(lambda: FakeConn(rules(levelled=levelled), [])) as rd:
+            reread = lambda name, now: members.reread_idle(rd, name, now)
+            composed = watchwall.nowstatus.compose(member, {})
+            banner = reread("Reed", composed)
+            wall = watchwall.build_wall([member], facts={}, reread=reread)
+        tile = wall["tiles"][0]["now"]
+        self.assertEqual(tile, banner)
+        for key in ("doing", "stalled_s"):
+            self.assertEqual(by["Reed"][key], banner[key])
+            self.assertEqual(by["Reed"][key], tile[key])
 
 
 if __name__ == "__main__":
