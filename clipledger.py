@@ -416,18 +416,19 @@ def _clear_requests(runs, roster, views, families=None):
     return out
 
 
-def expired_ids(
+def expired_reasons(
     rows: Iterable[Mapping],
     *,
     now: datetime,
     max_age: timedelta = eventclips.MAX_AGE,
     max_count: int = eventclips.MAX_CLIPS,
-) -> list:
-    """Ids of ready ledger rows that fall outside the retention bounds.
+) -> dict:
+    """{id: reason} for ready ledger rows that fall outside the retention bounds.
 
-    Marks only: the caller sets state to expired. No file is deleted here or
-    there. Rows in any other state hold no saved clip, so they neither count
-    toward the cap nor expire.
+    The reason names the cap that fired: the age cap when the row is older
+    than it, else the count cap. Marks only: the caller sets state to
+    expired. No file is deleted here or there. Rows in any other state hold
+    no saved clip, so they neither count toward the cap nor expire.
     """
     ready = [
         {"id": r["id"], "saved_at": r["created_at"]}
@@ -438,7 +439,16 @@ def expired_ids(
         c["id"]
         for c in eventclips.retain(ready, now=now, max_age=max_age, max_count=max_count)
     }
-    return [c["id"] for c in ready if c["id"] not in kept]
+    cutoff = now - max_age
+    out = {}
+    for c in ready:
+        if c["id"] in kept:
+            continue
+        if c["saved_at"] < cutoff:
+            out[c["id"]] = "expired: age cap (%d days)" % max_age.days
+        else:
+            out[c["id"]] = "expired: count cap (%d)" % max_count
+    return out
 
 
 def plan_requests(

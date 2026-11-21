@@ -53,6 +53,7 @@ import decree
 import priorities
 import director
 import dungeonplan
+import eventclips
 import eye
 import families
 import family
@@ -4710,7 +4711,9 @@ _CLIP_INSERT = (
     " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
 )
 _CLIP_EXPIRE = (
-    "UPDATE overseer_clip SET state = 'expired' WHERE id = %s AND state = 'ready'"
+    "UPDATE overseer_clip SET state = 'expired', detail = "
+    "CONCAT_WS('; ', NULLIF(detail, ''), NULLIF(%s, ''))"
+    " WHERE id = %s AND state = 'ready'"
 )
 
 
@@ -4792,9 +4795,13 @@ def scan_clips() -> dict:
         cur.execute(
             "SELECT id, event_key, state, created_at FROM overseer_clip"
             " WHERE state = 'ready'")
-        stale = clipledger.expired_ids(cur.fetchall(), now=found["now"])
+        max_count, max_age, notes = eventclips.retention_caps(os.environ)
+        for note in notes:
+            log.info("%s", note)
+        stale = clipledger.expired_reasons(
+            cur.fetchall(), now=found["now"], max_age=max_age, max_count=max_count)
         if stale:
-            cur.executemany(_CLIP_EXPIRE, [(i,) for i in stale])
+            cur.executemany(_CLIP_EXPIRE, [(why, i) for i, why in stale.items()])
         timed_out = clipledger.time_out(cur, now=found["now"])
     _clip_last_scan = began
     return {"written": len(planned), "expired": len(stale), "timed_out": timed_out}
