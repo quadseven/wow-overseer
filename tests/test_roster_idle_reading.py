@@ -126,5 +126,59 @@ class TheIdleLineIsEarned(unittest.TestCase):
         self.assertEqual(health.stuck_findings(payload, NOW), [])
 
 
+def _fails(_params):
+    raise RuntimeError("the side read failed")
+
+
+class ASideReadThatFailsDegradesOneField(unittest.TestCase):
+    """The idle re-read adds two reads; neither may take the roster down (#2192)."""
+
+    def _roster_with(self, *words):
+        ruleset = [r for r in rules() if r[0] != words]
+        ctx, _log = ctx_for([(words, _fails)] + ruleset, server(guildmates=NAMES))
+        return members.roster({}, ctx)
+
+    def test_a_failed_run_read_leaves_the_roster_served(self):
+        code, payload = self._roster_with("FROM overseer_guild_run")
+        self.assertEqual(code, 200)
+        by = {m["name"]: m for m in payload["members"]}
+        self.assertEqual(len(by), len(NAMES))
+        self.assertNotEqual(by["Moss"]["doing"], "In a guild run")
+
+    def test_a_failed_level_read_leaves_the_roster_served(self):
+        code, payload = self._roster_with("FROM overseer_level")
+        self.assertEqual(code, 200)
+        by = {m["name"]: m for m in payload["members"]}
+        self.assertEqual(len(by), len(NAMES))
+        self.assertEqual(by["Fern"]["doing"], "Stalled")
+
+
 if __name__ == "__main__":
     sys.exit(unittest.main())
+
+
+class AStallForWeeksIsNamedAndFiled(unittest.TestCase):
+    """A member idle with no level for a week or more is a stuck record (#2248)."""
+
+    def test_a_week_long_stall_with_no_blocker_is_filed_as_unknown(self):
+        by, ctx = roster(levelled=[("Reed", NOW - 8 * 24 * HOUR)])
+        self.assertTrue(by["Reed"]["stuck"])
+        self.assertEqual(by["Reed"]["stuck_kind"], "stall")
+        self.assertEqual(by["Reed"]["since"], NOW - 8 * 24 * HOUR)
+        self.assertIn("unknown", by["Reed"]["blocker"])
+        _code, payload = members.stuck({}, ctx)
+        self.assertEqual([m["name"] for m in payload["members"]], ["Reed"])
+
+    def test_a_stall_under_the_bound_stays_unfiled(self):
+        by, _ = roster(levelled=[("Reed", NOW - 6 * 24 * HOUR)])
+        self.assertFalse(by["Reed"]["stuck"])
+
+    def test_a_member_with_no_level_on_record_is_not_filed(self):
+        by, _ = roster()
+        self.assertFalse(by["Reed"]["stuck"])
+
+    def test_a_member_in_a_guild_run_is_not_filed(self):
+        by, _ = roster(
+            runs=["Reed:tank:warrior:29"], levelled=[("Reed", NOW - 8 * 24 * HOUR)]
+        )
+        self.assertFalse(by["Reed"]["stuck"])

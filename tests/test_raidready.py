@@ -587,6 +587,45 @@ class TheRealBlockerIsLevelAndTheQuorum(unittest.TestCase):
             (raidrun.QUORUM_SEATS, raidrun.QUORUM_TANKS, raidrun.QUORUM_HEALERS),
         )
 
+    def test_a_changed_quorum_value_changes_the_card(self):
+        env = {"RAID_DOOR_QUORUM_SEATS": "12", "RAID_DOOR_QUORUM_TANKS": "x"}
+        self.assertEqual((12, 3, 8), raidrun.door_quorum(env))
+        self.assertEqual((36, 3, 8), raidrun.door_quorum({}))
+        self.assertEqual(
+            (36, 3, 8), raidrun.door_quorum({"RAID_DOOR_QUORUM_SEATS": "0"})
+        )
+        # 20 seats stand at level 50 here: short of 36, enough for 12.
+        with mock.patch.dict(os.environ, {"RAID_DOOR_QUORUM_SEATS": "12"}):
+            _, card = self._card_with(low=10)
+        hard = [b["text"] for b in card["blockers"] if b["tone"] == "hard"]
+        self.assertFalse([t for t in hard if "holds a raid at the door" in t], hard)
+
+    def test_the_quorum_row_says_whether_it_shows_defaults_or_an_override(self):
+        keys = raidrun.DOOR_QUORUM_ENV
+        clean = {k: v for k, v in os.environ.items() if k not in keys}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            self.assertFalse(raidrun.door_quorum_overridden())
+            _, card = self._card_with(low=10)
+        text = [
+            b["text"]
+            for b in card["blockers"]
+            if "holds a raid at the door" in b["text"]
+        ][0]
+        self.assertIn("module defaults", text)
+        self.assertIn("RAID_DOOR_QUORUM_", text)
+        self.assertTrue(raidrun.door_quorum_overridden({keys[0]: "30"}))
+        self.assertFalse(raidrun.door_quorum_overridden({keys[0]: ""}))
+        env = dict(clean, **{keys[0]: "40", keys[1]: "3", keys[2]: "8"})
+        with mock.patch.dict(os.environ, env, clear=True):
+            _, card = self._card_with(low=10)
+        text = [
+            b["text"]
+            for b in card["blockers"]
+            if "holds a raid at the door" in b["text"]
+        ][0]
+        self.assertIn("set on the bridge", text)
+        self.assertNotIn("module defaults", text)
+
     def test_the_card_counts_the_seats_below_fifty_by_role(self):
         lowered, card = self._card_with(low=10)
         below = card["seats_below_level"]
@@ -851,3 +890,60 @@ class TheTopLine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HealerLevelsCard(unittest.TestCase):
+    """The Raid tab states healers at 50 and at 60 against the door quorum."""
+
+    def test_counts_healers_at_fifty_and_sixty_only(self):
+        raiders = [
+            {"name": "a", "role": "healer", "level": 60},
+            {"name": "b", "role": "healer", "level": 50},
+            {"name": "c", "role": "healer", "level": 49},
+            {"name": "d", "role": "tank", "level": 60},
+            {"name": "e", "role": "dps", "level": 60},
+        ]
+        card = raidready.healer_levels_card(raiders)
+        self.assertEqual((card["at_50"], card["at_60"]), (2, 1))
+        self.assertEqual(card["want"], raidrun.door_quorum()[2])
+        self.assertIn("Healers at 50: 2 of", card["line"])
+        self.assertIn("At 60: 1 of", card["line"])
+
+    def test_no_healers_reads_zero(self):
+        card = raidready.healer_levels_card([])
+        self.assertEqual((card["at_50"], card["at_60"]), (0, 0))
+
+
+class HealerPaceProjection(unittest.TestCase):
+    """The date for the healer quorum at 50 is read from recent level-ups."""
+
+    HEALERS = [
+        {"name": "a", "role": "healer", "level": 55},
+        {"name": "b", "role": "healer", "level": 50},
+        {"name": "c", "role": "healer", "level": 40},
+    ]
+
+    def test_pace_from_crossings_states_its_basis(self):
+        rows = [
+            {"name": "a", "old_level": 49, "new_level": 50},
+            {"name": "b", "old_level": 49, "new_level": 50},
+            {"name": "zz", "old_level": 49, "new_level": 50},
+            {"name": "c", "old_level": 40, "new_level": 41},
+        ]
+        got = raidready.healer_projection(self.HEALERS, 8, rows)
+        self.assertEqual((got["crossed"], got["need"], got["weeks"]), (2, 6, 6))
+        self.assertIn("2 healer(s) reached 50 in the last 14 days", got["line"])
+
+    def test_no_crossing_gives_no_date(self):
+        got = raidready.healer_projection(self.HEALERS, 8, [])
+        self.assertIsNone(got["weeks"])
+        self.assertIn("No date", got["line"])
+
+    def test_reached_quorum_needs_no_date(self):
+        got = raidready.healer_projection(self.HEALERS[:2], 2, [])
+        self.assertEqual(got["need"], 0)
+        self.assertIn("has 2 healers at 50", got["line"])
+
+    def test_card_carries_the_projection(self):
+        card = raidready.healer_levels_card(self.HEALERS, [])
+        self.assertIn("projection", card)

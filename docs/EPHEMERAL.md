@@ -244,8 +244,20 @@ for up to ten minutes, `EPH_START_WAIT_SECONDS`; no order is given meanwhile, an
 the act clock and `@t0` start when the wait ends. Then they are sampled once,
 before any order; a precondition that still fails ends the run INVALID, naming
 it), `continuous` (every ten seconds) or `end` (after the
-window). Log assertions count regex matches in the worldserver log and are
-checked at the end. A log assertion's `expect` is a bound on that count:
+window). A start precondition may use `online: cast` instead of SQL or a log
+assertion. The judge polls the seeded cast's character rows and holds every act
+until all resolved members have `online = 1`. If the bounded wait expires, the
+run is INVALID and names the members still offline. For example:
+
+    - name: cast-online
+      role: precondition
+      when: start
+      online: cast
+
+This observation cannot be combined with `sql`, `log` or `expect`, and it is
+only valid as a start precondition. Log assertions count regex matches in the
+worldserver log and are checked at the end. A log assertion's `expect` is a
+bound on that count:
 
 - `{count: N}` or `{exactly: N}`: exactly N matching lines. `{count: 0}` forbids
   a line. Either key stands alone.

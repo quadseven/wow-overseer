@@ -665,9 +665,36 @@ class Leave:
 # runs after the hold.
 
 
-def leave(rows: list, stuck: dict) -> Leave | None:
+# HOW MANY TIMES AN ORDER MAY BE HELD WITH NO RUN FORMED BETWEEN (#1261).
+# Each hold runs the order again after its backoff and the same stand-down
+# (a member held far away, a walk that never arrives) holds it again, so a
+# family could cycle between "held" and "runs again" for days with no run
+# ever opening, the order never judged on a fought run and never given up.
+# Past this many holds with no run since the first, the order is left like
+# any other stuck door, and the family is released to other work.
+ORDER_HOLD_LIMIT = 4
+
+# The holds of the family's orders on one door since its newest run began.
+HOLDS_SQL = (
+    "SELECT COUNT(*) AS n FROM overseer_dungeon_pace WHERE family = %s "
+    "AND decision = %s AND door = %s AND created_at > (SELECT created_at "
+    "FROM overseer_dungeon_queue WHERE id = %s) AND created_at > COALESCE(("
+    "SELECT MAX(started_at) FROM overseer_dungeon_run WHERE leader_name IN "
+    "({holes})), '1970-01-01')"
+)
+
+
+def holds_args(key: str, door: str, head_id: int, names) -> tuple:
+    """HOLDS_SQL's arguments (the `{holes}` count is len(names)). Only holds
+    written after the head order was queued count: an older order's do not."""
+    return (key, ORDER_DECISION, door, int(head_id or 0), *[str(n) for n in names])
+
+
+def leave(rows: list, stuck: dict, holds: int = 0) -> Leave | None:
     """The leave for this family's queue `rows` (pending, in order), or None
-    when its head is not a stuck door."""
+    when its head is not a stuck door. `holds` is how many times the door's
+    order has been held with no run formed since (HOLDS_SQL): at
+    ORDER_HOLD_LIMIT the order is left instead of held again."""
     if not rows:
         return None
     door = campaignplan.wing_of(str(rows[0].get("keyword") or ""))
@@ -677,6 +704,8 @@ def leave(rows: list, stuck: dict) -> Leave | None:
         r for r in rows if campaignplan.wing_of(str(r.get("keyword") or "")) == door
     ]
     park = tuple(int(r["id"]) for r in ours if dungeonpace.operator_ordered(r))
+    if park and int(holds or 0) >= ORDER_HOLD_LIMIT:
+        return _given_up(rows, ours, stuck[door], holds)
     drop = tuple(int(r["id"]) for r in ours if int(r["id"]) not in park)
     rest = [r for r in rows if int(r["id"]) not in drop and int(r["id"]) not in park]
     after = (
@@ -702,6 +731,24 @@ def leave(rows: list, stuck: dict) -> Leave | None:
             regroup,
         )
     return Leave(door, drop, "%s; left, %s" % (stuck[door].why, after))
+
+
+def _given_up(rows: list, ours: list, why, holds) -> Leave:
+    """The order held ORDER_HOLD_LIMIT times with no run formed: cancelled."""
+    door = campaignplan.wing_of(str(rows[0].get("keyword") or ""))
+    drop = tuple(int(r["id"]) for r in ours)
+    rest = [r for r in rows if int(r["id"]) not in drop]
+    after = (
+        "%s runs next" % council.keyword_place(str(rest[0]["keyword"]))
+        if rest
+        else "back to %s until the planner finds another door" % jobs.DEFAULT
+    )
+    return Leave(
+        door,
+        drop,
+        "%s; the order was held %d times and no run formed between, so it is "
+        "given up; %s" % (why.why, int(holds), after),
+    )
 
 
 # The newest hold of an operator's order for this door: the seconds its

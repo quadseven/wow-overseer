@@ -127,6 +127,7 @@ import craft_rhythm
 import craft_supply
 import dungeonpath
 import gearup
+import corpstickets
 import guildcorps
 import guildlevel
 import guildroute
@@ -694,6 +695,10 @@ class Member:
     # Bag slots free in the backpack and the worn bags; None when unread, which
     # keeps no quest waiting on room (class_room_needed).
     free_slots: int | None = None
+    # True when the last reading is away from where the pass before it read this
+    # member (standstill.walking): its own AI is walking it, and the module
+    # refuses a cast then, so no craft step is written (#2401).
+    moving: bool = False
     # Maps the module has refused to cross this member to for good, with its
     # reason (class_walls): classquest then names a MAP blocker, not a CROSS.
     no_crossing: dict = field(default_factory=dict)
@@ -741,6 +746,9 @@ class Member:
     # holds only what a vendor buys, so the plan reads the whole bags), and the
     # banker nearest it. Empty for any member that is not a seat short of room.
     plan_sales: tuple = ()  # Carried
+    # Guids of the pieces a set swap (setswap.py, #540) took off and left in the
+    # bags to be put back or banked after the run: no sale rule lets them go.
+    swapped_out: frozenset = frozenset()
     plan_bank: tuple = ()  # Carried
     banker: object = None  # a Spot
     # What the item plan routes to the auction house (auction.Sale) and the
@@ -1054,6 +1062,12 @@ def passing_hearth_row(r) -> bool:
     )
 
 
+def _refused_for_room(r) -> bool:
+    """Whether the module refused this row for bag room."""
+    said = "%s %s %s" % (r.result, r.reason, r.refusal)
+    return any(w in said for w in corpstickets.BAG_REASONS)
+
+
 def _step_row_wait(r, minutes: int, passing_wait: int | None = None) -> int:
     """Keep long waits for completed walks and persistent failures.
 
@@ -1070,6 +1084,10 @@ def _step_row_wait(r, minutes: int, passing_wait: int | None = None) -> int:
         and (r.refusal or r.reason) in PASSING_TRAIN_REASONS
     ):
         return min(minutes, LEVEL_TRANSIENT_RETRY_MINUTES)
+    if r.action == "collect" and not r.walk and _refused_for_room(r):
+        # Bags do not empty by themselves: a collect the module refused for
+        # bag room waits as long as a corps collect does (#2633).
+        return max(minutes, guildcorps.FULL_BAGS_COLLECT_MINUTES)
     if r.action == "train" and passing_train_row(r):
         # A profession errand asks again on the next pass (passing_wait); any
         # other trainer walk waits the base hour.
@@ -2597,6 +2615,8 @@ def _craft_or_room(m, kept, recent, cap, crafters, master):
     ladder a class quest uses, and the craft comes the pass after. Bags not
     read (free_slots None) keep the old behaviour.
     """
+    if m.moving:
+        return None, ""
     step = _craft_step(m)
     if step is None or m.free_slots is None or int(m.free_slots) >= 1:
         return step, ""
@@ -2848,13 +2868,16 @@ def vendor_stacks(member, kept, protected=frozenset()) -> list:
         for c in (member.carried or ())
         if (vendorsale.sells(c, judge) or int(c.guid) in second_best)
         and not _kept(member.name, c, kept)
+        and int(c.guid) not in member.swapped_out
     ]
     # A raid seat's item plan sales (#2609) go over the same counter, once.
     have = {int(c.guid) for c in own}
     own += [
         c
         for c in (member.plan_sales or ())
-        if int(c.guid) not in have and not _kept(member.name, c, kept)
+        if int(c.guid) not in have
+        and not _kept(member.name, c, kept)
+        and int(c.guid) not in member.swapped_out
     ]
     return sorted(
         own,
@@ -2886,6 +2909,18 @@ def junk_sales(member, kept, action="gear") -> tuple:
         )
         for c in _junk(member, kept)
     )
+
+
+def sale_spares_step(step, row) -> bool:
+    """Whether a sell row that was not served leaves the rest of `step` to run.
+
+    A supply trip sells junk first to make room, then buys. The guild loot
+    policy refuses a sell row for any stack it files for a route other than the
+    vendor, and a refused row is not written at all; if that ended the step,
+    the walk to the vendor would arrive and nothing would be bought. The sale is
+    only room-making: a buy that finds no room is refused by the world itself.
+    Every other step keeps its rule that a row which fails ends it."""
+    return step.action == restsupply.ACTION and row.kind == "sell"
 
 
 def sale_notes(stacks) -> tuple:
@@ -3941,6 +3976,17 @@ def _class_reagent_first(m, offer, recent, cap, kept=None, spell_reagents=None):
 # to the guild bank's Materials tab.
 CRAFTER_FLOOR = 5
 
+# COOKING IS THE ONE TRADE THAT CAN BE CAST AT 1 (#534). The floor above was
+# written when every Cooking recipe needed a Cooking Fire nobody could light,
+# so a cook at 1 could not work meat and a post to it was a letter never used.
+# The module now lights Basic Campfire before the recipe, and both meat
+# recipes grant a point from skill 1 (COOK_BANDS). With the floor at 5 a cook
+# at 1 was never posted meat, never carried any, so was never asked to cook,
+# and could never leave 1: the cycle that kept Cooking at 1 on every cook.
+# A cook at 1 now qualifies. The unopened-post and full-mailbox guards
+# (without_unclaimed, MAILBOX_FULL_LETTERS) still bound what one cook is sent.
+CRAFTER_FLOORS = {COOKING: 1}
+
 # The subject every post carries, which is also how an unopened one is found.
 POST_SUBJECT = "Guild materials"
 
@@ -3977,13 +4023,18 @@ def consumes_at(skill: int, value: int, entry: int) -> bool:
     A master tailor is read one bracket ahead (guildcorps.LADDER_AHEAD): the
     cloth and the leather its next rung and bag eat reach it before the cast.
     """
-    if int(value) < CRAFTER_FLOOR:
+    if int(value) < CRAFTER_FLOORS.get(int(skill), CRAFTER_FLOOR):
         return False
     ahead = guildcorps.LADDER_AHEAD if int(skill) == TAILORING else 0
     if int(entry) in _bag_inputs(skill, value):
         return True
     for recipe in craft.RECIPES.get(int(skill), ()):
-        if recipe.min_skill > int(value) + ahead:
+        low = recipe.min_skill
+        if int(skill) == COOKING and recipe.spell_id in COOK_BANDS:
+            # Both meat rungs grant a point from 1 (COOK_BANDS), not only
+            # from the ladder's own bracket edge.
+            low = min(low, COOK_BANDS[recipe.spell_id][0])
+        if low > int(value) + ahead:
             continue
         if any(
             r.entry == int(entry)
@@ -10102,6 +10153,15 @@ def hearth_step(m):
 # reached them: no job was left, no zone was outgrown and the pass read no
 # position history (standstill.py). A player whose character will not move uses
 # the hearthstone, and its own AI starts again at the inn.
+def _still_minutes_for(m) -> int:
+    """How long a member stands before its hearth. A seat levelling first is
+    left to its dungeon asks with no step, so it stands waiting for a party by
+    design: it waits longer, and a stuck one is still got moving."""
+    if levelling_first(m):
+        return standstill.SEAT_STILL_MINUTES
+    return standstill.STILL_MINUTES
+
+
 def stood_still_step(m, still_for, recent, leveling=None):
     """The hearth of a member that has stood on one spot (standstill.track)
     for standstill.STILL_MINUTES with nothing asked of it, or None.
@@ -10112,7 +10172,7 @@ def stood_still_step(m, still_for, recent, leveling=None):
     its own hearth written for it while it stood, and no hearth inside the
     hearth cooldown."""
     minutes = int(still_for or 0)
-    if minutes < standstill.STILL_MINUTES:
+    if minutes < _still_minutes_for(m):
         return None
     if not (m.online and m.alive and not m.in_combat):
         return None
@@ -10676,7 +10736,9 @@ def _refusal_of(row) -> dict:
     result = str(row.get("result") or "")
     if '"outcome":"refused"' not in result:
         return {}
-    found = re.search(r'"reason":"((?:[^"\\]|\\.)*)"', result)
+    # The closing quote may be missing: the read keeps the head of `result`,
+    # and a crossing's per-transport reason can run past it (#2994).
+    found = re.search(r'"reason":"((?:[^"\\]|\\.)*)(?:"|$)', result)
     refusal = found.group(1) if found else ""
     raw_refusal = ""
     if "no trainer" in refusal.lower() and refusal != NO_TRAINER_ON_MAP_REFUSAL:

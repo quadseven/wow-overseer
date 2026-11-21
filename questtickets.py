@@ -75,6 +75,10 @@ QUESTER_REFUSALS = (
     "the quest giver would not give it",
     "the turn-in NPC would not take it",
 )
+# The stored take reason from questers._giver_failure and the module's
+# QuestErrandRefusal. The module uses different reasons for an object
+# starter and for a quest without a starter relation.
+NO_GIVER_IN_REACH = "the quest giver would not give it: no giver of that quest in reach"
 TICKET_SQL = (
     "SELECT ticket FROM overseer_quest_ledger "
     "WHERE quest = %s AND ticket IS NOT NULL ORDER BY ticket DESC LIMIT 1"
@@ -327,12 +331,21 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
         "",
     ]
     lines.extend(_world_rows(info))
+    no_giver_in_reach = False
     for row in rows:
         name = str(row.get("character_name") or "")
+        reason = row.get("reason") or "no reason recorded"
+        no_giver_in_reach |= reason == NO_GIVER_IN_REACH
         lines += [
             "- Quester: %s (%s)" % (name, party_of(name)),
-            "  - Reason: %s" % (row.get("reason") or "no reason recorded"),
+            "  - Reason: %s" % reason,
             "  - Last objective counts: %s" % _objectives(counts.get(int(row["guid"]))),
+        ]
+    if no_giver_in_reach:
+        lines += [
+            "",
+            "The take command found no quest giver in reach, blocking acceptance. "
+            "The world names a creature giver. The stored rows leave open why the lookup failed.",
         ]
     lines += [
         "",

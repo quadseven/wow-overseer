@@ -59,6 +59,7 @@ online.
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 import agenda
@@ -71,6 +72,8 @@ from panel import _CLASS_NAMES, _RACE_NAMES
 
 from . import activity
 from ._scope import holes
+
+log = logging.getLogger(__name__)
 
 # A class quest ask newer than this means the blocker still stands: the bridge
 # asks again every pass it stands, ASK_COOLDOWN_MINUTES (15) apart at the most
@@ -199,6 +202,44 @@ def fetch(ctx) -> dict:
     return dict(rows, families=families, facts=facts or {})
 
 
+def _side_read(read, empty, what: str):
+    """`read()`, or `empty` when it raises: a read that only re-words an idle
+    member must degrade that one field, not turn the roster into a 503."""
+    try:
+        return read()
+    except Exception:
+        log.exception("%s could not be read; the roster is served without it", what)
+        return empty
+
+
+def reread_idle(rd, name: str, now: dict) -> dict:
+    """`nowstatus.idle_reading` for one member off its own reads, so a surface
+    that composes a single member (the current-goal banner) words an idle
+    member as the roster does (#2192). A read that fails leaves the member
+    as composed, never raises."""
+    if now.get("doing") != "Idle":
+        return now
+
+    def look():
+        level = rd.rows(CHARS_SQL.format(holes=holes(1)), (name,), what="characters")
+        leveled = rd.rows(
+            LEVELED_SQL.format(holes=holes(1)),
+            (name, LEVEL_DAYS),
+            what="overseer_level",
+        )
+        clock = rd.must("SELECT UNIX_TIMESTAMP() AS now_at")
+        at = leveled[0].get("at") if leveled else None
+        return nowstatus.idle_reading(
+            now,
+            name in guildrun.active_names(rd),
+            level[0].get("level") if level else None,
+            int(at) if at else None,
+            int(clock[0]["now_at"]) if clock else 0,
+        )
+
+    return _side_read(look, now, "idle re-read")
+
+
 def _read(ctx, names: list) -> dict:
     server = ctx.server
     rd = ctx.read
@@ -247,8 +288,12 @@ def _read(ctx, names: list) -> dict:
         (*everyone, deathloop.SLOW_READ_SECONDS),
         what="overseer_death",
     )
-    leveled = rd.rows(
-        LEVELED_SQL.format(holes=h), (*everyone, LEVEL_DAYS), what="overseer_level"
+    leveled = _side_read(
+        lambda: rd.rows(
+            LEVELED_SQL.format(holes=h), (*everyone, LEVEL_DAYS), what="overseer_level"
+        ),
+        [],
+        "overseer_level",
     )
     clock = rd.must("SELECT UNIX_TIMESTAMP() AS now_at")
     now_at = int(clock[0]["now_at"]) if clock else 0
@@ -266,8 +311,8 @@ def _read(ctx, names: list) -> dict:
             if r.get("at")
         },
         "deaths": deaths or [],
-        "in_run": guildrun.active_names(rd),
-        "run_of": guildrun.inside_runs(rd),
+        "in_run": _side_read(lambda: guildrun.active_names(rd), set(), "guild runs"),
+        "run_of": _side_read(lambda: guildrun.inside_runs(rd), {}, "guild runs"),
         "leveled": {r["name"]: int(r["at"]) for r in leveled or () if r.get("at")},
         "now_at": now_at,
     }
@@ -594,6 +639,12 @@ def standing_loop(name: str, loops: dict, rows: dict):
     loop = (loops or {}).get(name)
     if loop is None:
         return None
+    # A slow loop (#2615) dies once or twice an hour, so between deaths the
+    # member is routinely out of the zone (at its graveyard, on a corpse run,
+    # on the road back): a zone gate would hide most slow loops at any moment.
+    # It clears on its quiet clock or a level gain, as deathloop.loops judges.
+    if loop.slow:
+        return loop
     reading = rows["readings"].get(name) or {}
     snap = rows["snaps"].get(name) if reading.get("online") else None
     if not snap:
@@ -638,6 +689,35 @@ def _stuck_entry(member: dict, run: list, now_at: int, loop=None) -> dict | None
     if member["life"] in ("dead", "ghost"):
         return None
     return ask_blocker(run, now_at) or hold_blocker(member, now_at)
+
+
+# A member idle and level-less for this long is filed even with no blocker
+# recorded (#2248); the one-day stall reading alone files nothing.
+MEMBER_STALL_BOUND_SECONDS = 7 * 24 * 3600
+
+
+def member_stall_entry(member: dict, now_at: int | None) -> dict | None:
+    """The stuck entry for a member whose stall reading (nowstatus.idle_reading)
+    passed MEMBER_STALL_BOUND_SECONDS with no other blocker, or None.
+
+    The reason is `unknown` and says so, so the stall is a record with a name
+    rather than an empty blocker. A dead, offline or in-run member is not filed:
+    the reading only runs for a member with no job, and idle_reading clears it
+    for a member in a run."""
+    held = member.get("stalled_s")
+    if not held or not now_at or held < MEMBER_STALL_BOUND_SECONDS:
+        return None
+    if member["life"] in ("dead", "ghost") or not member.get("online"):
+        return None
+    return {
+        "step": member["doing"],
+        "blocker": (
+            "unknown: no level gained for %s, with no errand, hold or refusal "
+            "recorded." % agenda.span(int(held))
+        ),
+        "since": int(now_at) - int(held),
+        "kind": "stall",
+    }
 
 
 def _newest(rows) -> dict:
@@ -826,7 +906,7 @@ def build(
         m = _member(name, guild_of.get(name, {}), rows)
         found[name] = _stuck_entry(
             m, streaks.get(name, []), rows["now_at"], standing_loop(name, loops, rows)
-        )
+        ) or member_stall_entry(m, rows["now_at"])
         followed = nowstatus.followed(rows["facts"].get(name), m)
         if followed and not _asking(found[name]):
             follows[name] = followed

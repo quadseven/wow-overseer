@@ -91,7 +91,8 @@ rewarded quests are read (`Member.rewarded`), a quest is open for it when:
   * it is of a hub zone, its side may take it (levelroute.side_quests), its
     race mask holds the member's race and its minimum level is met;
   * a lone member works it: not a group, dungeon, raid or PvP quest, not
-    suggested for a group, not repeatable (`PARTY_QUEST_INFO`);
+    suggested for a group, not repeatable, and not gated by a scripted event
+    without an area trigger;
   * a creature or object of the world that gives it is spawned outside a
     seasonal event (`QUEST_FACTS_SQL`);
   * the member has not been rewarded for it, and the quest before it, if any,
@@ -228,16 +229,18 @@ ABOVE = levelroute.ABOVE
 # PvP (41), raid (62), dungeon (81), heroic (85), 10- and 25-man raid (88, 89).
 # Read against the dev world on 2026-10-10, 127 of the 2,178 hub zone quests.
 PARTY_QUEST_INFO = frozenset({1, 41, 62, 81, 85, 88, 89})
-# quest_template_addon.SpecialFlags: QUEST_SPECIAL_FLAGS_REPEATABLE.
+# quest_template_addon.SpecialFlags.
 REPEATABLE_FLAG = 1
+EXPLORATION_OR_EVENT_FLAG = 2
 # How many quests back a chain is followed to its head.
 CHAIN_DEPTH = 30
 # The maps a quest's giver is read on: the two continents and map 530.
 GIVER_MAPS = (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP)
 
-# One row per quest of a hub zone: the quest before it, its kind, and whether a
-# creature or object that gives it is spawned outside a seasonal event (a
-# positive game_event entry spawns it only while that event runs). The givers
+# One row per quest of a hub zone: the quest before it, its kind, whether an
+# area trigger completes it, and whether a creature or object that gives it
+# is spawned outside a seasonal event (a positive game_event entry spawns it
+# only while that event runs). The givers
 # are two uncorrelated IN sets, each built once: a correlated EXISTS per quest
 # scanned the gameobject table once per quest and took 23.6 s on the dev world,
 # against 0.33 s now. The only interpolated parts are this module's integer
@@ -245,7 +248,8 @@ GIVER_MAPS = (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP)
 QUEST_FACTS_SQL = (
     "SELECT t.ID AS quest, COALESCE(a.PrevQuestID, 0) AS prev, "  # noqa: S608
     "t.QuestInfoID AS info, t.SuggestedGroupNum AS group_size, "
-    "COALESCE(a.SpecialFlags, 0) AS special, ("
+    "COALESCE(a.SpecialFlags, 0) AS special, "
+    "t.ID IN (SELECT quest FROM acore_world.areatrigger_involvedrelation) AS area_trigger, ("
     "t.ID IN (SELECT s.quest FROM acore_world.creature_queststarter s "
     "JOIN acore_world.creature c ON c.id = s.id "
     "WHERE c.map IN (" + ", ".join(str(int(m)) for m in GIVER_MAPS) + ") "
@@ -483,6 +487,14 @@ def quest_book(quest_rows, fact_rows) -> dict | None:
     return out
 
 
+def scripted_event_quest(fact) -> bool:
+    """Whether the event flag is set without an area trigger for the quest."""
+    special = int(fact.get("special") or 0)
+    return bool(special & EXPLORATION_OR_EVENT_FLAG) and not int(
+        fact.get("area_trigger") or 0
+    )
+
+
 def _solo(fact) -> bool:
     """A quest a lone member works, given by a spawn of the world."""
     return (
@@ -490,6 +502,7 @@ def _solo(fact) -> bool:
         and int(fact.get("info") or 0) not in PARTY_QUEST_INFO
         and int(fact.get("group_size") or 0) <= 1
         and not int(fact.get("special") or 0) & REPEATABLE_FLAG
+        and not scripted_event_quest(fact)
     )
 
 

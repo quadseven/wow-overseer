@@ -395,20 +395,104 @@ def first_kill_card(raiders: list, min_level) -> dict:
     }
 
 
+HEALER_PACE_DAYS = 14
+HEALER_GATE = 50
+
+# Level-ups across the gate in the pace window, for the names bound (the pace
+# of the slowest seat, #2572). The window is applied here and again in Python.
+HEALER_CROSSINGS_SQL = (
+    "SELECT character_name AS name, old_level, new_level FROM overseer_level "
+    "WHERE character_name IN ({holes}) AND old_level < "
+    + str(HEALER_GATE)
+    + " AND new_level >= "
+    + str(HEALER_GATE)
+    + " AND created_at > NOW() - INTERVAL "
+    + str(HEALER_PACE_DAYS)
+    + " DAY"
+)
+
+
+def healer_projection(healers: list, want: int, level_rows) -> dict:
+    """When the guild reaches `want` healers at level 50, from the healers who
+    crossed 50 in the last HEALER_PACE_DAYS days (`level_rows`: name, old_level,
+    new_level). The basis is always stated; no crossing means no date."""
+    names = {m.get("name") for m in healers}
+    crossed = {
+        r.get("name")
+        for r in level_rows or ()
+        if r.get("name") in names
+        and int(r.get("old_level") or 0) < HEALER_GATE <= int(r.get("new_level") or 0)
+    }
+    have = len([m for m in healers if int(m.get("level") or 0) >= HEALER_GATE])
+    need = max(0, want - have)
+    basis = "%d healer(s) reached %d in the last %d days" % (
+        len(crossed),
+        HEALER_GATE,
+        HEALER_PACE_DAYS,
+    )
+    weeks = None
+    if need == 0:
+        line = "The guild has %d healers at %d." % (want, HEALER_GATE)
+    elif not crossed:
+        line = "No date for %d healers at %d (%s)." % (want, HEALER_GATE, basis)
+    else:
+        weeks = -(-need * HEALER_PACE_DAYS // (len(crossed) * 7))
+        line = "About %d week(s) to %d healers at %d (%s)." % (
+            weeks,
+            want,
+            HEALER_GATE,
+            basis,
+        )
+    return {
+        "crossed": len(crossed),
+        "need": need,
+        "weeks": weeks,
+        "basis": basis,
+        "line": line,
+    }
+
+
+def healer_levels_card(raiders: list, level_rows=()) -> dict:
+    """Healers at level 50 and at level 60 against the door quorum's healer
+    count, so the slowest seat to fill reads as a number on the Raid tab."""
+    want = raidrun.door_quorum()[2]
+    healers = [m for m in raiders if m.get("role") == "healer"]
+    at_50 = len([m for m in healers if int(m.get("level") or 0) >= 50])
+    at_60 = len([m for m in healers if int(m.get("level") or 0) >= 60])
+    return {
+        "want": want,
+        "at_50": at_50,
+        "at_60": at_60,
+        "line": "Healers at 50: %d of %d. At 60: %d of %d."
+        % (at_50, want, at_60, want),
+        "projection": healer_projection(healers, want, level_rows),
+    }
+
+
 def _quorum_blockers(raiders: list, min_level) -> list:
     """HARD: the module holds the raid at the door below its quorum. The
-    numbers are raidrun's copy of the module's defaults."""
+    numbers are raidrun.door_quorum: the realm's override, else the defaults."""
     have = _eligible_counts(raiders, min_level)
-    want = (raidrun.QUORUM_SEATS, raidrun.QUORUM_TANKS, raidrun.QUORUM_HEALERS)
+    want = raidrun.door_quorum()
     got = (have["seats"], have["tanks"], have["healers"])
     if all(h >= w for h, w in zip(got, want, strict=True)):
         return []
     return [
         "The module holds a raid at the door unless %d seats, %d tanks and %d "
         "healers stand there (Overseer.Raid.QuorumSeats, QuorumTanks, "
-        "QuorumHealers, at their defaults); %d seats, %d tanks and %d healers "
-        "are at level %d or more."
-        % (*want, have["seats"], have["tanks"], have["healers"], have["gate"])
+        "QuorumHealers); %d seats, %d tanks and %d healers "
+        "are at level %d or more. %s"
+        % (
+            *want,
+            have["seats"],
+            have["tanks"],
+            have["healers"],
+            have["gate"],
+            "Numbers set on the bridge to match the realm."
+            if raidrun.door_quorum_overridden()
+            else "Numbers are the module defaults; the bridge has no "
+            "RAID_DOOR_QUORUM_* set, so a realm that overrides them is not shown.",
+        )
     ]
 
 
@@ -917,6 +1001,7 @@ def build_guild(
     supply: dict | None = None,
     preraid: dict | None = None,
     item_rows: dict | None = None,
+    level_rows: list = (),
 ) -> dict:
     """One guild's readiness card.
 
@@ -1018,6 +1103,7 @@ def build_guild(
         "blockers": blockers,
         "seats_below_level": _below_level_card(raiders, min_level),
         "first_kill": first_kill_card(raiders, min_level),
+        "healer_levels": healer_levels_card(raiders, level_rows),
         "blockers_line": (
             "Nothing stands between this guild and its first raid."
             if not blockers
