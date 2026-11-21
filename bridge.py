@@ -3566,6 +3566,15 @@ def _death_hold_memos():
         return None
 
 
+def _read_moving(members, walking) -> list:
+    """The members with `moving` set for those named walking (#2401).
+
+    A guildjobs.Member is frozen, so the read is a copy, never an assignment:
+    assigning raised FrozenInstanceError and failed every guild jobs pass
+    before it planned, flagged or wrote anything."""
+    return [dataclasses.replace(m, moving=str(m.name) in walking) for m in members]
+
+
 def _flag_death_loop_holds(members, facts) -> None:
     """Write and drop the death loop flags for one guild jobs pass (deathhold.plan)."""
     memos = _death_hold_memos()
@@ -21576,8 +21585,7 @@ class Bridge(discord.Client):
         busy -= self._stranded_knights_freed(members)
         cap = self._guild_walk_cap()
         walking = standstill.walking(self._guild_still, members)
-        for m in members:
-            m.moving = str(m.name) in walking
+        members = _read_moving(members, walking)
         self._guild_still = standstill.track(self._guild_still, members, now)
         spawn_walks = now >= self._job_walks_unsupported.get("spawn", 0.0)
         # The hunt slots the realm has free (classhunt.py); none while this
