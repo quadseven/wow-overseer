@@ -1939,7 +1939,9 @@ class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
 
     def test_the_hold_count_reads_only_holds_since_the_order_and_the_last_run(self):
         sql = stall.HOLDS_SQL.format(holes=stall.holes(2))
-        self.assertEqual(sql.count("%s"), len(stall.holds_args("Fam", "d", 5, ["A", "B"])))
+        self.assertEqual(
+            sql.count("%s"), len(stall.holds_args("Fam", "d", 5, ["A", "B"]))
+        )
         self.assertIn("overseer_dungeon_queue WHERE id", sql)
         self.assertIn("MAX(started_at)", sql)
 
@@ -2006,9 +2008,7 @@ class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
         self.assertEqual("cancelled", w.queue[0]["status"])
         self.assertEqual(1, len(self.cancels(w)))
         self.assertEqual(stall.DECISION, w.records[0][1])
-        self.assertEqual(
-            {jobs.DEFAULT}, {r["job"] for r in w.family("Zug")}, w.jobs
-        )
+        self.assertEqual({jobs.DEFAULT}, {r["job"] for r in w.family("Zug")}, w.jobs)
 
     def test_a_stalled_operator_order_stays_pending_and_the_family_quests(self):
         w = self.world()
