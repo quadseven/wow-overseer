@@ -746,6 +746,9 @@ class Member:
     # holds only what a vendor buys, so the plan reads the whole bags), and the
     # banker nearest it. Empty for any member that is not a seat short of room.
     plan_sales: tuple = ()  # Carried
+    # Guids of the pieces a set swap (setswap.py, #540) took off and left in the
+    # bags to be put back or banked after the run: no sale rule lets them go.
+    swapped_out: frozenset = frozenset()
     plan_bank: tuple = ()  # Carried
     banker: object = None  # a Spot
     # What the item plan routes to the auction house (auction.Sale) and the
@@ -2865,13 +2868,16 @@ def vendor_stacks(member, kept, protected=frozenset()) -> list:
         for c in (member.carried or ())
         if (vendorsale.sells(c, judge) or int(c.guid) in second_best)
         and not _kept(member.name, c, kept)
+        and int(c.guid) not in member.swapped_out
     ]
     # A raid seat's item plan sales (#2609) go over the same counter, once.
     have = {int(c.guid) for c in own}
     own += [
         c
         for c in (member.plan_sales or ())
-        if int(c.guid) not in have and not _kept(member.name, c, kept)
+        if int(c.guid) not in have
+        and not _kept(member.name, c, kept)
+        and int(c.guid) not in member.swapped_out
     ]
     return sorted(
         own,
