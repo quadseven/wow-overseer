@@ -56,6 +56,7 @@ class TheWallReread(unittest.TestCase):
         by, _ = roster(levelled=levelled)
         member = dict(MEMBER, name="Reed")
         with realmread.Session(lambda: FakeConn(rules(levelled=levelled), [])) as rd:
+
             def reread(name, now):
                 return members.reread_idle(rd, name, now)
 
