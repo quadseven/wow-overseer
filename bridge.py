@@ -13232,6 +13232,21 @@ class Bridge(discord.Client):
             )
             return
 
+        # NO TRIP FOR A REAGENT THE HOUSE DOES NOT LIST. The walk would end at
+        # a counter with nothing to buy, holding the family's one column for
+        # its whole lease and asked for again next cycle.
+        listed = await asyncio.to_thread(
+            _fetch_listed_counts, sorted({n.entry for n in needs}))
+        if not auction.stocked_needs(needs, listed):
+            for note in reagentplan.house_none_notes(
+                    [(n.shopper, n.label or "item %d" % n.entry, n.entry)
+                     for n in needs], listed):
+                log.info("auction: %s", note)
+            log.info(
+                "auction: the house lists none of what the family is short of, "
+                "so no trip is taken")
+            return
+
         # ResolveTravelTarget can only search auctioneer spawns on the
         # leader's current map. Do not keep re-arming an aim that the module
         # must release when the map has no auctioneer at all.
