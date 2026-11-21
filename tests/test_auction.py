@@ -1269,8 +1269,7 @@ class AuctionTripNeedsListingTest(unittest.TestCase):
     ]
 
     def test_nothing_listed_means_no_need_worth_a_trip(self):
-        self.assertEqual(
-            auction.stocked_needs(self.NEEDS, {2835: 0, 2447: 0}), [])
+        self.assertEqual(auction.stocked_needs(self.NEEDS, {2835: 0, 2447: 0}), [])
 
     def test_one_listed_need_keeps_only_that_need(self):
         kept = auction.stocked_needs(self.NEEDS, {2835: 0, 2447: 3})
