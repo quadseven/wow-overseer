@@ -6924,6 +6924,22 @@ def _stall_held(key: str, door: str, head_id: int = 0) -> dict | None:
         return dict(rows[0]) if rows else None
 
 
+def _order_holds(key: str, head: dict, names: list) -> int:
+    """How many times operator order `head` was held with no run formed since
+    (dungeonstall.ORDER_HOLD_LIMIT, #1261); 0 when `head` is not an order."""
+    door = campaignplan.wing_of(str(head.get("keyword") or ""))
+    if not door or not dungeonpace.operator_ordered(head) or not names:
+        return 0
+    sql = dungeonstall.HOLDS_SQL.format(holes=dungeonstall.holes(len(names)))
+    # A failed read reaches the pass, which logs it and steps the queue as
+    # before; it is not counted as zero holds.
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, dungeonstall.holds_args(
+            key, door, int(head["id"]), names))
+        rows = cur.fetchall()
+        return int(dict(rows[0]).get("n") or 0) if rows else 0
+
+
 def _order_parked(key: str, door: str, head_id: int = 0) -> dict | None:
     """The newest hold of an operator's order for this door (#2216), or None:
     the pace row's id, when it was written (`created_at`), the seconds its
@@ -27258,7 +27274,8 @@ class Bridge(discord.Client):
             _door_wedge, rows[0], names, str(fam["leader"].get("name") or ""))
         if wedge is not None:
             stuck[wedge.door] = wedge
-        leave = dungeonstall.leave(rows, stuck)
+        holds = await asyncio.to_thread(_order_holds, key, rows[0], names)
+        leave = dungeonstall.leave(rows, stuck, holds)
         if leave is None:
             return False
         held = None
