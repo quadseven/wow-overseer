@@ -6931,15 +6931,13 @@ def _order_holds(key: str, head: dict, names: list) -> int:
     if not door or not dungeonpace.operator_ordered(head) or not names:
         return 0
     sql = dungeonstall.HOLDS_SQL.format(holes=dungeonstall.holes(len(names)))
-    try:
-        with _connect() as conn, conn.cursor() as cur:
-            cur.execute(sql, dungeonstall.holds_args(
-                key, door, int(head["id"]), names))
-            rows = cur.fetchall()
-            return int(dict(rows[0]).get("n") or 0) if rows else 0
-    except Exception:
-        log.exception("stall: the hold count for %s could not be read", key)
-        return 0
+    # A failed read reaches the pass, which logs it and steps the queue as
+    # before; it is not counted as zero holds.
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, dungeonstall.holds_args(
+            key, door, int(head["id"]), names))
+        rows = cur.fetchall()
+        return int(dict(rows[0]).get("n") or 0) if rows else 0
 
 
 def _order_parked(key: str, door: str, head_id: int = 0) -> dict | None:
