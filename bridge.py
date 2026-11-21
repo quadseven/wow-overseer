@@ -24361,6 +24361,18 @@ class Bridge(discord.Client):
                          "died on" if hub and walled(hub)
                          else "the hub is a long walk off")
                 hub = chosen
+        # A HUB WHOSE WALK WAS JUST RELEASED UNLANDED IS NOT ASKED FOR AGAIN
+        # (#1261): only a bag-room errand has another aim to choose, so any
+        # other errand waits out the memory instead of taking the traveller
+        # for the same walk. The retry clock restarts, so this is said once
+        # per UNLANDED_RETRY_SECONDS, not every tick.
+        if townerrand.unreachable_hub(why, hub, released, now):
+            log.info("town errand: %s%s, but the walk to %s was released "
+                     "unlanded within %ds, and nothing else serves this "
+                     "errand; not going", why, label,
+                     hub.get("place", "the hub"),
+                     int(townerrand.AIM_MEMORY_SECONDS))
+            return dataclasses.replace(state, ended=now, unlanded=True)
         if not hub:
             log.info("town errand: %s%s, but neither %s's hearthstone point nor "
                      "a capital of the family's own auction house on his map "
