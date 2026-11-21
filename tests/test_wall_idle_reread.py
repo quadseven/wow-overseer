@@ -3,6 +3,7 @@
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 from _stub_modules import PYMYSQL, stub_modules
 
@@ -68,6 +69,30 @@ class TheWallReread(unittest.TestCase):
         for key in ("doing", "stalled_s"):
             self.assertEqual(by["Reed"][key], banner[key])
             self.assertEqual(by["Reed"][key], tile[key])
+
+    def test_the_map_server_words_a_moved_member_as_the_banner_does(self):
+        with stub_modules(pymysql=PYMYSQL):
+            import map_server
+        with session(30) as rd:
+            composed = watchwall.nowstatus.compose(
+                {"present": False, "condition": "ok", "combat": False, "life": None},
+                None,
+                None,
+            )
+            banner = members.reread_idle(rd, "Grug", composed)
+        rules = [
+            (("FROM characters",), [{"name": "Grug", "level": 30}]),
+            (("overseer_level",), []),
+            (("UNIX_TIMESTAMP() AS now_at",), [{"now_at": 1_800_000_000}]),
+        ]
+        with (
+            mock.patch.object(map_server, "fetch_now_facts", lambda names: {}),
+            mock.patch.object(map_server.v2_presence, "of", lambda rd, names: {}),
+            mock.patch.object(map_server, "_connect", lambda: FakeConn(rules, [])),
+        ):
+            served = map_server._leader_now("Grug")
+        self.assertNotEqual(banner["doing"], "Idle")
+        self.assertEqual(served, banner)
 
 
 if __name__ == "__main__":
