@@ -647,6 +647,10 @@ class Facts:
     # Run keyword -> (guild runs cleared, guild runs that went in) over
     # CLEAR_RECORD_DAYS (guildrun.door_record), or None when unread.
     door_record: dict | None = None
+    # (doors the stall breaker left with no run formed since the family's
+    # last run, seconds since the newest of them), off dungeonstall.UNFORMED_SQL
+    # (`unformed_rest`), or None when unread.
+    unformed: tuple | None = None
 
     @property
     def mean_level(self) -> float:
@@ -1200,6 +1204,37 @@ def _heuristic_why(pick: Option) -> str:
             "is ready for" if pick.ready else "would be carried through",
             pick.why,
         )
+    )
+
+
+# A FAMILY THAT FORMS NO RUN IS NOT HANDED ANOTHER DOOR (#1261). The stall
+# breaker bars one door at a time (dungeonstall.HELD_SQL), so a family whose
+# runs never form walks the planner down every door it can reach. Measured on
+# the dev realm over the 48 hours to 2026-11-21: one level 60 family was
+# planned into ten doors in thirty hours and another into five, each left
+# about two hours later with no run started, and no family run started at all.
+# Dungeon jobs held the four families for 84 of their 192 hours and turned in
+# about 0.2 quests an hour against 0.55 on the quest job. When the same
+# family leaves a second door with no run formed since its last run, the door
+# is not what holds it: the planner rests for UNFORMED_REST_HOURS from the
+# newest leave and the family works its default job, then tries one door.
+# An operator's order is never touched: the planner does not write those.
+UNFORMED_LEAVES = 2
+UNFORMED_REST_HOURS = 6
+
+
+def unformed_rest(facts: Facts) -> str:
+    """Why the planner queues no door now (see UNFORMED_LEAVES), or ""."""
+    if not facts.unformed:
+        return ""
+    count, age = facts.unformed
+    rest = UNFORMED_REST_HOURS * 3600 - int(age or 0)
+    if int(count or 0) < UNFORMED_LEAVES or age is None or rest <= 0:
+        return ""
+    return (
+        "the family left %d doors with no run formed since its last run, so "
+        "the door is not what holds it; no door is planned for %.1f more "
+        "hour(s) and the family works its default job" % (int(count), rest / 3600)
     )
 
 
