@@ -63,6 +63,10 @@ BROKEN_SQL = (
     "WHERE state = %s ORDER BY quest, guid"
 )
 COMPLETED_SQL = "SELECT DISTINCT quest FROM overseer_quest_ledger WHERE state = %s"
+COMPLETION_DETAILS_SQL = (
+    "SELECT guid, finished FROM overseer_quest_ledger "
+    "WHERE quest = %s AND state = %s ORDER BY finished"
+)
 # A refusal the world gave one quester at its place and in its bags: the take or
 # the hand-in was turned down ("no giver in reach", "not eligible", "the core
 # will not reward it now"). Where another quester has completed the quest, such
@@ -95,6 +99,9 @@ FILED_SQL = (
     "UPDATE overseer_quest_ledger SET ticket = %s WHERE quest = %s AND ticket = %s"
 )
 RELEASE_SQL = (
+    "UPDATE overseer_quest_ledger SET ticket = NULL WHERE quest = %s AND ticket = %s"
+)
+RETIRE_SQL = (
     "UPDATE overseer_quest_ledger SET ticket = NULL WHERE quest = %s AND ticket = %s"
 )
 OBJECTIVES_SQL = (
@@ -130,6 +137,7 @@ class Plan:
     new: tuple  # (quest, rows) to file, oldest quest id first
     copies: tuple  # (quest, ticket): rows of a filed quest with no number yet
     stuck: tuple  # quest ids left at FILING by a filing that never finished
+    retired: tuple = ()  # (quest, ticket): completed quests to close
 
 
 def _quest_ticket(group, quest: int, ticket_for) -> tuple[int | None, bool]:
@@ -161,10 +169,13 @@ def plan(rows, ticket_for=None, completed=()) -> Plan:
     by_quest: dict = {}
     for row in rows or ():
         by_quest.setdefault(int(row["quest"]), []).append(row)
-    new, copies, stuck = [], [], []
+    new, copies, stuck, retired = [], [], [], []
     for quest, group in sorted(by_quest.items()):
         filed, has_filing = _quest_ticket(group, quest, ticket_for)
         tickets = [r["ticket"] for r in group if r.get("ticket") is not None]
+        if quest in completed and _quester_bound(group) and filed is not None:
+            retired.append((quest, filed))
+            continue
         if filed is not None:
             if len(tickets) < len(group):
                 copies.append((quest, filed))
@@ -174,7 +185,7 @@ def plan(rows, ticket_for=None, completed=()) -> Plan:
             continue
         else:
             new.append((quest, tuple(group)))
-    return Plan(tuple(new), tuple(copies), tuple(stuck))
+    return Plan(tuple(new), tuple(copies), tuple(stuck), tuple(retired))
 
 
 def initial_delay(
@@ -374,6 +385,12 @@ class SqlStore:
         self.cur.execute(COMPLETED_SQL, (questledger.COMPLETED,))
         return [int(r["quest"]) for r in self.cur.fetchall()]
 
+    def completion_summary(self, quest: int) -> tuple[int, object]:
+        self.cur.execute(COMPLETION_DETAILS_SQL, (quest, questledger.COMPLETED))
+        rows = list(self.cur.fetchall())
+        times = [r["finished"] for r in rows if r.get("finished") is not None]
+        return len(rows), max(times) if times else None
+
     def objectives(self, quest: int) -> list:
         self.cur.execute(OBJECTIVES_SQL, (quest,))
         return list(self.cur.fetchall())
@@ -402,6 +419,9 @@ class SqlStore:
 
     def release(self, quest: int) -> None:
         self.cur.execute(RELEASE_SQL, (quest, FILING))
+
+    def retire(self, ticket: int, quest: int) -> None:
+        self.cur.execute(RETIRE_SQL, (quest, ticket))
 
 
 def _is_timeout(exc: Exception) -> bool:
@@ -434,6 +454,19 @@ def run(
     # not see it as never run.
     if hasattr(store, "record_pass"):
         store.record_pass(time.time() if now is None else float(now))
+    retired = 0
+    for quest, ticket in todo.retired[:10]:
+        count, newest = store.completion_summary(quest)
+        client.retire(
+            ticket,
+            "Quest %d is completed: %d quester(s) completed it; newest completion: %s."
+            % (quest, count, newest if newest is not None else "time not recorded"),
+        )
+        if hasattr(store, "retire"):
+            store.retire(ticket, quest)
+        if getattr(client, "log", None):
+            client.log.info("questtickets: retired quest %d ticket #%d", quest, ticket)
+        retired += 1
     known = {q.id: q for q in catalogue or ()}
     filed = 0
     for quest, rows in todo.new[:MAX_PER_PASS]:
@@ -451,6 +484,7 @@ def run(
     unlinked, client.unlinked = client.unlinked, []
     return {
         "filed": filed,
+        "retired": retired,
         "copied": len(todo.copies),
         "stuck": list(todo.stuck),
         "unlinked": unlinked,
@@ -498,6 +532,17 @@ class Client:
                     "tickets: #%d is not linked under #%d", made["number"], self.epic
                 )
         return int(made["number"])
+
+    def retire(self, number: int, comment: str) -> None:
+        self.github.call(
+            "POST", "/issues/%d/comments" % int(number), {"body": comment}, ok=(201,)
+        )
+        self.github.call(
+            "PATCH",
+            "/issues/%d" % int(number),
+            {"state": "closed", "state_reason": "not_planned"},
+            ok=(200,),
+        )
 
 
 def client_from_env(log=None, env=None, epic=None) -> Client | None:

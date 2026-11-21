@@ -85,6 +85,28 @@ class FakeGitHub:
         return [c for c in self.calls if c[1] == "/issues"]
 
 
+class RetireStore(Store):
+    """Store behavior used only by tests of completed-ticket retirement."""
+
+    def completed(self):
+        return [r["quest"] for r in self.rows if r.get("state") == ql.COMPLETED]
+
+    def completion_summary(self, quest):
+        rows = [
+            r
+            for r in self.rows
+            if r.get("state") == ql.COMPLETED and r["quest"] == quest
+        ]
+        return len(rows), max(
+            (r.get("finished") for r in rows if r.get("finished")), default=None
+        )
+
+    def retire(self, ticket, quest):
+        for r in self.rows:
+            if r["quest"] == quest and r.get("ticket") == ticket:
+                r["ticket"] = None
+
+
 class Filing(unittest.TestCase):
     def run_pass(self, store, github=None, now=None):
         self.github = github or FakeGitHub()
@@ -393,6 +415,13 @@ class QuesterBoundRefusalTest(unittest.TestCase):
         r["reason"] = reason
         return r
 
+    def completed_row(self, quest, guid=9):
+        r = row(quest, guid=guid, name="Otherer")
+        r["reason"] = ql.FAILED_REASON
+        r["state"] = ql.COMPLETED
+        r["finished"] = "2026-11-19 10:00:00"
+        return r
+
     def test_completed_quest_with_only_refusals_files_nothing(self):
         rows = [
             self.refused(328, "the turn-in NPC would not take it: no object in reach"),
@@ -413,6 +442,91 @@ class QuesterBoundRefusalTest(unittest.TestCase):
         store = Store([self.refused(353, "the quest giver would not give it: x")])
         store.completed = lambda: [353]
         out = qt.run(store, qt.Client(FakeGitHub()), [])
+        self.assertEqual(out["filed"], 0)
+
+
+class RetireTest(unittest.TestCase):
+    """Tickets are retired for completed quests with only quester-bound broken rows."""
+
+    def refused(self, quest, reason, guid=8):
+        r = row(quest, guid=guid, name="Pindle")
+        r["reason"] = reason
+        return r
+
+    def completed_row(self, quest, guid=9):
+        r = row(quest, guid=guid, name="Otherer")
+        r["reason"] = ql.FAILED_REASON
+        r["state"] = ql.COMPLETED
+        r["finished"] = "2026-11-19 10:00:00"
+        return r
+
+    def test_plan_returns_completed_quests_with_only_quester_bound_tickets(self):
+        rows = [
+            self.refused(221, "the quest giver would not give it: not eligible", 7),
+            self.refused(221, "the turn-in NPC would not take it: no object", 8),
+            self.refused(222, "the quest giver would not give it: not eligible", 7),
+            self.refused(222, "the turn-in NPC would not take it: no object", 8),
+        ]
+
+        p = qt.plan(rows, ticket_for={221: 1001, 222: 1002}, completed={221, 222})
+        self.assertEqual(p.retired, ((221, 1001), (222, 1002)))
+        mixed = rows + [self.refused(223, "objectives did not move")]
+        p = qt.plan(mixed, ticket_for={223: 1003}, completed={221, 222, 223})
+        self.assertNotIn((223, 1003), p.retired)
+
+    def test_run_closes_tickets_with_comment(self):
+        rows = [
+            self.refused(221, "the quest giver would not give it: not eligible", 7),
+            self.refused(221, "the turn-in NPC would not take it: no object", 8),
+            self.completed_row(221, 9),
+        ]
+
+        store = RetireStore(rows)
+        for r in store.rows:
+            if r.get("state") == ql.BROKEN:
+                r["ticket"] = 1001
+
+        github = FakeGitHub()
+        out = qt.run(store, qt.Client(github), [])
+
+        self.assertEqual(out["retired"], 1)
+        self.assertEqual(out["filed"], 0)
+
+        comment_calls = [c for c in github.calls if "/issues/1001/comments" in c[1]]
+        self.assertEqual(len(comment_calls), 1)
+
+        patch_calls = [
+            c for c in github.calls if c[1] == "/issues/1001" and c[0] == "PATCH"
+        ]
+        self.assertEqual(len(patch_calls), 1)
+        self.assertEqual(patch_calls[0][2]["state"], "closed")
+        self.assertIn("Quest 221", comment_calls[0][2]["body"])
+        self.assertIn("1 quester", comment_calls[0][2]["body"])
+        self.assertIn("2026-11-19 10:00:00", comment_calls[0][2]["body"])
+        self.assertEqual(qt.run(store, qt.Client(FakeGitHub()), [])["retired"], 0)
+
+    def test_retire_limited_to_max_per_pass(self):
+        rows = []
+        for i in range(1, 16):
+            rows.extend(
+                [
+                    self.refused(
+                        i, "the quest giver would not give it: not eligible", 7
+                    ),
+                    self.refused(i, "the turn-in NPC would not take it: no object", 8),
+                    self.completed_row(i, 9),
+                ]
+            )
+
+        store = RetireStore(rows)
+        for r in store.rows:
+            if r.get("state") == ql.BROKEN:
+                r["ticket"] = 1000 + r["quest"]
+
+        github = FakeGitHub()
+        out = qt.run(store, qt.Client(github), [])
+
+        self.assertEqual(out["retired"], 10)
         self.assertEqual(out["filed"], 0)
 
 
