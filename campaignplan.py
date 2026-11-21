@@ -1209,9 +1209,8 @@ def _heuristic_why(pick: Option) -> str:
 
 # A FAMILY THAT FORMS NO RUN IS NOT HANDED ANOTHER DOOR (#1261). The stall
 # breaker bars one door at a time (dungeonstall.HELD_SQL), so a family whose
-# runs never form walks the planner down every door it can reach, about two
-# hours a door with no run started, while the quest job would have turned in
-# work in those hours. When the same
+# runs never form walks the planner down every door it can reach with no run
+# started, while the quest job would have turned in work meanwhile. When the same
 # family leaves a second door with no run formed since its last run, the door
 # is not what holds it: the planner rests for UNFORMED_REST_HOURS from the
 # newest leave and the family works its default job, then tries one door.
