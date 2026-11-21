@@ -56,7 +56,9 @@ class TheWallReread(unittest.TestCase):
         by, _ = roster(levelled=levelled)
         member = dict(MEMBER, name="Reed")
         with realmread.Session(lambda: FakeConn(rules(levelled=levelled), [])) as rd:
-            reread = lambda name, now: members.reread_idle(rd, name, now)
+            def reread(name, now):
+                return members.reread_idle(rd, name, now)
+
             composed = watchwall.nowstatus.compose(member, {})
             banner = reread("Reed", composed)
             wall = watchwall.build_wall([member], facts={}, reread=reread)
