@@ -1280,7 +1280,7 @@ class AuctionTripNeedsListingTest(unittest.TestCase):
 
     def test_the_pass_checks_the_house_before_it_claims_the_traveller(self):
         body = BRIDGE.read_text(encoding="utf-8")
-        body = body[body.index("async def _auction_once("):]
+        body = body[body.index("async def _auction_once(") :]
         body = body[: body.index("async def _auction_loop(")]
         gate = body.index("auction.stocked_needs(needs, listed)")
         self.assertLess(gate, body.index("self._claim_town_slot("))
