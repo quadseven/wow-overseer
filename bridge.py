@@ -19212,21 +19212,23 @@ class Bridge(discord.Client):
                              _family_label(cohort))
         _log_changed("bank bags", notes, tuple(sorted(names)))
 
-    async def _bank_passing_once(self, cohort=None) -> None:
+    async def _bank_passing_once(self, cohort=None) -> int:
         """The quick look: bank for whoever is at a banker, nothing else.
 
         Never claims the travel column. A family that stopped at a banker for
         any reason (a vendor beside it, the town trip) puts its surplus down
         on the way past instead of waiting for the ten-minute bank pass.
+
+        Returns how many rows it queued, which the errand's bank step reads.
         """
         names, _leader = await asyncio.to_thread(_family_of, cohort)
         if not names:
-            return
+            return 0
         seen = await asyncio.to_thread(_recent_bank_keys, GIVE_RETRY_MINUTES)
         await self._bank_bag_slots(names, seen, cohort)
         bank_plan = await asyncio.to_thread(_plan_bank, names)
         if not bank_plan.moves:
-            return
+            return 0
         planned = [(move, bank.command(move)) for move in bank_plan.moves]
         fresh, _walking = await self._bank_at_the_counter(planned, seen)
         if fresh:
@@ -19236,6 +19238,7 @@ class Bridge(discord.Client):
                      "without a trip%s",
                      ", ".join(sorted({m.character for m in fresh})),
                      len(fresh), _family_label(cohort))
+        return len(fresh)
 
     async def _bank_loop(self) -> None:
         """Keep the family's bank in use (mod-overseer#207).
@@ -24507,16 +24510,29 @@ class Bridge(discord.Client):
                 at = await asyncio.to_thread(_fetch_town, leader)
                 if leader not in positions or not at.banker:
                     return False
-            if step not in marks:
-                # BOTH BANKS, while the family stands at the counter. The
-                # errand owns the traveller, so the ten-minute bank and guild
-                # bank passes are refused it while the errand runs; this step
-                # is their turn, and a member short of bag room is exactly
-                # who needs the guild vault as well as its own bank.
-                await self._bank_passing_once(cohort)
+            # BOTH BANKS, while the family stands at the counter. The errand
+            # owns the traveller, so the ten-minute bank and guild bank
+            # passes are refused it while the errand runs; this step is their
+            # turn, and a member short of bag room is exactly who needs the
+            # guild vault as well as its own bank.
+            #
+            # ASKED AGAIN UNTIL A PASS FINDS NOTHING LEFT (a banker errand
+            # that never queued a row). The leader is read at the banker
+            # before its followers, and a row is only written for a member
+            # standing within TOWN_COUNTER_YARDS of one, so a single look on
+            # the leader's arrival wrote nothing, marked the step as run, and
+            # the step then ran out its window with every row unwritten; the
+            # next errand walked the leader back to the same counter for the
+            # same rows. Each look is throttled, and the step ends once one
+            # has queued nothing after the settle time.
+            if step not in marks or now - marks[step + ":run"] >= 40.0:
+                marks.setdefault(step, now)
+                marks[step + ":run"] = now
+                queued = await self._bank_passing_once(cohort)
                 await self._guild_bank_passing_once(cohort)
-                marks[step] = now
-            return ran_for >= TOWN_ERRAND_SETTLE_SECONDS
+                marks[step + ":queued"] = bool(queued)
+            return (ran_for >= TOWN_ERRAND_SETTLE_SECONDS
+                    and not marks.get(step + ":queued"))
         if step == townerrand.TIDY:
             # THE BAG TIDY PASS RUNS HERE TOO (#375), while the family stands
             # together: its hand-ons are gives and trades between members, and
