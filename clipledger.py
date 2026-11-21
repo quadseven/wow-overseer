@@ -772,10 +772,31 @@ def missed(rows: Iterable[Mapping]) -> list:
     return [{"day": day, **days[day]} for day in sorted(days, reverse=True)]
 
 
+def repeats(rows: Iterable[Mapping]) -> dict:
+    """Where each ready clip stands among repeats of its item: {id: (nth, of)}.
+
+    Two drops of one item by one character are two real moments that read as a
+    duplicate. Clips of the same kind, character and subject are numbered oldest
+    first, so a card can say "2 of 2". A clip with no subject is never counted."""
+    groups: dict = {}
+    for r in rows:
+        if r.get("state") == "ready" and r.get("file_name") and subject(r):
+            key = (r.get("kind"), r.get("character"), subject(r))
+            groups.setdefault(key, []).append(r)
+    out: dict = {}
+    for group in groups.values():
+        group.sort(key=lambda r: (str(_iso(r.get("event_at")) or ""), r["id"]))
+        for n, r in enumerate(group, 1):
+            out[r["id"]] = (n, len(group))
+    return out
+
+
 def shelf(rows: Iterable[Mapping]) -> dict:
     """The /api/clips payload: ready rows with a file, newest event first, and
-    the moments missed per day (`missed`)."""
+    the moments missed per day (`missed`). A clip of an item its character
+    caught more than once carries `nth` and `of`."""
     rows = list(rows)
+    again = repeats(rows)
     ready = [r for r in rows if r.get("state") == "ready" and r.get("file_name")]
     ready.sort(
         key=lambda r: (str(_iso(r.get("event_at")) or ""), r["id"]), reverse=True
@@ -790,6 +811,11 @@ def shelf(rows: Iterable[Mapping]) -> dict:
                 "subject": subject(r),
                 "at": _iso(r.get("event_at")),
                 "url": clip_url(r["file_name"]),
+                **(
+                    {"nth": again[r["id"]][0], "of": again[r["id"]][1]}
+                    if r["id"] in again and again[r["id"]][1] > 1
+                    else {}
+                ),
             }
             for r in ready[:SHELF_LIMIT]
         ],

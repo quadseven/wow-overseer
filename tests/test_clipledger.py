@@ -589,6 +589,54 @@ class ShelfViewOwnerTests(unittest.TestCase):
         self.assertEqual("Cedar", clip["view_owner"])
 
 
+class ShelfRepeatTests(unittest.TestCase):
+    def row(self, id, minutes, **over):
+        row = {
+            "id": id,
+            "kind": "loot",
+            "character": "Cedar",
+            "event_at": NOW - timedelta(minutes=minutes),
+            "state": "ready",
+            "file_name": "clip-%d-loot.mp4" % id,
+            "detail": "Test Blade",
+        }
+        row.update(over)
+        return row
+
+    def clips(self, *rows):
+        return {c["id"]: c for c in clipledger.shelf(list(rows))["clips"]}
+
+    def test_two_drops_of_one_item_are_numbered_oldest_first(self):
+        got = self.clips(self.row(1, 600), self.row(2, 10))
+        self.assertEqual((1, 2), (got[1]["nth"], got[1]["of"]))
+        self.assertEqual((2, 2), (got[2]["nth"], got[2]["of"]))
+
+    def test_two_drops_a_failed_and_an_unviewed_row_give_two_cards_and_a_count(self):
+        shelf = clipledger.shelf(
+            [
+                self.row(1, 600),
+                self.row(2, 10),
+                self.row(3, 5, state="failed", file_name=None),
+                self.row(4, 5, state="no_view", file_name=None),
+            ]
+        )
+        self.assertEqual([2, 1], [c["id"] for c in shelf["clips"]])
+        self.assertEqual(["Test Blade"] * 2, [c["subject"] for c in shelf["clips"]])
+        (day,) = shelf["missed"]
+        self.assertEqual((1, 1), (day["no_view"], day["failed"]))
+
+    def test_a_single_clip_and_other_items_carry_no_number(self):
+        got = self.clips(
+            self.row(1, 600),
+            self.row(2, 10, detail="Test Staff"),
+            self.row(3, 5, character="Alder"),
+            self.row(4, 5, state="failed"),
+        )
+        for clip in got.values():
+            self.assertNotIn("nth", clip)
+            self.assertNotIn("of", clip)
+
+
 class EventKeyTests(unittest.TestCase):
     def test_the_key_functions_spell_what_the_planner_writes(self):
         at = NOW - timedelta(minutes=3)
