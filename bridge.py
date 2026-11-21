@@ -9683,6 +9683,8 @@ class Bridge(discord.Client):
         # out, and when each grounded walker last used its hearthstone.
         self._post_walks: dict = {}
         self._post_held_until: dict = {}
+        # name -> (level at its death on the road, hold end); guildpost.died_names
+        self._post_died: dict = {}
         self._ground_hearths: dict = {}
         # THE ACTIVITY CHOICE (#216). Per family key: what the last cycle saw
         # (breakpoint marks, when Jev was last asked, since when the family has
@@ -20614,8 +20616,14 @@ class Bridge(discord.Client):
         held = {n for n, until in held_until.items() if until > time.monotonic()}
         for gone in set(held_until) - held:
             held_until.pop(gone, None)
+        struck = getattr(self, "_post_died", {})
+        died = guildpost.died_names(
+            struck, await asyncio.to_thread(_fetch_family_levels, sorted(struck)),
+            time.monotonic()) if struck else frozenset()
+        for gone in set(struck) - set(died):
+            struck.pop(gone, None)
         plan, notes = guildpost.visits(letters, online, busy, free_slots, roster,
-                                       sitting, held)
+                                       sitting, held, died)
         log.info("%s %d letter(s) with items or gold wait for %d guild member(s) of %s's "
                  "guild; %d walk(s) this pass", guildpost.LOG_PREFIX, len(letters),
                  len({x.receiver for x in letters}), names[0] if names else "?",
@@ -20664,6 +20672,11 @@ class Bridge(discord.Client):
                 if guildpost.is_held(answer.said):
                     self._post_held_until[visit.receiver] = (
                         time.monotonic() + guildpost.HELD_BACKOFF_SECONDS)
+                if guildpost.is_died(answer.said):
+                    level = (await asyncio.to_thread(
+                        _fetch_family_levels, [visit.receiver])).get(visit.receiver)
+                    self._post_died[visit.receiver] = (
+                        level, time.monotonic() + guildpost.DIED_HOLD_SECONDS)
                 log.info("%s walk row %d for %s: %s; the post stays in the "
                          "mailbox", guildpost.LOG_PREFIX, row_id, visit.receiver,
                          answer.said or answer.state)
