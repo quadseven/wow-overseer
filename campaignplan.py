@@ -246,6 +246,62 @@ LOOKAHEAD = 8
 # again. Nothing it could be offered changes faster than a level or a run.
 IDLE_SECONDS = 600
 
+# A FAMILY WHOSE CAMPAIGNS NEVER FORM A RUN RESTS (#1261). The stall bar
+# (`Facts.stalled`) is per door: an entry the stall breaker gives up with no
+# run opened bars that door, and the planner queues the next one at once. When
+# the cause is the family (members scattered too far to gather, errands of
+# their own) and not the door, every door fails the same way. Measured on the
+# dev realm over 48 hours: four level 60 families spent about half their head
+# time on dungeon jobs and opened no run at all, one family stepping through
+# nine doors back to back, each held one to four hours. While a dungeon job
+# stands, the profession loop, the craft rhythm and the quest drive wait for
+# it. So once the family's UNFORMED_LIMIT newest ended entries opened no run,
+# nothing is planned until UNFORMED_REST_SECONDS after the newest; then one
+# door is tried again, and a run that opens ends the rest.
+UNFORMED_LIMIT = 2
+UNFORMED_REST_SECONDS = 6 * 3600
+UNFORMED_WINDOW_HOURS = 48
+# The family's ended queue entries that started, newest first: seconds since
+# each ended, and whether any run led by a member opened while it stood.
+UNFORMED_SQL = (
+    "SELECT TIMESTAMPDIFF(SECOND, q.finished_at, NOW()) AS age, "
+    "EXISTS(SELECT 1 FROM overseer_dungeon_run r WHERE r.leader_name IN ({holes}) "
+    "AND r.started_at >= q.started_at AND r.started_at <= q.finished_at) AS formed "
+    "FROM overseer_dungeon_queue q WHERE q.family = %s "
+    "AND q.status IN ('done', 'cancelled') AND q.started_at IS NOT NULL "
+    "AND q.finished_at >= NOW() - INTERVAL %s HOUR "
+    "ORDER BY q.finished_at DESC, q.id DESC LIMIT %s"
+)
+
+
+def unformed_args(names, key: str) -> tuple:
+    """UNFORMED_SQL's arguments (the `{holes}` count is len(names))."""
+    return (*[str(n) for n in names], key, UNFORMED_WINDOW_HOURS, UNFORMED_LIMIT)
+
+
+def unformed(rows: list) -> tuple:
+    """Facts.unformed from UNFORMED_SQL rows: (formed, seconds since it
+    ended) per entry, newest first."""
+    return tuple(
+        (bool(int(r.get("formed") or 0)), float(r.get("age") or 0)) for r in rows or []
+    )
+
+
+def formation_rest(entries) -> str:
+    """Why the planner rests this family, or "" (see UNFORMED_LIMIT)."""
+    entries = tuple(entries or ())[:UNFORMED_LIMIT]
+    if len(entries) < UNFORMED_LIMIT or any(formed for formed, _age in entries):
+        return ""
+    newest = min(age for _formed, age in entries)
+    if newest >= UNFORMED_REST_SECONDS:
+        return ""
+    return (
+        "the family's last %d dungeon entries ended with no run formed, so no "
+        "door is planned for %d more minutes and the family works at other jobs"
+        % (len(entries), int((UNFORMED_REST_SECONDS - newest) // 60))
+    )
+
+
 # The switch. On unless the operator turns it off.
 ENV_SWITCH = "CAMPAIGN_PLANNER"
 
@@ -647,6 +703,9 @@ class Facts:
     # Run keyword -> (guild runs cleared, guild runs that went in) over
     # CLEAR_RECORD_DAYS (guildrun.door_record), or None when unread.
     door_record: dict | None = None
+    # (formed, seconds since it ended) for the family's newest ended queue
+    # entries (`unformed`), or None when unread.
+    unformed: tuple | None = None
 
     @property
     def mean_level(self) -> float:
@@ -1039,7 +1098,7 @@ def _history_facts(facts: Facts, run: Run) -> dict:
 def options(facts: Facts) -> list:
     """Every run the family could be queued for now, in path order."""
     _who, level = facts.weakest
-    if not level:
+    if not level or formation_rest(facts.unformed):
         return []
     kinds = refusal_kinds(facts)
     refused = {keyword: why for keyword, (_k, why) in kinds.items()}
@@ -1349,6 +1408,9 @@ def nothing_line(facts: Facts) -> str:
     who, level = facts.weakest
     if not level:
         return "nobody's level can be read, so nothing is planned"
+    rest = formation_rest(facts.unformed)
+    if rest:
+        return "nothing to plan: %s" % rest
     grouped: dict = {}
     for keyword, why in sorted(refusals(facts).items()):
         grouped.setdefault(why.split(" - ")[0].split(":")[0], []).append(keyword)
