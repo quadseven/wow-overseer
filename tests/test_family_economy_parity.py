@@ -715,6 +715,7 @@ class TheMailPassDoesNotReWalkALeaderAlreadyAtTheBox(unittest.TestCase):
     for 0 takes."""
 
     def setUp(self):
+        """Claims made so far, counted after each mail cycle."""
         self.claims_by_cycle = []
 
     def run_mail(self, standing, arrivals=()):
