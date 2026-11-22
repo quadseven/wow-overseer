@@ -85,6 +85,39 @@ class Observe(unittest.TestCase):
         )
 
 
+class FollowingFar(unittest.TestCase):
+    """A member read "following" thousands of yards out is stranded too."""
+
+    FAR = "Oz|following|3228\nUzza|following|2"
+
+    def test_a_far_following_member_is_stranded_after_the_window(self):
+        watch = {}
+        states = sh.parse_members_state(self.FAR)
+        sh.observe(watch, "Zug", states, 0.0)
+        self.assertEqual(sh.observe(watch, "Zug", states, sh.STRAND_SECONDS), ["Oz"])
+
+    def test_a_near_following_member_is_never_stranded(self):
+        watch = {}
+        states = sh.parse_members_state("Oz|following|900")
+        sh.observe(watch, "Zug", states, 0.0)
+        self.assertEqual(sh.observe(watch, "Zug", states, 9999.0), [])
+        self.assertEqual(watch, {})
+
+    def test_a_far_following_member_that_closes_is_not_stranded(self):
+        watch = {}
+        sh.observe(watch, "Zug", sh.parse_members_state("Oz|following|3228"), 0.0)
+        closing = sh.parse_members_state("Oz|following|2800")
+        self.assertEqual(sh.observe(watch, "Zug", closing, sh.STRAND_SECONDS), [])
+
+    def test_the_clock_survives_the_module_changing_its_word(self):
+        watch = {}
+        sh.observe(watch, "Zug", sh.parse_members_state("Oz|following|3228"), 0.0)
+        held = sh.parse_members_state("Oz|held where it stands, too far to walk back|3228")
+        sh.observe(watch, "Zug", held, 300.0)
+        again = sh.parse_members_state("Oz|following|3228")
+        self.assertEqual(sh.observe(watch, "Zug", again, sh.STRAND_SECONDS), ["Oz"])
+
+
 def able(**over):
     facts = {"stone": True, "cooldown": 0.0, "alive": True}
     facts.update(over)
