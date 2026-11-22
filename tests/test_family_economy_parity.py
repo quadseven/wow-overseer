@@ -709,16 +709,17 @@ class ThePlanAsksOnlyAPurseThatPays(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TheMailPassDoesNotReWalkALeaderAlreadyAtTheBox(unittest.TestCase):
     """The loop: gear waits for members far from the mailbox, the leader
     already stands at it, and every cycle re-aimed it ('took over' / 'ended')
     for 0 takes."""
 
-    def run_mail(self, standing):
+    def setUp(self):
+        self.claims_by_cycle = []
+
+    def run_mail(self, standing, arrivals=()):
+        """`arrivals` are the members who walk into reach after each cycle."""
+        standing = set(standing)
         world, log = {}, _Log()
         me = TheSelf(world)
         ns = _mail_ns(world, log)
@@ -733,6 +734,8 @@ class TheMailPassDoesNotReWalkALeaderAlreadyAtTheBox(unittest.TestCase):
         me._mail_urgent = lambda *a: ns["_mail_urgent"](me, *a)
         for cycle in range(3):
             asyncio.run(ns["_mail_once"](me, HORDE))
+            self.claims_by_cycle.append(len(me.claims))
+            standing.update(a for a in arrivals[cycle : cycle + 1] if a)
         return world, me, log
 
     def test_no_holder_in_reach_means_the_column_is_not_claimed_again(self):
@@ -745,3 +748,13 @@ class TheMailPassDoesNotReWalkALeaderAlreadyAtTheBox(unittest.TestCase):
     def test_a_holder_in_reach_still_gets_the_pass(self):
         world, me, _ = self.run_mail({"Zug", "Uzza"})
         self.assertEqual(3, len(me.claims))
+
+    def test_the_pass_goes_ahead_the_cycle_a_holder_comes_into_reach(self):
+        # Cycles one and two leave the column free for the town errand; the
+        # holder arrives after cycle two and cycle three claims.
+        _, me, _ = self.run_mail({"Zug"}, arrivals=(None, "Uzza"))
+        self.assertEqual([0, 0, 1], self.claims_by_cycle)
+
+
+if __name__ == "__main__":
+    unittest.main()
