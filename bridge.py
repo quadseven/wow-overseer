@@ -6890,7 +6890,8 @@ def _door_wedge(head: dict, names: list, leader: str):
             if delete_memo is not None:
                 delete_memo(key)
         return None
-    if not any(jobs.is_dungeon_job(job) for job in _jobs_of(names).values()):
+    if not any(jobs.is_dungeon_job(job) or jobs.is_raid_job(job)
+               for job in _jobs_of(names).values()):
         # The family may switch jobs while still separated. Preserve its clock
         # so a temporary quest job cannot restart the stand-down bound.
         return None
@@ -6916,6 +6917,12 @@ def _door_wedge(head: dict, names: list, leader: str):
         # errand state does, and an errand taken up again counts on.
         for name in recall(leader, ages, head_id):
             ages.pop(name, None)
+    # A RAID DOOR IS NEVER LEFT BY THE BREAKER, but a member's errand of its
+    # own is still handed back there: the recall above is the only bound on it,
+    # and a raid's leader walks back for the member, or waits at the door for
+    # it, for as long as the errand lasts (Refs #1261).
+    if raidrun.is_raid(keyword):
+        return None
     # The stall line names the errand that held the run (#2280).
     errand_of = globals().get("_current_travel_npc")
     for name, (state, age) in ages.items():
@@ -27378,6 +27385,11 @@ class Bridge(discord.Client):
         refusing this one. dungeonstall.py decides.
         """
         if raidrun.is_raid(str(rows[0].get("keyword") or "")):
+            # No door is left for a raid, but the recall of a member's own
+            # errand still runs (Refs #1261): `_door_wedge` returns after it.
+            await asyncio.to_thread(
+                _door_wedge, rows[0], list(fam["names"]),
+                str(fam["leader"].get("name") or ""))
             return False
         names = list(fam["names"])
         # AN OPERATOR'S ORDER IS HELD, NEVER CANCELLED (#2216): inside its
@@ -28152,6 +28164,16 @@ class Bridge(discord.Client):
         if not name or not townslot.campaign_owns_traveller(active, job, False):
             return "", ""
         free = await asyncio.to_thread(_fetch_free_slots, list(fam["names"]))
+        # A MEMBER NO VENDOR CAN CLEAR DOES NOT WITHHOLD THE CAMPAIGN (#1261).
+        # The run's own gate reads the slots through the bag-floor release and
+        # lets the family proceed; this read took them raw, so the same family
+        # was "withheld" here, the town passes were given the leader's column,
+        # and a pass such as the mail walk took the door walk off it again and
+        # again. One reading for both. Looked up: the campaign tests load this
+        # function in isolation.
+        release = globals().get("_floor_release")
+        if release is not None:
+            free = await asyncio.to_thread(release, list(fam["names"]), free)
         withheld = jev_activity.withheld(True, free)
         phase = await asyncio.to_thread(_staging_phase, name) if withheld else ""
         if not townslot.campaign_owns_traveller(active, job, withheld, bool(phase)):
