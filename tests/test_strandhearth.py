@@ -112,7 +112,9 @@ class FollowingFar(unittest.TestCase):
     def test_the_clock_survives_the_module_changing_its_word(self):
         watch = {}
         sh.observe(watch, "Zug", sh.parse_members_state("Oz|following|3228"), 0.0)
-        held = sh.parse_members_state("Oz|held where it stands, too far to walk back|3228")
+        held = sh.parse_members_state(
+            "Oz|held where it stands, too far to walk back|3228"
+        )
         sh.observe(watch, "Zug", held, 300.0)
         again = sh.parse_members_state("Oz|following|3228")
         self.assertEqual(sh.observe(watch, "Zug", again, sh.STRAND_SECONDS), ["Oz"])
