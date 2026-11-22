@@ -62,8 +62,9 @@ class ARaidDoorRecallsAMembersErrand(unittest.TestCase):
     def test_the_breaker_asks_the_door_verdict_for_a_raid_head(self):
         fn = loop.FUNCTIONS["_stall_breaker"]
         first = next(
-            n for n in fn.body if isinstance(n, ast.If)
-            and "is_raid" in ast.unparse(n.test)
+            n
+            for n in fn.body
+            if isinstance(n, ast.If) and "is_raid" in ast.unparse(n.test)
         )
         self.assertIn("_door_wedge", ast.unparse(first))
 
