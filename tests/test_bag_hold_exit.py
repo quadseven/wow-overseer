@@ -347,6 +347,58 @@ class TheBankStepAsksAgainUntilTheRowsAreQueued(unittest.TestCase):
         self.assertEqual(5, len(looks))
 
 
+class TheVendorStepAsksAgainUntilTheSalesAreQueued(unittest.TestCase):
+    """The leader is read at the vendor before its followers; the single sell
+    look on that tick queued nothing and the step ended with every sale
+    unwritten, so the next errand walked back to the same vendor."""
+
+    def test_a_look_that_queued_nothing_does_not_end_the_step(self):
+        looks = []
+        answers = iter([0, 0, 4, 0, 0])
+
+        class Family:
+            async def _town_errand_vendor_settle(self, *a):
+                return True
+
+            async def _town_errand_vendor_trip(self, *a):
+                return {}, [], types.SimpleNamespace(vendor=0, name="", why_not="none")
+
+            async def _vendor_once(self, cohort):
+                looks.append(1)
+                return next(answers)
+
+        ns = {
+            "asyncio": asyncio,
+            "townerrand": townerrand,
+            "TOWN_ERRAND_SETTLE_SECONDS": 60.0,
+            "log": types.SimpleNamespace(info=lambda *a, **k: None),
+            "_family_label": lambda cohort: "",
+        }
+        exec(  # noqa: S102 - bridge.py's own source
+            compile(
+                ast.Module(body=_functions("_town_errand_vendor"), type_ignores=[]),
+                "bridge.py",
+                "exec",
+            ),
+            ns,
+        )
+        marks = {townerrand.VENDOR: 0.0}
+        done = []
+        for now in (100.0, 120.0, 140.0, 180.0, 220.0, 260.0):
+            done.append(
+                asyncio.run(
+                    ns["_town_errand_vendor"](
+                        Family(), None, NAMES, "Grug", {"Grug": {}}, None, now, marks
+                    )
+                )
+            )
+        # Looks at 100 and 140 queue nothing (followers still walking) and the
+        # settle time has not passed; 180 queues rows; 220 finds nothing left
+        # and the settle time has passed, so only then is the step done.
+        self.assertEqual([False, False, False, False, True, True], done)
+        self.assertEqual(5, len(looks))
+
+
 class Clock:
     def __init__(self):
         self.now = 1000.0
