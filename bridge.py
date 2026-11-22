@@ -28146,6 +28146,16 @@ class Bridge(discord.Client):
         if not name or not townslot.campaign_owns_traveller(active, job, False):
             return "", ""
         free = await asyncio.to_thread(_fetch_free_slots, list(fam["names"]))
+        # A MEMBER NO VENDOR CAN CLEAR DOES NOT WITHHOLD THE CAMPAIGN (#1261).
+        # The run's own gate reads the slots through the bag-floor release and
+        # lets the family proceed; this read took them raw, so the same family
+        # was "withheld" here, the town passes were given the leader's column,
+        # and a pass such as the mail walk took the door walk off it again and
+        # again. One reading for both. Looked up: the campaign tests load this
+        # function in isolation.
+        release = globals().get("_floor_release")
+        if release is not None:
+            free = await asyncio.to_thread(release, list(fam["names"]), free)
         withheld = jev_activity.withheld(True, free)
         phase = await asyncio.to_thread(_staging_phase, name) if withheld else ""
         if not townslot.campaign_owns_traveller(active, job, withheld, bool(phase)):
