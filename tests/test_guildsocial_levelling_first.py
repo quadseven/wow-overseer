@@ -12,14 +12,18 @@ gain could have used.
 These pin the order the social layer picks askers in: a raid seat under the
 order's level gate first, any other member under it next, everyone else last,
 the gear need ranking within each tier. They use the public seam, plan_pass.
+
+Healer seats are ranked first among seats because they are the slowest seat
+to fill for the Molten Core quorum (#2572).
 """
 
 import unittest
 
 import guildsocial as gs
-from test_guildsocial import ROGUE, MAGE, WARLOCK, mate, plan
+from test_guildsocial import ROGUE, MAGE, WARLOCK, PRIEST, mate, plan
 
 BLOOD = "Combat"
+HOLY = "Holy"
 
 
 def need(name, keyword, gain, preraid=False):
@@ -89,6 +93,30 @@ class TheAskerOrder(unittest.TestCase):
             },
         )
         self.assertEqual(askers(out), ["Dane", "Fynn"])
+
+    def test_a_healer_seat_asks_before_a_damage_seat_at_same_level(self):
+        """Healer seats are the slowest seat to fill; they ask first (#2572)."""
+        healer = mate("Ugga", 20, PRIEST, target_tree=HOLY)
+        damage = mate("Grog", 20, ROGUE, target_tree=BLOOD)
+        needs = {
+            "Ugga": [need("Ugga", "deadmines", 1.0)],
+            "Grog": [need("Grog", "deadmines", 1.0)],
+        }
+        out = plan([healer, damage], needs=needs)
+        # Healer seat asks before damage seat at same level with same need.
+        self.assertEqual(askers(out), ["Ugga", "Grog"])
+
+    def test_a_healer_seat_asks_before_a_damage_seat_with_stronger_need(self):
+        """Healer seat priority outranks gear need within the seat tier (#2572)."""
+        healer = mate("Ugga", 20, PRIEST, target_tree=HOLY)
+        damage = mate("Grog", 20, ROGUE, target_tree=BLOOD)
+        needs = {
+            "Ugga": [need("Ugga", "deadmines", 1.0)],
+            "Grog": [need("Grog", "deadmines", 6.0)],
+        }
+        out = plan([healer, damage], needs=needs)
+        # Healer seat still asks first despite weaker gear need.
+        self.assertEqual(askers(out), ["Ugga", "Grog"])
 
 
 class unittest_env:

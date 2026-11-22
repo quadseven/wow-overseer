@@ -79,6 +79,8 @@ import gearupgrades
 import guildrun
 import guildsaid
 import jev
+import raidroles
+import raidteams
 import recap
 
 ENV_SWITCH = "GUILD_SOCIAL"
@@ -122,6 +124,13 @@ NEW_ASKS_PER_PASS = 2
 SEATS_LEVEL_FIRST_ENV = "SEATS_LEVEL_FIRST"
 # The Molten Core order's gate: every seat at 50 or more.
 ORDER_LEVEL_GATE = 50
+# Approved healer seats: healers level first for the quorum.
+HEALER_SEAT_NAMES = frozenset(
+    seat.name
+    for guild in raidteams.GROUPS
+    for seat in raidteams.seats(guild)
+    if seat.seat == raidroles.SEAT_HEALER
+)
 ANSWERS_PER_PASS = 4
 
 # --- who may answer -----------------------------------------------------------
@@ -1816,17 +1825,21 @@ def _best_askers(board: _Board, guild: str, barred: set, asked: set) -> list:
 
 
 def _asker_tier(member: guildrun.Member, environ=None) -> int:
-    """0 for an approved raid seat under ORDER_LEVEL_GATE, 1 for any other
-    member under it, 2 for the rest; always 0 with SEATS_LEVEL_FIRST off, so
-    the need alone ranks. An approved seat carries its plan tree
-    (guildrun.levelling_seats reads it the same way)."""
+    """-1 for an approved healer seat under ORDER_LEVEL_GATE, 0 for any other
+    approved raid seat under it, 1 for any other member under it, 2 for the
+    rest; always 0 with SEATS_LEVEL_FIRST off, so the need alone ranks. An
+    approved seat carries its plan tree (guildrun.levelling_seats reads it the
+    same way). Healer seats are ranked first because they are the slowest seat
+    to fill for the Molten Core quorum (#2572)."""
     env = os.environ if environ is None else environ
     raw = str(env.get(SEATS_LEVEL_FIRST_ENV, "") or "").strip().lower()
     if raw in ("off", "0", "false", "no"):
         return 0
     if int(member.level) >= ORDER_LEVEL_GATE:
         return 2
-    return 0 if member.target_tree else 1
+    if not member.target_tree:
+        return 1
+    return -1 if member.name in HEALER_SEAT_NAMES else 0
 
 
 def _turn_order(guilds, asks: list) -> list:
