@@ -608,7 +608,7 @@ def _pass(world):
             "_connect": lambda: StoreConn(world),
             "_silent_seconds": lambda head_id, names: world.silent_seconds,
             "_OFF_DUNGEON_JOB_AT": {},
-            "_door_wedge": lambda head, names, leader: world.wedge,
+            "_door_wedge": lambda head, names, leader, expected_job=None: world.wedge,
             "_jobs_of": lambda names: {n: world.member_job(n) for n in names},
             "_last_job_source": lambda name: "town-errand",
             "_STALL_STOOD_DOWN": world.stood_down,

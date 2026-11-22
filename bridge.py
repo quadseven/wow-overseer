@@ -6871,7 +6871,7 @@ def _recall_door_errands(leader: str, ages: dict, head_id: int = 0) -> list:
     return released
 
 
-def _door_wedge(head: dict, names: list, leader: str):
+def _door_wedge(head: dict, names: list, leader: str, expected_job: str | None = None):
     """The Stuck for a family wedged at the door `head` holds, or None.
 
     Only a started head on a family still on a dungeon job, like the silent
@@ -6879,6 +6879,11 @@ def _door_wedge(head: dict, names: list, leader: str):
     are dungeonstall's; this gathers their evidence and keeps their clocks.
     A corpse outranks a walk, and a walk outranks a hold: the recorded
     reason names the worst thing wrong at the door.
+
+    `expected_job` is the job the queue entry writes (from jobs.job_for). When
+    provided, the wedge check runs even if the family's current roster job is
+    not a dungeon/raid job - this handles the case where the stall breaker
+    moved the family to DEFAULT and the planner re-queued the same door.
     """
     if head.get("status") != campaignqueue.ACTIVE:
         # A different queue phase is not a door hold. The active job may come
@@ -6890,11 +6895,20 @@ def _door_wedge(head: dict, names: list, leader: str):
             if delete_memo is not None:
                 delete_memo(key)
         return None
-    if not any(jobs.is_dungeon_job(job) or jobs.is_raid_job(job)
-               for job in _jobs_of(names).values()):
+    current_jobs = _jobs_of(names)
+    on_dungeon_job = any(
+        jobs.is_dungeon_job(job) or jobs.is_raid_job(job)
+        for job in current_jobs.values()
+    )
+    if not on_dungeon_job and expected_job is None:
         # The family may switch jobs while still separated. Preserve its clock
         # so a temporary quest job cannot restart the stand-down bound.
         return None
+    if not on_dungeon_job and expected_job is not None:
+        # The queue entry is for a dungeon/raid but the family is temporarily
+        # on another job (e.g., DEFAULT after a stall breaker leave). Run the
+        # wedge check using the expected job so a re-queued wedge is caught.
+        pass
     keyword = str(head.get("keyword") or "")
     head_id = int(head.get("id") or 0)
     restarts, members = _door_wedge_evidence(leader, head_id)
@@ -27389,7 +27403,8 @@ class Bridge(discord.Client):
             # errand still runs (Refs #1261): `_door_wedge` returns after it.
             await asyncio.to_thread(
                 _door_wedge, rows[0], list(fam["names"]),
-                str(fam["leader"].get("name") or ""))
+                str(fam["leader"].get("name") or ""),
+                jobs.job_for(str(rows[0].get("keyword") or "")))
             return False
         names = list(fam["names"])
         # AN OPERATOR'S ORDER IS HELD, NEVER CANCELLED (#2216): inside its
@@ -27414,7 +27429,8 @@ class Bridge(discord.Client):
         # leader's walk and the members' states, because neither ended runs
         # nor family-wide silence can see a party split across a door.
         wedge = await asyncio.to_thread(
-            _door_wedge, rows[0], names, str(fam["leader"].get("name") or ""))
+            _door_wedge, rows[0], names, str(fam["leader"].get("name") or ""),
+            jobs.job_for(str(rows[0].get("keyword") or "")))
         if wedge is not None:
             stuck[wedge.door] = wedge
         holds = await asyncio.to_thread(_order_holds, key, rows[0], names)
