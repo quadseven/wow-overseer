@@ -475,7 +475,7 @@ def run_step_downs(found, min_members=RUN_WIPE_MIN_MEMBERS) -> dict:
     (`run == 0`) are never grouped, and a run with one looping member yields
     nothing. Pure: it decides, it writes nothing."""
     by_run = {}
-    for name, loop in (found or {}).items():
+    for loop in (found or {}).values():
         if loop.run:
             by_run.setdefault(loop.run, []).append(loop)
     out = {}
