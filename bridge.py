@@ -6890,7 +6890,8 @@ def _door_wedge(head: dict, names: list, leader: str):
             if delete_memo is not None:
                 delete_memo(key)
         return None
-    if not any(jobs.is_dungeon_job(job) for job in _jobs_of(names).values()):
+    if not any(jobs.is_dungeon_job(job) or jobs.is_raid_job(job)
+               for job in _jobs_of(names).values()):
         # The family may switch jobs while still separated. Preserve its clock
         # so a temporary quest job cannot restart the stand-down bound.
         return None
@@ -6916,6 +6917,12 @@ def _door_wedge(head: dict, names: list, leader: str):
         # errand state does, and an errand taken up again counts on.
         for name in recall(leader, ages, head_id):
             ages.pop(name, None)
+    # A RAID DOOR IS NEVER LEFT BY THE BREAKER, but a member's errand of its
+    # own is still handed back there: the recall above is the only bound on it,
+    # and a raid's leader walks back for the member, or waits at the door for
+    # it, for as long as the errand lasts (Refs #1261).
+    if raidrun.is_raid(keyword):
+        return None
     # The stall line names the errand that held the run (#2280).
     errand_of = globals().get("_current_travel_npc")
     for name, (state, age) in ages.items():
@@ -27360,6 +27367,11 @@ class Bridge(discord.Client):
         refusing this one. dungeonstall.py decides.
         """
         if raidrun.is_raid(str(rows[0].get("keyword") or "")):
+            # No door is left for a raid, but the recall of a member's own
+            # errand still runs (Refs #1261): `_door_wedge` returns after it.
+            await asyncio.to_thread(
+                _door_wedge, rows[0], list(fam["names"]),
+                str(fam["leader"].get("name") or ""))
             return False
         names = list(fam["names"])
         # AN OPERATOR'S ORDER IS HELD, NEVER CANCELLED (#2216): inside its
