@@ -453,7 +453,7 @@ class FakeWorld:
         return True
 
 
-def _bridge_self(world, clock, log):
+def _bridge_self(world, clock, log, floor_release=None):
     ns = _load(
         [
             "_campaign_owns_travel",
@@ -509,6 +509,7 @@ def _bridge_self(world, clock, log):
             "_release_learn_aim": world.release_learn,
             "_fetch_free_slots": lambda names: dict(world.free),
             "_staging_phase": world.staging_phase,
+            **({"_floor_release": floor_release} if floor_release else {}),
         },
     )
     claim_store = claims.Claims(
@@ -1067,6 +1068,36 @@ class TheReads(unittest.TestCase):
         self.assertIn("SET travel_npc = ''", sql)
         self.assertNotIn("learn_skill", sql)
         self.assertEqual(("Zug", learnaim.TRAINER_ROLE), params)
+
+
+class AFamilyTheBagFloorReleasedIsNotWithheld(unittest.TestCase):
+    """#1261: the run proceeds past a member no vendor can clear, so the
+    campaign keeps the leader's column for the door walk."""
+
+    AT_THE_FLOOR = {"Oz": 4, "Uzza": 2, "Zork": 7, "Zrog": 0, "Zug": 0}
+    RELEASED = ("Uzza", "Zrog", "Zug")
+
+    def owns(self, floor_release):
+        world = FakeWorld(
+            column="at:209:1190.3,840.6,8.9",
+            free=self.AT_THE_FLOOR,
+            job="raid:ubrs",
+        )
+        world.pending = lambda: {
+            "Zug": [dict(keyword="ubrs", runs_wanted=1, status="active", id=1)]
+        }
+        me = _bridge_self(world, Clock(), _Log(), floor_release)
+        _queue_pass(me, world)
+        return me._cohort_town_slot("Zug").campaign
+
+    def release(self, names, free):
+        return {n: v for n, v in free.items() if n not in self.RELEASED}
+
+    def test_released_members_do_not_hand_the_column_to_the_town_passes(self):
+        self.assertIn("raid:ubrs", self.owns(self.release))
+
+    def test_a_family_nobody_released_is_still_withheld(self):
+        self.assertEqual("", self.owns(lambda names, free: free))
 
 
 if __name__ == "__main__":

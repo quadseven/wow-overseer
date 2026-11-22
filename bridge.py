@@ -23367,6 +23367,24 @@ class Bridge(discord.Client):
         # errands cycle after cycle, so the guild never bought a tab. Urgency
         # is bounded the way the auction pass's is: a grant that queues no take
         # backs off (`_mail_urgency_spent`).
+        # A LEADER ALREADY AT THE MAILBOX IS NOT WALKED TO IT AGAIN. Every
+        # cycle with gear waiting for members who are far off (another map, or
+        # thousands of yards) took the column for a "short town stop" at the box
+        # the leader stood at, queued 0 takes because no holder was in reach,
+        # and backed its urgency off, only to ask again once that expired. Each
+        # re-write read as the old walk ending and a new one taking over, and
+        # each held the column from the other passes. With the leader in reach
+        # and no taker in reach there is nothing to walk to and nothing a walk
+        # would let anybody take; the town errand's gather brings the family.
+        if travel.spawn_in_reach(spawn, where, TOWN_COUNTER_YARDS) and not any(
+                travel.spawn_in_reach(spawn, positions.get(t.character),
+                                      TOWN_COUNTER_YARDS)
+                for t in mail_plan.takes):
+            log.info("mail: leader=%s already stands at the mailbox and no "
+                     "holder of the %d letter(s) is within reach of it, so the "
+                     "walk is not asked for again%s", leader, len(letters),
+                     _family_label(cohort))
+            return
         urgent = await self._mail_urgent(names, cohort, letters)
         aimed = await self._claim_town_slot("mail", leader, post.aim,
                                              urgent=urgent,
@@ -28146,6 +28164,16 @@ class Bridge(discord.Client):
         if not name or not townslot.campaign_owns_traveller(active, job, False):
             return "", ""
         free = await asyncio.to_thread(_fetch_free_slots, list(fam["names"]))
+        # A MEMBER NO VENDOR CAN CLEAR DOES NOT WITHHOLD THE CAMPAIGN (#1261).
+        # The run's own gate reads the slots through the bag-floor release and
+        # lets the family proceed; this read took them raw, so the same family
+        # was "withheld" here, the town passes were given the leader's column,
+        # and a pass such as the mail walk took the door walk off it again and
+        # again. One reading for both. Looked up: the campaign tests load this
+        # function in isolation.
+        release = globals().get("_floor_release")
+        if release is not None:
+            free = await asyncio.to_thread(release, list(fam["names"]), free)
         withheld = jev_activity.withheld(True, free)
         phase = await asyncio.to_thread(_staging_phase, name) if withheld else ""
         if not townslot.campaign_owns_traveller(active, job, withheld, bool(phase)):
