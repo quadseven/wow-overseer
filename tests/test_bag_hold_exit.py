@@ -361,8 +361,7 @@ class TheVendorStepAsksAgainUntilTheSalesAreQueued(unittest.TestCase):
                 return True
 
             async def _town_errand_vendor_trip(self, *a):
-                return {}, [], types.SimpleNamespace(
-                    vendor=0, name="", why_not="none")
+                return {}, [], types.SimpleNamespace(vendor=0, name="", why_not="none")
 
             async def _vendor_once(self, cohort):
                 looks.append(1)
@@ -386,8 +385,13 @@ class TheVendorStepAsksAgainUntilTheSalesAreQueued(unittest.TestCase):
         marks = {townerrand.VENDOR: 0.0}
         done = []
         for now in (100.0, 120.0, 140.0, 180.0, 220.0, 260.0):
-            done.append(asyncio.run(ns["_town_errand_vendor"](
-                Family(), None, NAMES, "Grug", {"Grug": {}}, None, now, marks)))
+            done.append(
+                asyncio.run(
+                    ns["_town_errand_vendor"](
+                        Family(), None, NAMES, "Grug", {"Grug": {}}, None, now, marks
+                    )
+                )
+            )
         # Looks at 100 and 140 queue nothing (followers still walking) and the
         # settle time has not passed; 180 queues rows; 220 finds nothing left
         # and the settle time has passed, so only then is the step done.
