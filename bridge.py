@@ -16068,7 +16068,7 @@ class Bridge(discord.Client):
                 release.why,
             )
 
-    async def _vendor_once(self, cohort=None) -> None:
+    async def _vendor_once(self, cohort=None) -> int:
         """Queue carried junk and outgrown gear for the world sell executor.
 
         FOR ONE FAMILY AT A TIME (#150). `cohort` is None for the family this
@@ -16601,6 +16601,7 @@ class Bridge(discord.Client):
             route_sales=route_sales,
         )
         _report_vendor_claim(slot, aimed, inserted)
+        return inserted
 
     async def _take_vendor_aim(self, step: str, leader: str, cohort=None) -> bool:
         """Take the leader's vendor aim when the errand step says AIM.
@@ -24665,6 +24666,20 @@ class Bridge(discord.Client):
         facts, rows, trip = await self._town_errand_vendor_trip(
             state, names, leader, visited)
         if not trip.vendor and step in marks:
+            # THE SELL PASS IS ASKED AGAIN, NOT ONCE (a vendor errand that
+            # never sold). The leader is read at the vendor before its
+            # followers, and a sale row is only written for a member standing
+            # at a counter, so the single look made on the leader's arrival
+            # queued nothing, the step ended with every sale unwritten, and
+            # the next errand walked back for the same sale. Each look is
+            # throttled, and the step ends once one queues nothing.
+            marks.setdefault(step + ":idle", now)
+            if now - marks.get(step + ":run", 0.0) >= 40.0:
+                marks[step + ":run"] = now
+                marks[step + ":queued"] = bool(await self._vendor_once(cohort))
+            if (marks.get(step + ":queued")
+                    or now - marks[step + ":idle"] < TOWN_ERRAND_SETTLE_SECONDS):
+                return False
             log.info("town errand vendor: nothing more to buy at any vendor "
                      "in reach - %s%s", trip.why_not, _family_label(cohort))
             return True
