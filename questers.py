@@ -1823,8 +1823,10 @@ def failures(
     )
     # A quester whose hunts are refused for bag room is not working a quest:
     # its clock waits for the sale (`needs_sale`).
-    playing = bool(member.online and member.alive) and not bags_full_hunt(
-        member.name, tried, member.free_slots
+    playing = (
+        bool(member.online and member.alive)
+        and not bags_full_hunt(member.name, tried, member.free_slots)
+        and not _boat_crossing_in_flight(member.name, crossings)
     )
     out = []
     for qid in sorted(member.quest_log):
@@ -1848,6 +1850,16 @@ def failures(
             out.append(Broken(member.name, qid, quest.title, reason, held=True))
     clock.forget(member.name, member.quest_log)
     return out
+
+
+def _boat_crossing_in_flight(name, crossings) -> bool:
+    """Whether a quester boat row is still being handled by the world."""
+    return any(
+        row.name == name
+        and row.action == CROSS_ACTION
+        and row.status in guildjobs.IN_FLIGHT_STATUSES
+        for row in crossings or ()
+    )
 
 
 def _broken_reason(

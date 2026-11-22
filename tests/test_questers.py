@@ -817,6 +817,23 @@ class Broken(unittest.TestCase):
         self.assertEqual((p.move.kind, p.move.quest), (classquest.ABANDON, 1))
         self.assertIn(questers.STALLED, p.move.said)
 
+    def test_time_in_a_quester_boat_hold_does_not_advance_the_stall_clock(self):
+        member = mirra(quest_log={1: 3}, quests_done=frozenset({2, 3}))
+        clock = questers.Clock()
+        boat = crossing_row(
+            "", True, age=1,
+            source=guildjobs.source_for(questers.CROSS_ACTION, "Mirra"),
+        )
+        boat.update(status="verifying", result="")
+        held_boat = guildjobs.recent_from_rows([boat])
+        for minute in range(0, 125, 5):
+            result = questers.plan(
+                world(), member, clock, minute * 60.0, last_quest=1,
+                crossings=held_boat,
+            )
+        self.assertEqual(result.broken, ())
+        self.assertLess(clock.played("Mirra", 1), questers.STALL_SECONDS)
+
     def test_a_quest_with_no_required_objectives_explains_why_it_stalls(self):
         row = quest(273, ELWYNN, 15, prev=302, title="Resupplying the Excavation")
         row["npc_count1"] = 0

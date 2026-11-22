@@ -4,6 +4,7 @@ battleground queue that does not pop holds it out of both."""
 
 import unittest
 
+import guildjobs
 import pvpgear
 from test_pvp_cohort import ALLIANCE, filler, run, wanter
 
@@ -39,6 +40,37 @@ class LevellingFirst(unittest.TestCase):
         )
         move = pvpgear.next_move(aim, pvpgear.WSG.map_id, False, ())
         self.assertTrue(move.holds)
+
+    def test_a_member_below_the_floor_stays_held_in_a_game_or_live_queue(self):
+        seeker = filler("Low", level=39)
+        for map_id, recent in (
+            (489, ()),
+            (
+                0,
+                (
+                    guildjobs.Recent(
+                        "Low", "pvp", 2, "queued", command="bg-queue wsg"
+                    ),
+                ),
+            ),
+        ):
+            aims, moves, _ = pvpgear.gate(
+                {}, {}, [seeker], {}, recent, {"Low": map_id}
+            )
+            self.assertIn("Low", aims)
+            self.assertTrue(moves["Low"].holds)
+
+    def test_a_member_below_the_floor_is_not_requeued_after_queue_times_out(self):
+        seeker = filler("Low", level=39)
+        recent = (
+            guildjobs.Recent(
+                "Low", "pvp", pvpgear.WAITING_MINUTES, "queued",
+                command="bg-queue wsg",
+            ),
+        )
+        aims, moves, _ = pvpgear.gate({}, {}, [seeker], {}, recent)
+        self.assertNotIn("Low", aims)
+        self.assertNotIn("Low", moves)
 
 
 if __name__ == "__main__":

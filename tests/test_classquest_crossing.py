@@ -19,6 +19,7 @@ import classquest
 import guildjobs
 import guildlevel
 import pvpgear
+import questers
 from test_classquest import EASTERN, KALIMDOR, UNDEAD, book, class_plan, who
 from test_guildlevel import world as level_world
 
@@ -135,6 +136,17 @@ class TheStep(unittest.TestCase):
         result = class_plan([eastern()], recent=recent)
         self.assertEqual(cross_steps(result), [])
         self.assertIn(classquest.MARK, result.lines["Bigzug"])
+
+    def test_a_quester_boat_row_does_not_hold_a_class_boat_step(self):
+        row = guildjobs.Recent(
+            "Bigzug",
+            questers.CROSS_ACTION,
+            5,
+            "verifying",
+            command="cross-to-map map:1",
+        )
+        result = class_plan([eastern()], recent=(row,))
+        self.assertEqual(len(cross_steps(result)), 1)
 
     def test_the_member_crosses_again_after_the_cooldown(self):
         age = classquest.CROSS_COOLDOWN_MINUTES

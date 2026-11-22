@@ -8762,7 +8762,7 @@ def crossing_cooling(name, recent, skip=frozenset()) -> bool:
 # buyer still cools on every crossing row, the class quest's included, and the
 # class step runs ahead of the PvP step (_quest_first before _pvp_first), so a
 # class crossing that is due is the one written.
-CLASS_CROSS_SKIPS = frozenset({pvpgear.CROSS_ACTION})
+CLASS_CROSS_SKIPS = frozenset({pvpgear.CROSS_ACTION, QUESTER_CROSS_ACTION})
 
 
 def class_crossing_cooling(name, recent) -> bool:

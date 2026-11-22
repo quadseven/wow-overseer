@@ -964,9 +964,24 @@ def _filler(s, bg: Battleground, cohort: str = "") -> Aim:
 
 
 def _hold_fillers(by_name: dict, aims: dict, moves: dict, recent, maps) -> None:
-    """A filler already in a queue is held there like any member (in place)."""
+    """Keep an under-floor member held in a live game or queue, never requeue it."""
     for name, s in by_name.items():
         if int(s.level) < FILLER_MIN_LEVEL:
+            map_id = maps.get(name)
+            bg = next(
+                (
+                    candidate
+                    for candidate in BATTLEGROUNDS.values()
+                    if map_id is not None and int(map_id) == candidate.map_id
+                ),
+                None,
+            )
+            queued = _queued_key(name, recent) if name not in aims else None
+            if queued is not None and queued[1] < WAITING_MINUTES:
+                bg = BATTLEGROUNDS[queued[0]]
+            if bg is not None:
+                aims[name] = _filler(s, bg)
+                moves[name] = next_move(aims[name], map_id, False, recent)
             continue
         queued = _queued_key(name, recent) if name not in aims else None
         if queued is not None:
