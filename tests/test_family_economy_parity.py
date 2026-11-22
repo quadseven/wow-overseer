@@ -711,3 +711,35 @@ class ThePlanAsksOnlyAPurseThatPays(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheMailPassDoesNotReWalkALeaderAlreadyAtTheBox(unittest.TestCase):
+    """The loop: gear waits for members far from the mailbox, the leader
+    already stands at it, and every cycle re-aimed it ('took over' / 'ended')
+    for 0 takes."""
+
+    def run_mail(self, standing):
+        world, log = {}, _Log()
+        me = TheSelf(world)
+        ns = _mail_ns(world, log)
+        ns["_fetch_positions"] = lambda names: {n: {"n": n} for n in names}
+        # The letters are the far members' (the leader holds none).
+        ns["mailrun"].plan = lambda letters, slots, asked: types.SimpleNamespace(
+            notes=(), takes=[_Take(n) for _, n in letters if n != "Zug"]
+        )
+        ns["travel"].spawn_in_reach = lambda spawn, where, yards: bool(
+            where and where["n"] in standing
+        )
+        me._mail_urgent = lambda *a: ns["_mail_urgent"](me, *a)
+        for cycle in range(3):
+            asyncio.run(ns["_mail_once"](me, HORDE))
+        return world, me, log
+
+    def test_no_holder_in_reach_means_the_column_is_not_claimed_again(self):
+        _, me, log = self.run_mail({"Zug"})
+        self.assertEqual([], me.claims)
+        self.assertEqual(3, sum("already stands at the mailbox" in ln for ln in log.lines))
+
+    def test_a_holder_in_reach_still_gets_the_pass(self):
+        world, me, _ = self.run_mail({"Zug", "Uzza"})
+        self.assertEqual(3, len(me.claims))
