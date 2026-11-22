@@ -738,7 +738,9 @@ class TheMailPassDoesNotReWalkALeaderAlreadyAtTheBox(unittest.TestCase):
     def test_no_holder_in_reach_means_the_column_is_not_claimed_again(self):
         _, me, log = self.run_mail({"Zug"})
         self.assertEqual([], me.claims)
-        self.assertEqual(3, sum("already stands at the mailbox" in ln for ln in log.lines))
+        self.assertEqual(
+            3, sum("already stands at the mailbox" in ln for ln in log.lines)
+        )
 
     def test_a_holder_in_reach_still_gets_the_pass(self):
         world, me, _ = self.run_mail({"Zug", "Uzza"})
