@@ -78,14 +78,14 @@ class TheComposerReportsWhatIsMissing(unittest.TestCase):
             self.assertEqual(row["lacks"], row["needs"], row["boss"])
 
     def test_tanks_count_the_tank_seat_not_the_class(self):
-        report = mcencounters.compose([_raider(WARRIOR)] * 6)
+        report = mcencounters.compose([_raider(WARRIOR)] * 6 + [_raider(PALADIN)])
         self.assertEqual(_row(report, "Golemagg")["lacks"], {TANKS: 3})
-        report = mcencounters.compose([_raider(WARRIOR, "tank")] * 3)
+        report = mcencounters.compose([_raider(WARRIOR, "tank")] * 3 + [_raider(PALADIN)])
         self.assertEqual(_row(report, "Golemagg")["lacks"], {})
 
     def test_lucifron_lacks_one_curse_dispeller(self):
         raid = [_raider(WARRIOR, "tank")] * 3 + [_raider(PRIEST, "healer")] * 2
-        raid.append(_raider(MAGE))
+        raid += [_raider(MAGE), _raider(PALADIN)]
         row = _row(mcencounters.compose(raid), "Lucifron")
         self.assertEqual(row["have"][CURSE_DISPEL], 1)
         self.assertEqual(row["lacks"], {CURSE_DISPEL: 1})
@@ -95,7 +95,7 @@ class TheComposerReportsWhatIsMissing(unittest.TestCase):
         )
 
     def test_magmadar_needs_a_hunter(self):
-        raid = [_raider(WARRIOR, "tank"), _raider(PRIEST, "healer")]
+        raid = [_raider(WARRIOR, "tank"), _raider(PRIEST, "healer"), _raider(PALADIN)]
         self.assertEqual(
             _row(mcencounters.compose(raid), "Magmadar")["lacks"],
             {TRANQUILIZING_SHOT: 1},
@@ -168,3 +168,47 @@ class TheLineupCarriesTheReport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+SHADOW_BOSSES = ("Lucifron", "Gehennas", "Majordomo Executus")
+FIRE_BOSSES = ("Magmadar", "Garr", "Sulfuron Harbinger", "Golemagg")
+
+
+class ResistanceAurasTheStrategyCasts(unittest.TestCase):
+    def _line(self, level=None):
+        placed = [] if level is None else [
+            {"class_id": PALADIN, "seat": "dps", "level": level}
+        ]
+        return mcencounters.compose(placed), placed
+
+    def test_no_paladin_lacks_each_resistance_source(self):
+        report, _ = self._line()
+        for boss in SHADOW_BOSSES:
+            self.assertEqual(
+                _row(report, boss)["lacks"].get(mcencounters.SHADOW_RESISTANCE), 1
+            )
+        for boss in FIRE_BOSSES:
+            self.assertEqual(_row(report, boss)["lacks"].get(FIRE_RESISTANCE), 1)
+        line = mcencounters.encounter_line(report)
+        self.assertIn("Magmadar lacks", line)
+        self.assertIn("shadow resistance source", line)
+
+    def test_one_paladin_at_36_meets_them_all(self):
+        report, _ = self._line(36)
+        for boss in SHADOW_BOSSES:
+            self.assertNotIn(mcencounters.SHADOW_RESISTANCE, _row(report, boss)["lacks"])
+        for boss in FIRE_BOSSES:
+            self.assertNotIn(FIRE_RESISTANCE, _row(report, boss)["lacks"])
+
+    def test_below_level_paths(self):
+        report, _ = self._line(27)
+        self.assertEqual(
+            _row(report, "Lucifron")["below_level"][mcencounters.SHADOW_RESISTANCE],
+            [28],
+        )
+        report, _ = self._line(30)
+        self.assertNotIn(mcencounters.SHADOW_RESISTANCE, _row(report, "Lucifron")["lacks"])
+        self.assertEqual(
+            _row(report, "Magmadar")["below_level"][FIRE_RESISTANCE], [36]
+        )
+        self.assertIn("level 28", mcencounters.encounter_line(self._line(27)[0]))
