@@ -1148,6 +1148,25 @@ class TheCompositions(unittest.TestCase):
         self.assertEqual(first.key, "spec-tank/spec-healer")
         self.assertEqual(len(set(first.names)), 5)
 
+    def test_a_healer_seat_below_fifty_is_chosen_before_a_damage_seat_of_same_level(
+        self,
+    ):
+        """A healer seat below 50 (healing target_tree, no spent talents) is picked
+        as healer over a damage dealer of the same level."""
+        tank = member("Tanky", 45, WARRIOR, talent_spells=PROTECTION_TALENT)
+        # Healer seat: Holy paladin at 45, no spent talents yet, but target_tree=Holy
+        healer_seat = member("HealySeat", 45, PALADIN, target_tree="Holy")
+        # Damage dealer at same level
+        dps_same_level = member("Stabby", 45, ROGUE)
+        dps1 = member("Zappy", 44, MAGE)
+        dps2 = member("Locky", 43, WARLOCK)
+        window = [tank, healer_seat, dps_same_level, dps1, dps2]
+        comps = guildrun.compositions(window)
+        self.assertGreaterEqual(len(comps), 1)
+        first = comps[0]
+        self.assertEqual(first.healer.name, "HealySeat")
+        self.assertEqual(first.tank.name, "Tanky")
+
     def test_each_alternative_changes_a_seat(self):
         comps = guildrun.compositions(cave_band())
         self.assertEqual(len({frozenset(c.names) for c in comps}), len(comps))
@@ -1340,7 +1359,12 @@ class TheHeuristicIsThePrior(unittest.TestCase):
 
 class OnlyRealTanksAndHealersAreSeated(unittest.TestCase):
     """#575: Cave seated damage-specced shamans, paladins and druids in the
-    tank and healer seats; dungeon clear logged no tank in 7 of 9 runs."""
+    tank and healer seats; dungeon clear logged no tank in 7 of 9 runs.
+
+    Healer seats below 50 (target_tree set, no spent talents) are now
+    prioritized for leveling and ARE seated as healers (#2572). Only
+    damage-specced members (spent talents in a damage tree) are excluded.
+    """
 
     def test_a_class_that_could_heal_but_does_not_is_not_a_healer(self):
         ret = member("Ret", 19, PALADIN, talent_spells="20375")
@@ -1350,15 +1374,34 @@ class OnlyRealTanksAndHealersAreSeated(unittest.TestCase):
         self.assertFalse(planned.plays(guildrun.HEALER))
         self.assertTrue(holy.plays(guildrun.HEALER))
 
-    def test_no_real_healer_no_group(self):
+    def test_a_healer_seat_below_fifty_without_talents_is_seated_as_healer(self):
+        """A healer seat below 50 (healing target_tree, no spent talents) is now
+        seated as a healer for leveling priority (#2572)."""
         crowd = [
             member("Tanky", 20, WARRIOR, talent_spells=PROTECTION_TALENT),
-            member("Ret", 19, PALADIN, talent_spells="20375"),
-            member("Plan", 19, PALADIN, target_tree="Holy"),
+            member("Ret", 19, PALADIN, talent_spells="20375"),  # damage-specced
+            member("Plan", 19, PALADIN, target_tree="Holy"),  # healer seat, no talents
             member("Stabby", 19, ROGUE),
             member("Zappy", 18, MAGE),
         ]
-        self.assertEqual(guildrun.compositions(crowd), [])
+        comps = guildrun.compositions(crowd)
+        self.assertGreaterEqual(len(comps), 1)
+        first = comps[0]
+        self.assertEqual(first.healer.name, "Plan")
+        self.assertEqual(first.tank.name, "Tanky")
+
+    def test_a_damage_specced_paladin_is_never_a_healer(self):
+        """A paladin with Retribution talents is not seated as a healer even
+        if it has a Holy target_tree (#575)."""
+        crowd = [
+            member("Tanky", 20, WARRIOR, talent_spells=PROTECTION_TALENT),
+            member("RetPlan", 19, PALADIN, talent_spells="20375", target_tree="Holy"),
+            member("Stabby", 19, ROGUE),
+            member("Zappy", 18, MAGE),
+            member("Locky", 17, WARLOCK),
+        ]
+        comps = guildrun.compositions(crowd)
+        self.assertEqual(comps, [])
 
 
 class AFailingDoorIsRetired(unittest.TestCase):

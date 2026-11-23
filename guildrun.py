@@ -1438,6 +1438,33 @@ def _dps_rank(member: Member) -> int:
     return 0 if member.played_tree else 1
 
 
+def _is_healer_seat(member: Member) -> bool:
+    """Is this member a healer seat in the approved lineup (healing target_tree)
+    without spent talents in a conflicting tree.
+
+    A member with spent talents in a damage or tank tree is not a healer seat
+    for leveling priority (#575), even if its target_tree is healing. Only
+    members with no spent talents (tree empty) and a healing target_tree
+    qualify. Members with spent healing talents are handled by regular_healers.
+    """
+    target = member.target_tree
+    if not target:
+        return False
+    # If member has spent talents that don't fit healer, it's damage-specced.
+    if member.tree and not member.plays(HEALER):
+        return False
+    cid = int(member.class_id)
+    if cid == 2:  # Paladin
+        return target == "Holy"
+    if cid == 5:  # Priest
+        return target in ("Holy", "Discipline")
+    if cid == 7:  # Shaman
+        return target == "Restoration"
+    if cid == 11:  # Druid
+        return target == "Restoration"
+    return False
+
+
 def compositions(window: list) -> list:
     """Up to MAX_OPTIONS ways to seat five of `window`, best first.
 
@@ -1450,10 +1477,20 @@ def compositions(window: list) -> list:
         (m for m in window if m.plays(TANK) and tank_ready(m)),
         key=lambda m: (_seat_rank(m, TANK), -m.level, m.name),
     )
-    healers = sorted(
+    # Healer seats below 50 are prioritized for leveling: they get dungeon runs
+    # before damage seats of the same level. They are sorted by level ascending
+    # (lowest first) so the ones that need leveling most go first.
+    healer_seats = sorted(
+        (m for m in window if _is_healer_seat(m) and m.level < 50 and covered(m)),
+        key=lambda m: (m.level, m.name),
+    )
+    # Regular healers (with spent healing talents) are sorted by fit then level.
+    regular_healers = sorted(
         (m for m in window if m.plays(HEALER) and covered(m)),
         key=lambda m: (_seat_rank(m, HEALER), -m.level, m.name),
     )
+    # Healer seats below 50 come first, then regular healers.
+    healers = healer_seats + regular_healers
     out = []
     seen = set()
 
