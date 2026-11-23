@@ -2500,12 +2500,14 @@ def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
         )
     if move.kind == classquest.HUNT:
         item_progress = member.quest_item_objectives.get(int(move.quest), {})
+        kill_progress = member.quest_objectives.get(int(move.quest), {})
         row = (
             classhunt.command(
                 quest,
                 move.spot.entry,
                 lambda item: item_progress.get(int(item), 0),
                 item_form,
+                kill_progress=lambda entry: kill_progress.get(int(entry), 0),
             )
             if (hunt and quest is not None)
             else ""

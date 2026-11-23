@@ -135,11 +135,19 @@ def is_hunt_row(command) -> bool:
     return str(command or "").split(" ", 1)[0] == VERB
 
 
-def command(quest: classquest.Quest, entry, held=None, item_form=True) -> str:
+def command(
+    quest: classquest.Quest,
+    entry,
+    held=None,
+    item_form=True,
+    kill_progress=None,
+) -> str:
     """The `hunt-spawn` row for `entry`, a creature of the quest's objective,
     or "" when the quest has no creature to hunt there.
 
-    A kill objective asks for its own kill count, so the row finishes by itself.
+    A kill objective asks for its remaining kill count, so the row finishes by
+    itself. When that count is complete, the same creature can still be hunted
+    for an item objective.
     An item the creature drops (mod-overseer#871) names the item and how many
     are still missing, `item:<entry> count:<needed>`: the module loots the
     corpse itself and ends the row `done` when the bot holds that many. `held`
@@ -152,8 +160,10 @@ def command(quest: classquest.Quest, entry, held=None, item_form=True) -> str:
     if entry <= 0:
         return ""
     kills = dict(quest.kills)
-    if entry in kills:
-        word = " count:%d" % min(MAX_COUNT, max(1, int(kills[entry])))
+    kill_needed = int(kills.get(entry, 0))
+    kill_have = int(kill_progress(entry)) if callable(kill_progress) else 0
+    if kill_needed and kill_have < kill_needed:
+        word = " count:%d" % min(MAX_COUNT, max(1, kill_needed - kill_have))
         return "%s creature:%d%s max:%d" % (VERB, entry, word, MAX_SECONDS)
     wants = dict(quest.items)
     candidates = [i for i, e in quest.drops if e == entry and i in wants]

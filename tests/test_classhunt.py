@@ -117,6 +117,32 @@ class TheRow(unittest.TestCase):
             "hunt-spawn creature:6390 count:1 max:%d" % classhunt.MAX_SECONDS,
         )
 
+    def test_a_completed_kill_objective_can_still_hunt_that_creature_for_its_item(self):
+        quest = classquest.Quest(
+            358,
+            "Graverobbers",
+            0,
+            4,
+            0,
+            0,
+            0,
+            0,
+            0,
+            kills=((1941, 8),),
+            items=((2834, 8),),
+            drops=((2834, 1941), (2834, 1674), (2834, 1675)),
+        )
+
+        self.assertEqual(
+            classhunt.command(
+                quest,
+                1941,
+                lambda item: 0,
+                kill_progress=lambda entry: 8,
+            ),
+            "hunt-spawn creature:1941 item:2834 count:8 max:%d" % classhunt.MAX_SECONDS,
+        )
+
     def test_the_count_is_held_to_the_modules_ceiling(self):
         rows = [qrow(7, "Cull", npc1=99, npc_count1=500)]
         quest = classquest.build(rows, [], [], []).quests[7]

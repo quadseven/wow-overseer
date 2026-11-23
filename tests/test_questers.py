@@ -2301,6 +2301,50 @@ class ASummonedObjectEnder(unittest.TestCase):
             ],
         )
 
+    def test_graverobbers_hunts_a_completed_kill_target_for_its_remaining_item(self):
+        graverobbers = quest(
+            358, 85, 8, min_level=4, kill=1941, count=8, title="Graverobbers"
+        )
+        graverobbers.update(item1=2834, item_count1=8)
+        cat = world(
+            extra_quests=[graverobbers],
+            extra_givers=[
+                giver(358, "start", 8358, 1358, 0, 0),
+                giver(358, "end", 8358, 1358, 0, 0),
+            ],
+            extra_spawns=[
+                spawn(8359, 1941, 20, 0, level=8),
+                spawn(8360, 1674, 40, 0, level=8),
+                spawn(8361, 1675, 60, 0, level=8),
+            ],
+            extra_loot=[
+                {"item": 2834, "entry": 1674},
+                {"item": 2834, "entry": 1675},
+                {"item": 2834, "entry": 1941},
+            ],
+        )
+        member = mirra(
+            level=8,
+            zone_id=85,
+            quest_log={358: questers.STATUS_INCOMPLETE},
+            quest_progress={358: 8},
+            quest_objectives={358: {1941: 8}},
+            quest_item_objectives={358: {2834: 0}},
+        )
+
+        plan = questers.plan(cat, member, questers.Clock(), 0.0)
+        step = questers.step_for(member, plan.move, 0, cat.quest(358))
+
+        self.assertEqual(plan.move.kind, classquest.HUNT)
+        self.assertEqual(plan.move.spot.entry, 1941)
+        self.assertEqual(
+            [row.command for row in step.rows],
+            [
+                "hunt-spawn creature:1941 item:2834 count:8 max:%d"
+                % classhunt.MAX_SECONDS
+            ],
+        )
+
     def test_coastal_menace_hunts_only_objectives_with_remaining_kills(self):
         coastal = quest(
             104, WESTFALL, 17, kill=127, count=10, title="The Coastal Menace"
