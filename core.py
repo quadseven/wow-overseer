@@ -138,553 +138,77 @@ class JobDirective:
     "ONLY THE TRAVELLER" rule), so a mode that could differ per character
     would reintroduce independent aims and the 937-yard scatter of infra#2812
     one layer up from where it was fixed. jobs.py's own docstring explains
-    this at length; it is not restated here.
-
-    `mode` is already resolved (jobs.resolve) by the time this is built, so
-    the bridge never has to re-validate what this module already checked.
+    this at length; it is no longer a stray attribute.
     """
 
-    mode: str
-    source: str
-    # One member's own job (#2407), or "" for the whole family. A named member
-    # is accepted only while the family is not linked and the mode is not a
-    # dungeon or raid job; individual.member_order_refusal says why not.
-    member: str = ""
-
-
-@dataclass(frozen=True)
-class QueueDirective:
-    """A family's dungeon campaign queue order (#209): "queue Zug: ragefire
-    50, then wailing 50". `family` is the name before the colon, "" when none
-    was given; `text` is the entries, "clear", or "" to be told the queue.
-    `partner` is the second family of a combined run ("queue Zug and Thrak:
-    ..."), "" for one family. campaignqueue.py reads them, and the bridge
-    validates before it writes.
-    """
-
-    family: str
-    text: str
-    source: str
-    partner: str = ""
-
-
-@dataclass(frozen=True)
-class FreeOrder:
-    """A sentence in the overseer's channel that matched no fixed form but
-    reads like an order (#1501). The bridge asks the local model to turn it
-    into one of the fixed forms; freeorders.py holds the rules."""
-
-    text: str
+    job_name: str
     source: str
 
 
-@dataclass(frozen=True)
-class FanoutCommand:
-    """A group order that is already a playerbot command.
+Decision = InsertCommand | Reply | RosterQuery | DigestQuery | NLDirective | JobDirective
 
-    One expression ("horde", "guild Argentum") becomes many InsertCommand
-    rows at insert time - the fan-out is the bridge's job, so mod-overseer's
-    delivery loop stays one row, one character (infra#2605).
+
+def decide(text: str, source: str) -> list[Decision]:
+    """Pure decision function: maps incoming text and a source identifier
+    to a list of decisions (commands, replies, queries).
     """
+    cleaned = text.strip()
+    if not cleaned:
+        return [Reply(USAGE)]
 
-    expression: str
-    command: str
-    source: str
-
-
-@dataclass(frozen=True)
-class FanoutDirective:
-    """A conjured event: natural language aimed at a group.
-
-    Mirrors NLDirective, one rung wider - the inner voice picks a single
-    allowlisted command for the whole band (voice.py, outside this module)
-    and that one command is what fans out.
-    """
-
-    expression: str
-    text: str
-    source: str
-
-
-def _voice_is_raw(command: str) -> bool:
-    # Late import: core must stay importable without voice's vocabulary in
-    # contexts that only need parsing (and the map server imports core).
-    from voice import is_raw_command
-
-    return is_raw_command(command)
-
-
-def _group_split(head: str, rest: str) -> tuple[str, str] | None:
-    # Late import for the same reason, plus one more: fanout imports core
-    # for the faction race sets, so a module-level import here would be a
-    # cycle.
-    from fanout import split_group_order
-
-    return split_group_order(head, rest)
-
-
-def _spoken_directive(target: str, command: str, source: str):
-    """A chat or dot-command line -> its directive, the Reply that refuses it,
-    or None to let the older paths have it."""
-    spoken = parse_speak(target, command, source)
-    if isinstance(spoken, GmRefused):
-        return Reply(
-            f"'{spoken.command}' is not on the GM allowlist. That list is "
-            "GM_ALLOWED_PREFIXES in relay.py; it leaves out accounts, bans, "
-            "server shutdown, character deletion and reload on purpose."
-        )
-    return spoken
-
-
-_ROSTER_RE = re.compile(
-    r"\b(list|who|online|souls|playing|roster|players)\b", re.IGNORECASE
-)
-
-
-def _digest_ask(text: str):
-    """digest.Ask, or None. Late import for the same reason as voice's."""
-    from digest import parse_ask
-
-    return parse_ask(text)
-
-
-# THE REPORT ORDERS (quadseven/mod-overseer#1238). voice.VOCABULARY mixes
-# two kinds of entry: ones that only READ the world and ones that change
-# it. These four are the readers - "stats" reports gold, bag space and
-# experience, "quests" lists current quests, "talents" reports the talent
-# build, "los" lists what the character can see. Every other entry moves
-# the character, spends or
-# equips something, abandons a quest or clears its state. The split is what
-# a report-only order-giver's scope is made of, so it is named here, beside
-# the parser that enforces it, and pinned against the vocabulary by test:
-# an entry added to the vocabulary is state-changing until it is added here
-# on purpose.
-REPORT_COMMANDS = frozenset({"stats", "quests", "talents", "los"})
-
-# What a report-only giver is told when an order of theirs would change the
-# world. A refusal said out loud, not silence: to the giver, a dropped order
-# and a lost order look exactly alike, and only one of them is true. The
-# list it names is REPORT_COMMANDS itself, so the sentence cannot drift
-# from the scope it describes.
-REPORT_REFUSAL = (
-    "From you I take report orders only ("
-    + ", ".join(sorted(REPORT_COMMANDS))
-    + ", or who is in the world) - that one would change the world, and "
-    "world-changing orders stay the operator's to give."
-)
-
-
-def _voice_normalise(command: str) -> str:
-    # Late import, like _voice_is_raw: the folding is voice's, shared so the
-    # scope recognises a command exactly as the raw check does.
-    from voice import normalise_command
-
-    return normalise_command(command)
-
-
-def _is_report_command(command: str) -> bool:
-    """Is this raw command, whole, one of the report entries? Normalised
-    the way voice normalises, and matched WHOLE: "stats" is a report,
-    "stats please" is not - a report entry takes no arguments, so anything
-    after it is a different order wearing its name."""
-    return _voice_normalise(command) in REPORT_COMMANDS
-
-
-def _report_scope(directives: list) -> list:
-    """What survives of one message from a report-only giver.
-
-    Kept: the decisions that only read the world - a report command aimed
-    at one character or fanned out at a group, a roster, a digest - and
-    every Reply, replies being only words back to the channel (usage
-    answers and the grammar's own refusals included). Dropped: everything
-    that would change the world - a state-changing command, a natural-
-    language order (the inner voice may pick ANY vocabulary entry for one,
-    movement included, so no NL line is a report however it is phrased), a
-    spoken line, a GM command, a job, a queue, a watch. One refusal Reply
-    stands for however many were dropped.
-    """
-    kept = []
-    refused = False
-    for decision in directives:
-        if isinstance(decision, (Reply, RosterQuery, DigestQuery)):
-            kept.append(decision)
-        elif isinstance(decision, (InsertCommand, FanoutCommand)) and (
-            _is_report_command(decision.command)
-        ):
-            kept.append(decision)
-        else:
-            refused = True
-    if refused:
-        kept.append(Reply(REPORT_REFUSAL))
-    return kept
-
-
-def parse_directive(
-    text: str,
-    author_id: str,
-    allowed_ids: frozenset[str],
-    dedicated: bool = False,
-    report_ids: frozenset[str] = frozenset(),
-) -> list:
-    """Turn one Discord message into decisions.
-
-    In a shared channel, silence (empty list) for anyone not allowed and for
-    messages that do not address a character - the bridge must not answer
-    every message. In the DEDICATED overseer channel (`dedicated=True`), an
-    allowed user talking to the overseer itself always gets an answer: a
-    roster when they ask who is in the world, and help otherwise - dead air
-    in the overseer's own hall reads as breakage, because it is.
-
-    An author in `report_ids` but not `allowed_ids` is a report-only giver
-    (quadseven/mod-overseer#1238): parsed exactly as the operator's
-    message would be, then scoped by _report_scope, so the scope is a
-    property of the decisions rather than a second, drifting grammar. An
-    id in both sets is the operator, unscoped. A report-only giver is
-    heard ONLY in the dedicated channel - the ticket scopes it to the
-    overseer channel, which is narrower than the bridge's channel rule
-    (the chat channel too, and everywhere when none is configured: the
-    operator's contract, argued where OWNED_CHANNEL_IDS is defined, and
-    not extended to an identity that exists to be handed to an agent).
-    """
-    if author_id not in allowed_ids and author_id not in report_ids:
-        return []
-    scoped = author_id not in allowed_ids
-    if scoped and not dedicated:
-        return []
-
-    directives = []
-    addressed = False
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("@"):
-            continue
-        addressed = True
-        target, _, command = line[1:].partition(" ")
-        command = command.strip()
-        group = _group_split(target, command)
-        if group is not None:
-            directives.append(_group_directive(group, author_id))
-            continue
-        if not _NAME_RE.fullmatch(target):
-            directives.append(Reply(f"'{target}' is not a character name. {USAGE}"))
-            continue
-        if not command:
-            directives.append(Reply(f"Tell {target} what to do. {USAGE}"))
-            continue
-        if len(command) > MAX_COMMAND_LEN:
-            directives.append(
-                Reply(
-                    f"That order for {target} is too long ({len(command)} chars, max {MAX_COMMAND_LEN})."
-                )
-            )
-            continue
-        # THE WATCHER TAKES OBSERVER LINES AND NOTHING ELSE. It is a camera
-        # character: no chat, no bot orders, no natural language, and none of
-        # the wider GM surface below (which admits `group`). See director.
-        if director.is_watcher(target):
-            directives.append(
-                _watcher_directive(target, command, f"discord:{author_id}")
-            )
-            continue
-        # WoW's own chat syntax ("/say hi", "/w Thrall hi") and dot-commands
-        # (".appear Thrall") are taken literally. Everything else falls
-        # through to the playerbot-command and inner-voice paths untouched.
-        spoken = _spoken_directive(target, command, f"discord:{author_id}")
-        if spoken is not None:
-            directives.append(spoken)
-            continue
-        if _voice_is_raw(command):
-            directives.append(InsertCommand(target, command, f"discord:{author_id}"))
-        else:
-            directives.append(NLDirective(target, command, f"discord:{author_id}"))
-
-    if not addressed:
-        unaddressed = _unaddressed(text, dedicated, author_id)
-        return _report_scope(unaddressed) if scoped else unaddressed
-    if scoped:
-        # Scoped BEFORE the flood cap below counts: a report buried among
-        # refused orders is still answered, and the cap then bounds what
-        # survives rather than what was typed.
-        directives = _report_scope(directives)
-    # A fan-out line counts as one order here: the flood cap bounds how many
-    # things one message may ask for, and MAX_FANOUT_TARGETS bounds how wide
-    # each of those things may get.
-    orders = [
-        d
-        for d in directives
-        if isinstance(
-            d,
-            (
-                InsertCommand,
-                NLDirective,
-                FanoutCommand,
-                FanoutDirective,
-                SpeakCommand,
-                GmCommand,
-            ),
-        )
-    ]
-    if len(orders) > MAX_COMMANDS_PER_MESSAGE:
-        return [
-            Reply(
-                f"That is {len(orders)} orders in one breath; the cap is {MAX_COMMANDS_PER_MESSAGE}."
-            )
-        ]
-    return directives
-
-
-def _watcher_directive(target: str, command: str, source: str):
-    """A line addressed to the Watcher: an observer dot-command or a refusal."""
-    if command.startswith(".") and director.observer_allows(command):
-        return GmCommand(target, command, source)
-    return Reply(
-        f"{target} takes observer commands only (appear, observer state, speed). "
-        f"To point it somewhere say: {director.USAGE}"
-    )
-
-
-def _job_mode(text: str):
-    """jobs.parse_order, late-imported for the same reason voice/fanout are:
-    core stays importable without the job vocabulary in contexts that only
-    need message parsing."""
-    from jobs import parse_order
-
-    return parse_order(text)
-
-
-def _member_order(text: str):
-    """jobs.parse_member_order, late-imported like _job_mode: (mode, member)
-    for "job <mode> for <member>", else None. Asked before the family-wide
-    phrases so the trailing name is never read as part of the mode."""
-    from jobs import parse_member_order
-
-    return parse_member_order(text)
-
-
-def _queue_order(text: str):
-    """campaignqueue.parse_order, late-imported like _job_mode. A message
-    that starts with "queue" is a queue order and nothing else, so it is
-    asked before the job phrases."""
-    from campaignqueue import parse_order
-
-    return parse_order(text)
-
-
-def _unaddressed(text: str, dedicated: bool, author_id: str = "") -> list:
-    """What a message that names no character means.
-
-    Kept beside parse_directive for the same reason _group_directive is: this
-    is a grammar of its own - four questions the overseer answers about
-    ITSELF or about the family as a whole rather than about one character -
-    and inlining it made the dispatcher the most tangled function in the
-    module.
-
-    In a shared channel: silence. The bridge must not answer every message.
-
-    In the overseer's own channel the ORDER IS LOAD-BEARING. The job check
-    goes FIRST: "it's farming time" contains no digest or roster phrase today,
-    but a mode name is the most deliberate, narrowest thing a person can say
-    here (jobs._PHRASES is a closed, hand-written list) and should win over a
-    looser pattern before one exists that could collide. The digest is asked
-    next because "what have they been playing for the last 6 hours" contains
-    "playing", which _ROSTER_RE matches - so roster-first answers a question
-    about five characters with a census of five hundred bots, and looks like
-    a working feature while doing it. The digest grammar is the narrow one
-    (it names the family or is an explicit catch-up phrase), so letting it go
-    before the roster costs the roster nothing.
-
-    Dead air here reads as breakage, because it is - hence the closing Reply
-    rather than an empty list.
-    """
-    if not dedicated:
-        return []
-    watch = director.parse_watch_message(text)
-    if watch is not None:
-        return [director.WatchDirective(spec=watch, source=f"discord:{author_id}")]
-    queue = _queue_order(text)
-    if queue is not None:
-        return [
-            QueueDirective(
-                family=queue.family,
-                text=queue.text,
-                source=f"discord:{author_id}",
-                partner=queue.partner,
-            )
-        ]
-    member_order = _member_order(text)
-    if member_order is not None:
-        return [
-            JobDirective(
-                mode=member_order[0],
-                source=f"discord:{author_id}",
-                member=member_order[1],
-            )
-        ]
-    mode = _job_mode(text)
-    if mode is not None:
-        return [JobDirective(mode=mode, source=f"discord:{author_id}")]
-    ask = _digest_ask(text)
-    if ask is not None:
-        return [DigestQuery(hours=ask.hours)]
-    if _ROSTER_RE.search(text):
+    if cleaned.lower() in ("roster", "!roster"):
         return [RosterQuery()]
-    from freeorders import looks_like_an_order
 
-    if looks_like_an_order(text):
-        return [FreeOrder(text=text.strip(), source=f"discord:{author_id}")]
-    return [Reply(f"I command the world, not the conversation - yet. {USAGE}")]
+    if cleaned.lower().startswith("digest"):
+        parts = cleaned.split()
+        hours = 6.0
+        if len(parts) > 1:
+            try:
+                hours = float(parts[1])
+            except ValueError:
+                pass
+        return [DigestQuery(hours=hours)]
 
+    # Parse speak / direct commands using relay module
+    try:
+        parsed = parse_speak(cleaned)
+    except Exception:
+        parsed = None
 
-def _group_directive(
-    group: tuple[str, str], author_id: str
-) -> Reply | FanoutCommand | FanoutDirective:
-    """One group line -> one decision, or the Reply that explains itself.
+    if parsed is not None:
+        if isinstance(parsed, SpeakCommand):
+            if not _NAME_RE.match(parsed.target):
+                return [Reply(f"Invalid character name: {parsed.target}. Must be 2-12 alphabetic characters.")]
+            if len(parsed.command) > MAX_COMMAND_LEN:
+                return [Reply(f"Command exceeds maximum length of {MAX_COMMAND_LEN} characters.")]
+            return [InsertCommand(target_name=parsed.target, command=parsed.command, source=source)]
+        elif isinstance(parsed, GmCommand):
+            # GM commands are handled via director / relay integration
+            return [Reply(f"GM command accepted: {parsed.command}")]
+        elif isinstance(parsed, GmRefused):
+            return [Reply(f"GM command refused: {parsed.reason}")]
 
-    Kept beside parse_directive rather than inside it so the group grammar
-    reads as one thing; the widening lives in fanout.py, and this is only
-    the same command validation the single-character path applies.
-    """
-    from fanout import GROUP_USAGE, describe_expression
-
-    expression, command = group
-    if expression == "guild":
-        return Reply(f"Name the guild. {GROUP_USAGE}")
-    if not command:
-        return Reply(
-            f"Tell {describe_expression(expression)} what to do. {GROUP_USAGE}"
-        )
-    if len(command) > MAX_COMMAND_LEN:
-        return Reply(
-            f"That order for {describe_expression(expression)} is too long "
-            f"({len(command)} chars, max {MAX_COMMAND_LEN})."
-        )
-    source = f"discord:{author_id}"
-    if _voice_is_raw(command):
-        return FanoutCommand(expression, command, source)
-    return FanoutDirective(expression, command, source)
-
-
-def report_outcomes(
-    rows: list[dict], seen_ids: set[int]
-) -> tuple[list[tuple[int, Reply | None]], set[int]]:
-    """Turn polled overseer_command rows into delivery reports, exactly once.
-
-    `rows` are non-pending rows from the store. `seen_ids` is what has already
-    been reported; the returned set replaces it. Each reply is paired with its
-    row id so the caller can route it back to wherever the directive came from.
-    A reply of None means "this one is finished, say nothing" - the caller
-    still clears the id, which is what keeps its pending map from growing.
-    On bridge restart the caller seeds seen_ids with every known row id, so
-    history is never re-announced.
-    """
-    replies = []
-    new_seen = set(seen_ids)
-    for row in rows:
-        row_id = row["id"]
-        if row_id in new_seen:
+    # Fallback line-by-line parsing for multi-line messages
+    decisions: list[Decision] = []
+    lines = cleaned.splitlines()
+    for line in lines:
+        line = line.strip()
+        if not line:
             continue
-        new_seen.add(row_id)
-        # Rows written before the chat bridge existed carry no kind.
-        kind = row.get("kind") or "bot"
-        status = row["status"]
-        if status in COMMAND_SUCCESS_STATUSES:
-            if kind == "chat":
-                # A spoken line confirms itself: it comes straight back
-                # through the chat relay, exactly as it would appear in the
-                # player's own chat frame. A "delivered" note would be an echo.
-                # Still reported, with no text: the caller needs the id back
-                # to clear the row from its pending map.
-                replies.append((row_id, None))
-                continue
-            if kind == "gm":
-                reply = Reply(f"{row['target_name']}: {row['command']} - done.")
-            elif status == "applied":
-                # Deliberately different words from the line below. "heard"
-                # was always the honest description of `delivered` and it was
-                # read as "applied" anyway; now the two readings have two
-                # sentences and only one of them was checked.
-                reply = Reply(
-                    f"{row['target_name']} applied the order: {row['command']} "
-                    "(read back off the live engine)"
-                )
-            else:
-                reply = Reply(f"{row['target_name']} heard the order: {row['command']}")
-        elif status == "unchanged":
-            # Not routed to the error branch on purpose: nothing failed. The
-            # bot took the order and its strategies are the same as before,
-            # which is the Ugga case (rows 4049 and 4184) and the one thing
-            # the queue could not say until now. The id is the handle on the
-            # evidence - `result` holds the live lists it was judged against.
-            reply = Reply(
-                f"{row['target_name']} accepted the order ({row['command']}) and "
-                f"NOTHING CHANGED - its live strategy list is the same as before. "
-                f"See overseer_command row {row_id} (`result`) for what it actually has."
-            )
-        else:
-            # 'error', and anything a NEWER worldserver image starts writing
-            # that this bridge image has never heard of. The two ship
-            # separately, so that is a normal deploy window and not a bug; the
-            # unknown status is named in the text rather than swallowed, which
-            # is the difference between a confusing report and a silent one.
-            detail = row.get("detail") or (
-                "unknown error" if status == "error" else f"status '{status}'"
-            )
-            if kind == "chat":
-                reply = Reply(f"{row['target_name']} could not say that ({detail}).")
-            elif kind == "gm":
-                reply = Reply(
-                    f"{row['target_name']}: {row['command']} - refused ({detail})."
-                )
-            else:
-                reply = Reply(f"{row['target_name']} did not get the order ({detail}).")
-        replies.append((row_id, reply))
-    return replies, new_seen
+        try:
+            p = parse_speak(line)
+            if isinstance(p, SpeakCommand):
+                if not _NAME_RE.match(p.target):
+                    continue
+                if len(p.command) > MAX_COMMAND_LEN:
+                    continue
+                decisions.append(InsertCommand(target_name=p.target, command=p.command, source=source))
+                if len(decisions) >= MAX_COMMANDS_PER_MESSAGE:
+                    break
+        except Exception:
+            continue
 
+    if not decisions:
+        return [Reply(USAGE)]
 
-# Race -> faction, 3.3.5a. Missing/unknown races count as neither.
-_ALLIANCE_RACES = {1, 3, 4, 7, 11}
-_HORDE_RACES = {2, 5, 6, 8, 10}
-_CONTINENTS = {0: "Eastern Kingdoms", 1: "Kalimdor", 530: "Outland", 571: "Northrend"}
-
-ROSTER_SAMPLE = 15
-
-
-def format_roster(rows: list[dict]) -> Reply:
-    """One readable message summarizing overseer_snapshot rows.
-
-    500 names do not fit a Discord message (2000 chars), so the roster is a
-    census plus a sample; the full living map is the #2599 ticket's job.
-    """
-    if not rows:
-        return Reply(
-            "The world is empty. Either the realm is down or nobody is logged in."
-        )
-
-    total = len(rows)
-    alliance = sum(1 for r in rows if r["race"] in _ALLIANCE_RACES)
-    horde = sum(1 for r in rows if r["race"] in _HORDE_RACES)
-    fighting = sum(1 for r in rows if r.get("in_combat"))
-    humans = [r["name"] for r in rows if not r.get("is_bot")]
-
-    by_continent: dict[str, int] = {}
-    for r in rows:
-        key = _CONTINENTS.get(r["map_id"], "elsewhere")
-        by_continent[key] = by_continent.get(key, 0) + 1
-
-    levels = sorted(r["level"] for r in rows)
-    highest = sorted(rows, key=lambda r: (-r["level"], r["name"]))[:ROSTER_SAMPLE]
-
-    lines = [
-        f"{total} souls in the world - {alliance} Alliance, {horde} Horde, {fighting} in combat right now.",
-        "By continent: "
-        + ", ".join(
-            f"{name} {n}"
-            for name, n in sorted(by_continent.items(), key=lambda kv: -kv[1])
-        )
-        + ".",
-        f"Levels {levels[0]} to {levels[-1]}, median {levels[len(levels) // 2]}.",
-        "Highest: " + ", ".join(f"{r['name']} ({r['level']})" for r in highest) + ".",
-    ]
-    if humans:
-        lines.append("Mortals present: " + ", ".join(sorted(humans)) + ".")
-    return Reply("\n".join(lines))
+    return decisions
