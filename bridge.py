@@ -3566,6 +3566,15 @@ def _death_hold_memos():
         return None
 
 
+def _read_moving(members, walking) -> list:
+    """The members with `moving` set for those named walking (#2401).
+
+    A guildjobs.Member is frozen, so the read is a copy, never an assignment:
+    assigning raised FrozenInstanceError and failed every guild jobs pass
+    before it planned, flagged or wrote anything."""
+    return [dataclasses.replace(m, moving=str(m.name) in walking) for m in members]
+
+
 def _flag_death_loop_holds(members, facts) -> None:
     """Write and drop the death loop flags for one guild jobs pass (deathhold.plan)."""
     memos = _death_hold_memos()
@@ -5789,6 +5798,11 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
         # (dungeonstall.py, #1041), nor any door the stall breaker left in
         # its window, a silent head's included (#1078).
         stalled = _stall_barred(cur, key, names)
+        # A FAMILY THAT FORMS NO RUN rests the planner (campaignplan.unformed_rest).
+        unformed = _planner_rows(
+            cur, dungeonstall.UNFORMED_SQL.format(holes=marks),
+            dungeonstall.unformed_args(key, names),
+            "the doors left with no run formed")
         # A DOOR THE GUILDS RARELY CLEAR gives way to a sound one
         # (campaignplan.Option.poor).
         record = _planner_rows(
@@ -5810,7 +5824,8 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
         bosses=_PLANNER_BOSSES,
         keys=_read_or_none(campaignplan.keys_held, keys),
         stalled=stalled,
-        door_record=_read_or_none(guildrun.door_record, record))
+        door_record=_read_or_none(guildrun.door_record, record),
+        unformed=dungeonstall.unformed(unformed))
 
 
 async def _planner_due(read: dict, key: str, fam: dict, rows: list,
@@ -6875,7 +6890,8 @@ def _door_wedge(head: dict, names: list, leader: str):
             if delete_memo is not None:
                 delete_memo(key)
         return None
-    if not any(jobs.is_dungeon_job(job) for job in _jobs_of(names).values()):
+    if not any(jobs.is_dungeon_job(job) or jobs.is_raid_job(job)
+               for job in _jobs_of(names).values()):
         # The family may switch jobs while still separated. Preserve its clock
         # so a temporary quest job cannot restart the stand-down bound.
         return None
@@ -6901,6 +6917,12 @@ def _door_wedge(head: dict, names: list, leader: str):
         # errand state does, and an errand taken up again counts on.
         for name in recall(leader, ages, head_id):
             ages.pop(name, None)
+    # A RAID DOOR IS NEVER LEFT BY THE BREAKER, but a member's errand of its
+    # own is still handed back there: the recall above is the only bound on it,
+    # and a raid's leader walks back for the member, or waits at the door for
+    # it, for as long as the errand lasts (Refs #1261).
+    if raidrun.is_raid(keyword):
+        return None
     # The stall line names the errand that held the run (#2280).
     errand_of = globals().get("_current_travel_npc")
     for name, (state, age) in ages.items():
@@ -16053,7 +16075,7 @@ class Bridge(discord.Client):
                 release.why,
             )
 
-    async def _vendor_once(self, cohort=None) -> None:
+    async def _vendor_once(self, cohort=None) -> int:
         """Queue carried junk and outgrown gear for the world sell executor.
 
         FOR ONE FAMILY AT A TIME (#150). `cohort` is None for the family this
@@ -16586,6 +16608,7 @@ class Bridge(discord.Client):
             route_sales=route_sales,
         )
         _report_vendor_claim(slot, aimed, inserted)
+        return inserted
 
     async def _take_vendor_aim(self, step: str, leader: str, cohort=None) -> bool:
         """Take the leader's vendor aim when the errand step says AIM.
@@ -19197,21 +19220,23 @@ class Bridge(discord.Client):
                              _family_label(cohort))
         _log_changed("bank bags", notes, tuple(sorted(names)))
 
-    async def _bank_passing_once(self, cohort=None) -> None:
+    async def _bank_passing_once(self, cohort=None) -> int:
         """The quick look: bank for whoever is at a banker, nothing else.
 
         Never claims the travel column. A family that stopped at a banker for
         any reason (a vendor beside it, the town trip) puts its surplus down
         on the way past instead of waiting for the ten-minute bank pass.
+
+        Returns how many rows it queued, which the errand's bank step reads.
         """
         names, _leader = await asyncio.to_thread(_family_of, cohort)
         if not names:
-            return
+            return 0
         seen = await asyncio.to_thread(_recent_bank_keys, GIVE_RETRY_MINUTES)
         await self._bank_bag_slots(names, seen, cohort)
         bank_plan = await asyncio.to_thread(_plan_bank, names)
         if not bank_plan.moves:
-            return
+            return 0
         planned = [(move, bank.command(move)) for move in bank_plan.moves]
         fresh, _walking = await self._bank_at_the_counter(planned, seen)
         if fresh:
@@ -19221,6 +19246,7 @@ class Bridge(discord.Client):
                      "without a trip%s",
                      ", ".join(sorted({m.character for m in fresh})),
                      len(fresh), _family_label(cohort))
+        return len(fresh)
 
     async def _bank_loop(self) -> None:
         """Keep the family's bank in use (mod-overseer#207).
@@ -21576,8 +21602,7 @@ class Bridge(discord.Client):
         busy -= self._stranded_knights_freed(members)
         cap = self._guild_walk_cap()
         walking = standstill.walking(self._guild_still, members)
-        for m in members:
-            m.moving = str(m.name) in walking
+        members = _read_moving(members, walking)
         self._guild_still = standstill.track(self._guild_still, members, now)
         spawn_walks = now >= self._job_walks_unsupported.get("spawn", 0.0)
         # The hunt slots the realm has free (classhunt.py); none while this
@@ -23342,6 +23367,24 @@ class Bridge(discord.Client):
         # errands cycle after cycle, so the guild never bought a tab. Urgency
         # is bounded the way the auction pass's is: a grant that queues no take
         # backs off (`_mail_urgency_spent`).
+        # A LEADER ALREADY AT THE MAILBOX IS NOT WALKED TO IT AGAIN. Every
+        # cycle with gear waiting for members who are far off (another map, or
+        # thousands of yards) took the column for a "short town stop" at the box
+        # the leader stood at, queued 0 takes because no holder was in reach,
+        # and backed its urgency off, only to ask again once that expired. Each
+        # re-write read as the old walk ending and a new one taking over, and
+        # each held the column from the other passes. With the leader in reach
+        # and no taker in reach there is nothing to walk to and nothing a walk
+        # would let anybody take; the town errand's gather brings the family.
+        if travel.spawn_in_reach(spawn, where, TOWN_COUNTER_YARDS) and not any(
+                travel.spawn_in_reach(spawn, positions.get(t.character),
+                                      TOWN_COUNTER_YARDS)
+                for t in mail_plan.takes):
+            log.info("mail: leader=%s already stands at the mailbox and no "
+                     "holder of the %d letter(s) is within reach of it, so the "
+                     "walk is not asked for again%s", leader, len(letters),
+                     _family_label(cohort))
+            return
         urgent = await self._mail_urgent(names, cohort, letters)
         aimed = await self._claim_town_slot("mail", leader, post.aim,
                                              urgent=urgent,
@@ -24353,6 +24396,18 @@ class Bridge(discord.Client):
                          "died on" if hub and walled(hub)
                          else "the hub is a long walk off")
                 hub = chosen
+        # A HUB WHOSE WALK WAS JUST RELEASED UNLANDED IS NOT ASKED FOR AGAIN
+        # (#1261): only a bag-room errand has another aim to choose, so any
+        # other errand waits out the memory instead of taking the traveller
+        # for the same walk. The retry clock restarts, so this is said once
+        # per UNLANDED_RETRY_SECONDS, not every tick.
+        if townerrand.unreachable_hub(why, hub, released, now):
+            log.info("town errand: %s%s, but the walk to %s was released "
+                     "unlanded within %ds, and nothing else serves this "
+                     "errand; not going", why, label,
+                     hub.get("place", "the hub"),
+                     int(townerrand.AIM_MEMORY_SECONDS))
+            return dataclasses.replace(state, ended=now, unlanded=True)
         if not hub:
             log.info("town errand: %s%s, but neither %s's hearthstone point nor "
                      "a capital of the family's own auction house on his map "
@@ -24481,16 +24536,29 @@ class Bridge(discord.Client):
                 at = await asyncio.to_thread(_fetch_town, leader)
                 if leader not in positions or not at.banker:
                     return False
-            if step not in marks:
-                # BOTH BANKS, while the family stands at the counter. The
-                # errand owns the traveller, so the ten-minute bank and guild
-                # bank passes are refused it while the errand runs; this step
-                # is their turn, and a member short of bag room is exactly
-                # who needs the guild vault as well as its own bank.
-                await self._bank_passing_once(cohort)
+            # BOTH BANKS, while the family stands at the counter. The errand
+            # owns the traveller, so the ten-minute bank and guild bank
+            # passes are refused it while the errand runs; this step is their
+            # turn, and a member short of bag room is exactly who needs the
+            # guild vault as well as its own bank.
+            #
+            # ASKED AGAIN UNTIL A PASS FINDS NOTHING LEFT (a banker errand
+            # that never queued a row). The leader is read at the banker
+            # before its followers, and a row is only written for a member
+            # standing within TOWN_COUNTER_YARDS of one, so a single look on
+            # the leader's arrival wrote nothing, marked the step as run, and
+            # the step then ran out its window with every row unwritten; the
+            # next errand walked the leader back to the same counter for the
+            # same rows. Each look is throttled, and the step ends once one
+            # has queued nothing after the settle time.
+            if step not in marks or now - marks[step + ":run"] >= 40.0:
+                marks.setdefault(step, now)
+                marks[step + ":run"] = now
+                queued = await self._bank_passing_once(cohort)
                 await self._guild_bank_passing_once(cohort)
-                marks[step] = now
-            return ran_for >= TOWN_ERRAND_SETTLE_SECONDS
+                marks[step + ":queued"] = bool(queued)
+            return (ran_for >= TOWN_ERRAND_SETTLE_SECONDS
+                    and not marks.get(step + ":queued"))
         if step == townerrand.TIDY:
             # THE BAG TIDY PASS RUNS HERE TOO (#375), while the family stands
             # together: its hand-ons are gives and trades between members, and
@@ -24623,6 +24691,20 @@ class Bridge(discord.Client):
         facts, rows, trip = await self._town_errand_vendor_trip(
             state, names, leader, visited)
         if not trip.vendor and step in marks:
+            # THE SELL PASS IS ASKED AGAIN, NOT ONCE (a vendor errand that
+            # never sold). The leader is read at the vendor before its
+            # followers, and a sale row is only written for a member standing
+            # at a counter, so the single look made on the leader's arrival
+            # queued nothing, the step ended with every sale unwritten, and
+            # the next errand walked back for the same sale. Each look is
+            # throttled, and the step ends once one queues nothing.
+            marks.setdefault(step + ":idle", now)
+            if now - marks.get(step + ":run", 0.0) >= 40.0:
+                marks[step + ":run"] = now
+                marks[step + ":queued"] = bool(await self._vendor_once(cohort))
+            if (marks.get(step + ":queued")
+                    or now - marks[step + ":idle"] < TOWN_ERRAND_SETTLE_SECONDS):
+                return False
             log.info("town errand vendor: nothing more to buy at any vendor "
                      "in reach - %s%s", trip.why_not, _family_label(cohort))
             return True
@@ -27303,6 +27385,11 @@ class Bridge(discord.Client):
         refusing this one. dungeonstall.py decides.
         """
         if raidrun.is_raid(str(rows[0].get("keyword") or "")):
+            # No door is left for a raid, but the recall of a member's own
+            # errand still runs (Refs #1261): `_door_wedge` returns after it.
+            await asyncio.to_thread(
+                _door_wedge, rows[0], list(fam["names"]),
+                str(fam["leader"].get("name") or ""))
             return False
         names = list(fam["names"])
         # AN OPERATOR'S ORDER IS HELD, NEVER CANCELLED (#2216): inside its
@@ -27724,7 +27811,8 @@ class Bridge(discord.Client):
             return False
         facts = await asyncio.to_thread(_planner_facts, key, fam, level_rows)
         facts = dataclasses.replace(facts, dry=dry)
-        opts = campaignplan.options(facts)
+        rest = campaignplan.unformed_rest(facts)
+        opts = [] if rest else campaignplan.options(facts)
         pick = campaignplan.heuristic(opts)
         if pick is None and due.dry:
             # A DOOR THAT TEACHES NOTHING ENDS EVEN WITH NOTHING TO FOLLOW IT
@@ -27735,7 +27823,7 @@ class Bridge(discord.Client):
                      "(finished=%s)", who, due.reason, ended)
             return bool(ended)
         if pick is None:
-            line = campaignplan.nothing_line(facts)
+            line = rest or campaignplan.nothing_line(facts)
             if idle is None or idle[0] != line:
                 log.info("planner: %s: %s", who, line)
             self._planner_said[key] = (line, now)
@@ -28076,6 +28164,16 @@ class Bridge(discord.Client):
         if not name or not townslot.campaign_owns_traveller(active, job, False):
             return "", ""
         free = await asyncio.to_thread(_fetch_free_slots, list(fam["names"]))
+        # A MEMBER NO VENDOR CAN CLEAR DOES NOT WITHHOLD THE CAMPAIGN (#1261).
+        # The run's own gate reads the slots through the bag-floor release and
+        # lets the family proceed; this read took them raw, so the same family
+        # was "withheld" here, the town passes were given the leader's column,
+        # and a pass such as the mail walk took the door walk off it again and
+        # again. One reading for both. Looked up: the campaign tests load this
+        # function in isolation.
+        release = globals().get("_floor_release")
+        if release is not None:
+            free = await asyncio.to_thread(release, list(fam["names"]), free)
         withheld = jev_activity.withheld(True, free)
         phase = await asyncio.to_thread(_staging_phase, name) if withheld else ""
         if not townslot.campaign_owns_traveller(active, job, withheld, bool(phase)):

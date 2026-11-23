@@ -672,6 +672,23 @@ def _was_released(spot: dict, released, now: float) -> bool:
     )
 
 
+def unreachable_hub(why: str, hub: dict, released, now: float) -> bool:
+    """Whether an errand for `why` must not start because its `hub` is one a
+    walk was released from as "did not land" in the last AIM_MEMORY_SECONDS.
+
+    A NEED THE TOWN CANNOT MEET IS NOT A TRIP (#1261). Only a bag-room errand
+    moves off a released hub (`choose_aim`); a gear, mail or supply errand has
+    no other aim, so the same capital mailbox was walked to again every
+    UNLANDED_RETRY_SECONDS. wow-dev: a family whose bought gear waited in the
+    post started the errand, stood still some 800 yards out until the stall
+    bound released it, and started it again five minutes later, for hours.
+    The memory expires on its own clock, and the next try may land.
+    """
+    if not hub or room_errand(why):
+        return False
+    return _was_released(hub, released, now)
+
+
 def vendor_stops(rows, side: int = 0, kind: str = "vendor") -> list:
     """Vendor spots from creature rows ({map_id, x, y, name, enemy_group}),
     nearest first as given, one per VENDOR_STOP_YARDS, none of the side that
