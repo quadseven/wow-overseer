@@ -37,8 +37,10 @@ class TheDeadHold(unittest.TestCase):
     def test_the_town_slot_door_asks_before_writing_any_aim(self):
         src = (pathlib.Path(__file__).parent.parent / "bridge.py").read_text()
         door = src.split("async def _claim_town_slot", 1)[1]
-        self.assertLess(door.index("_traveller_is_dead"),
-                        door.index("professions.Errand(character=character"))
+        self.assertLess(
+            door.index("_traveller_is_dead"),
+            door.index("professions.Errand(character=character"),
+        )
 
 
 if __name__ == "__main__":
