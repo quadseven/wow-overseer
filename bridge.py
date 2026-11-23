@@ -3582,8 +3582,9 @@ def _flag_death_loop_holds(members, facts) -> None:
         return
     levels = {str(m.name): int(getattr(m, "level", 0) or 0) for m in members or ()}
     now = time.time()
-    flags = deathhold.plan(facts.get("death_loops") or {}, levels, memos, now,
-                           facts.get("roster") or ())
+    flags = deathhold.plan(
+        deathhold.flagged(facts.get("death_loops"), facts.get("death_forming")),
+        levels, memos, now, facts.get("roster") or ())
     for write in flags.writes:
         _memo_upsert(deathhold.KIND, write.name, write.value, write.since, write.expires)
         log.info("death loop hold: %s is flagged in zone %d, so its own wandering is "
@@ -39877,6 +39878,8 @@ def _fetch_job_facts(family_names: list) -> dict:
     levels = {str(r["name"]): int(r.get("level") or 0) for r in rows}
     (facts["death_loops"], facts["death_risks"],
      facts["death_avoided"]) = deathloop.judge(death_rows, levels)
+    # Loops forming at three deaths, for the hold flag only (#3196).
+    facts["death_forming"] = deathloop.forming(death_rows, levels)
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}
