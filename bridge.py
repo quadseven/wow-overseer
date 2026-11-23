@@ -23070,7 +23070,10 @@ class Bridge(discord.Client):
         walk = str(row.command).startswith("walk-to-")
         seconds = (max(CORPS_ROW_FOLLOW_SECONDS, guildroute.follow_seconds(cap))
                    if walk else CORPS_ROW_FOLLOW_SECONDS)
-        for attempt in (1, 2):
+        loop_hearth_walk = guildjobs.is_loop_hearth_walk(step, row)
+        attempts = (guildjobs.LOOP_HEARTH_WALK_RETRIES + 1
+                    if loop_hearth_walk else 2)
+        for attempt in range(1, attempts + 1):
             row_id = await asyncio.to_thread(_insert_corps_row, step.holder, row)
             if not row_id:
                 return False
@@ -23089,6 +23092,14 @@ class Bridge(discord.Client):
                     log.info("guild jobs: sale: %s (row %d)",
                              vendorsale.sale_line(step.holder, sale), row_id)
                 return True
+            if (loop_hearth_walk and attempt < attempts
+                    and guildjobs.loop_hearth_walk_held(status, detail)):
+                log.info("guild jobs: %s's onward walk is still held after its hearth; "
+                         "retrying in %d seconds (ask %d of %d)", step.holder,
+                         guildjobs.LOOP_HEARTH_WALK_RETRY_SECONDS, attempt,
+                         guildjobs.LOOP_HEARTH_WALK_RETRIES)
+                await asyncio.sleep(guildjobs.LOOP_HEARTH_WALK_RETRY_SECONDS)
+                continue
             if attempt == 1 and await self._corps_row_again(step, row, row_id, detail, walk):
                 continue
             self._note_job_walk_unsupported(step, row, detail)
