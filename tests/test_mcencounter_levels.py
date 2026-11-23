@@ -113,7 +113,9 @@ class FactProjection(unittest.TestCase):
 
     def test_missing_shadow_resistance_aura_refuses_generation(self):
         self.training["Paladin"]["spells"]["above"] = [
-            r for r in self.training["Paladin"]["spells"]["above"] if r["spell"] != 19876
+            r
+            for r in self.training["Paladin"]["spells"]["above"]
+            if r["spell"] != 19876
         ]
         with self.assertRaisesRegex(ValueError, "missing required"):
             mc_spell_facts.project(self.training, self.spells)

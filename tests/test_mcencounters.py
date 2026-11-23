@@ -80,7 +80,9 @@ class TheComposerReportsWhatIsMissing(unittest.TestCase):
     def test_tanks_count_the_tank_seat_not_the_class(self):
         report = mcencounters.compose([_raider(WARRIOR)] * 6 + [_raider(PALADIN)])
         self.assertEqual(_row(report, "Golemagg")["lacks"], {TANKS: 3})
-        report = mcencounters.compose([_raider(WARRIOR, "tank")] * 3 + [_raider(PALADIN)])
+        report = mcencounters.compose(
+            [_raider(WARRIOR, "tank")] * 3 + [_raider(PALADIN)]
+        )
         self.assertEqual(_row(report, "Golemagg")["lacks"], {})
 
     def test_lucifron_lacks_one_curse_dispeller(self):
@@ -176,9 +178,11 @@ FIRE_BOSSES = ("Magmadar", "Garr", "Sulfuron Harbinger", "Golemagg")
 
 class ResistanceAurasTheStrategyCasts(unittest.TestCase):
     def _line(self, level=None):
-        placed = [] if level is None else [
-            {"class_id": PALADIN, "seat": "dps", "level": level}
-        ]
+        placed = (
+            []
+            if level is None
+            else [{"class_id": PALADIN, "seat": "dps", "level": level}]
+        )
         return mcencounters.compose(placed), placed
 
     def test_no_paladin_lacks_each_resistance_source(self):
@@ -196,7 +200,9 @@ class ResistanceAurasTheStrategyCasts(unittest.TestCase):
     def test_one_paladin_at_36_meets_them_all(self):
         report, _ = self._line(36)
         for boss in SHADOW_BOSSES:
-            self.assertNotIn(mcencounters.SHADOW_RESISTANCE, _row(report, boss)["lacks"])
+            self.assertNotIn(
+                mcencounters.SHADOW_RESISTANCE, _row(report, boss)["lacks"]
+            )
         for boss in FIRE_BOSSES:
             self.assertNotIn(FIRE_RESISTANCE, _row(report, boss)["lacks"])
 
@@ -207,8 +213,8 @@ class ResistanceAurasTheStrategyCasts(unittest.TestCase):
             [28],
         )
         report, _ = self._line(30)
-        self.assertNotIn(mcencounters.SHADOW_RESISTANCE, _row(report, "Lucifron")["lacks"])
-        self.assertEqual(
-            _row(report, "Magmadar")["below_level"][FIRE_RESISTANCE], [36]
+        self.assertNotIn(
+            mcencounters.SHADOW_RESISTANCE, _row(report, "Lucifron")["lacks"]
         )
+        self.assertEqual(_row(report, "Magmadar")["below_level"][FIRE_RESISTANCE], [36])
         self.assertIn("level 28", mcencounters.encounter_line(self._line(27)[0]))
