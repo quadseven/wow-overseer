@@ -8,7 +8,12 @@ is not needed for Molten Core and only applies to Nefarian's Shadow Flame in
 Blackwing Lair.
 
 `data/mc-spells.json` records the first trainer ranks used by `mcencounters.py`
-and the dispel types of its seven cited boss spells. These are learn-level
+and the dispel types of its seven cited boss spells. Shadow Resistance Aura
+(19876, level 28) and Fire Resistance Aura (19891, level 36) are the paladin
+auras the table asks for at the bosses whose strategy casts them. The
+Shadow Resistance Aura row was added by hand from the world database's
+`trainer_spell` row for spell 19876, not from the archived export; the next
+regeneration must see it in the export or it fails. These are learn-level
 requirements, not a claim that a member has purchased or currently can cast
 a spell. Talent-only capabilities are excluded. Seats and encounter needs
 are unchanged.

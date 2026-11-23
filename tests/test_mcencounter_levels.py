@@ -111,6 +111,16 @@ class FactProjection(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "conflicting"):
             mc_spell_facts.project(contradictory, self.spells)
 
+    def test_missing_shadow_resistance_aura_refuses_generation(self):
+        missing = copy.deepcopy(self.training)
+        missing["Paladin"]["spells"]["above"] = [
+            row
+            for row in missing["Paladin"]["spells"]["above"]
+            if row["spell"] != 19876
+        ]
+        with self.assertRaisesRegex(ValueError, "missing required.*19876"):
+            mc_spell_facts.project(missing, self.spells)
+
     def test_missing_boss_data_refuses_generation(self):
         del self.spells[19703]
         with self.assertRaisesRegex(ValueError, "missing boss"):
