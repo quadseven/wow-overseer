@@ -594,6 +594,43 @@ def held_args(key: str) -> tuple:
     return (WINDOW_HOURS, key, DECISION, WINDOW_HOURS)
 
 
+# THE DOORS LEFT WITH NO RUN FORMED (campaignplan.unformed_rest, #1261): the
+# breaker's leaves inside the window written after the family's newest run
+# ended (an open run reads as now, so nothing counts while one is under way),
+# less RUN_LEAVE_GRACE_MINUTES, because the leave after two stalls is written
+# as the second stalled run closes. Then the seconds since the newest leave.
+RUN_LEAVE_GRACE_MINUTES = 10
+UNFORMED_SQL = (
+    "SELECT COUNT(*) AS n, TIMESTAMPDIFF(SECOND, MAX(created_at), NOW()) AS age_s "
+    "FROM overseer_dungeon_pace WHERE family = %s AND decision = %s "
+    "AND created_at >= NOW() - INTERVAL %s HOUR AND created_at > COALESCE(("
+    "SELECT MAX(COALESCE(ended_at, NOW())) FROM overseer_dungeon_run "
+    "WHERE leader_name IN ({holes})) + INTERVAL %s MINUTE, '1970-01-01')"
+)
+
+
+def unformed_args(key: str, names) -> tuple:
+    """UNFORMED_SQL's arguments (the `{holes}` count is len(names))."""
+    return (
+        key,
+        DECISION,
+        WINDOW_HOURS,
+        *[str(n) for n in names],
+        RUN_LEAVE_GRACE_MINUTES,
+    )
+
+
+def unformed(rows) -> tuple | None:
+    """campaignplan.Facts.unformed off UNFORMED_SQL's row: (leaves, seconds
+    since the newest), or None when unread."""
+    if not rows:
+        return None
+    row = rows[0]
+    count = int(row.get("n") or 0)
+    age = row.get("age_s")
+    return count, None if age is None else int(age)
+
+
 def held_barred(rows: list) -> dict:
     """Run keyword -> why the planner refuses a door the breaker left inside
     the window (campaignplan.Facts.stalled), from HELD_SQL's rows."""

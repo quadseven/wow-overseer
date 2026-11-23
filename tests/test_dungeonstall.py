@@ -1557,6 +1557,7 @@ class TheDoorWedgeReads(unittest.TestCase):
             {
                 "campaignqueue": campaignqueue,
                 "dungeonstall": stall,
+                "raidrun": raidrun,
                 "jobs": jobs,
                 "time": types.SimpleNamespace(
                     monotonic=lambda: clock[0], time=lambda: clock[0]
@@ -1684,6 +1685,7 @@ class TheDoorWedgeReads(unittest.TestCase):
             {
                 "campaignqueue": campaignqueue,
                 "dungeonstall": stall,
+                "raidrun": raidrun,
                 "jobs": jobs,
                 "time": types.SimpleNamespace(
                     monotonic=lambda: clock[0], time=lambda: clock[0]
@@ -2361,6 +2363,7 @@ class TheErrandARunWaitsOn(unittest.TestCase):
             "campaignqueue": campaignqueue,
             "dungeonstall": stall,
             "jobs": jobs,
+            "raidrun": raidrun,
             "log": types.SimpleNamespace(info=lambda *a, **k: None),
             "time": types.SimpleNamespace(monotonic=lambda: clock[0]),
             "_jobs_of": lambda names: {n: "dungeon:maraudon-orange" for n in names},
