@@ -2440,3 +2440,41 @@ class ASummonedObjectEnder(unittest.TestCase):
         p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
         self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+class BloodscalpEars(unittest.TestCase):
+    def test_item_objective_hunts_its_world_row_creatures(self):
+        stranglethorn_vale = 33
+        bloodscalp = quest(
+            189, stranglethorn_vale, 35, min_level=30, title="Bloodscalp Ears"
+        )
+        bloodscalp.update(item1=1519, item_count1=15)
+        entries = (587, 588, 595, 597, 660, 671, 694, 697, 699, 701, 702)
+        cat = world(
+            extra_quests=[bloodscalp],
+            extra_givers=[
+                giver(189, "start", 5189, 130, 0, 0),
+                giver(189, "end", 5190, 130, 0, 0),
+            ],
+            extra_spawns=[
+                spawn(6000 + entry, entry, entry, 0, level=35) for entry in entries
+            ],
+            extra_loot=[{"item": 1519, "entry": entry} for entry in entries],
+        )
+        member = mirra(
+            level=35,
+            zone_id=stranglethorn_vale,
+            quest_log={189: questers.STATUS_INCOMPLETE},
+            quest_progress={189: 0},
+            quest_item_objectives={189: {1519: 0}},
+        )
+
+        move = questers._hunt(cat, member, frozenset(), frozenset())
+        plan = questers.Plan(member.name, move=move)
+        step = questers.step_for(member, plan.move, 0, cat.quest(189))
+
+        self.assertEqual((plan.move.kind, plan.move.spot.entry), (classquest.HUNT, 587))
+        self.assertEqual(
+            step.rows[0].command,
+            "hunt-spawn creature:587 item:1519 count:15 max:%d" % classhunt.MAX_SECONDS,
+        )
