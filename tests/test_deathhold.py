@@ -143,3 +143,67 @@ class TheWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def death_rows(zone, count, name=NAME, level=60, start_age=60, step=300):
+    return [
+        {
+            "name": name,
+            "zone": zone,
+            "map": 1,
+            "level": level,
+            "killer": "Boar",
+            "age": start_age + i * step,
+        }
+        for i in range(count)
+    ]
+
+
+def flagged(rows, memos=None, roster=(), level=60):
+    levels = {NAME: level}
+    return deathhold.plan(
+        deathloop.loops(rows, levels),
+        levels,
+        memos or {},
+        NOW,
+        roster,
+        forming=deathloop.forming(rows, levels),
+    )
+
+
+class AFormingLoop(unittest.TestCase):
+    def test_three_deaths_in_a_zone_are_flagged(self):
+        out = flagged(death_rows(1377, 3))
+        self.assertEqual([1377], [w.value["zone"] for w in out.writes])
+
+    def test_two_deaths_are_not(self):
+        self.assertEqual((), flagged(death_rows(1377, 2)).writes)
+
+    def test_three_deaths_across_zones_are_not(self):
+        rows = death_rows(1377, 2) + death_rows(440, 1, start_age=900)
+        self.assertEqual((), flagged(rows).writes)
+
+    def test_a_roster_member_is_never_flagged(self):
+        self.assertEqual((), flagged(death_rows(1377, 3), roster={NAME}).writes)
+
+    def test_a_level_gained_is_not_a_loop(self):
+        self.assertEqual((), flagged(death_rows(1377, 3), level=61).writes)
+
+    def test_the_escape_step_still_needs_five(self):
+        rows = death_rows(1377, 4)
+        self.assertEqual({}, deathloop.loops(rows, {NAME: 60}))
+        self.assertIn(NAME, deathloop.forming(rows, {NAME: 60}))
+
+    def test_a_second_zone_is_flagged_and_the_first_row_is_not_rewritten(self):
+        memos = {NAME: ({"map": 1, "zone": 440, "level": 60}, NOW - 7200)}
+        rows = death_rows(440, 3, start_age=3000) + death_rows(1377, 3)
+        out = flagged(rows, memos)
+        self.assertEqual([1377], [w.value["zone"] for w in out.writes])
+        self.assertEqual(NOW, out.writes[0].since)
+
+    def test_a_standing_row_for_the_same_zone_is_kept(self):
+        memos = {NAME: ({"map": 1, "zone": 1377, "level": 60}, NOW - 7200)}
+        self.assertEqual((), flagged(death_rows(1377, 3), memos).writes)
+
+    def test_the_writer_passes_the_forming_loops(self):
+        self.assertIn("forming=", function_source("_flag_death_loop_holds"))

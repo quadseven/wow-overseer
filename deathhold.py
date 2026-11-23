@@ -83,14 +83,24 @@ def _same_zone(old, loop) -> bool:
     )
 
 
-def plan(loops, levels, memos, now, roster=()) -> Plan:
+def _newest(a, b):
+    """The loop whose newest death is the more recent, or the one there is."""
+    if a is None or b is None:
+        return a or b
+    return b if b.last_age < a.last_age else a
+
+
+def plan(loops, levels, memos, now, roster=(), forming=None) -> Plan:
     """What to write for the members this pass judged.
 
     `loops` name -> deathloop.Loop; `levels` name -> the member's level now,
     for every member this pass read (only those are touched, so another
     cohort's rows are left alone); `memos` name -> (value, since) for this
-    KIND's unexpired rows; `roster` the roster and family names."""
+    KIND's unexpired rows; `roster` the roster and family names; `forming`
+    name -> deathloop.Loop for a loop still forming (#3196): the member's
+    newest loop zone, formed or forming, is the one flagged."""
     loops = loops or {}
+    forming = forming or {}
     memos = memos or {}
     roster = set(roster or ())
     writes = []
@@ -102,7 +112,7 @@ def plan(loops, levels, memos, now, roster=()) -> Plan:
             if old is not None:
                 drops.append(name)
             continue
-        loop = loops.get(name)
+        loop = _newest(loops.get(name), forming.get(name))
         if old is not None:
             gained = isinstance(old_value, dict) and _int(levels.get(name)) > _int(
                 old_value.get("level"), 1 << 30

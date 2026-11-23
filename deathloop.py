@@ -62,6 +62,9 @@ QUIET_SECONDS = 2 * 3600
 # How far back the deaths are read: a window that ended up to QUIET_SECONDS ago
 # is still seen whole.
 READ_SECONDS = WINDOW_SECONDS + QUIET_SECONDS
+# Three deaths in one zone inside an hour is a loop forming (#3196): the
+# realm's death-loop figure counts it, and `forming` judges it for the hold.
+FORMING_MIN_DEATHS = 3
 # A dozen deaths in one zone inside a day is a slow loop (#2615).
 SLOW_MIN_DEATHS = 12
 SLOW_WINDOW_SECONDS = 24 * 3600
@@ -179,11 +182,11 @@ def _top_killer(window) -> str:
     return min(counts, key=lambda k: (-counts[k], newest[k], k))
 
 
-def _zone_loop(name, deaths, level_now) -> Loop | None:
+def _zone_loop(name, deaths, level_now, min_deaths=MIN_DEATHS) -> Loop | None:
     """The newest window of one zone's deaths (newest first) that is a loop."""
     for i, newest in enumerate(deaths):
         window = [d for d in deaths[i:] if d.age - newest.age <= WINDOW_SECONDS]
-        if len(window) < MIN_DEATHS:
+        if len(window) < min_deaths:
             continue
         levels = {d.level for d in window}
         if len(levels) != 1:
@@ -433,6 +436,32 @@ def loops(rows, levels=None, slow=False) -> dict:
             out[name] = min(
                 found, key=lambda lp: (lp.slow, lp.last_age, -lp.deaths, lp.zone)
             )
+    return out
+
+
+def forming(rows, levels=None) -> dict:
+    """name -> Loop for every member with FORMING_MIN_DEATHS or more deaths in
+    one zone inside an hour (#3196), by the same level and quiet rules as
+    `loops`, over the newest READ_SECONDS of rows. The hold flag (deathhold)
+    takes these beside the loops; the escape step never does. Pure."""
+    levels = levels or {}
+    out = {}
+    for name, deaths in _deaths_of(rows).items():
+        by_zone: dict = {}
+        for d in deaths:
+            if d.age <= READ_SECONDS:
+                by_zone.setdefault(d.zone, []).append(d)
+        found = [
+            loop
+            for zone, zone_deaths in by_zone.items()
+            if zone and zone_deaths[0].age <= QUIET_SECONDS
+            for loop in (
+                _zone_loop(name, zone_deaths, levels.get(name), FORMING_MIN_DEATHS),
+            )
+            if loop is not None
+        ]
+        if found:
+            out[name] = min(found, key=lambda lp: (lp.last_age, -lp.deaths, lp.zone))
     return out
 
 
