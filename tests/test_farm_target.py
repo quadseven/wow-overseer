@@ -54,7 +54,10 @@ class TheMemberTargetIsItsOwn(unittest.TestCase):
         self.assertEqual(farmjob.target_for({"mining": 900}), "")
 
     def test_a_member_with_no_gathering_trade_has_no_target(self):
-        self.assertEqual(farmjob.target_for({"skinning": 14, "leatherworking": 57}), "")
+        # Skinning is now a farm trade, so a skinner should get a skinning target
+        self.assertEqual(
+            farmjob.target_for({"skinning": 14, "leatherworking": 57}), "farm:skinning"
+        )
         self.assertEqual(farmjob.target_for({"tailoring": 155}), "")
         self.assertEqual(farmjob.target_for(None), "")
 

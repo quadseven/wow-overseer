@@ -246,11 +246,11 @@ IMPLEMENTED = frozenset(
     {"quest", "dungeon", "train", "craft", "raid prep", "fish", "town run", "farm"}
 )
 
-# The job a farm order writes: `farm:<item entry>` or `farm:<mining|herbalism>`
+# The job a farm order writes: `farm:<item entry>` or `farm:<mining|herbalism|skinning>`
 # (#2417). The suffix rules are farmjob.order_of's; they are repeated in
 # `farm_order` below because this module imports nothing of the bridge's.
 FARM_PREFIX = "farm:"
-FARM_SKILLS = ("mining", "herbalism")
+FARM_SKILLS = ("mining", "herbalism", "skinning")
 
 # What a bare `farm` order is told, by the bridge and by the site alike: it
 # names nothing, and farmjob would end it on its first pass.

@@ -267,16 +267,19 @@ class GatherTarget(unittest.TestCase):
         with mock.patch("jobs.can_set", side_effect=lambda m: m == "quest"):
             job, why = profloop.gather_job(self.SKILLS)
         self.assertEqual(job, "quest")
-        self.assertIn("mining", why)
+        self.assertIn("skinning", why)
 
     def test_the_trade_furthest_behind_once_farm_is_wired(self):
         with mock.patch("jobs.can_set", return_value=True):
-            self.assertEqual(profloop.gather_job(self.SKILLS)[0], "farm:mining")
+            self.assertEqual(profloop.gather_job(self.SKILLS)[0], "farm:skinning")
             herbs = {"Uzza": {"herbalism": 124}, "Zug": {"mining": 160}}
             self.assertEqual(profloop.gather_job(herbs)[0], "farm:herbalism")
 
     def test_no_node_trade_roams(self):
-        self.assertEqual(profloop.gather_job({"Bork": {"skinning": 14}})[0], "quest")
+        # Skinning is now a farm trade, so a skinner gets a skinning target
+        self.assertEqual(
+            profloop.gather_job({"Bork": {"skinning": 14}})[0], "farm:skinning"
+        )
 
     def test_kill_drop_shortage_chooses_farm_item(self):
         short = reagentplan.Short(
@@ -330,7 +333,7 @@ class GatherTarget(unittest.TestCase):
         )
         plan = reagentplan.Plan("Og", 3839, True, 2, (), (thin,))
         self.assertEqual(
-            "farm:mining", profloop.gather_job(self.SKILLS, {"Og": plan})[0]
+            "farm:skinning", profloop.gather_job(self.SKILLS, {"Og": plan})[0]
         )
 
     def test_the_bigger_gap_is_farmed_first_across_short_and_thin(self):
@@ -436,7 +439,7 @@ class GatherTarget(unittest.TestCase):
         )
         plan = reagentplan.Plan("Mizu", 12053, True, 0, (short,))
         job, _ = profloop.gather_job(self.SKILLS, {"Mizu": plan})
-        self.assertEqual("farm:mining", job)
+        self.assertEqual("farm:skinning", job)
 
     def test_node_reagent_shortage_falls_back_to_node_trade(self):
         short = reagentplan.Short(
@@ -448,7 +451,7 @@ class GatherTarget(unittest.TestCase):
         )
         plan = reagentplan.Plan("Uzza", 2330, True, 0, (short,))
         job, _ = profloop.gather_job(self.SKILLS, {"Uzza": plan})
-        self.assertEqual("farm:mining", job)
+        self.assertEqual("farm:skinning", job)
 
 
 class TheTownErrandTakesTheLoopsReason(unittest.TestCase):

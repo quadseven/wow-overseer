@@ -57,6 +57,7 @@ import jobs
 
 PREFIX = jobs.FARM_PREFIX
 SKILLS = gatheraim.AIMABLE
+FARM_SKILLS = jobs.FARM_SKILLS
 
 # How many of the material end the job when no count was given. Twenty is the
 # live acceptance number on #2417, and small enough that a first session ends
@@ -127,7 +128,7 @@ WAIT = "wait"
 def job_for(what) -> str | None:
     """The job string for an item entry or a skill name, or None."""
     text = str(what or "").strip().lower()
-    if text in SKILLS:
+    if text in FARM_SKILLS:
         return PREFIX + text
     if text.isdigit() and not text.startswith("0") and len(text) <= 9:
         return PREFIX + text
@@ -143,7 +144,7 @@ def order_of(job) -> tuple:
     if not text.startswith(PREFIX):
         return 0, ""
     what = text[len(PREFIX) :]
-    if what in SKILLS:
+    if what in FARM_SKILLS:
         return 0, what
     if what.isdigit() and not what.startswith("0") and len(what) <= 9:
         return int(what), ""
@@ -165,18 +166,57 @@ def skill_of_lock(lock_id) -> tuple:
 
 
 def best_skills(skills) -> dict:
-    """{skill name: best value in the family} for the aimable trades."""
-    return dict(gatheraim.strongest_gatherers(skills))
+    """{skill name: best value in the family} for the farm trades."""
+    best = dict(gatheraim.strongest_gatherers(skills))
+    # Add skinning if present
+    for holdings in (skills or {}).values():
+        for name, value in (holdings or {}).items():
+            if name == "skinning":
+                try:
+                    have = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if have > best.get("skinning", 0):
+                    best["skinning"] = have
+    return best
 
 
 def skill_locks(skill_name, value) -> list:
-    """Locks of `skill_name` that `value` can open and that still give skill."""
+    """Locks of `skill_name` that `value` can open and that still give skill.
+
+    For skinning, returns the creature levels that can be skinned and still
+    give skill, since skinning uses creature levels instead of node locks.
+    """
+    if skill_name == "skinning":
+        return skinning_levels(value)
     out = []
     for lock in gatherband.reachable_locks(skill_name, value):
         band = gatherband.band_for(lock, skill_name)
         if band is not None and int(value) < band + GREY_AFTER:
             out.append(lock)
     return out
+
+
+def skinning_levels(value) -> list:
+    """Creature levels that `value` in skinning can skin and that still give skill.
+
+    Uses the same formula as guildjobs.skinnable_level: a creature of level L
+    needs skinning (L - 10) * 10 below 100 skill and L * 5 from there.
+    A skinner gains skill up to 5 levels above the creature's required level.
+    """
+    try:
+        have = int(value)
+    except (TypeError, ValueError):
+        return []
+    if have <= 0:
+        return []
+    # Highest creature level this skill can skin
+    max_level = have // 10 + 10 if have < 100 else have // 5
+    # Gives skill up to 5 levels above the creature's required level (grey after)
+    # The lowest level that still gives skill is max_level - 5 (approximately)
+    # We return all levels from 1 to max_level that still give skill
+    min_level_for_skill = max(1, max_level - 5)
+    return list(range(min_level_for_skill, max_level + 1))
 
 
 def advances(job, skills) -> bool:
@@ -198,7 +238,7 @@ def target_for(skills) -> str:
     and the other trades with no node to walk to) has no farm target: "".
     """
     best = None
-    for name in SKILLS:
+    for name in FARM_SKILLS:
         try:
             have = int((skills or {}).get(name))
         except (TypeError, ValueError):
@@ -395,7 +435,11 @@ def usable(order, spawns, skills) -> tuple:
     For an item, the lowest band among its nodes is what the refusal names, so
     "Dreamfoil needs herbalism 270, the best herbalist has 200" is said rather
     than "no field".
+
+    For a skinning skill order, `spawns` should be creature spawns (farmjob.Creature).
     """
+    if order.skill == "skinning":
+        return usable_skinning(order, spawns, skills)
     best = best_skills(skills)
     if order.skill and order.skill not in best:
         return [], "nobody in the family has %s" % order.skill
@@ -424,6 +468,48 @@ def usable(order, spawns, skills) -> tuple:
     return [], (
         "%s needs %s %d at its lowest node and the family's best is %s, so no "
         "node of it can be opened" % (_what(order), name, band, best.get(name, "none"))
+    )
+
+
+def usable_skinning(order, creatures, skills) -> tuple:
+    """(creature spawns that can be skinned, the refusal when none can).
+
+    `creatures` are farmjob.Creature spawns with `level` set. The family's best
+    skinning value determines which creatures can be skinned and still give skill.
+    """
+    best = best_skills(skills)
+    skinning_value = best.get("skinning")
+    if skinning_value is None:
+        return [], "nobody in the family has skinning"
+    try:
+        have = int(skinning_value)
+    except (TypeError, ValueError):
+        return [], "nobody in the family has skinning"
+    if have <= 0:
+        return [], "nobody in the family has skinning"
+    # Highest creature level this skill can skin
+    max_level = have // 10 + 10 if have < 100 else have // 5
+    # Gives skill up to 5 levels above the creature's required level
+    min_level_for_skill = max(1, max_level - 5)
+    # Also respect the family's danger ceiling (weakest member + LEVEL_MARGIN)
+    lowest_member = min(
+        (int(v) for v in skills.values() if isinstance(v, dict) for v in v.values()),
+        default=0,
+    )
+    danger_ceiling = lowest_member + LEVEL_MARGIN if lowest_member else 0
+    open_ = []
+    for creature in creatures or ():
+        level = int(creature.level or 0)
+        if level < min_level_for_skill or level > max_level:
+            continue
+        if danger_ceiling and level > danger_ceiling:
+            continue
+        open_.append(creature)
+    if open_:
+        return open_, ""
+    return [], (
+        "%s needs skinning %d to %d (have %d) and the family's danger ceiling is %d"
+        % (_what(order), min_level_for_skill, max_level, have, danger_ceiling)
     )
 
 

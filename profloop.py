@@ -155,7 +155,7 @@ READY_CASTS = craft_rhythm.STOCK_CASTS
 FRUITLESS_SECONDS = 2 * 3600.0
 
 # The node trades a farm job can name (#2417), in the order a tie is broken.
-FARM_TRADES = ("mining", "herbalism")
+FARM_TRADES = ("mining", "herbalism", "skinning")
 
 
 def families(env=None) -> frozenset:

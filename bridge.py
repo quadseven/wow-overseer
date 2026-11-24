@@ -43850,6 +43850,7 @@ def _farm_reads(names: list, leader: str, item: int, skill: str, since: float,
     """
     skills = _fetch_trade_skills(names)
     leader_at = _fetch_positions([leader]).get(leader)
+    creatures = []
     if item:
         spawns = _farm_item_spawns(item)
         name = _farm_item_name(item)
@@ -43859,12 +43860,23 @@ def _farm_reads(names: list, leader: str, item: int, skill: str, since: float,
         best = farmjob.best_skills(skills).get(skill)
         spawns = []
         if best is not None and leader_at and leader_at.get("map_id") is not None:
-            spawns = _survey_job_nodes(int(leader_at["map_id"]),
-                                       farmjob.skill_locks(skill, best))
+            if skill == "skinning":
+                # For skinning, skill_locks returns creature levels
+                level_range = farmjob.skill_locks(skill, best)
+                if level_range:
+                    min_level = min(level_range)
+                    max_level = max(level_range)
+                    spawns = _survey_skinning_beasts(
+                        int(leader_at["map_id"]), min_level, max_level,
+                        float(leader_at.get("pos_x") or 0.0),
+                        float(leader_at.get("pos_y") or 0.0))
+            else:
+                spawns = _survey_job_nodes(int(leader_at["map_id"]),
+                                           farmjob.skill_locks(skill, best))
     levels = _fetch_family_levels(names)
     # A KILL DROP (#2524): an item no node holds is read as creature spawns.
     creatures = (_farm_item_creatures(item, leader_at, levels)
-                 if item and not spawns else [])
+                 if item and not spawns else creatures)
     zone_levels = {}
     order = farmjob.Order(job="", item=item, skill=skill, name=name)
     open_, _refused = (farmjob.usable_kills(order, creatures, levels) if creatures
@@ -43922,6 +43934,45 @@ def _survey_gather_nodes(leader: str, lock_ids):
             map_id=int(row["map_id"]), zone_id=int(row["zone_id"]),
             x=float(row["x"]), y=float(row["y"]), z=float(row["z"]),
             lock_id=int(row["lock_id"]), name=str(row["name"] or ""))
+        for row in cur.fetchall()]
+
+
+# SKINNING SKILL SURVEY: for `farm:skinning` skill orders, find skinnable beasts
+# in the level range that the family's best skinner can skin and still gain skill.
+_FARM_SKINNING_SKILL_SQL = (
+    "SELECT DISTINCT c.guid AS guid, c.map AS map_id, c.zoneId AS zone_id, "
+    "c.position_x AS x, c.position_y AS y, c.position_z AS z, "
+    "ct.name AS name, ct.maxlevel AS level, 100.0 AS chance "
+    "FROM acore_world.creature_template ct "
+    "JOIN acore_world.creature c ON c.id = ct.entry "
+    "WHERE ct.skinloot > 0 AND ct.maxlevel BETWEEN %s AND %s "
+    "AND ct.`rank` = 0 AND (ct.type_flags & 768) = 0 AND c.map = %s "
+    "ORDER BY POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2) "
+    "LIMIT " + str(FARM_CREATURE_ROWS)
+)
+
+
+def _survey_skinning_beasts(map_id: int, min_level: int, max_level: int,
+                            leader_x: float, leader_y: float) -> list:
+    """Every skinnable beast spawn on one map within the level range, with its
+    spawn id, for a walk-to-spawn row. Used for `farm:skinning` skill orders.
+    """
+    if min_level > max_level:
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_FARM_SKINNING_SKILL_SQL,
+                        (int(min_level), int(max_level), int(map_id),
+                         float(leader_x), float(leader_y)))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return []
+            raise
+        return [farmjob.Creature(
+            map_id=int(row["map_id"]), zone_id=int(row["zone_id"] or 0),
+            x=float(row["x"]), y=float(row["y"]), z=float(row["z"]),
+            lock_id=0, name=str(row["name"] or ""), guid=int(row["guid"]),
+            level=int(row["level"] or 0), chance=float(row["chance"] or 0.0))
             for row in cur.fetchall()]
 
 

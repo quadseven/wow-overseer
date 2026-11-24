@@ -62,8 +62,10 @@ class TheOrderNamesItsMaterial(unittest.TestCase):
     def test_an_item_entry_and_a_skill_are_orders(self):
         self.assertEqual(farmjob.job_for(13463), "farm:13463")
         self.assertEqual(farmjob.job_for("Mining"), "farm:mining")
+        self.assertEqual(farmjob.job_for("Skinning"), "farm:skinning")
         self.assertEqual(farmjob.order_of("farm:13463"), (13463, ""))
         self.assertEqual(farmjob.order_of("farm:herbalism"), (0, "herbalism"))
+        self.assertEqual(farmjob.order_of("farm:skinning"), (0, "skinning"))
 
     def test_anything_else_names_nothing(self):
         for job in (
@@ -71,7 +73,6 @@ class TheOrderNamesItsMaterial(unittest.TestCase):
             "farm:",
             "farm:0",
             "farm:013",
-            "farm:skinning",
             "farm:dreamfoil",
             "quest",
             "",
@@ -80,7 +81,7 @@ class TheOrderNamesItsMaterial(unittest.TestCase):
         ):
             self.assertEqual(farmjob.order_of(job), (0, ""), job)
             self.assertFalse(farmjob.is_farm_job(job), job)
-        self.assertIsNone(farmjob.job_for("skinning"))
+        self.assertEqual(farmjob.job_for("skinning"), "farm:skinning")
 
     def test_it_fits_the_job_column(self):
         self.assertLessEqual(len(farmjob.job_for(123456789)), jobs.COLUMN_WIDTH)
@@ -332,9 +333,10 @@ class TheJobIsWired(unittest.TestCase):
         self.assertIn("farm", jobs.IMPLEMENTED)
         self.assertTrue(jobs.can_set("farm:13463"))
         self.assertTrue(jobs.can_set("farm:mining"))
-        self.assertFalse(jobs.can_set("farm:skinning"))
+        self.assertTrue(jobs.can_set("farm:skinning"))
         self.assertEqual(jobs.resolve("farm:13463"), "farm:13463")
         self.assertEqual(jobs.resolve("farm mining"), "farm:mining")
+        self.assertEqual(jobs.resolve("farm skinning"), "farm:skinning")
         self.assertEqual(jobs.parse_order("job farm:13463"), "farm:13463")
         self.assertTrue(jobs.is_farm_job("farm:13463"))
         self.assertIn("farm 13463", jobs.describe("farm:13463"))
@@ -345,10 +347,10 @@ class TheJobIsWired(unittest.TestCase):
             "farm:13463",
             "farm:mining",
             "farm:herbalism",
+            "farm:skinning",
             "farm:0",
             "farm:x",
             "farm",
-            "farm:skinning",
         ):
             self.assertEqual(
                 jobs.farm_order(job) is not None, farmjob.is_farm_job(job), job
