@@ -923,6 +923,41 @@ class Broken(unittest.TestCase):
             "requires crafted Seasoned Wolf Kabobs (item 1017); questers cannot cook",
         )
 
+    def _failed_reason(self, cat, qid):
+        return questers._broken_reason(
+            cat.quest(qid),
+            cat.facts[qid],
+            questers.STATUS_FAILED,
+            0,
+            frozenset(),
+            {},
+        )
+
+    def test_a_failed_quest_names_its_objective_off_the_quests_map(self):
+        # The quest is given on map 0; its boars stand on map 1 only.
+        cat = world(
+            extra_quests=[quest(258, ELWYNN, 17, min_level=11, kill=1192, count=5)],
+            extra_givers=[giver(258, "start", 1258, 140, 0, 0)],
+            extra_spawns=[spawn(3001, 1192, 0, 0, map_id=1, name="Boar")],
+        )
+        self.assertEqual(cat.facts[258].home_map, 0)
+        self.assertEqual(
+            self._failed_reason(cat, 258),
+            questers.FAILED
+            + "; its objective creature 1192 has no spawn on the quest's map "
+            "(1 on other maps)",
+        )
+
+    def test_a_failed_quest_with_its_objective_on_its_map_keeps_the_plain_reason(
+        self,
+    ):
+        cat = world(
+            extra_quests=[quest(258, ELWYNN, 17, min_level=11, kill=1192, count=5)],
+            extra_givers=[giver(258, "start", 1258, 140, 0, 0)],
+            extra_spawns=[spawn(3001, 1192, 0, 0, map_id=0, name="Boar")],
+        )
+        self.assertEqual(self._failed_reason(cat, 258), questers.FAILED)
+
     def test_quest_101_carries_no_hard_coded_reason(self):
         """The Totem of Infliction is a plain three-item collect quest in the
         world rows (items 1129, 1130, 2378, no item use), so it is judged like
