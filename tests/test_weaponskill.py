@@ -14,6 +14,7 @@ import weaponskill as ws
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (ROOT / "bridge.py").read_text(encoding="utf-8")
+WEAPONSKILL = (ROOT / "weaponskill.py").read_text(encoding="utf-8")
 
 FACTS = {
     "Og": {"class": "mage", "level": 35, "equipped": {"chest": 16, "offhand": 22},
@@ -181,13 +182,12 @@ class LearnedSkillReopensEquipRetries(unittest.TestCase):
 class TheBridge(unittest.TestCase):
     def test_the_loop_runs_and_defines_its_helpers(self):
         self.assertEqual(1, BRIDGE.count('_Pass("_weapon_skill_loop"),'))
-        names = {
+        bridge_names = {
             n.name
             for n in ast.walk(ast.parse(BRIDGE))
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
         for fn in (
-            "_weapon_skill_once",
             "_weapon_skill_changes",
             "_fetch_bag_weapons",
             "_fetch_weapon_masters",
@@ -195,7 +195,13 @@ class TheBridge(unittest.TestCase):
             "_weapon_trains_applied",
             "_insert_weapon_equip",
         ):
-            self.assertIn(fn, names)
+            self.assertIn(fn, bridge_names)
+        pass_names = {
+            n.name
+            for n in ast.walk(ast.parse(WEAPONSKILL))
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        self.assertIn("run_once", pass_names)
 
     def test_equip_retry_history_reopens_after_applied_skill_training(self):
         self.assertIn("weaponskill.reopen_equip_attempts", BRIDGE)

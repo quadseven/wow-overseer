@@ -24,6 +24,7 @@ import weaponskill
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (ROOT / "bridge.py").read_text(encoding="utf-8")
+WEAPONSKILL = (ROOT / "weaponskill.py").read_text(encoding="utf-8")
 
 MAGE, PRIEST, HUNTER = 8, 5, 3
 SWORDS, BOWS = 43, 45
@@ -456,10 +457,15 @@ class TheIsland(unittest.TestCase):
         )
 
     def test_the_bridge_reads_the_ground_of_every_walker(self):
-        self.assertEqual(
-            3,
-            BRIDGE.count('int(at["map_id"]), at)') + BRIDGE.count("int(m.map_id), at)"),
+        bridge_reads = (
+            BRIDGE.count('int(at["map_id"]), at)')
+            + BRIDGE.count("int(m.map_id), at)")
         )
+        pass_reads = (
+            WEAPONSKILL.count('int(at["map_id"]), at)')
+            + WEAPONSKILL.count("int(m.map_id), at)")
+        )
+        self.assertEqual(3, bridge_reads + pass_reads)
 
 
 def cross_row(action, dest, age, **over):
@@ -509,15 +515,15 @@ class TheBridgeReadsTheFarMaster(unittest.TestCase):
         self.assertIn("weaponskill.far_maps(", body)
 
     def test_the_family_crosses_when_no_local_master_teaches_the_skill(self):
-        body = BRIDGE.split("async def _weapon_skill_once", 1)[1].split(
-            "\n    async def _weapon_skill_train", 1
+        body = WEAPONSKILL.split("async def run_once", 1)[1].split(
+            "\n    async def _train", 1
         )[0]
         expected = (
-            "weaponskill.far_maps(",
-            "weaponskill.choose_far_master(",
+            "far_maps(",
+            "choose_far_master(",
             "guildjobs.weapon_cross_step(",
-            "_fetch_weapon_crossings, names",
-            "self._class_cross_row(",
+            "fetch_weapon_crossings, names",
+            "_class_cross_row(",
         )
         self.assertTrue(all(part in body for part in expected))
 

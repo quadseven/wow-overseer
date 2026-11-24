@@ -19,11 +19,28 @@ PURE MODULE: rows in, decisions out. bridge.py reads and writes.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import dataclass
+from types import SimpleNamespace
+from typing import Any, AsyncContextManager, Protocol, runtime_checkable
+
+import townerrand
+import travel
+
+log = logging.getLogger(__name__)
 
 # item_template.class for weapons. Kept local so this decision module does not
 # import gear.py and create a dependency cycle.
 ITEM_CLASS_WEAPON = 2
+
+# The town radius the core applies to a trainer interaction, the same value the
+# bridge pass used before extraction. Kept local so the pass does not read a
+# bridge constant.
+TOWN_COUNTER_YARDS = 8
+
+# The claimant the weapon-skill pass uses when it aims the leader at a master.
+WEAPON_SKILL_CLAIMANT = "weapon master"
 
 # item_template.subclass for a weapon -> (SkillLine id, the trainer spell that
 # teaches it). Wands are left out: no trainer sells them, the class has them.
@@ -528,3 +545,161 @@ def reopen_equip_attempts(history, learned, carried):
         else:
             remaining.append(attempt)
     return tuple(remaining), tuple(reopened)
+
+
+@runtime_checkable
+class _BridgeLike(Protocol):
+    """The bridge adapter a WeaponSkillPass talks to.
+
+    The pass reads nothing else on the Bridge: every world read, every town
+    errand transition, and every command write goes through this interface.
+    """
+
+    def family_of(self, cohort=None) -> tuple[list[str], str]: ...
+    def fetch_gearup_facts(self, names: list) -> dict: ...
+    def fetch_bag_weapons(self, names: list) -> list: ...
+    def town_errand_state(self, key: Any) -> Any: ...
+    async def _town_errand_yield_for_weapon(self, state: Any, names: list,
+                                            leader: str, slot: Any,
+                                            label: str) -> bool: ...
+    def _cohort_town_slot(self, cohort: Any) -> Any: ...
+    def _town_errand_lock(self, names: list) -> AsyncContextManager[Any]: ...
+    async def _mid_run(self, names: list) -> bool: ...
+    def fetch_positions(self, names: list) -> dict: ...
+    def fetch_teams(self, names: list) -> dict: ...
+    def fetch_weapon_masters(self, at: dict, spells: list,
+                             also_maps: tuple) -> list: ...
+    def fetch_weapon_crossings(self, names: list) -> tuple: ...
+    def fetch_weapon_trains_applied(self, names: list) -> list: ...
+    def insert_weapon_equip(self, row: dict) -> int: ...
+    def weapon_train_asked(self, need: Any) -> bool: ...
+    def insert_weapon_train(self, need: Any) -> int: ...
+    async def _claim_town_slot(self, claimant: str, character: str,
+                               target: str, urgent: bool,
+                               cohort: Any) -> bool: ...
+    async def _class_cross_row(self, step: Any, row: Any) -> None: ...
+
+
+class WeaponSkillPass:
+    """The weapon-skill pass: equip what was trained, train a member standing
+    in reach of the weapon master, or walk the leader to the master.
+
+    One entry point, `run_once`. It reaches the Bridge only through
+    `_BridgeLike`; nothing else on Bridge is read.
+    """
+
+    def __init__(self, bridge: _BridgeLike) -> None:
+        self._bridge = bridge
+
+    async def run_once(self, cohort=None, _locked=False) -> None:
+        """One family: equip what was trained, train who stands in reach, or
+        walk the leader to the weapon master."""
+        if not _locked and hasattr(self._bridge, "_town_errand_locks"):
+            names, _leader = await asyncio.to_thread(
+                self._bridge.family_of, cohort)
+            if not names:
+                return
+            async with self._bridge._town_errand_lock(names):
+                await self.run_once(cohort, _locked=True)
+            return
+        names, leader = await asyncio.to_thread(self._bridge.family_of, cohort)
+        if not names or not leader:
+            return
+        key = getattr(cohort, "key", None)
+        label = " for family %s" % key if key else ""
+        await self._equip(names, label)
+        if await self._bridge._mid_run(names):
+            return
+        facts = await asyncio.to_thread(self._bridge.fetch_gearup_facts, names)
+        weapon_needs = needs(
+            facts, await asyncio.to_thread(self._bridge.fetch_bag_weapons, names))
+        if not weapon_needs:
+            return
+        critical = any(
+            need.slot == "mainhand" and need.why == "its mainhand is empty"
+            for need in weapon_needs
+        )
+        key = tuple(sorted(names))
+        state = self._bridge.town_errand_state(key)
+        if state and state.active:
+            if not critical:
+                return
+            if state.phase not in (
+                    townerrand.GO, townerrand.GATHER, townerrand.STEPS):
+                return
+            slot = self._bridge._cohort_town_slot(cohort)
+            if not await self._bridge._town_errand_yield_for_weapon(
+                    state, names, leader, slot, label):
+                return
+        positions = await asyncio.to_thread(
+            self._bridge.fetch_positions, list(names))
+        at = positions.get(leader)
+        if not at:
+            return
+        teams = await asyncio.to_thread(self._bridge.fetch_teams, [leader])
+        spells = {n.spell for n in weapon_needs}
+        masters = await asyncio.to_thread(
+            self._bridge.fetch_weapon_masters, at, sorted(spells),
+            far_maps(at["map_id"]))
+        master = choose_master(
+            masters, spells, teams.get(leader, ""), int(at["map_id"]), at)
+        said = "; ".join("%s carries %s (%s) and has no skill %d for it" % (
+            n.name, n.item, n.why, n.skill) for n in weapon_needs)
+        if not master:
+            far = choose_far_master(
+                masters, spells, teams.get(leader, ""), int(at["map_id"]))
+            if far:
+                need = next(n for n in weapon_needs if n.spell in far["spells"])
+                import guildjobs
+                step, note = guildjobs.weapon_cross_step(
+                    SimpleNamespace(name=leader, map_id=int(at["map_id"])),
+                    offer(need, far),
+                    await asyncio.to_thread(
+                        self._bridge.fetch_weapon_crossings, names))
+                if note:
+                    log.info("weapon skill: %s%s", note, label)
+                if step:
+                    await self._bridge._class_cross_row(step, step.rows[0])
+                return
+            log.info("weapon skill: %s; no weapon master of the family's side "
+                     "on this map teaches it, so nobody walks%s", said, label)
+            return
+        if await self._train(weapon_needs, master, positions, label):
+            return
+        target = travel.resolve(str(int(master["entry"])))
+        if not target:
+            return
+        aimed = await self._bridge._claim_town_slot(
+            WEAPON_SKILL_CLAIMANT, leader, target, urgent=True,
+            cohort=getattr(cohort, "key", None))
+        log.info("weapon skill: %s; %s is aimed at %s (%d yards) "
+                 "(aim taken=%s)%s", said, leader, master["name"],
+                 int(float(master["yards"])), aimed, label)
+
+    async def _train(self, needs, master, positions, label) -> int:
+        """Write a train row for each member standing at the master; how many."""
+        written = 0
+        for need in needs:
+            if need.spell not in master["spells"]:
+                continue
+            if not in_reach(
+                    master, positions.get(need.name), TOWN_COUNTER_YARDS):
+                continue
+            if await asyncio.to_thread(self._bridge.weapon_train_asked, need):
+                continue
+            if await asyncio.to_thread(self._bridge.insert_weapon_train, need):
+                written += 1
+                log.info("weapon skill: %s buys skill %d at %s with its own "
+                         "gold, to wield %s%s", need.name, need.skill,
+                         master["name"], need.item, label)
+        return written
+
+    async def _equip(self, names, label) -> None:
+        """Put on each weapon whose skill row reads applied and not yet worn."""
+        for row in await asyncio.to_thread(
+                self._bridge.fetch_weapon_trains_applied, names):
+            if await asyncio.to_thread(self._bridge.insert_weapon_equip, row):
+                log.info("weapon skill: %s learned skill %s; puts on %s%s",
+                         row["name"], row["skill"],
+                         row.get("item_name")
+                         or "an unnamed item (%s)" % row["entry"], label)
