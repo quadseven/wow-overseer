@@ -6,6 +6,7 @@ warrior carried a Ravenwood Bow with no Bows skill and an empty ranged slot.
 """
 
 import ast
+import asyncio
 import datetime
 import pathlib
 import unittest
@@ -14,6 +15,7 @@ import weaponskill as ws
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (ROOT / "bridge.py").read_text(encoding="utf-8")
+WEAPONSKILL = (ROOT / "weaponskill.py").read_text(encoding="utf-8")
 
 FACTS = {
     "Og": {"class": "mage", "level": 35, "equipped": {"chest": 16, "offhand": 22},
@@ -181,13 +183,24 @@ class LearnedSkillReopensEquipRetries(unittest.TestCase):
 class TheBridge(unittest.TestCase):
     def test_the_loop_runs_and_defines_its_helpers(self):
         self.assertEqual(1, BRIDGE.count('_Pass("_weapon_skill_loop"),'))
-        names = {
+        bridge_names = {
             n.name
             for n in ast.walk(ast.parse(BRIDGE))
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
+        module_names = {
+            n.name
+            for n in ast.walk(ast.parse(WEAPONSKILL))
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        self.assertIn("run_once", module_names)
         for fn in (
             "_weapon_skill_once",
+            "_weapon_skill_equip",
+            "_weapon_skill_train",
+        ):
+            self.assertNotIn(fn, bridge_names)
+        for fn in (
             "_weapon_skill_changes",
             "_fetch_bag_weapons",
             "_fetch_weapon_masters",
@@ -195,7 +208,7 @@ class TheBridge(unittest.TestCase):
             "_weapon_trains_applied",
             "_insert_weapon_equip",
         ):
-            self.assertIn(fn, names)
+            self.assertIn(fn, bridge_names)
 
     def test_equip_retry_history_reopens_after_applied_skill_training(self):
         self.assertIn("weaponskill.reopen_equip_attempts", BRIDGE)
@@ -207,6 +220,141 @@ class TheBridge(unittest.TestCase):
 
     def test_the_row_is_the_verb_the_module_reads(self):
         self.assertIn("VALUES (%s, %s, 'cast', %s, %s)", BRIDGE)
+
+
+class WeaponSkillPassCharacterization(unittest.TestCase):
+    class _Lock:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class _Adapter:
+        def __init__(self, positions, applied=()):
+            self.positions = positions
+            self.applied = applied
+            self.writes = []
+            self.facts = {
+                "MemberA": {
+                    "class": "mage",
+                    "level": 35,
+                    "equipped": {},
+                    "skills": {"weapons": set()},
+                }
+            }
+            self.bag_rows = [
+                {
+                    "name": "MemberA",
+                    "entry": 11,
+                    "label": "A Sword",
+                    "subclass": 7,
+                    "InventoryType": 13,
+                    "ItemLevel": 36,
+                    "RequiredLevel": 31,
+                    "AllowableClass": -1,
+                }
+            ]
+            if self.applied:
+                self.facts = {}
+                self.bag_rows = []
+            self.master = {
+                "entry": 11867,
+                "name": "A Weapon Master",
+                "faction": 12,
+                "map_id": 0,
+                "x": 0.0,
+                "y": 0.0,
+                "yards": 0.0,
+                "spell": 201,
+            }
+
+        async def _weapon_skill_family(self, _cohort=None):
+            return ["MemberA", "LeaderA"], "LeaderA", "", None
+
+        def _town_errand_lock(self, _names):
+            return WeaponSkillPassCharacterization._Lock()
+
+        async def _weapon_skill_applied(self, _names):
+            return list(self.applied)
+
+        async def _insert_weapon_skill_equip(self, row):
+            self.writes.append(("equip", row))
+            return 1
+
+        async def _mid_run(self, _names):
+            return False
+
+        async def _weapon_skill_facts(self, _names):
+            return self.facts, self.bag_rows
+
+        async def _weapon_skill_town_errand_state(self, _names):
+            return None
+
+        async def _weapon_skill_positions(self, _names):
+            return self.positions
+
+        async def _weapon_skill_teams(self, _names):
+            return {"LeaderA": "alliance"}
+
+        async def _weapon_skill_masters(self, _at, _spells, _also_maps):
+            return [self.master]
+
+        def _weapon_skill_reach_yards(self):
+            return 8
+
+        async def _weapon_skill_train_asked(self, _need):
+            return False
+
+        async def _insert_weapon_skill_train(self, need):
+            self.writes.append(("train", need))
+            return 1
+
+        async def _claim_town_slot(self, *args, **kwargs):
+            self.writes.append(("walk", args, kwargs))
+            return True
+
+        async def _weapon_skill_crossings(self, _names):
+            return ()
+
+        def _cohort_town_slot(self, _cohort=None):
+            return None
+
+        async def _town_errand_yield_for_weapon(self, *_args):
+            return False
+
+        async def _class_cross_row(self, *_args):
+            return None
+
+    def run_pass(self, positions, applied=()):
+        adapter = self._Adapter(positions, applied)
+        asyncio.run(ws.WeaponSkillPass(adapter).run_once())
+        return adapter.writes
+
+    def test_run_once_equip_train_and_walk_cases(self):
+        applied = ({"name": "MemberA", "skill": "43", "entry": 11},)
+        equipped = self.run_pass(
+            {"MemberA": {"map_id": 0, "pos_x": 0, "pos_y": 0}}, applied
+        )
+        self.assertEqual("equip", equipped[0][0])
+
+        trained = self.run_pass(
+            {
+                "MemberA": {"map_id": 0, "pos_x": 0, "pos_y": 0},
+                "LeaderA": {"map_id": 0, "pos_x": 0, "pos_y": 0},
+            }
+        )
+        self.assertEqual("train", trained[0][0])
+        self.assertEqual("MemberA", trained[0][1].name)
+
+        walked = self.run_pass(
+            {
+                "MemberA": {"map_id": 0, "pos_x": 100, "pos_y": 100},
+                "LeaderA": {"map_id": 0, "pos_x": 100, "pos_y": 100},
+            }
+        )
+        self.assertEqual("walk", walked[0][0])
+        self.assertEqual("LeaderA", walked[0][1][1])
 
 
 if __name__ == "__main__":
