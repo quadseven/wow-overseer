@@ -14,6 +14,8 @@ from http.server import ThreadingHTTPServer
 import json
 import os
 import pathlib
+import re
+import socket
 import sys
 import tempfile
 import threading
@@ -225,6 +227,127 @@ class HttpKeepAliveTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+
+# A request line hidden in a POST body. If the server answers before reading
+# the body and keeps the connection open, it parses these bytes as the next
+# request: request smuggling behind the ingress.
+_SMUGGLED = b"GET /smuggled HTTP/1.1\r\nHost: x\r\n\r\n"
+
+
+@unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
+class UnreadBodyClosesConnectionTests(unittest.TestCase):
+    """Raw sockets, so the bytes on the wire are exactly the test's."""
+
+    def setUp(self):
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), map_server.Handler)
+        self.port = self.server.server_address[1]
+        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+
+        def stop():
+            self.server.shutdown()
+            self.server.server_close()
+            thread.join(timeout=2)
+
+        self.addCleanup(stop)
+
+    def _exchange(self, payload: bytes) -> bytes:
+        """Send `payload` on one socket, then read until the server closes
+        it or goes quiet."""
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        try:
+            sock.sendall(payload)
+            sock.settimeout(1.5)
+            out = b""
+            while True:
+                try:
+                    chunk = sock.recv(65536)
+                except TimeoutError:
+                    return out
+                if not chunk:
+                    return out
+                out += chunk
+        finally:
+            sock.close()
+
+    def _assert_not_smuggled(self, raw: bytes) -> None:
+        # A smuggled GET would get its own 404; the body's request line must
+        # never be answered. The server says Connection: close and drops the
+        # socket, so exactly one response comes back and the honest GET sent
+        # after the body goes unanswered, as a client of a closed connection
+        # expects.
+        self.assertTrue(raw.startswith(b"HTTP/1.1 "), raw[:80])
+        statuses = re.findall(rb"HTTP/1\.1 (\d{3}) ", raw)
+        self.assertIn(b"Connection: close", raw.split(b"\r\n\r\n", 1)[0])
+        self.assertEqual(len(statuses), 1, raw)
+
+    def test_unknown_path_post_with_body_closes_connection(self):
+        raw = self._post(b"/nope", _SMUGGLED)
+        self.assertTrue(raw.startswith(b"HTTP/1.1 404"), raw[:80])
+        self._assert_not_smuggled(raw)
+
+    def _post(self, target: bytes, body: bytes, ctype: bytes = b"text/plain") -> bytes:
+        return self._exchange(
+            b"POST "
+            + target
+            + b" HTTP/1.1\r\nHost: x\r\nContent-Type: "
+            + ctype
+            + b"\r\nContent-Length: "
+            + str(len(body)).encode()
+            + b"\r\n\r\n"
+            + body
+            + b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n"
+        )
+
+    def test_operator_off_403_closes_connection(self):
+        with mock.patch.object(map_server.v2_operator, "enabled", return_value=False):
+            raw = self._post(b"/api/chat", _SMUGGLED)
+        self.assertTrue(raw.startswith(b"HTTP/1.1 403"), raw[:80])
+        self._assert_not_smuggled(raw)
+
+    def test_json_body_415_closes_connection(self):
+        # _read_json_body refuses the content type before it reads the body.
+        with mock.patch.object(map_server.v2_operator, "enabled", return_value=True):
+            raw = self._post(b"/api/chat", _SMUGGLED)
+        self.assertTrue(raw.startswith(b"HTTP/1.1 415"), raw[:80])
+        self._assert_not_smuggled(raw)
+
+    def test_frame_bad_name_400_closes_connection(self):
+        raw = self._post(b"/api/frame?name=bad!", _SMUGGLED, b"image/jpeg")
+        self.assertTrue(raw.startswith(b"HTTP/1.1 400"), raw[:80])
+        self._assert_not_smuggled(raw)
+
+    def test_body_read_in_full_keeps_connection(self):
+        # A frame with a good name whose body is read and then refused: the
+        # socket is clean, so the honest GET after it is answered.
+        raw = self._post(
+            b"/api/frame?name=Ugga&status=ok", b"not a jpeg", b"image/jpeg"
+        )
+        statuses = re.findall(rb"HTTP/1\.1 (\d{3}) ", raw)
+        self.assertEqual(statuses, [b"400", b"200"], raw)
+        self.assertNotIn(b"Connection: close", raw)
+
+    def test_chunked_post_closes_connection(self):
+        chunk = _SMUGGLED
+        raw = self._exchange(
+            b"POST /nope HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
+            + hex(len(chunk))[2:].encode()
+            + b"\r\n"
+            + chunk
+            + b"\r\n0\r\n\r\n"
+        )
+        self.assertTrue(raw.startswith(b"HTTP/1.1 404"), raw[:80])
+        self._assert_not_smuggled(raw)
+
+    def test_keep_alive_survives_after_get(self):
+        raw = self._exchange(
+            b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n"
+            b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n"
+        )
+        statuses = re.findall(rb"HTTP/1\.1 (\d{3}) ", raw)
+        self.assertEqual(statuses, [b"200", b"200"], raw)
+        self.assertNotIn(b"Connection: close", raw)
 
 
 class FingerprintTtlTests(unittest.TestCase):

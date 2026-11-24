@@ -5806,10 +5806,47 @@ def _family_scope(query: dict):
     return rosters.get(chosen, []), chosen, list(rosters)
 
 
+class _CountingReader:
+    """The request socket's reader, counting every byte it hands out.
+
+    The handler compares the count against Content-Length to learn whether a
+    request body was read in full before the response goes out. Anything not
+    defined here passes straight through to the wrapped reader.
+    """
+
+    def __init__(self, raw) -> None:
+        self._raw = raw
+        self.count = 0
+
+    def _counted(self, data: bytes) -> bytes:
+        self.count += len(data)
+        return data
+
+    def read(self, *args) -> bytes:
+        return self._counted(self._raw.read(*args))
+
+    def read1(self, *args) -> bytes:
+        return self._counted(self._raw.read1(*args))
+
+    def readline(self, *args) -> bytes:
+        return self._counted(self._raw.readline(*args))
+
+    def readinto(self, buf) -> int | None:
+        n = self._raw.readinto(buf)
+        self.count += n or 0
+        return n
+
+    def __getattr__(self, name):
+        return getattr(self._raw, name)
+
+
 class Handler(BaseHTTPRequestHandler):
     # Persistent connections avoid paying a fresh TCP handshake on every poll
     # and asset request. Every response either sends Content-Length or has no
-    # body (304), and `timeout` bounds idle sockets.
+    # body (304), and `timeout` bounds idle sockets. A response sent before
+    # the request body was read in full closes the connection (end_headers):
+    # the unread bytes would otherwise be parsed as the next request, which
+    # is request smuggling behind the ingress.
     protocol_version = "HTTP/1.1"
     # Socket reads and writes give up after this long. Without it a client
     # that opens a connection and sends nothing, or declares a body it never
@@ -7623,12 +7660,50 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def setup(self) -> None:
+        super().setup()
+        self.rfile = _CountingReader(self.rfile)
+        self._body_mark = None
+
+    def parse_request(self) -> bool:
+        # The mark is where this request's body starts, set only once its
+        # headers parsed. An error response before that point has no body to
+        # account for, and the stdlib closes the connection itself.
+        self._body_mark = None
+        ok = super().parse_request()
+        if ok:
+            self._body_mark = self.rfile.count
+        return ok
+
+    def _body_unread(self) -> bool:
+        """True when the request declared a body not yet read in full.
+
+        Only Content-Length bodies are ever read here, so a chunked body
+        (any Transfer-Encoding) always counts as unread.
+        """
+        mark = getattr(self, "_body_mark", None)
+        headers = getattr(self, "headers", None)
+        if mark is None or headers is None:
+            return False
+        if headers.get("Transfer-Encoding"):
+            return True
+        try:
+            length = int(headers.get("Content-Length") or 0)
+        except ValueError:
+            return True
+        return length != 0 and self.rfile.count - mark < length
+
     def end_headers(self) -> None:
         # Every response, however it was built, says not to leak the page's
         # address and not to be indexed (basepath.PRIVACY_HEADERS): the one
         # place all of them pass through, so a new response cannot forget.
         for name, value in basepath.PRIVACY_HEADERS:
             self.send_header(name, value)
+        # The same one place closes a kept-alive connection whose request
+        # body is still (partly) on the socket. send_header sets
+        # close_connection when it sees this header.
+        if self._body_unread() and not getattr(self, "close_connection", False):
+            self.send_header("Connection", "close")
         super().end_headers()
 
     def log_message(self, fmt, *args):
