@@ -3918,20 +3918,18 @@ _LOOT_CLIPS_SQL = (
 
 def _run_reports(rd, rows: list, limit: int) -> dict:
     """Each recent run's post-run report (mod-overseer#152), by run id: the
-    newest `limit` run ids in the timeline rows, read through runreport.read,
-    the same read the bridge posts to Discord. A realm without the summary
-    view shows no report rather than one that says nothing dropped."""
+    newest `limit` run ids in the timeline rows, read in batch through
+    runreport.read_many, the same builder the bridge posts to Discord. A realm
+    without the summary view shows no report rather than one that says nothing
+    dropped."""
     ids = sorted({int(r.get("run_id") or 0) for r in rows} - {0}, reverse=True)[:limit]
-    reports: dict = {}
+    if not ids:
+        return {}
     try:
-        for run_id in ids:
-            report = runreport.read(rd.must, run_id)
-            if report is not None:
-                reports[run_id] = report
+        return runreport.read_many(rd.must, ids)
     except realmread.Gap:
         log.info("run reports unavailable (no overseer_dungeon_run_summary yet)")
         return {}
-    return reports
 
 
 # --- the live dungeon recap and the loot board (infra#2597) ------------------
@@ -5265,11 +5263,18 @@ def _accepts_gzip(handler) -> bool:
     return False
 
 
+def _will_gzip(handler, ctype: str, body: bytes) -> bool:
+    """Whether `_gzipped` would compress this response."""
+    return (
+        _compressible(ctype)
+        and len(body) >= GZIP_MIN_BYTES
+        and _accepts_gzip(handler)
+    )
+
+
 def _gzipped(handler, ctype: str, body: bytes) -> bytes | None:
     """The body gzipped, or None when it should go out as it is."""
-    if not _compressible(ctype) or len(body) < GZIP_MIN_BYTES:
-        return None
-    if not _accepts_gzip(handler):
+    if not _will_gzip(handler, ctype, body):
         return None
     if ctype.split(";")[0].strip() == _GZIP_JSON:
         return gzip.compress(body, 5, mtime=0)
@@ -5802,6 +5807,10 @@ def _family_scope(query: dict):
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Persistent connections avoid paying a fresh TCP handshake on every poll
+    # and asset request. Every response either sends Content-Length or has no
+    # body (304), and `timeout` bounds idle sockets.
+    protocol_version = "HTTP/1.1"
     # Socket reads and writes give up after this long. Without it a client
     # that opens a connection and sends nothing, or declares a body it never
     # sends, holds one thread of the threading server for as long as it
@@ -7583,9 +7592,9 @@ class Handler(BaseHTTPRequestHandler):
                 and getattr(self, "command", "") == "GET"):
             cache_control = "no-cache"
             tag = _etag(body)
-        packed = _gzipped(self, ctype, body)
+        will_gz = _will_gzip(self, ctype, body)
         if tag:
-            if packed is not None:
+            if will_gz:
                 tag = tag[:-1] + '-gz"'
             asked = self.headers.get("If-None-Match", "") if getattr(self, "headers", None) else ""
             if tag in [t.strip() for t in asked.split(",")]:
@@ -7597,6 +7606,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header(hkey, hval)
                 self.end_headers()
                 return
+        packed = _gzipped(self, ctype, body) if will_gz else None
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         if packed is not None:
