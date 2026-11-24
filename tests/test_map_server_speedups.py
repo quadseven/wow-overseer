@@ -340,6 +340,32 @@ class UnreadBodyClosesConnectionTests(unittest.TestCase):
         self.assertTrue(raw.startswith(b"HTTP/1.1 404"), raw[:80])
         self._assert_not_smuggled(raw)
 
+    def _bad_length(self, length_headers: bytes) -> bytes:
+        return self._exchange(
+            b"POST /api/frame?name=Ugga&status=ok HTTP/1.1\r\nHost: x\r\n"
+            + length_headers
+            + b"\r\n"
+            + _SMUGGLED
+            + b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n"
+        )
+
+    def test_bad_content_length_is_refused_and_closed(self):
+        # int() would take every one of these; none is a plain length, and
+        # "-5" used to read as "no body" and leave it on the socket.
+        cases = {
+            "negative": b"Content-Length: -5\r\n",
+            "non-numeric": b"Content-Length: abc\r\n",
+            "signed": b"Content-Length: +36\r\n",
+            "underscored": b"Content-Length: 3_6\r\n",
+            "duplicated": b"Content-Length: 36\r\nContent-Length: 0\r\n",
+            "with chunked": b"Content-Length: 36\r\nTransfer-Encoding: chunked\r\n",
+        }
+        for label, headers in cases.items():
+            with self.subTest(label):
+                raw = self._bad_length(headers)
+                self.assertTrue(raw.startswith(b"HTTP/1.1 400"), raw[:80])
+                self._assert_not_smuggled(raw)
+
     def test_keep_alive_survives_after_get(self):
         raw = self._exchange(
             b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n"

@@ -5806,6 +5806,10 @@ def _family_scope(query: dict):
     return rosters.get(chosen, []), chosen, list(rosters)
 
 
+# The only Content-Length the handler accepts: plain ASCII digits.
+_CONTENT_LENGTH_RE = re.compile(r"[0-9]+")
+
+
 class _CountingReader:
     """The request socket's reader, counting every byte it hands out.
 
@@ -7671,9 +7675,22 @@ class Handler(BaseHTTPRequestHandler):
         # account for, and the stdlib closes the connection itself.
         self._body_mark = None
         ok = super().parse_request()
-        if ok:
-            self._body_mark = self.rfile.count
-        return ok
+        if not ok:
+            return False
+        # A body whose length cannot be known is refused before routing.
+        # int() takes "-5", " 5", "+5" and "5_0", and a front proxy may read
+        # any of those differently, so only plain ASCII digits count as a
+        # length. Two Content-Length headers, or one beside
+        # Transfer-Encoding, are the classic smuggling shapes. send_error
+        # sends Connection: close, so whatever bytes follow are dropped.
+        lengths = self.headers.get_all("Content-Length") or []
+        if len(lengths) > 1 or (lengths and (
+                not _CONTENT_LENGTH_RE.fullmatch(lengths[0])
+                or self.headers.get("Transfer-Encoding") is not None)):
+            self.send_error(400, "Bad Content-Length")
+            return False
+        self._body_mark = self.rfile.count
+        return True
 
     def _body_unread(self) -> bool:
         """True when the request declared a body not yet read in full.
@@ -7685,12 +7702,15 @@ class Handler(BaseHTTPRequestHandler):
         headers = getattr(self, "headers", None)
         if mark is None or headers is None:
             return False
-        if headers.get("Transfer-Encoding"):
+        if headers.get("Transfer-Encoding") is not None:
             return True
-        try:
-            length = int(headers.get("Content-Length") or 0)
-        except ValueError:
+        raw = headers.get("Content-Length")
+        if raw is None:
+            return False
+        # parse_request already refused anything else; fail closed anyway.
+        if not _CONTENT_LENGTH_RE.fullmatch(raw):
             return True
+        length = int(raw)
         return length != 0 and self.rfile.count - mark < length
 
     def end_headers(self) -> None:
