@@ -5804,6 +5804,12 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
             cur, dungeonstall.UNFORMED_SQL.format(holes=marks),
             dungeonstall.unformed_args(key, names),
             "the doors left with no run formed")
+        # A DOOR ACROSS THE SEA QUEUED AND NEVER STARTED is not offered again
+        # for a while (campaignplan._unstarted).
+        unstarted = _planner_rows(
+            cur, campaignplan.UNSTARTED_SQL.format(holes=marks),
+            campaignplan.unstarted_args(key, names),
+            "the queued doors that started no run")
         # A DOOR THE GUILDS RARELY CLEAR gives way to a sound one
         # (campaignplan.Option.poor).
         record = _planner_rows(
@@ -5825,6 +5831,7 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
         bosses=_PLANNER_BOSSES,
         keys=_read_or_none(campaignplan.keys_held, keys),
         stalled=stalled,
+        unstarted=campaignplan.unstarted(unstarted),
         door_record=_read_or_none(guildrun.door_record, record),
         unformed=dungeonstall.unformed(unformed))
 
