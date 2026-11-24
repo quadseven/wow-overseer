@@ -194,7 +194,12 @@ class Filing(unittest.TestCase):
         self.assertEqual(
             text.count("The take command found no quest giver in reach"), 1
         )
-        self.assertIn("The stored rows leave open why the lookup failed.", text)
+        explanation = (
+            "The take command found no quest giver in reach, so it could not accept "
+            "the quest. The ledger rows do not identify why the lookup failed."
+        )
+        self.assertIn(explanation, text)
+        self.assertNotIn("The world names a creature giver.", text)
         self.assertNotIn(
             "The take command found no quest giver in reach",
             qt.body(218, None, [row(218)], [], ""),
