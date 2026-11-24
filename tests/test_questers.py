@@ -255,6 +255,45 @@ class EveryQuestInReach(unittest.TestCase):
         # The quest should also not be open_to the member.
         self.assertFalse(questers.open_to(cat, mirra(), 99))
 
+    def test_a_quest_whose_kills_spawn_only_off_its_own_maps_is_not_offered(self):
+        # The world rows of one broken quest: it requires killing creatures
+        # 1197 and 1164, ten each, and each has spawns in the world but none
+        # on the map its giver and ender stand on, so a quester that takes
+        # it where it is given has nothing to hunt for it there.
+        row = quest(
+            263, ELWYNN, 15, kill=1197, count=10, prev=237, title="Off Map Hunt"
+        )
+        row["npc2"] = 1164
+        row["npc_count2"] = 10
+        givers = [
+            giver(263, "start", 1263, 263, 100, 0),
+            giver(263, "end", 1263, 263, 100, 0),
+        ]
+        member = mirra(level=15, quests_done=frozenset({237}))
+        cat = world(
+            extra_quests=[row],
+            extra_givers=givers,
+            extra_spawns=[
+                spawn(2263, 1197, 500, 0, map_id=1),
+                spawn(2264, 1164, 500, 0, map_id=1),
+            ],
+        )
+        self.assertNotIn(263, questers.in_reach(cat, member, ELWYNN))
+        self.assertFalse(questers.open_to(cat, member, 263))
+        # A spawn of each creature on the quest's own map offers it again.
+        reachable = world(
+            extra_quests=[row],
+            extra_givers=givers,
+            extra_spawns=[
+                spawn(2263, 1197, 500, 0, map_id=1),
+                spawn(2264, 1164, 500, 0, map_id=1),
+                spawn(2265, 1197, 150, 0),
+                spawn(2266, 1164, 160, 0),
+            ],
+        )
+        self.assertIn(263, questers.in_reach(reachable, member, ELWYNN))
+        self.assertTrue(questers.open_to(reachable, member, 263))
+
     def test_a_zone_on_the_other_continent_is_crossed_to(self):
         far = [quest(40, 148, 4, title="Darkshore Fish")]
         cat = world(

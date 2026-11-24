@@ -1589,6 +1589,8 @@ def open_to(cat: Catalogue, member, quest_id, broken=frozenset()) -> bool:
         return False
     if (quest.kills or quest.items) and not quest.fields and not _chested(quest):
         return False
+    if _kills_off_quest_maps(quest):
+        return False
     return not _exclusive_closed(cat, member, quest)
 
 
@@ -1726,6 +1728,26 @@ def _over_level(spawns, within) -> tuple:
 def _chested(quest) -> bool:
     """True when a chest holds an item the quest asks for (a USE_OBJECT use)."""
     return any(u.verb == classquest.USE_OBJECT and u.item for u in quest.uses)
+
+
+def _kills_off_quest_maps(quest) -> bool:
+    """True when a creature the quest requires killing has no spawn on any
+    map a starter or ender of the quest stands on: its spawns, if any, are
+    all on other maps, so a quester that takes the quest where it is given
+    has nothing to hunt for that creature. The quest catalogue counts a
+    quest's objective spawns the same way (questcatalogue's map_count, off
+    the maps its starters and enders stand on). A quest no starter or
+    ender spawn stands for at all is not judged here: its giver is missing,
+    which `_giver_failure` already records."""
+    if not quest.kills:
+        return False
+    maps = {int(s.map_id) for s in quest.starters} | {
+        int(s.map_id) for s in quest.enders
+    }
+    if not maps:
+        return False
+    on = {int(s.entry) for s in quest.fields if int(s.map_id) in maps}
+    return any(entry not in on for entry, _count in quest.kills)
 
 
 def chest_spots(member, qid: int, quest: classquest.Quest) -> tuple:
