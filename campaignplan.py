@@ -214,25 +214,25 @@ UNSTARTED_WAIT_SECONDS = 30 * 60
 # Long enough for the berths to change, short enough not to bar a door all day.
 UNSTARTED_COOLDOWN_SECONDS = 3 * 3600
 
-# queue entry age per door, for the family, with no run started since the entry
-# was made. The oldest such entry per door, inside the wait plus the cooldown.
+# One row per queue entry of the family, with the map of each run that leader
+# started since the entry was made (NULL when none did). The run ledger keeps
+# no door keyword, so `unstarted` matches the entry to a run by map in Python:
+# a run at some other dungeon must not clear this door.
 UNSTARTED_SQL = (
-    "SELECT q.keyword AS keyword, "
-    "TIMESTAMPDIFF(SECOND, MIN(q.created_at), NOW()) AS age_s "
-    "FROM overseer_dungeon_queue q WHERE q.family = %s "
-    "AND q.created_at >= NOW() - INTERVAL %s SECOND "
-    "AND NOT EXISTS (SELECT 1 FROM overseer_dungeon_run r "
-    "WHERE r.leader_name IN ({holes}) AND r.started_at >= q.created_at) "
-    "GROUP BY q.keyword"
+    "SELECT q.id AS entry, q.keyword AS keyword, "
+    "TIMESTAMPDIFF(SECOND, q.created_at, NOW()) AS age_s, r.map_id AS map_id "
+    "FROM overseer_dungeon_queue q LEFT JOIN overseer_dungeon_run r "
+    "ON r.leader_name IN ({holes}) AND r.started_at >= q.created_at "
+    "WHERE q.family = %s AND q.created_at >= NOW() - INTERVAL %s SECOND"
 )
 
 
 def unstarted_args(key: str, names) -> tuple:
     """UNSTARTED_SQL's arguments (the `{holes}` count is len(names))."""
     return (
+        *[str(n) for n in names],
         key,
         UNSTARTED_WAIT_SECONDS + UNSTARTED_COOLDOWN_SECONDS,
-        *[str(n) for n in names],
     )
 
 
@@ -241,12 +241,22 @@ def unstarted(rows) -> dict | None:
     its oldest entry, or None when unread."""
     if rows is None:
         return None
-    out: dict = {}
+    ages: dict = {}
+    started: set = set()
     for row in rows:
         door = wing_of(str(row.get("keyword") or ""))
         age = row.get("age_s")
-        if door and age is not None:
-            out[door] = max(int(age), out.get(door, 0))
+        if not door or age is None:
+            continue
+        entry = row.get("entry")
+        ages[(entry, door)] = int(age)
+        map_id = row.get("map_id")
+        if map_id is not None and int(map_id) == BY_KEYWORD[door].map_id:
+            started.add((entry, door))
+    out: dict = {}
+    for (entry, door), age in ages.items():
+        if (entry, door) not in started:
+            out[door] = max(age, out.get(door, 0))
     return out
 
 

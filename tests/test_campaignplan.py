@@ -1171,9 +1171,31 @@ class ADoorAcrossTheSeaQueuedAndNeverStarted(unittest.TestCase):
 
     def test_the_rows_read_into_the_oldest_age_per_door(self):
         rows_ = [
-            {"keyword": self.far.keyword, "age_s": 5},
-            {"keyword": self.far.keyword, "age_s": 9},
-            {"keyword": "nowhere", "age_s": 7},
+            {"entry": 1, "keyword": self.far.keyword, "age_s": 5, "map_id": None},
+            {"entry": 2, "keyword": self.far.keyword, "age_s": 9, "map_id": None},
+            {"entry": 3, "keyword": "nowhere", "age_s": 7, "map_id": None},
         ]
         self.assertEqual({self.far.keyword: 9}, campaignplan.unstarted(rows_))
         self.assertIsNone(campaignplan.unstarted(None))
+
+    def test_a_run_at_another_dungeon_does_not_clear_the_door(self):
+        other = self.far.map_id + 1
+        rows_ = [{"entry": 1, "keyword": self.far.keyword, "age_s": 9, "map_id": other}]
+        self.assertEqual({self.far.keyword: 9}, campaignplan.unstarted(rows_))
+
+    def test_a_run_at_the_door_clears_that_entry_only(self):
+        rows_ = [
+            {
+                "entry": 1,
+                "keyword": self.far.keyword,
+                "age_s": 9,
+                "map_id": self.far.map_id,
+            },
+            {"entry": 2, "keyword": self.far.keyword, "age_s": 4, "map_id": None},
+        ]
+        self.assertEqual({self.far.keyword: 4}, campaignplan.unstarted(rows_))
+
+    def test_the_arguments_follow_the_placeholders(self):
+        args = campaignplan.unstarted_args("fam", ["a", "b"])
+        self.assertEqual(("a", "b", "fam"), args[:2] + args[2:3])
+        self.assertEqual(4, len(args))
