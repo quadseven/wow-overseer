@@ -249,6 +249,7 @@ def unstarted(rows) -> dict | None:
             out[door] = max(int(age), out.get(door, 0))
     return out
 
+
 LEVEL_CAP = 60
 
 # How close the family's mean level may come to a door's ceiling before the
