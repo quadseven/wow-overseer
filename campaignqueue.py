@@ -73,6 +73,7 @@ CREATE_SQL = (
     " status ENUM('queued','active','done','cancelled') NOT NULL"
     " DEFAULT 'queued',"
     " source VARCHAR(64) NOT NULL DEFAULT '',"
+    " supervisor VARCHAR(64) NOT NULL DEFAULT '',"
     " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
     " started_at TIMESTAMP NULL DEFAULT NULL,"
     " finished_at TIMESTAMP NULL DEFAULT NULL,"
@@ -98,20 +99,20 @@ CANCEL_SQL = (
 
 INSERT_SQL = (
     "INSERT INTO overseer_dungeon_queue "
-    "(family, position, keyword, runs_wanted, source) "
-    "VALUES (%s, %s, %s, %s, %s)"
+    "(family, position, keyword, runs_wanted, source, supervisor) "
+    "VALUES (%s, %s, %s, %s, %s, %s)"
 )
 
 ITEM_INSERT_SQL = (
     "INSERT INTO overseer_dungeon_queue "
-    "(family, position, keyword, runs_wanted, source, goal_item) "
-    "VALUES (%s, %s, %s, %s, %s, %s)"
+    "(family, position, keyword, runs_wanted, source, supervisor, goal_item) "
+    "VALUES (%s, %s, %s, %s, %s, %s, %s)"
 )
 
 FIRST_KILL_INSERT_SQL = (
     "INSERT INTO overseer_dungeon_queue "
-    "(family, position, keyword, runs_wanted, source, first_kill) "
-    "VALUES (%s, %s, %s, %s, %s, 1)"
+    "(family, position, keyword, runs_wanted, source, supervisor, first_kill) "
+    "VALUES (%s, %s, %s, %s, %s, %s, 1)"
 )
 
 # Guarded on the status it moves FROM, so a queue replaced between the read
@@ -816,6 +817,21 @@ CHOOSERS = {
 def chooser(row: dict) -> str:
     """ "Jev's choice", "the planner's choice", or "" for an operator's entry."""
     return CHOOSERS.get(str(row.get("source") or ""), "")
+
+
+def supervisor_from_source(source: str) -> str:
+    """Map a queue source to a supervisor name."""
+    if source == "overseer:queue":
+        return "the operator"
+    if source == "web:overseer":
+        return "the operator"
+    if source == "overseer:planner":
+        return "the planner"
+    if source == "overseer:jev":
+        return "Jev"
+    if source == "overseer:stepdown":
+        return "the stepdown planner"
+    return ""
 
 
 def _marked(row: dict, said: str) -> str:

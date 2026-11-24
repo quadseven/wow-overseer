@@ -154,7 +154,7 @@ class TheDeathsReadIsBoundToTheRun(unittest.TestCase):
         )
 
 
-def _fetcher(deaths=()):
+def _fetcher(deaths=(), supervisor=""):
     """A fetch that answers runreport's three reads, recording each."""
     asked = []
 
@@ -164,6 +164,8 @@ def _fetcher(deaths=()):
             return [RUN] if params == (412,) else []
         if sql == runreport.EVENTS_SQL:
             return list(EVENTS)
+        if sql == runreport.SUPERVISOR_SQL:
+            return [{"supervisor": supervisor}] if supervisor else []
         if sql.startswith("SELECT character_name, killer_name FROM overseer_death"):
             return list(deaths)
         raise AssertionError(sql)
@@ -173,7 +175,7 @@ def _fetcher(deaths=()):
 
 class ThePageShowsWhatDiscordWasSent(unittest.TestCase):
     def test_the_run_card_carries_the_discord_lines_for_its_run_id(self):
-        fetch, _ = _fetcher()
+        fetch, _ = _fetcher(supervisor="the operator")
         report = runreport.read(fetch, 412)
         discord_text = runreport.render(report)
         rows = [
@@ -268,7 +270,7 @@ class OneDiscordMessagePerEndedRun(unittest.TestCase):
         sent: list = []
         self.warnings: list = []
         self.infos: list = []
-        fetch, _ = _fetcher()
+        fetch, _ = _fetcher(supervisor="the operator")
 
         async def to_thread(fn, *args):
             return fn(*args)
@@ -399,7 +401,7 @@ class ABurstAfterARestartIsBounded(unittest.TestCase):
             # What the database's LIMIT does to the owed read.
             return [r for r in owed["owed"] if r not in done][: runreport.OWED_LIMIT]
 
-        fetch, _ = _fetcher()
+        fetch, _ = _fetcher(supervisor="the operator")
         report = runreport.read(fetch, 412)
         post.__globals__["_fetch_owed_run_reports"] = capped
         post.__globals__["_read_run_report"] = lambda run_id: report

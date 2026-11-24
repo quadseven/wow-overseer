@@ -5397,9 +5397,10 @@ def _apply_queue(cur, plan) -> int:
         cur.execute(campaignqueue.CANCEL_SQL, (plan.family,))
         changed = cur.rowcount or 0
         for position, entry in enumerate(plan.entries):
+            supervisor = campaignqueue.supervisor_from_source(WEB_SOURCE)
             cur.execute(campaignqueue.INSERT_SQL,
                         (plan.family, position, entry.keyword, entry.runs,
-                         WEB_SOURCE))
+                         WEB_SOURCE, supervisor))
             changed += 1
     except pymysql.err.MySQLError as exc:
         if not (exc.args and exc.args[0] in _DEGRADED):

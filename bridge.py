@@ -5591,11 +5591,12 @@ def _write_queue(plan, source: str, new_ids: list | None = None) -> int:
 
     `new_ids`, when given, collects each inserted entry's id for the order
     record (#1499)."""
+    supervisor = campaignqueue.supervisor_from_source(source)
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(campaignqueue.CANCEL_SQL, (plan.family,))
         changed = cur.rowcount or 0
         for position, entry in enumerate(plan.entries):
-            params = (plan.family, position, entry.keyword, entry.runs, source[:64])
+            params = (plan.family, position, entry.keyword, entry.runs, source[:64], supervisor[:64])
             if entry.goal_item:
                 cur.execute(campaignqueue.ITEM_INSERT_SQL, params + (entry.goal_item,))
             elif entry.first_kill:
@@ -5983,6 +5984,7 @@ def _append_planned(family: str, rows: list, finish: int, option,
     pass then moves past like any finished entry. `source` says who chose it:
     campaignplan.SOURCE_JEV for Jev, campaignplan.SOURCE for the heuristic.
     """
+    supervisor = campaignqueue.supervisor_from_source(source)
     position = max([int(r.get("position") or 0) for r in rows] or [-1]) + 1
     with _connect() as conn, conn.cursor() as cur:
         changed = 0
@@ -5991,7 +5993,7 @@ def _append_planned(family: str, rows: list, finish: int, option,
             changed += cur.rowcount or 0
         cur.execute(campaignqueue.INSERT_SQL,
                     (family, position, option.keyword, int(option.runs),
-                     source))
+                     source, supervisor[:64]))
         changed += cur.rowcount or 0
     return changed
 

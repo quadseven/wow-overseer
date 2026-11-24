@@ -120,6 +120,15 @@ DEATHS_MANY_SQL = (
     "ORDER BY id"
 )
 
+# The supervisor who oversaw this run, from the queue entry that launched it.
+# Matches the run's leader_name (family head) to the queue's family, and the
+# run's map_id to the queue's keyword via dungeonpath.PORTAL_MAPS.
+SUPERVISOR_SQL = (
+    "SELECT q.supervisor FROM overseer_dungeon_queue q "
+    "WHERE q.family = %s AND q.supervisor <> '' "
+    "ORDER BY q.id DESC LIMIT 1"
+)
+
 
 def members(run: dict) -> list[str]:
     """The leader, then each member, once each, in the order the row has them."""
@@ -233,7 +242,7 @@ def _deaths(deaths: list[dict]) -> list[dict]:
     ]
 
 
-def _identity(run: dict, map_name: str) -> dict:
+def _identity(run: dict, map_name: str, supervisor: str = "") -> dict:
     """The run row's own facts, as the report heading reads them."""
     seconds = run.get("duration_seconds")
     word = outcome(run)
@@ -248,17 +257,22 @@ def _identity(run: dict, map_name: str) -> dict:
         "wipe": word == "wipe",
         "reason": run.get("ended_reason") or "",
         "duration_seconds": int(seconds) if seconds is not None else None,
+        "supervisor": supervisor,
     }
 
 
 def build(
-    run: dict, events: list[dict], deaths: list[dict], map_name: str = ""
+    run: dict,
+    events: list[dict],
+    deaths: list[dict],
+    map_name: str = "",
+    supervisor: str = "",
 ) -> dict:
     """The report for one run, from RUN_SQL's row, EVENTS_SQL's rows and
     DEATHS_SQL's rows. Everything the page draws and Discord prints is here."""
     names = members(run)
     loot = _loot(events)
-    report = _identity(run, map_name)
+    report = _identity(run, map_name, supervisor)
     report["members"] = names
     report["bosses"] = _bosses(events)
     for key, items in (
@@ -282,8 +296,19 @@ def read(fetch, run_id: int) -> dict | None:
     events = fetch(EVENTS_SQL, (run_id,))
     asked = deaths_query(run)
     deaths = fetch(*asked) if asked else []
+    # Fetch the supervisor from the queue entry that launched this run.
+    supervisor = ""
+    leader = run.get("leader_name")
+    if leader:
+        sup_rows = fetch(SUPERVISOR_SQL, (leader,))
+        if sup_rows:
+            supervisor = sup_rows[0].get("supervisor") or ""
     return build(
-        run, events, deaths, achievements.dungeon_name(int(run.get("map_id") or 0))
+        run,
+        events,
+        deaths,
+        achievements.dungeon_name(int(run.get("map_id") or 0)),
+        supervisor,
     )
 
 
@@ -408,6 +433,16 @@ _SECTIONS = (
 
 
 def _head(report: dict) -> str:
+    sup = report.get("supervisor")
+    if sup:
+        return "Run report #%d: %s, run %s, %s, outcome %s, supervisor %s" % (
+            report["run_id"],
+            report["map_name"],
+            report["run_number"] or "unnumbered",
+            duration(report["duration_seconds"]),
+            report["outcome"].upper() if report["wipe"] else report["outcome"],
+            sup,
+        )
     return "Run report #%d: %s, run %s, %s, outcome %s" % (
         report["run_id"],
         report["map_name"],

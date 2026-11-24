@@ -1143,8 +1143,8 @@ class TheDecreeQueueCard(unittest.TestCase):
         self.assertEqual(("Zug",), cursor.calls[0][1])
         self.assertEqual(
             [
-                ("Zug", 0, "ragefire", 50, map_server.WEB_SOURCE),
-                ("Zug", 1, "wailing", 50, map_server.WEB_SOURCE),
+                ("Zug", 0, "ragefire", 50, map_server.WEB_SOURCE, "the operator"),
+                ("Zug", 1, "wailing", 50, map_server.WEB_SOURCE, "the operator"),
             ],
             [params for _, params in cursor.calls[1:]],
         )
