@@ -432,5 +432,142 @@ class TheWiring(unittest.TestCase):
             self.assertIn(str(zone), levelroute.QUESTS_SQL)
 
 
+class HubDanger(unittest.TestCase):
+    """A hub whose neighbourhood is full of hostile elites or mostly red spawns
+    is refused, so a member is not walked into a death trap."""
+
+    def setUp(self):
+        self.hinterlands = next(h for h in levelroute.hubs_for(levelroute.HORDE) if h.zone_id == 47)
+        self.felwood = next(h for h in levelroute.hubs_for(levelroute.HORDE) if h.zone_id == 361)
+
+    def _world_with_spawns(self, spawns):
+        if spawns is None:
+            spawns_tuple = None
+        else:
+            spawns_tuple = tuple(spawns)
+        return guildlevel.World(
+            bands={
+                levelroute.HORDE: {
+                    47: (40, 50, 10),
+                    361: (48, 55, 10),
+                }
+            },
+            masters={
+                "hinterlands": guildlevel.HubMaster(
+                    123,
+                    self.hinterlands.point[0] if self.hinterlands.point else 0,
+                    self.hinterlands.point[1] if self.hinterlands.point else 0,
+                    self.hinterlands.point[2] if self.hinterlands.point else 0,
+                    "Hinterlands Master",
+                ),
+                "felwood": guildlevel.HubMaster(
+                    124,
+                    self.felwood.point[0] if self.felwood.point else 1,
+                    self.felwood.point[1] if self.felwood.point else 0,
+                    self.felwood.point[2] if self.felwood.point else 0,
+                    "Felwood Master",
+                ),
+            },
+            spawns=spawns_tuple,
+        )
+
+    def test_a_hub_with_hostile_elites_at_member_level_is_refused(self):
+        """Elite spawns at or above the member's level make the hub dangerous.
+        The member is sent to a safe hub instead."""
+        point = self.hinterlands.point
+        spawns = [
+            levelroute.Cell(
+                map_id=point[0],
+                x=point[1],
+                y=point[2],
+                level=50,
+                elite=True,
+                side=0,
+                n=10,
+            )
+        ]
+        world = self._world_with_spawns(spawns)
+        choice = guildlevel.choose(
+            47, 2, 0, world.bands[levelroute.HORDE], world.masters, world=world
+        )
+        # Hinterlands should be refused due to elites, member sent to Felwood via zeppelin
+        self.assertNotEqual(choice.hub.key, "hinterlands")
+        self.assertEqual(choice.hub.key, "felwood")
+        self.assertEqual(choice.cross_to, 1)
+
+    def test_a_hub_with_mostly_red_spawns_is_refused(self):
+        """When most hostile spawns are DANGER_GAP+ levels above the member, the hub is refused."""
+        point = self.hinterlands.point
+        # 10 spawns at level 55 (DANGER_GAP=5 above level 50), 2 at level 40
+        spawns = [
+            levelroute.Cell(
+                map_id=point[0],
+                x=point[1],
+                y=point[2],
+                level=55,
+                elite=False,
+                side=0,
+                n=10,
+            ),
+            levelroute.Cell(
+                map_id=point[0],
+                x=point[1] + 100.0,
+                y=point[2] + 100.0,
+                level=40,
+                elite=False,
+                side=0,
+                n=2,
+            ),
+        ]
+        world = self._world_with_spawns(spawns)
+        choice = guildlevel.choose(
+            50, 2, 0, world.bands[levelroute.HORDE], world.masters, world=world
+        )
+        # Hinterlands should be refused due to mostly red spawns
+        self.assertNotEqual(choice.hub.key, "hinterlands")
+        self.assertEqual(choice.hub.key, "felwood")
+        self.assertEqual(choice.cross_to, 1)
+
+    def test_a_hub_without_spawn_data_is_not_judged(self):
+        """When spawns are unread, no danger check is applied."""
+        world = self._world_with_spawns(None)
+        choice = guildlevel.choose(
+            47, 2, 0, world.bands[levelroute.HORDE], world.masters, world=world
+        )
+        self.assertEqual(choice.refused, "")
+        self.assertEqual(choice.hub.key, "hinterlands")
+
+    def test_a_hub_with_few_red_spawns_is_accepted(self):
+        """A hub with some red spawns but not a majority is accepted."""
+        point = self.hinterlands.point
+        # 3 spawns at level 55 (red), 10 at level 40 (not red) -> 3/13 < 0.5
+        spawns = [
+            levelroute.Cell(
+                map_id=point[0],
+                x=point[1],
+                y=point[2],
+                level=55,
+                elite=False,
+                side=0,
+                n=3,
+            ),
+            levelroute.Cell(
+                map_id=point[0],
+                x=point[1] + 100.0,
+                y=point[2] + 100.0,
+                level=40,
+                elite=False,
+                side=0,
+                n=10,
+            ),
+        ]
+        world = self._world_with_spawns(spawns)
+        choice = guildlevel.choose(
+            50, 2, 0, world.bands[levelroute.HORDE], world.masters, world=world
+        )
+        self.assertEqual(choice.refused, "")
+        self.assertEqual(choice.hub.key, "hinterlands")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -6884,6 +6884,7 @@ def _level_decision(m, world, recent, cap, loop=None, campaign="", avoid_zones=(
         opens=opens,
         nodes=m.taxi_nodes,
         avoid=_level_avoid(loop, avoid_zones),
+        world=world,
     )
     if choice.refused:
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice), ""
@@ -7025,6 +7026,7 @@ def death_loop_onward(m, loop, world, recent, cap):
         opens=opens,
         nodes=m.taxi_nodes,
         avoid=loop.zone,
+        world=world,
     )
     if choice.refused or choice.orb is not None or choice.crosses:
         return None
