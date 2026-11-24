@@ -241,6 +241,20 @@ class EveryQuestInReach(unittest.TestCase):
         self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 30))
         self.assertIn("goes on to", p.move.said)
 
+    def test_a_quest_with_no_objective_spawns_is_not_offered(self):
+        # Quest 99 requires killing creature 999, but no spawns for 999 are provided.
+        cat = world(
+            extra_quests=[quest(99, ELWYNN, 2, kill=999, title="Unspawned Hunt")],
+            extra_givers=[
+                giver(99, "start", 1099, 199, 100, 0),
+                giver(99, "end", 1099, 199, 100, 0),
+            ],
+        )
+        # The quest has a giver but no objective spawns - it should not be in reach.
+        self.assertNotIn(99, questers.in_reach(cat, mirra(), ELWYNN))
+        # The quest should also not be open_to the member.
+        self.assertFalse(questers.open_to(cat, mirra(), 99))
+
     def test_a_zone_on_the_other_continent_is_crossed_to(self):
         far = [quest(40, 148, 4, title="Darkshore Fish")]
         cat = world(
