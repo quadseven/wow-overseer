@@ -123,6 +123,52 @@ class TheBound(unittest.TestCase):
         )
 
 
+def deaths(zone, n, level=50, newest=60):
+    return [
+        {
+            "name": NAME,
+            "zone": zone,
+            "map": 1,
+            "level": level,
+            "killer": "Boar",
+            "age": newest + 300 * i,
+        }
+        for i in range(n)
+    ]
+
+
+def forming_plan(rows, memos=None, roster=()):
+    found = deathhold.flagged(
+        deathloop.loops(rows, {NAME: 50}), deathloop.forming(rows, {NAME: 50})
+    )
+    return deathhold.plan(found, {NAME: 50}, memos, NOW, roster=roster)
+
+
+class TheFormingLoop(unittest.TestCase):
+    def test_three_deaths_write_two_do_not(self):
+        out = forming_plan(deaths(14, 3))
+        self.assertEqual(1, len(out.writes))
+        self.assertEqual(14, out.writes[0].value["zone"])
+        self.assertEqual((), forming_plan(deaths(14, 2)).writes)
+
+    def test_the_escape_rule_still_needs_five(self):
+        self.assertEqual({}, deathloop.loops(deaths(14, 4), {NAME: 50}))
+
+    def test_a_roster_member_is_never_flagged(self):
+        self.assertEqual((), forming_plan(deaths(14, 3), roster={NAME}).writes)
+
+    def test_a_second_zone_is_flagged_and_the_first_row_kept(self):
+        rows = deaths(14, 3, newest=1200) + deaths(15, 3, newest=60)
+        memos = {NAME: ({"map": 1, "zone": 14, "level": 50}, NOW - 1000)}
+        out = forming_plan(rows, memos)
+        self.assertEqual(1, len(out.writes))
+        self.assertEqual(15, out.writes[0].value["zone"])
+        self.assertEqual(NOW, out.writes[0].since)
+        # The same zone again rewrites nothing.
+        same = {NAME: ({"map": 1, "zone": 15, "level": 50}, NOW - 100)}
+        self.assertEqual((), forming_plan(rows, same).writes)
+
+
 class TheWiring(unittest.TestCase):
     def test_the_guild_jobs_pass_writes_the_flags(self):
         start = BRIDGE.index("async def _start_guild_job_pass(")
@@ -131,7 +177,8 @@ class TheWiring(unittest.TestCase):
 
     def test_the_writer_plans_from_the_judged_loops(self):
         body = function_source("_flag_death_loop_holds")
-        self.assertIn('deathhold.plan(facts.get("death_loops")', body)
+        self.assertIn("deathhold.plan(", body)
+        self.assertIn('facts.get("death_loops")', body)
         self.assertIn("_memo_upsert(deathhold.KIND", body)
         self.assertIn("_memo_delete(deathhold.KIND", body)
 
