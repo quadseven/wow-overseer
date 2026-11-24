@@ -17,7 +17,8 @@ reach of a quester when:
   * its race and class masks hold the quester's, its minimum level is met, its
     maximum level (MaxLevel, 0 for none) is not passed, and its own level is
     at most levelroute.ABOVE over the quester's;
-  * the quest before it is rewarded (or held, for a negative PrevQuestID), and
+  * the quest before it is rewarded (or held, for a negative PrevQuestID),
+    including the world's quest-available conditions, and
     no quest of its exclusive group is rewarded or held. "The quest before it"
     is the world's list, not the row's: its own PrevQuestID or any quest whose
     NextQuestID names it, a quest of a negative exclusive group standing for
@@ -771,10 +772,12 @@ def catalogue(
     link_rows=(),
     chest_rows=(),
     object_rows=(),
+    condition_rows=(),
 ):
     """The Catalogue from the world's rows: QUESTS_SQL's, classquest's
     GIVERS_SQL, SPAWNS_SQL and LOOT_SQL rows for these quests, STARTERS_SQL's,
-    ENDERS_SQL's and LINKS_SQL's.
+    ENDERS_SQL's, LINKS_SQL's and `classquest.CONDITIONS_SQL` rows for the
+    quest-available conditions.
 
     Only the classic world: a quest is kept when its zone holds a quest whose
     giver is spawned on a classic continent, or is one of the starting lands.
@@ -793,6 +796,7 @@ def catalogue(
         object_rows=object_rows,
         start_rows=start_rows,
         every=True,
+        condition_rows=condition_rows,
     )
     named, npc_enders, object_enders = _named(start_rows, ender_rows)
     object_spots = _object_ender_spots(ender_rows)
@@ -1577,7 +1581,10 @@ def open_to(cat: Catalogue, member, quest_id, broken=frozenset()) -> bool:
         return False
     if facts.level > int(member.level) + levelroute.ABOVE:
         return False
-    if facts.before and not any(
+    if quest.needs:
+        if not any(all(p in member.quests_done for p in way) for way in quest.needs):
+            return False
+    elif facts.before and not any(
         all(_before_met(member, p) for p in way) for way in facts.before
     ):
         return False
