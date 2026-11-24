@@ -1124,3 +1124,56 @@ class TheBridgeReadsTheLootForADoorPastItsCeiling(unittest.TestCase):
             {}, level_rows=rows(ALLIANCE, EASTERN_KINGDOMS, 50)
         )
         self.assertEqual((wrote, written, reads), ([False], [], []))
+
+
+class ADoorAcrossTheSeaQueuedAndNeverStarted(unittest.TestCase):
+    """The module's `boards` fact is realm-wide, so a far door is offered to
+    every family. One queued and never started is held back for a while."""
+
+    WAIT = campaignplan.UNSTARTED_WAIT_SECONDS
+    COOL = campaignplan.UNSTARTED_COOLDOWN_SECONDS
+
+    def setUp(self):
+        from council import continent_of
+        import crossing
+
+        crossing.note_module_crossing("boards")
+        self.addCleanup(crossing.note_module_crossing, "")
+        self.family = ALLIANCE
+        base = campaignplan.refusal_kinds(facts(ALLIANCE, map_id=KALIMDOR))
+        self.far = next(
+            r
+            for r in campaignplan.RUNS
+            if continent_of(r.map_id) == 0 and r.keyword not in base
+        )
+
+    def refused(self, age, map_id=KALIMDOR):
+        f = facts(ALLIANCE, map_id=map_id, unstarted={self.far.keyword: age})
+        return campaignplan.refusal_kinds(f).get(self.far.keyword)
+
+    def test_past_the_wait_the_far_door_is_refused_as_a_crossing(self):
+        kind, why = self.refused(self.WAIT + 1)
+        self.assertEqual(campaignplan.council.REFUSED_CROSSING, kind)
+        self.assertIn("queued across the sea and never started", why)
+
+    def test_inside_the_wait_it_is_still_offered(self):
+        self.assertIsNone(self.refused(self.WAIT - 1))
+
+    def test_after_the_cooldown_it_is_offered_again(self):
+        self.assertIsNone(self.refused(self.WAIT + self.COOL))
+
+    def test_nothing_queued_changes_nothing(self):
+        f = facts(ALLIANCE, map_id=KALIMDOR)
+        self.assertNotIn(self.far.keyword, campaignplan.refusal_kinds(f))
+
+    def test_a_leader_on_the_doors_continent_is_never_refused(self):
+        self.assertIsNone(self.refused(self.WAIT + 1, map_id=EASTERN_KINGDOMS))
+
+    def test_the_rows_read_into_the_oldest_age_per_door(self):
+        rows_ = [
+            {"keyword": self.far.keyword, "age_s": 5},
+            {"keyword": self.far.keyword, "age_s": 9},
+            {"keyword": "nowhere", "age_s": 7},
+        ]
+        self.assertEqual({self.far.keyword: 9}, campaignplan.unstarted(rows_))
+        self.assertIsNone(campaignplan.unstarted(None))
