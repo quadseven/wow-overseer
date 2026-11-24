@@ -3582,8 +3582,9 @@ def _flag_death_loop_holds(members, facts) -> None:
         return
     levels = {str(m.name): int(getattr(m, "level", 0) or 0) for m in members or ()}
     now = time.time()
-    flags = deathhold.plan(facts.get("death_loops") or {}, levels, memos, now,
-                           facts.get("roster") or ())
+    flags = deathhold.plan(
+        deathhold.flagged(facts.get("death_loops"), facts.get("death_forming")),
+        levels, memos, now, facts.get("roster") or ())
     for write in flags.writes:
         _memo_upsert(deathhold.KIND, write.name, write.value, write.since, write.expires)
         log.info("death loop hold: %s is flagged in zone %d, so its own wandering is "
@@ -5803,6 +5804,12 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
             cur, dungeonstall.UNFORMED_SQL.format(holes=marks),
             dungeonstall.unformed_args(key, names),
             "the doors left with no run formed")
+        # A DOOR ACROSS THE SEA QUEUED AND NEVER STARTED is not offered again
+        # for a while (campaignplan._unstarted).
+        unstarted = _planner_rows(
+            cur, campaignplan.UNSTARTED_SQL.format(holes=marks),
+            campaignplan.unstarted_args(key, names),
+            "the queued doors that started no run")
         # A DOOR THE GUILDS RARELY CLEAR gives way to a sound one
         # (campaignplan.Option.poor).
         record = _planner_rows(
@@ -5824,6 +5831,7 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
         bosses=_PLANNER_BOSSES,
         keys=_read_or_none(campaignplan.keys_held, keys),
         stalled=stalled,
+        unstarted=campaignplan.unstarted(unstarted),
         door_record=_read_or_none(guildrun.door_record, record),
         unformed=dungeonstall.unformed(unformed))
 
@@ -23070,7 +23078,10 @@ class Bridge(discord.Client):
         walk = str(row.command).startswith("walk-to-")
         seconds = (max(CORPS_ROW_FOLLOW_SECONDS, guildroute.follow_seconds(cap))
                    if walk else CORPS_ROW_FOLLOW_SECONDS)
-        for attempt in (1, 2):
+        loop_hearth_walk = guildjobs.is_loop_hearth_walk(step, row)
+        attempts = (guildjobs.LOOP_HEARTH_WALK_RETRIES + 1
+                    if loop_hearth_walk else 2)
+        for attempt in range(1, attempts + 1):
             row_id = await asyncio.to_thread(_insert_corps_row, step.holder, row)
             if not row_id:
                 return False
@@ -23089,6 +23100,14 @@ class Bridge(discord.Client):
                     log.info("guild jobs: sale: %s (row %d)",
                              vendorsale.sale_line(step.holder, sale), row_id)
                 return True
+            if (loop_hearth_walk and attempt < attempts
+                    and guildjobs.loop_hearth_walk_held(status, detail)):
+                log.info("guild jobs: %s's onward walk is still held after its hearth; "
+                         "retrying in %d seconds (ask %d of %d)", step.holder,
+                         guildjobs.LOOP_HEARTH_WALK_RETRY_SECONDS, attempt,
+                         guildjobs.LOOP_HEARTH_WALK_RETRIES)
+                await asyncio.sleep(guildjobs.LOOP_HEARTH_WALK_RETRY_SECONDS)
+                continue
             if attempt == 1 and await self._corps_row_again(step, row, row_id, detail, walk):
                 continue
             self._note_job_walk_unsupported(step, row, detail)
@@ -39877,6 +39896,8 @@ def _fetch_job_facts(family_names: list) -> dict:
     levels = {str(r["name"]): int(r.get("level") or 0) for r in rows}
     (facts["death_loops"], facts["death_risks"],
      facts["death_avoided"]) = deathloop.judge(death_rows, levels)
+    # Loops forming at three deaths, for the hold flag only (#3196).
+    facts["death_forming"] = deathloop.forming(death_rows, levels)
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}

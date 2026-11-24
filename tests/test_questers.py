@@ -241,6 +241,20 @@ class EveryQuestInReach(unittest.TestCase):
         self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 30))
         self.assertIn("goes on to", p.move.said)
 
+    def test_a_quest_with_no_objective_spawns_is_not_offered(self):
+        # Quest 99 requires killing creature 999, but no spawns for 999 are provided.
+        cat = world(
+            extra_quests=[quest(99, ELWYNN, 2, kill=999, title="Unspawned Hunt")],
+            extra_givers=[
+                giver(99, "start", 1099, 199, 100, 0),
+                giver(99, "end", 1099, 199, 100, 0),
+            ],
+        )
+        # The quest has a giver but no objective spawns - it should not be in reach.
+        self.assertNotIn(99, questers.in_reach(cat, mirra(), ELWYNN))
+        # The quest should also not be open_to the member.
+        self.assertFalse(questers.open_to(cat, mirra(), 99))
+
     def test_a_zone_on_the_other_continent_is_crossed_to(self):
         far = [quest(40, 148, 4, title="Darkshore Fish")]
         cat = world(
@@ -878,6 +892,35 @@ class Broken(unittest.TestCase):
         self.assertEqual(
             reason,
             "requires crafted Crab Cakes (item 2683); questers cannot cook",
+        )
+
+    def test_seasoned_wolf_kabobs_ledger_explains_the_unsupported_cooking_step(self):
+        quest = classquest.Quest(
+            90,
+            "Seasoned Wolf Kabobs",
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((1017, 10),),
+        )
+        facts = questers.Facts(zone=DUSKWOOD, level=25, ender_npcs=True)
+
+        reason = questers._broken_reason(
+            quest,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            reason,
+            "requires crafted Seasoned Wolf Kabobs (item 1017); questers cannot cook",
         )
 
     def test_quest_101_carries_no_hard_coded_reason(self):

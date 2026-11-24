@@ -8,7 +8,13 @@ is not needed for Molten Core and only applies to Nefarian's Shadow Flame in
 Blackwing Lair.
 
 `data/mc-spells.json` records the first trainer ranks used by `mcencounters.py`
-and the dispel types of its seven cited boss spells. These are learn-level
+and the dispel types of its seven cited boss spells. The table also asks for
+one shadow resistance source (Shadow Resistance Aura, spell 19876, level 28) at
+Lucifron, Gehennas and Majordomo Executus, and one fire resistance source at
+Magmadar, Garr, Baron Geddon, Sulfuron Harbinger, Golemagg and Ragnaros, as the
+pinned playerbots strategy casts the paladin aura on those bosses. The fire
+capability still counts a shaman's Fire Resistance Totem; whether the shaman's
+own AI casts it for these bosses was not read. These are learn-level
 requirements, not a claim that a member has purchased or currently can cast
 a spell. Talent-only capabilities are excluded. Seats and encounter needs
 are unchanged.

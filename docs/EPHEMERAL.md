@@ -102,6 +102,7 @@ SQL are checked against a snapshot of the game databases
     decree: v1
     id: <kebab-case>
     proves: [{repo: owner/name, issue: <n or TODO>, criterion: "<live-check box text>"}]
+    # Or, for `eph report`: proves: <issue number> and box: "<checkbox text or stable prefix>"
     fix: {repo: owner/name, commit: <sha or TODO>}
     world: {class: lean|full, image: follow-dev, bridge: "off"|"on", random_bots: 0, config: {}}
     runs: {control: 3, treatment: 3}
@@ -153,6 +154,13 @@ SQL are checked against a snapshot of the game databases
   yet, so today this only fixes the names a decree may use.
 
 `TODO` is allowed for an issue number or commit and is a warning, never an error.
+The numeric `proves` form names an issue in this repository and requires `box`.
+`eph report` posts the named decree's batch result, including each run's UTC
+start time and judge reason lines. It ticks one uniquely matching checkbox only
+when every declared control run is `FAIL` and every declared treatment run is
+`PASS`; a missing or ambiguous match leaves the body unchanged. The command
+never closes an issue. This records the decree's checks and does not claim that
+the behavior is proven end to end.
 
 ## Anchors
 
@@ -298,9 +306,9 @@ judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`; without them it prints an INVALID verdict and exits 2,
 because there is nowhere to write the result.
 
-## Runner: submit, dispatch, collect
+## Runner: submit, dispatch, collect, report
 
-All three read one settings file, never the repository: copy
+Runner commands read one settings file, never the repository: copy
 `ephemeral/eph.config.example.json`, fill it in, and pass `--config` or set
 `EPH_CONFIG`. It names the namespace, the nodes a world may use (each with its
 client-data claim and a world cap), the nodes that are never used, and the
@@ -311,6 +319,7 @@ digest-pinned tools image. A missing or malformed file is an error.
     python3 -m ephemeral dispatch [--once] [--owner NAME]
     python3 -m ephemeral dispatch --stop --owner NAME
     python3 -m ephemeral collect [--dry-run]
+    python3 -m ephemeral report <batch-id> [batch-id ...] [--dry-run]
 
 `submit` lints the decree, reads the Job skeleton ConfigMap and the base realm's
 running image digests and override files, merges the decree's config onto them
@@ -379,6 +388,16 @@ nothing to the issue. A decree not yet merged posts to its own pull request when
 `--decree-pr` was given. The comment author is read back and must be the
 configured App, and `collect` refuses to write unless `GH_TOKEN` and
 `GH_CONFIG_DIR` are set.
+
+`report` is the non-closing evidence path for decrees using numeric `proves`
+and `box` fields. It accepts one or more batches from the same decree and posts
+the decree id, batch ids, per-run verdicts, UTC start times and judge reason
+lines. The box is ticked only when every
+declared pair meets the decree rule (control `FAIL`, treatment `PASS`) and one
+checkbox uniquely matches its exact text or prefix and every completed run has
+a UTC start time. Missing or ambiguous boxes are reported without a body edit.
+`--dry-run` prints the exact comment and makes no issue changes. This command
+never closes an issue.
 
 The template is forged from the live realm: its characters and auth databases and its
 world database are at the live schema, and its `updates` table holds each module SQL file

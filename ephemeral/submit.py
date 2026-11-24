@@ -400,6 +400,7 @@ def submit(
         "batch": batch, "decree_id": decree_id, "decree_sha256": sha,
         "decree_path": str(decree_path), "decree_pr": args.get("decree_pr"),
         "submitted_at": int(clock()), "class": klass, "proves": decree["proves"],
+        "box": decree.get("box"),
         "fix": decree["fix"], "runs_wanted": {a: decree["runs"][a] for a in arms},
         "presence": presence, "fidelity_deltas": deltas, "runs": runs,
     }  # fmt: skip
