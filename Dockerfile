@@ -30,7 +30,7 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      professions.py craft.py craft_supply.py auction.py gearup.py weaponskill.py jobs.py trainjob.py \
      craft_rhythm.py \
      skillgoal.py gatheraim.py gatherband.py farmassign.py farmjob.py \
-     flightlearn.py \
+     flightlearn.py flightguard.py \
      followhold.py \
      learnaim.py reagentplan.py recipebook.py \
      craftpleas.py materials.py \
