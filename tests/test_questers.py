@@ -880,6 +880,35 @@ class Broken(unittest.TestCase):
             "requires crafted Crab Cakes (item 2683); questers cannot cook",
         )
 
+    def test_seasoned_wolf_kabobs_ledger_explains_the_unsupported_cooking_step(self):
+        quest = classquest.Quest(
+            90,
+            "Seasoned Wolf Kabobs",
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((1017, 10),),
+        )
+        facts = questers.Facts(zone=DUSKWOOD, level=25, ender_npcs=True)
+
+        reason = questers._broken_reason(
+            quest,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            reason,
+            "requires crafted Seasoned Wolf Kabobs (item 1017); questers cannot cook",
+        )
+
     def test_quest_101_carries_no_hard_coded_reason(self):
         """The Totem of Infliction is a plain three-item collect quest in the
         world rows (items 1129, 1130, 2378, no item use), so it is judged like

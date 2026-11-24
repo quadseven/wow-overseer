@@ -262,6 +262,9 @@ GIVER_MISSING = "the quest giver is not in the world"
 # to satisfy these objectives.
 UNSUPPORTED_OBJECTIVE = "it requires speaking to an NPC, which questers cannot do"
 CRAFTED_CRAB_CAKES = "requires crafted Crab Cakes (item 2683); questers cannot cook"
+SEASONED_WOLF_KABOBS = (
+    "requires crafted Seasoned Wolf Kabobs (item 1017); questers cannot cook"
+)
 FARGODEEP_EXPLORATION = (
     "requires exploring Fargodeep Mine; questers cannot earn exploration credit"
 )
@@ -1870,6 +1873,8 @@ def _broken_reason(
         return UNSUPPORTED_OBJECTIVE
     if quest.id == 93 and status == STATUS_INCOMPLETE and (2683, 6) in quest.items:
         return CRAFTED_CRAB_CAKES
+    if quest.id == 90 and status == STATUS_INCOMPLETE and (1017, 10) in quest.items:
+        return SEASONED_WOLF_KABOBS
     if quest.id == 62 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return FARGODEEP_EXPLORATION
     if quest.id == 127 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
