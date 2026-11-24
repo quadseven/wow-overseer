@@ -181,6 +181,25 @@ class Filing(unittest.TestCase):
         out_of_scope = text.split("## Out of scope", 1)[1]
         self.assertIn("A reason string keyed on this quest's id", out_of_scope)
 
+    def test_stolen_journal_ticket_explains_the_recorded_take_refusal(self):
+        # bridge._record_quest_broken persists the reason from questers._giver_failure.
+        reason = "the quest giver would not give it: no giver of that quest in reach"
+        rows = [
+            dict(row(218, guid=7, name="Fizzik"), reason=reason),
+            dict(row(218, guid=8, name="Pindle"), reason=reason),
+        ]
+        text = qt.body(218, None, rows, [], "")
+        self.assertEqual(text.count("Reason: " + reason), 2)
+        self.assertEqual(text.count("Last objective counts: not in the log now"), 2)
+        self.assertEqual(
+            text.count("The take command found no quest giver in reach"), 1
+        )
+        self.assertIn("The stored rows leave open why the lookup failed.", text)
+        self.assertNotIn(
+            "The take command found no quest giver in reach",
+            qt.body(218, None, [row(218)], [], ""),
+        )
+
     def test_tickets_default_to_the_open_quest_epic(self):
         with mock.patch.dict("os.environ", {}, clear=False) as env:
             env.pop("QUEST_TICKET_EPIC", None)
@@ -364,6 +383,37 @@ class Plumbing(unittest.TestCase):
         self.assertIn("initial_delay", bridge_src)
         self.assertIn("_read_last_quest_tickets_pass", bridge_src)
         self.assertIn("SqlStore(cur).last_pass()", bridge_src)
+
+
+class QuesterBoundRefusalTest(unittest.TestCase):
+    """A quest another quester completed is not filed for one quester's refusal."""
+
+    def refused(self, quest, reason, guid=8):
+        r = row(quest, guid=guid, name="Pindle")
+        r["reason"] = reason
+        return r
+
+    def test_completed_quest_with_only_refusals_files_nothing(self):
+        rows = [
+            self.refused(328, "the turn-in NPC would not take it: no object in reach"),
+            self.refused(328, "the quest giver would not give it: not eligible", 9),
+        ]
+        todo = qt.plan(rows, completed={328})
+        self.assertEqual(todo.new, ())
+
+    def test_same_rows_file_when_nobody_completed_it(self):
+        rows = [self.refused(328, "the turn-in NPC would not take it: no object")]
+        self.assertEqual([q for q, _ in qt.plan(rows).new], [328])
+
+    def test_a_stall_on_a_completed_quest_still_files(self):
+        rows = [self.refused(348, "its objectives did not move for 2 hours of play")]
+        self.assertEqual([q for q, _ in qt.plan(rows, completed={348}).new], [348])
+
+    def test_run_reads_completed_from_the_store(self):
+        store = Store([self.refused(353, "the quest giver would not give it: x")])
+        store.completed = lambda: [353]
+        out = qt.run(store, qt.Client(FakeGitHub()), [])
+        self.assertEqual(out["filed"], 0)
 
 
 if __name__ == "__main__":

@@ -528,6 +528,7 @@ class TheAdapter(unittest.TestCase):
         self.hearthed = frozenset()
         self.binds = {}
         self.stall = 0.0
+        self.unloaded = frozenset()
         letters = [
             {
                 "holder": "Bork",
@@ -606,6 +607,11 @@ class TheAdapter(unittest.TestCase):
             "_town_errand_jobs": lambda names: self.jobs.append("town run") or 2,
             "_hub_aim": lambda hub: "at:0:100,100,10",
             "_fetch_mail": lambda names: letters,
+            # The split read is the same rows and the letters left out of them.
+            "_fetch_mail_split": lambda names: (
+                ns["_fetch_mail"](names),
+                self.unloaded,
+            ),
             "_recent_mail_keys": lambda minutes: set(),
             "_fetch_free_slots": lambda names: {"Bork": 5, "Grug": 5},
             "_fetch_town_worn": lambda names: [],
@@ -619,6 +625,7 @@ class TheAdapter(unittest.TestCase):
             body=_functions(
                 "_town_errand_once",
                 "_town_errand_start",
+                "_say_errand_waits_for_run",
                 "_town_errand_release_trainer",
                 "_town_errand_aim",
                 "_town_errand_step",
@@ -662,6 +669,99 @@ class TheAdapter(unittest.TestCase):
         self.assertEqual(["town run"], self.jobs)
         self.assertIn("town errand", self.fam.slot.reserved)
         self.assertEqual(("town errand", "Grug", "at:0:100,100,10"), self.fam.aims[-1])
+
+    def test_a_gear_errand_is_not_sent_again_to_a_hub_its_walk_never_reached(self):
+        # #1261: bought gear waited in the post, the walk to the capital
+        # mailbox stalled out as "did not land", and five minutes later the
+        # same errand took the traveller for the same walk, for hours.
+        import dataclasses
+
+        said = []
+        self.ns["dataclasses"] = dataclasses
+        self.ns["log"] = types.SimpleNamespace(
+            info=lambda fmt, *a: said.append(fmt % a if a else fmt)
+        )
+        self.ns["_TOWN_ERRAND_RELEASED"] = {
+            ("Bork", "Grug"): [(dict(HUB), self.now - te.UNLANDED_RETRY_SECONDS - 1)]
+        }
+        before = te.State(ended=self.now - te.UNLANDED_RETRY_SECONDS - 1, unlanded=True)
+        state = asyncio.run(
+            self.fam._town_errand_start(
+                before, ["Bork", "Grug"], "Grug", False, self.now, ""
+            )
+        )
+        self.assertFalse(state.active)
+        self.assertEqual(self.now, state.ended)
+        self.assertTrue(state.unlanded)
+        self.assertEqual([], self.jobs)
+        self.assertEqual([], self.hearths)
+        self.assertTrue(any("released unlanded" in line for line in said), said)
+
+    def test_a_gear_errand_goes_again_once_the_memory_has_expired(self):
+        self.ns["_TOWN_ERRAND_RELEASED"] = {
+            ("Bork", "Grug"): [(dict(HUB), self.now - te.AIM_MEMORY_SECONDS - 1)]
+        }
+        before = te.State(ended=self.now - te.UNLANDED_RETRY_SECONDS - 1, unlanded=True)
+        state = asyncio.run(
+            self.fam._town_errand_start(
+                before, ["Bork", "Grug"], "Grug", False, self.now, ""
+            )
+        )
+        self.assertTrue(state.active)
+        self.assertEqual(["town run"], self.jobs)
+
+    def ended_errand_start(self, ended_ago, ran_since=False, free=None, said=None):
+        """Try to start an errand for a family whose last one ended
+        `ended_ago` seconds ago, while a run is queued for it."""
+        # The profession loop asks for the errand, a path the ordinary
+        # two-hour cooldown does not hold back.
+        names, leader = self.ns["_family_of"](None)
+        self.ns["_PROF_LOOP_TOWN"] = {tuple(sorted(names)): "profession loop: bags low"}
+        self.ns["_campaign_waiting"] = lambda names: True
+        self.ns["_fetch_free_slots"] = lambda names: dict(free or {n: 5 for n in names})
+        self.ns["_bag_hold_stuck"] = lambda names, free_slots, claim_store=None: False
+        if said is not None:
+            self.ns["log"] = types.SimpleNamespace(
+                info=lambda fmt, *a: said.append(fmt % a if a else fmt)
+            )
+        state = te.State(ended=self.now - ended_ago, ran_since=ran_since)
+        return asyncio.run(
+            self.fam._town_errand_start(state, names, leader, False, self.now, "")
+        )
+
+    def free_with(self, first):
+        names, _leader = self.ns["_family_of"](None)
+        return {n: (first if i == 0 else 5) for i, n in enumerate(names)}
+
+    def test_an_ended_errand_does_not_reclaim_the_family_while_a_run_is_queued(self):
+        state = self.ended_errand_start(ended_ago=120)
+        self.assertFalse(state.active)
+        self.assertEqual([], self.jobs)
+
+    def test_the_errand_may_claim_again_once_the_queued_run_opened(self):
+        state = self.ended_errand_start(ended_ago=120, ran_since=True)
+        self.assertTrue(state.active)
+        self.assertEqual(["town run"], self.jobs)
+
+    def test_the_errand_may_claim_again_after_the_window(self):
+        state = self.ended_errand_start(ended_ago=te.RUN_WAIT_SECONDS + 1)
+        self.assertTrue(state.active)
+
+    def test_a_member_with_no_free_slot_still_triggers_the_errand(self):
+        state = self.ended_errand_start(ended_ago=120, free=self.free_with(first=0))
+        self.assertTrue(state.active)
+
+    def test_a_member_below_the_comfortable_floor_does_not(self):
+        state = self.ended_errand_start(ended_ago=120, free=self.free_with(first=2))
+        self.assertFalse(state.active)
+
+    def test_the_wait_is_said_once_per_window(self):
+        said = []
+        for ago in (120, 150, 180):
+            self.now = 1000.0 + ago
+            self.ended_errand_start(ended_ago=ago, said=said)
+        waits = [line for line in said if "waits for the run" in line]
+        self.assertEqual(1, len(waits), said)
 
     def test_a_bag_room_errand_inside_an_instance_goes_to_the_door_continent(self):
         # wow-dev 2026-10-24: the family in Razorfen Downs (map 129), the head
@@ -1212,6 +1312,77 @@ class TheAdapter(unittest.TestCase):
         self.assertTrue(done)
         self.assertEqual([], self.written)
 
+    def _hear(self):
+        """The errand's log lines, as written."""
+        lines = []
+        self.ns["log"] = types.SimpleNamespace(
+            info=lambda fmt, *args, **kw: lines.append(fmt % args if args else fmt)
+        )
+        return lines
+
+    def _to_the_mail_step(self):
+        self.tick()
+        self.positions = {"Grug": _at(101, 100), "Bork": _at(103, 101)}
+        self.assertEqual(te.GATHER, self.tick().phase)
+        self.assertEqual(te.STEPS, self.tick().phase)
+        state = self.tick()  # nothing to fund
+        self.assertEqual(te.MAIL, state.current_step)
+        return state
+
+    def test_a_letter_the_mailbox_has_not_loaded_ends_the_mail_step_at_once(self):
+        """#2402: eight such letters held the step its whole 900 seconds. The
+        read is the bridge's own, over a world whose only letter was refused
+        `no mail with that id` since its holder last logged out."""
+        from test_mail_unloaded import bridge, letter, refusal, world
+
+        def read(names):
+            with world([letter("Bork", 9, 77)], [refusal("Bork", 9, 77, 2000, 1000)]):
+                return bridge._fetch_mail_split(names)
+
+        self.ns["_fetch_mail_split"] = read
+        lines = self._hear()
+        at_mail = self._to_the_mail_step()
+        entered = self.now
+        state = self.tick()
+        self.assertEqual(te.STEPS, state.phase)
+        self.assertGreater(state.step, at_mail.step)
+        self.assertEqual([], self.written)
+        self.assertEqual(900.0, te.STEP_SECONDS[te.MAIL])
+        self.assertLess(self.now - entered, te.STEP_SECONDS[te.MAIL] / 10)
+        self.assertFalse([line for line in lines if "ran out of time" in line])
+        said = [line for line in lines if "wait for its next login" in line]
+        self.assertEqual(1, len(said))
+        self.assertIn("Bork mail 9", said[0])
+
+    def test_the_errand_names_the_unreachable_letters_once(self):
+        """One line per errand, however many passes the mail step takes: the
+        loaded letter keeps the step open, the unloaded one is named once."""
+        self.unloaded = frozenset({("Grug", 12), ("Bork", 31)})
+        lines = self._hear()
+        self._to_the_mail_step()
+        for _ in range(3):
+            self.assertEqual(te.MAIL, self.tick().current_step)
+        said = [line for line in lines if "wait for its next login" in line]
+        self.assertEqual(1, len(said), said)
+        self.assertTrue(said[0].startswith("town errand mail: 2 letter(s)"))
+        self.assertIn("Bork mail 31, Grug mail 12", said[0])
+        self.assertIn("the mail step does not wait for them", said[0])
+
+    def test_the_next_errand_names_them_again_and_no_letters_is_no_line(self):
+        self.unloaded = frozenset({("Grug", 12)})
+        lines = self._hear()
+        mail = self.ns["_town_errand_mail"]
+        where = {"Grug": _at(101, 100), "Bork": _at(103, 101)}
+        marks = {}
+        for step_marks in (marks, marks, {}):
+            asyncio.run(mail(self.fam, HUB, ["Bork", "Grug"], where, None, step_marks))
+        said = [line for line in lines if "wait for its next login" in line]
+        self.assertEqual(2, len(said))
+        del lines[:]
+        self.unloaded = frozenset()
+        asyncio.run(mail(self.fam, HUB, ["Bork", "Grug"], where, None, {}))
+        self.assertFalse([line for line in lines if "next login" in line])
+
     def test_the_richest_member_posts_gold_before_the_post_is_taken(self):
         # wow-dev 2026-09-28: the warrior carried 54 gold, the rogue 2.
         rich = {
@@ -1746,6 +1917,36 @@ def replace_phase(state, phase):
     return dataclasses.replace(state, phase=phase)
 
 
+class AHubThatNeverLandedIsNotATrip(unittest.TestCase):
+    """#1261: only a bag-room errand has another aim to choose, so any other
+    errand does not start for a hub its walk was released from unlanded."""
+
+    WHY = "bought gear waits in the mailbox for Bork"
+
+    def test_a_gear_errand_refuses_a_released_hub(self):
+        self.assertTrue(te.unreachable_hub(self.WHY, HUB, [(dict(HUB), 0.0)], 600.0))
+
+    def test_the_memory_expires(self):
+        released = [(dict(HUB), 0.0)]
+        self.assertFalse(
+            te.unreachable_hub(self.WHY, HUB, released, te.AIM_MEMORY_SECONDS + 1)
+        )
+
+    def test_a_hub_elsewhere_is_not_refused(self):
+        far = dict(HUB, x=HUB["x"] + te.AIM_SAME_YARDS + 50.0)
+        self.assertFalse(te.unreachable_hub(self.WHY, HUB, [(far, 0.0)], 600.0))
+
+    def test_a_bag_room_errand_keeps_its_own_fallback(self):
+        released = [(dict(HUB), 0.0)]
+        self.assertFalse(te.unreachable_hub(te.BAG_PRESSURE_WHY, HUB, released, 600.0))
+        self.assertFalse(
+            te.unreachable_hub(te.LOOP_WHY + "bags low", HUB, released, 600.0)
+        )
+
+    def test_no_hub_is_not_this_refusal(self):
+        self.assertFalse(te.unreachable_hub(self.WHY, {}, [(dict(HUB), 0.0)], 600.0))
+
+
 class TheLeaderThatCannotWalk(unittest.TestCase):
     """The Zug family's sale trip never landed (wow-dev 2026-11-14).
 
@@ -1887,3 +2088,54 @@ class TheBridgeCountsALostAim(unittest.TestCase):
     def test_only_an_empty_column_after_our_own_aim_is_a_lost_aim(self):
         self.assertIn("state.go_aimed", BRIDGE)
         self.assertIn("aim_lost = not await asyncio.to_thread(column, leader)", BRIDGE)
+
+
+class TheRunWait(unittest.TestCase):
+    def ended(self, **kw):
+        return te.State(ended=100.0, **kw)
+
+    def test_waits_until_the_window_ends_while_a_run_is_queued(self):
+        until = te.run_wait_until(self.ended(), 200.0, run_queued=True)
+        self.assertEqual(100.0 + te.RUN_WAIT_SECONDS, until)
+
+    def test_no_wait_without_a_queued_run_or_after_the_run_opened(self):
+        self.assertEqual(0.0, te.run_wait_until(self.ended(), 200.0, run_queued=False))
+        self.assertEqual(
+            0.0,
+            te.run_wait_until(self.ended(ran_since=True), 200.0, run_queued=True),
+        )
+
+    def test_no_wait_for_a_member_with_no_room_or_a_family_never_sent(self):
+        self.assertEqual(
+            0.0, te.run_wait_until(self.ended(), 200.0, run_queued=True, no_room=True)
+        )
+        self.assertEqual(0.0, te.run_wait_until(te.State(), 200.0, run_queued=True))
+
+    def test_the_window_is_thirty_minutes_and_env_tunable(self):
+        self.assertEqual(1800.0, te.RUN_WAIT_SECONDS)
+
+    def reloaded(self, value):
+        """RUN_WAIT_SECONDS and the refused reads after a reload with the
+        environment variable set to `value` (None: unset)."""
+        import importlib
+        import os
+        from unittest import mock
+
+        env = {} if value is None else {"TOWN_ERRAND_RUN_WAIT_SECONDS": value}
+        try:
+            with mock.patch.dict(os.environ, env):
+                if value is None:
+                    os.environ.pop("TOWN_ERRAND_RUN_WAIT_SECONDS", None)
+                module = importlib.reload(te)
+                return module.RUN_WAIT_SECONDS, list(module.ENV_REJECTED)
+        finally:
+            importlib.reload(te)
+
+    def test_the_environment_sets_the_window(self):
+        self.assertEqual((600.0, []), self.reloaded("600"))
+
+    def test_a_bad_or_negative_value_keeps_the_default_and_is_noted(self):
+        for raw in ("soon", "-5", "nan"):
+            seconds, rejected = self.reloaded(raw)
+            self.assertEqual(1800.0, seconds, raw)
+            self.assertEqual([("TOWN_ERRAND_RUN_WAIT_SECONDS", raw)], rejected)

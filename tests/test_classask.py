@@ -431,6 +431,18 @@ class TheAnswer(unittest.TestCase):
         )
         self.assertEqual([r.member for r in other.replies], ["Chill", "Dread"])
 
+    def test_a_helper_with_a_refused_road_does_not_answer_a_later_ask(self):
+        out = classask.plan_pass(
+            helps_of("Dread"),
+            friends(),
+            {},
+            [qask(2, asker_="Dread")],
+            [],
+            NOW,
+            road_refused_helpers={2000: frozenset({"Chill"})},
+        )
+        self.assertEqual([r.member for r in out.replies], ["Bigzug", "Ghoul"])
+
     def test_an_asker_that_gave_up_lately_does_not_ask_again(self):
         out = classask.plan_pass(
             helps_of("Bigzug"), friends(), {}, [], [], NOW, cooling={"Bigzug"}
@@ -909,6 +921,27 @@ class TheHold(unittest.TestCase):
 
 class TheDungeonPasses(unittest.TestCase):
     """The class quest comes before the dungeon in every pass that forms one."""
+
+    def test_a_helper_on_a_refused_meeting_road_is_not_invited_again(self):
+        board = classparty.Board()
+        run = classparty.PartyRun(99, "Bigzug", ("Chill",), 2000, "Group Job", None)
+        run.level, run.map_id = 20, 1
+        run.route_context = {"Chill": (19, 1)}
+        run.walks["Chill"] = "the way to the spawn crosses the other side's ground"
+        board.refuse_road(run, ("Chill",))
+        facts_ = {
+            "asks": [qask(2, asker_="Dread")],
+            "answers": [],
+            "now": NOW,
+            "busy": set(),
+            "family": set(),
+        }
+
+        quest_pass, *_ = bridge._class_ask_pass(
+            facts_, friends(), {}, {}, helps_of("Dread"), board=board
+        )
+
+        self.assertEqual([r.member for r in quest_pass.replies], ["Bigzug", "Ghoul"])
 
     def social(self, helps=(), asks=(), answers=(), on_write=None, plans=()):
         this = _Self()

@@ -74,6 +74,37 @@ class TheShelf(unittest.TestCase):
         m = self.draw({"data": {"clips": bare, "empty": "none"}, "loading": False})
         self.assertNotIn("clip-subject", m)
 
+    def test_a_repeat_of_one_item_says_which_one_it_is(self):
+        twice = [
+            dict(CLIPS[1], id=4, nth=2, of=2),
+            dict(CLIPS[1], id=3, nth=1, of=2),
+        ]
+        m = self.draw({"data": {"clips": twice, "empty": "none"}, "loading": False})
+        self.assertIn("2 of 2", m)
+        self.assertIn("1 of 2", m)
+        once = self.draw({"data": {"clips": CLIPS, "empty": "none"}, "loading": False})
+        self.assertNotIn("clip-nth", once)
+
+    def test_a_day_footer_counts_missed_moments_and_adds_no_card(self):
+        missed = [
+            {"day": "2026-11-10", "no_view": 2, "failed": 1},
+            {"day": "2026-11-09", "no_view": 0, "failed": 0},
+        ]
+        m = self.draw(
+            {"data": {"clips": CLIPS, "missed": missed, "empty": "x"}, "loading": False}
+        )
+        self.assertEqual(m.count('class="card clip-card"'), 2)
+        self.assertIn("2026-11-10: 2 with no streamed member in view", m)
+        self.assertIn("1 where recording failed", m)
+        self.assertNotIn("2026-11-09", m)
+
+    def test_only_missed_moments_still_show_the_footer(self):
+        missed = [{"day": "2026-11-10", "no_view": 1, "failed": 0}]
+        m = self.draw(
+            {"data": {"clips": [], "missed": missed, "empty": "x"}, "loading": False}
+        )
+        self.assertIn("1 with no streamed member in view", m)
+
     def test_no_video_is_loaded_until_play(self):
         m = self.draw({"data": {"clips": CLIPS, "empty": "none"}, "loading": False})
         self.assertNotIn("<video", m)
@@ -185,6 +216,23 @@ class TheClipLink(unittest.TestCase):
             % json.dumps(entry)
         )
         return out["m"]
+
+    def test_a_clip_from_another_view_says_whose_under_the_link(self):
+        note = "Filmed from the view of Otherchar (leader)."
+        m = self.link(
+            {
+                "clip": {
+                    "url": "/clips/clip-9-loot.mp4",
+                    "kind": "loot",
+                    "view_note": note,
+                }
+            }
+        )
+        self.assertIn("Watch the clip", m)
+        self.assertIn(note, m)
+        self.assertLess(m.index("Watch the clip"), m.index(note))
+        plain = self.link({"clip": {"url": "/clips/clip-9-loot.mp4", "kind": "loot"}})
+        self.assertNotIn("clip-note", plain)
 
     def test_a_clip_is_a_link_under_the_mount(self):
         m = self.link({"clip": {"url": "/clips/clip-9-loot.mp4", "kind": "loot"}})

@@ -189,7 +189,7 @@ def lendable(
     for family, members in _families(roster).items():
         if not family or family not in idle:
             continue
-        if operatorhold.held(holds, family) is not None:
+        if operatorhold.held(holds, family, "lending") is not None:
             continue
         for name, _job in members:
             if name == family:

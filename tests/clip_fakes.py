@@ -64,6 +64,8 @@ class FakeLedger:
         rows = list(self.rows)
         if "state = 'ready'" in sql:
             rows = [r for r in rows if r["state"] == "ready"]
+        if "state IN ('no_view', 'failed')" in sql:
+            rows = [r for r in rows if r["state"] in ("no_view", "failed")]
         if "file_name = %s" in sql:
             rows = [r for r in rows if r["file_name"] == params[0]]
         if "event_key IN" in sql:

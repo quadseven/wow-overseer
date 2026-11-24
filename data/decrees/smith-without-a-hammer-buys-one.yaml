@@ -12,8 +12,8 @@
 # Fixes: wow-overseer pulls 1878 (hammer purchase) and 1597 (worn recipes); the commit is 1878.
 decree: v1
 id: smith-without-a-hammer-buys-one
-proves:
-  - {repo: quadseven/wow-overseer, issue: 1590, criterion: "a job craft smith with no hammer gets exactly one kind buy row for item 5956 and no second while it is held, then a craft event for a worn recipe spell"}
+proves: 1590
+box: "Live: on the dev realm a job craft smith with no hammer gets exactly one kind buy row for item 5956 in the town errand table, and no second one while it is held."
 fix: {repo: quadseven/wow-overseer, commit: "ac6cba9a04590c9d2cdd673dfb07fdf2d5e7d527"}
 world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}

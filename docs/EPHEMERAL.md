@@ -102,6 +102,7 @@ SQL are checked against a snapshot of the game databases
     decree: v1
     id: <kebab-case>
     proves: [{repo: owner/name, issue: <n or TODO>, criterion: "<live-check box text>"}]
+    # Or, for `eph report`: proves: <issue number> and box: "<checkbox text or stable prefix>"
     fix: {repo: owner/name, commit: <sha or TODO>}
     world: {class: lean|full, image: follow-dev, bridge: "off"|"on", random_bots: 0, config: {}}
     runs: {control: 3, treatment: 3}
@@ -117,6 +118,16 @@ SQL are checked against a snapshot of the game databases
   `creature`, `gameobject`, `areatrigger`, `graveyard`, `with`, or `captured`
   (a key in `data/decrees/anchors.yaml`). A coordinate column compared to a number
   in observation SQL is also an error.
+- `at_each` places a `family:<name>` selector's members at separate named
+  `creature`, `gameobject` or `areatrigger` anchors. Give it at least two unique
+  anchors, one for each resolved family member. The order follows the resolver's
+  family order (lead first, then character GUID); the compiler refuses a count
+  mismatch or anchors that resolve to the same map position. `at_each` cannot
+  be combined with `at`. A `with` anchor (in `at`, `homebind` or `corpse_at`)
+  may not name a family placed by `at_each`: its members have separate
+  positions, so lint refuses it with the entry's path. Anchor positions come
+  from existing spawn or point data;
+  coordinates are never written in the decree.
 - `kind: gm` is rejected: bot sessions are SEC_PLAYER, so it silently does nothing.
 - Auction rows and the auction house bot are refused unless the decree sets
   `family: auction-house`.
@@ -143,6 +154,13 @@ SQL are checked against a snapshot of the game databases
   yet, so today this only fixes the names a decree may use.
 
 `TODO` is allowed for an issue number or commit and is a warning, never an error.
+The numeric `proves` form names an issue in this repository and requires `box`.
+`eph report` posts the named decree's batch result, including each run's UTC
+start time and judge reason lines. It ticks one uniquely matching checkbox only
+when every declared control run is `FAIL` and every declared treatment run is
+`PASS`; a missing or ambiguous match leaves the body unchanged. The command
+never closes an issue. This records the decree's checks and does not claim that
+the behavior is proven end to end.
 
 ## Anchors
 
@@ -211,6 +229,10 @@ volume both containers mount), and the judge reads the worldserver log from
 world adds, which carries the module's and the bots' lines at trace and info
 level); `--log` overrides both. With none of them it reports a log that
 could not be read, which is INVALID.
+On a `bridge: on` decree the log assertions also read the bridge sidecar's own log, the
+worldserver log followed by `EPH_BRIDGE_LOG_FILE`, else `$EPH_LOGS_DIR/Bridge.log` (the sidecar
+tees its output there); a bridge log that is missing is INVALID, so a forbidden line can never
+read as absent for want of a file.
 It reads the variables and resolved cast the seed left in `EPH_VARS_FILE`, runs
 the `act` steps (by time, or when a named observation first holds), samples the
 `observe` entries and decides one of three verdicts:
@@ -230,8 +252,20 @@ for up to ten minutes, `EPH_START_WAIT_SECONDS`; no order is given meanwhile, an
 the act clock and `@t0` start when the wait ends. Then they are sampled once,
 before any order; a precondition that still fails ends the run INVALID, naming
 it), `continuous` (every ten seconds) or `end` (after the
-window). Log assertions count regex matches in the worldserver log and are
-checked at the end. A log assertion's `expect` is a bound on that count:
+window). A start precondition may use `online: cast` instead of SQL or a log
+assertion. The judge polls the seeded cast's character rows and holds every act
+until all resolved members have `online = 1`. If the bounded wait expires, the
+run is INVALID and names the members still offline. For example:
+
+    - name: cast-online
+      role: precondition
+      when: start
+      online: cast
+
+This observation cannot be combined with `sql`, `log` or `expect`, and it is
+only valid as a start precondition. Log assertions count regex matches in the
+worldserver log and are checked at the end. A log assertion's `expect` is a
+bound on that count:
 
 - `{count: N}` or `{exactly: N}`: exactly N matching lines. `{count: 0}` forbids
   a line. Either key stands alone.
@@ -282,9 +316,9 @@ judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`; without them it prints an INVALID verdict and exits 2,
 because there is nowhere to write the result.
 
-## Runner: submit, dispatch, collect
+## Runner: submit, dispatch, collect, report
 
-All three read one settings file, never the repository: copy
+Runner commands read one settings file, never the repository: copy
 `ephemeral/eph.config.example.json`, fill it in, and pass `--config` or set
 `EPH_CONFIG`. It names the namespace, the nodes a world may use (each with its
 client-data claim and a world cap), the nodes that are never used, and the
@@ -295,6 +329,7 @@ digest-pinned tools image. A missing or malformed file is an error.
     python3 -m ephemeral dispatch [--once] [--owner NAME]
     python3 -m ephemeral dispatch --stop --owner NAME
     python3 -m ephemeral collect [--dry-run]
+    python3 -m ephemeral report <batch-id> [batch-id ...] [--dry-run]
 
 `submit` lints the decree, reads the Job skeleton ConfigMap and the base realm's
 running image digests and override files, merges the decree's config onto them
@@ -333,6 +368,19 @@ owner's dispatcher is refused. Never `pkill`, `killall` or any
 kill by command-line pattern ("dl.sh", "ephemeral"): it can take down another
 agent's dispatcher.
 
+`dispatch --standby` is for a second dispatcher that should wait in the wings, such
+as one running as a Deployment inside the cluster. When another dispatcher holds
+the Lease it logs the holder once, checks every `--interval` seconds, and takes the
+Lease by itself when the holder releases it or stops renewing it (after
+`lease_seconds`). It starts nothing while it waits. `--once` ignores `--standby`
+and still exits 3 on a held Lease. A dispatcher that ends cleanly (an interrupt or
+SIGTERM) hands the Lease back, so a successor does not wait out its duration; a
+killed process cannot, and its Lease simply expires. Inside a pod, leave
+`kubeconfig` empty in the config: kubectl then uses the pod's ServiceAccount.
+Handover from one dispatcher to another is: start the standby, then have the
+current dispatcher's owner stop it (`dispatch --stop --owner NAME`). To go back,
+stop the standby first, so its Lease is released, then start the other.
+
 `collect` copies result ConfigMaps to the results directory, decides each batch
 and posts. A decree with any run count other than 3 control and 3 treatment can
 still post evidence (outcome `underpowered`, decided before any other outcome, so a
@@ -350,6 +398,16 @@ nothing to the issue. A decree not yet merged posts to its own pull request when
 `--decree-pr` was given. The comment author is read back and must be the
 configured App, and `collect` refuses to write unless `GH_TOKEN` and
 `GH_CONFIG_DIR` are set.
+
+`report` is the non-closing evidence path for decrees using numeric `proves`
+and `box` fields. It accepts one or more batches from the same decree and posts
+the decree id, batch ids, per-run verdicts, UTC start times and judge reason
+lines. The box is ticked only when every
+declared pair meets the decree rule (control `FAIL`, treatment `PASS`) and one
+checkbox uniquely matches its exact text or prefix and every completed run has
+a UTC start time. Missing or ambiguous boxes are reported without a body edit.
+`--dry-run` prints the exact comment and makes no issue changes. This command
+never closes an issue.
 
 The template is forged from the live realm: its characters and auth databases and its
 world database are at the live schema, and its `updates` table holds each module SQL file

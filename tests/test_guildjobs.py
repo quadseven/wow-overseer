@@ -1054,13 +1054,20 @@ class WhereMaterialsGo(unittest.TestCase):
             "8 Copper Ore to Grug (the guild bank's Materials tab)", step.said
         )
 
-    def test_meat_with_every_cook_at_one_goes_to_the_bank(self):
-        # #373: ten family members at Cooking 1 made the pick a name
-        # tiebreak, and Bork was posted 1,190 items he never opened.
+    def test_meat_goes_to_a_cook_at_one(self):
+        # #534: a cook at Cooking 1 can cast a meat recipe once Basic Campfire
+        # is lit, but with a floor of 5 it was never posted meat, so it never
+        # carried any and never left 1. One cook is named, not every cook.
         meat = stack(21, 769, 20, subclass=8, name="Chunk of Boar Meat")
         cooks = {185: [(n, 1) for n in ("Og", "Bork", "Grug", "Ugga", "Grog")]}
         self.assertEqual(
-            guildjobs.recipient_for(meat, cooks, "Grug"),
+            guildjobs.recipient_for(meat, cooks, "Zug"), ("Bork", "its crafter")
+        )
+
+    def test_meat_still_goes_to_the_bank_with_no_cook(self):
+        meat = stack(21, 769, 20, subclass=8, name="Chunk of Boar Meat")
+        self.assertEqual(
+            guildjobs.recipient_for(meat, {}, "Grug"),
             ("Grug", "the guild bank's Materials tab"),
         )
 

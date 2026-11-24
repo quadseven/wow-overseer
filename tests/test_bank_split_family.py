@@ -47,7 +47,10 @@ def deposit(who="Ugga", guid=501, item="Rough Stone"):
 class _Run:
     """One `_bank_once` with every read stubbed; what it decided, recorded."""
 
-    def __init__(self, *, counter=(), split=True, moves=(), bag_facts=None, plan=None):
+    def __init__(
+        self, *, counter=(), split=True, moves=(), bag_facts=None, plan=None, party=None
+    ):
+        self.party = party
         self.counter = set(counter)
         self.split = split
         self.moves = list(moves)
@@ -69,8 +72,12 @@ class _Run:
         this._bank_family_movement = {}
         if self.split:
             now = time.monotonic()
+            # The clock belongs to the trip's own party: the leader and the
+            # members with bank work (#2568). A clock begun over any other
+            # membership starts over, so seed it over the party being judged.
+            party = self.party or sorted({"Grug"} | {m.character for m in self.moves})
             this._bank_family_movement["Grug"] = vendor_stall.FamilyMovement(
-                positions=tuple((n, 0, self.positions[n]["pos_x"], 0.0) for n in NAMES),
+                positions=tuple((n, 0, self.positions[n]["pos_x"], 0.0) for n in party),
                 steady_since=now - SPLIT_FOR,
                 split_since=now - SPLIT_FOR,
             )
@@ -241,7 +248,9 @@ class ADeferralSaysHowManyMovesWait(unittest.TestCase):
         facts = [bankbags.Facts(name=n, worn=(10, 10, 10, 10)) for n in NAMES]
         facts[2] = bankbags.Facts(name="Og", money=5000, worn=(10, 10, 10, 10))
         run = _Run(
-            moves=[deposit("Ugga"), deposit("Bork", 600, "Linen")], bag_facts=facts
+            moves=[deposit("Ugga"), deposit("Bork", 600, "Linen")],
+            bag_facts=facts,
+            party=NAMES,
         ).run()
         (line,) = [w for w in run.warnings if "remained split" in w]
         self.assertIn("3 planned move(s) waiting", line)

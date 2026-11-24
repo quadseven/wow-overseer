@@ -35,6 +35,14 @@ OTHER = "other"
 # errand finished (or the bridge forgot it) and left the job behind (#2379).
 ERRAND_DONE = "errand_done"
 
+# THE OWNERSHIP CEILING. A turn normally follows a finished run, but a queue
+# whose runs never finish (a door held by the pace pass, a run that never
+# opens) would then own the job for ever and no looped family would reach its
+# GATHER phase. When no run has ended and no turn has started for this long, a
+# turn starts anyway, so a queue never keeps a family from its trades for
+# longer than this plus one turn.
+OWNED_CEILING_SECONDS = 2 * 3600
+
 START = "start"
 HOLD = "hold"
 RELEASE = "release"
@@ -105,9 +113,20 @@ def below_cap(trades: dict) -> list:
     )
 
 
-def needs_facts(last_run_end, turn: Turn | None) -> bool:
+def ceiling_due(last_run_end, turn: Turn | None, now: float) -> bool:
+    """Whether the family has gone OWNED_CEILING_SECONDS with neither a run
+    ending nor a turn starting. Needs a recorded turn or run to count from."""
+    if turn is not None and not turn.over:
+        return False
+    anchor = max(float(last_run_end or 0), float(turn.started) if turn else 0.0)
+    return anchor > 0 and now - anchor >= OWNED_CEILING_SECONDS
+
+
+def needs_facts(last_run_end, turn: Turn | None, now: float | None = None) -> bool:
     """Whether a new turn could start, so the caller must read the run state
     and the trades. False while a turn is live or already taken."""
+    if now is not None and ceiling_due(last_run_end, turn, now):
+        return True
     if last_run_end is None:
         return False
     if turn is None:
@@ -140,9 +159,10 @@ def decide(
     """
     if turn is not None and not turn.over:
         return _live(turn, setting, kind, elapsed, town_setting)
-    if last_run_end is None:
+    overdue = ceiling_due(last_run_end, turn, now)
+    if last_run_end is None and not overdue:
         return Decision(NONE, "no run has finished")
-    if turn is not None and int(last_run_end) <= turn.run_ended:
+    if not overdue and turn is not None and int(last_run_end) <= turn.run_ended:
         return Decision(NONE, "the turn for this run is already taken")
     if mid_run:
         return Decision(NONE, "a run is in progress")
@@ -156,11 +176,19 @@ def decide(
             % classic.MAX_PROFESSION_SKILL,
         )
     name, trade, value = low[0]
+    why = "%d trade(s) below the cap, first %s %s at %d" % (
+        len(low),
+        name,
+        trade,
+        value,
+    )
+    if overdue:
+        why += "; no run ended or turn began for %d seconds" % OWNED_CEILING_SECONDS
     return Decision(
         START,
-        "%d trade(s) below the cap, first %s %s at %d" % (len(low), name, trade, value),
+        why,
         remaining=float(setting),
-        turn=Turn(int(last_run_end), now, False),
+        turn=Turn(int(last_run_end or 0), now, False),
     )
 
 

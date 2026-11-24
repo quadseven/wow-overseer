@@ -406,6 +406,15 @@ class Judge:
                 if problems:
                     raise JudgeError(f"observation {name}: " + "; ".join(problems))
                 rendered[name] = sql
+            elif o.get("online") == "cast":
+                sql = render_sql(
+                    "SELECT guid FROM characters WHERE guid IN (@cast) AND online = 1",
+                    variables,
+                )
+                problems = dbschema.check_select(sql, self.schema)
+                if problems:
+                    raise JudgeError(f"observation {name}: " + "; ".join(problems))
+                rendered[name] = sql
         return rendered
 
     def _window(self, steps, duration, started):
@@ -428,9 +437,16 @@ class Judge:
         why = []
         for r in self.records.values():
             if r["role"] == "precondition" and r["status"] != "held":
-                why.append(
-                    f"precondition {r['name']} {self._phrase(r)}: the scenario was never reached"
-                )
+                missing = r.get("missing_members") or []
+                if missing:
+                    why.append(
+                        f"precondition {r['name']} is waiting for cast members to log in: "
+                        + ", ".join(missing)
+                    )
+                else:
+                    why.append(
+                        f"precondition {r['name']} {self._phrase(r)}: the scenario was never reached"
+                    )
             elif r["role"] == "check" and r["status"] in ("timeout", "error"):
                 why.append(f"check {r['name']} {self._phrase(r)}")
         why.extend(self._credit_reasons())
@@ -574,6 +590,8 @@ class Judge:
         """One look at one observation: a record dict, not yet merged."""
         o = self.observes[name]
         role = o["role"]
+        if o.get("online") == "cast":
+            return self._evaluate_cast_online(name, o)
         rec = {
             "name": name,
             "role": role,
@@ -609,6 +627,31 @@ class Judge:
         except QueryTimeout as exc:
             rec["status"], rec["detail"] = "timeout", str(exc)[:MAX_CELL_CHARS]
         except Exception as exc:  # noqa: BLE001 - any failure to look is INVALID, never a pass
+            rec["status"], rec["detail"] = "error", repr(exc)[:MAX_CELL_CHARS]
+        return rec
+
+    def _evaluate_cast_online(self, name, observation):
+        rec = {
+            "name": name,
+            "role": observation["role"],
+            "when": "start",
+            "online": "cast",
+        }
+        members = self.handoff.get("members") or []
+        try:
+            rows = self.world.select(self.rendered[name])
+            online = {int(row[0]) for row in rows}
+            missing = [
+                member["name"]
+                for member in members
+                if int(member["guid"]) not in online
+            ]
+            rec["status"] = "held" if not missing else "violated"
+            rec["observed"] = f"online={len(members) - len(missing)}/{len(members)}"
+            rec["missing_members"] = missing
+        except QueryTimeout as exc:
+            rec["status"], rec["detail"] = "timeout", str(exc)[:MAX_CELL_CHARS]
+        except Exception as exc:  # noqa: BLE001 - a failed look cannot release the act gate
             rec["status"], rec["detail"] = "error", repr(exc)[:MAX_CELL_CHARS]
         return rec
 
@@ -835,9 +878,36 @@ def _read_log(path):
         raise JudgeError(f"worldserver log unreadable: {exc}") from exc
 
 
+def log_reader(decree, log_path, bridge_log_path=None):
+    """The callable the log assertions read: the worldserver log, plus the bridge log on a bridge-on decree.
+
+    The bridge sidecar writes its own file, so a line it logs is never in the
+    worldserver log. A bridge-on decree reads both; an unreadable or unnamed
+    bridge log refuses, so a forbidden line can never read as absent for want of a file.
+    """
+    world = decree.get("world") if isinstance(decree, dict) else None
+    bridge_on = isinstance(world, dict) and world.get("bridge") == "on"
+
+    def read():
+        text = _read_log(log_path)
+        if not bridge_on:
+            return text
+        if not bridge_log_path:
+            raise JudgeError("no bridge log file was given")
+        try:
+            extra = pathlib.Path(bridge_log_path).read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except OSError as exc:
+            raise JudgeError(f"bridge log unreadable: {exc}") from exc
+        return text + "\n" + extra
+
+    return read
+
+
 def run(
     decree_path, env, connect=None, store=None, log_path=None, out=print,
-    clock=None, anchors_path=None,
+    clock=None, anchors_path=None, bridge_log_path=None,
 ):  # fmt: skip
     """Returns 0 once a verdict is written (INVALID included), 2 when the harness broke."""
     clock = clock or _Wall
@@ -859,7 +929,9 @@ def run(
         result = _invalid("", env, "", f"decree unreadable: {exc}")
     else:
         sha = hashlib.sha256(raw).hexdigest()
-        result = _judge(raw, sha, env, connect, log_path, clock, anchors_path)
+        result = _judge(
+            raw, sha, env, connect, log_path, clock, anchors_path, bridge_log_path
+        )
     out(
         f"{result['verdict']}: {result['decree'] or decree_path} "
         + "; ".join(result["reasons"])
@@ -873,7 +945,7 @@ def run(
     return 0
 
 
-def _judge(raw, sha, env, connect, log_path, clock, anchors_path):
+def _judge(raw, sha, env, connect, log_path, clock, anchors_path, bridge_log_path=None):
     try:
         decree = loads(raw.decode("utf-8"))
         anchors_doc = loads(
@@ -918,7 +990,7 @@ def _judge(raw, sha, env, connect, log_path, clock, anchors_path):
         g.set_query_timeout(QUERY_TIMEOUT_SECONDS)
         return Judge(
             decree, GuardedWorldDb(g, live), handoff,
-            log_text=lambda: _read_log(log_path),
+            log_text=log_reader(decree, log_path, bridge_log_path),
             clock=clock.monotonic, sleep=clock.sleep,
             run_id=env.get("EPH_RUN_ID", ""), sha=sha, arm=env.get("EPH_ARM", ""),
             schema=live, start_wait=start_wait_from_env(env),

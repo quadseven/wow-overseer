@@ -398,6 +398,56 @@ class WhichOne(unittest.TestCase):
         pick = campaignplan.heuristic(opts)
         self.assertEqual(pick.keyword, "sunken-temple")
 
+    def test_at_the_cap_a_held_band_is_not_filled_by_a_run_below_it(self):
+        """With every run in the band refused as stalled, a below-band run is
+        the only one left to rank, and the family was sent to it for hours
+        (#2715). The band is held, not finished, so nothing is planned."""
+        stalled = {
+            r.keyword: "stalled twice"
+            for r in campaignplan.RUNS
+            if r.ceiling >= campaignplan.LEVEL_CAP
+        }
+        upgrades = {
+            "sunken-temple": (preraid.Gain("Grug", 3, 0.6, 30.0, "a helm"),),
+        }
+        opts = campaignplan.options(
+            facts(
+                ALLIANCE,
+                EASTERN_KINGDOMS,
+                keys=SHADOWFORGE,
+                bosses=self.CAP_BOSSES,
+                upgrades=upgrades,
+                stalled=stalled,
+            )
+        )
+        self.assertNotIn("sunken-temple", keywords(opts))
+        self.assertIsNone(campaignplan.heuristic(opts))
+
+    def test_a_held_band_still_lets_a_fire_piece_in_from_below(self):
+        stalled = {
+            r.keyword: "stalled twice"
+            for r in campaignplan.RUNS
+            if r.ceiling >= campaignplan.LEVEL_CAP
+        }
+        upgrades = {
+            "sunken-temple": (
+                preraid.Gain(
+                    "Grug", 3, 0.6, 30.0, "a helm", 10.0, "Emberplate Armguards"
+                ),
+            ),
+        }
+        opts = campaignplan.options(
+            facts(
+                ALLIANCE,
+                EASTERN_KINGDOMS,
+                keys=SHADOWFORGE,
+                bosses=self.CAP_BOSSES,
+                upgrades=upgrades,
+                stalled=stalled,
+            )
+        )
+        self.assertEqual(campaignplan.heuristic(opts).keyword, "sunken-temple")
+
     def test_nothing_to_choose_is_none(self):
         self.assertIsNone(campaignplan.heuristic([]))
 
@@ -577,7 +627,7 @@ class _Log:
 class TheBridgePass(unittest.TestCase):
     """_plan_campaigns and _plan_campaign, run on fakes."""
 
-    def run_pass(self, pending, jev_pick=None, confidence=0.9, key="k"):
+    def run_pass(self, pending, jev_pick=None, confidence=0.9, key="k", read=None):
         log = _Log()
         written, recorded = [], []
 
@@ -599,7 +649,7 @@ class TheBridgePass(unittest.TestCase):
                 "jev_choices": jev_choices,
                 "log": log,
                 "_queue_level_rows": lambda fam: list(rows()),
-                "_planner_facts": lambda key, fam, level_rows: facts(),
+                "_planner_facts": lambda key, fam, level_rows: read or facts(),
                 "_append_planned": append,
                 "_insert_jev_judgment": recorded.append,
                 "_planner_dry": lambda names: None,
@@ -707,6 +757,14 @@ class TheBridgePass(unittest.TestCase):
         self.assertFalse(wrote)
         self.assertEqual((written, recorded), ([], []))
 
+    def test_a_family_that_formed_no_run_at_two_doors_is_given_no_third(self):
+        # #1261: two doors left with no run formed, the newest ten minutes ago.
+        read = facts(unformed=(2, 600))
+        wrote, written, recorded, lines, _me = self.run_pass({}, read=read)
+        self.assertFalse(wrote)
+        self.assertEqual((written, recorded), ([], []))
+        self.assertTrue(any("no run formed" in line for line in lines))
+
     def test_the_switch_turns_it_off(self):
         with mock.patch.dict("os.environ", {"CAMPAIGN_PLANNER": "off"}):
             self.assertFalse(campaignplan.enabled())
@@ -738,6 +796,47 @@ def _node(name):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AFamilyThatFormsNoRun(unittest.TestCase):
+    """#1261: a family whose runs never form is not walked down every door."""
+
+    def test_two_doors_left_with_no_run_formed_rest_the_planner(self):
+        said = campaignplan.unformed_rest(facts(unformed=(2, 600)))
+        self.assertIn("left 2 doors with no run formed", said)
+        self.assertIn("5.8 more hour(s)", said)
+
+    def test_one_door_left_is_the_door(self):
+        self.assertEqual(campaignplan.unformed_rest(facts(unformed=(1, 600))), "")
+
+    def test_the_rest_ends_and_one_door_is_tried(self):
+        over = campaignplan.UNFORMED_REST_HOURS * 3600
+        self.assertEqual(campaignplan.unformed_rest(facts(unformed=(4, over))), "")
+
+    def test_an_unread_record_rests_nothing(self):
+        self.assertEqual(campaignplan.unformed_rest(facts()), "")
+        self.assertEqual(campaignplan.unformed_rest(facts(unformed=(3, None))), "")
+
+    def test_the_read_counts_the_breakers_own_leaves(self):
+        import dungeonstall
+
+        names = ["Zug", "Oz"]
+        args = dungeonstall.unformed_args("Zug", names)
+        sql = dungeonstall.UNFORMED_SQL.format(holes=campaignplan.holes(len(names)))
+        self.assertEqual(sql.count("%s"), len(args))
+        self.assertEqual(args[1], dungeonstall.DECISION)
+        self.assertEqual(dungeonstall.unformed([{"n": 2, "age_s": 60}]), (2, 60))
+        self.assertIsNone(dungeonstall.unformed(None))
+
+    def test_the_bridge_reads_it_and_rests_before_options(self):
+        body = ast.get_source_segment(BRIDGE, _node("_planner_facts"))
+        self.assertIn("dungeonstall.UNFORMED_SQL", body)
+        self.assertIn("unformed=dungeonstall.unformed(", body)
+        body = ast.get_source_segment(BRIDGE, _node("_plan_campaign"))
+        self.assertLess(
+            body.index("campaignplan.unformed_rest(facts)"),
+            body.index("campaignplan.options(facts)"),
+        )
 
 
 class ADoorThatTeachesNothing(unittest.TestCase):

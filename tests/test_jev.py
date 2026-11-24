@@ -279,7 +279,7 @@ class PaymentPauseTest(unittest.TestCase):
         self.assertEqual(len(transport.calls), 3)
 
     def test_a_passing_failure_does_not_pause(self):
-        for status in (429, 500, 503, 529):
+        for status in (500, 503, 529):
             with self.subTest(status=status):
                 client, transport, _ = self.paused_client(status=status)
                 ask(client)

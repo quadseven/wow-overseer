@@ -23,8 +23,16 @@ Listed targets have no instance and are scored bare, so a gain over a worn
 piece is shown net of the enchant it wears. Gems: no classic item has a
 socket, so gem slots are read but empty on this realm.
 
-WHAT IS NOT SEEN. Equip-spell stats, procs and the temporary enchant (a poison
-or an oil). `scored_from` says so, and the page prints it.
+WHAT IS NOT SEEN. Procs, "Use:" effects and the temporary enchant (a poison
+or an oil). `scored_from` says so, and the page prints it. An equip spell
+that reads as a plain stat is counted (#2905).
+
+WHERE THE SCORE IS BLIND (#2208). A piece whose whole worth is a proc or a
+"Use:" scores 0.0, most trinkets among them. When what is worn and the
+listed pieces all score 0.0 the score cannot rank them, so `next` is the
+piece the guide lists ahead of the worn one and its `ranked_by` says
+"guide_order". Each slot's `next_status` and each target's `source_status`
+say "none_known" outright where no piece, or no source, is known.
 
 PURE: dicts in, a dict out. The caller reads item_template.
 """
@@ -230,6 +238,8 @@ def _target(entry: int, value: float, rows: dict) -> dict:
         "name": _name(entry, rows),
         "score": _round(value),
         "where": where(entry),
+        # Says outright when no source is known, not an empty list alone.
+        "source_status": "named" if where(entry) else "none_known",
     }
 
 
@@ -289,13 +299,21 @@ def _worn_block(spec, level, key, worn_row, pool, bonus=None) -> dict | None:
 
 
 def _next_block(spec, level, key, worn, worn_stats, pool, list_rows) -> dict | None:
-    """The next upgrade by gearscore.next_target, with its gain over the worn."""
-    nxt = gearscore.next_target(spec, key, worn_stats, pool, level)
+    """The next upgrade by gearscore.next_target, with its gain over the worn.
+
+    `ranked_by` says how it was picked: "score" when it scores above what
+    is worn, or above zero for an empty slot; "guide_order" when it does not,
+    which is a 0.0 piece the guide's own order named, for a worn 0.0 piece
+    and for an empty slot alike (#2208)."""
+    worn_id = worn["entry"] if worn else None
+    nxt = gearscore.next_target(spec, key, worn_stats, pool, level, worn_id)
     if not nxt:
         return None
     phase, item_id, value = nxt
+    old = gearscore.score(worn_stats, spec, level, key) if worn_stats else 0.0
     out = _target(item_id, value, list_rows)
     out["phase"] = phase
+    out["ranked_by"] = "score" if value > old else "guide_order"
     out["gain"] = _round(value - (worn["score"] if worn else 0.0))
     return out
 
@@ -351,6 +369,7 @@ def _slot(
     pct = None
     if worn and best_pre and best_pre[0][1] > 0:
         pct = min(1.0, gearscore.score(worn_stats, spec, level, key) / best_pre[0][1])
+    nxt = _next_block(spec, level, key, worn, worn_stats, pool, list_rows)
     return {
         "slot": slot_name,
         "label": label,
@@ -359,7 +378,9 @@ def _slot(
         "worn": worn,
         "pct_of_preraid": None if pct is None else round(pct, 3),
         "targets": targets,
-        "next": _next_block(spec, level, key, worn, worn_stats, pool, list_rows),
+        "next": nxt,
+        # Says outright when no better piece is known, not a bare null.
+        "next_status": "named" if nxt else "none_known",
         "scored": bool(best_pre),
     }
 

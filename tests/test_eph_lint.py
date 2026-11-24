@@ -80,6 +80,17 @@ def rules(d):
     return {f.rule for f in errors(d)}
 
 
+def scattered_doc():
+    d = doc()
+    d["cast"][0]["who"] = "family:grug"
+    d["cast"][0]["set"].pop("at")
+    d["cast"][0]["set"]["at_each"] = [
+        {"creature": "Some Creature"},
+        {"areatrigger": 2},
+    ]
+    return d
+
+
 class CleanTest(unittest.TestCase):
     def test_base_is_clean(self):
         self.assertEqual(run(doc()), [])
@@ -94,7 +105,92 @@ class CleanTest(unittest.TestCase):
         self.assertEqual(out[0].rule, "yaml")
 
 
+class CastOnlineLintTest(unittest.TestCase):
+    def decree(self):
+        d = doc()
+        d["observe"][0] = {
+            "name": "cast-online",
+            "role": "precondition",
+            "when": "start",
+            "online": "cast",
+        }
+        return d
+
+    def test_cast_online_is_a_valid_start_precondition(self):
+        self.assertEqual(errors(self.decree()), [])
+
+    def test_cast_online_must_be_a_start_precondition(self):
+        d = self.decree()
+        d["observe"][0]["when"] = "end"
+        self.assertIn("online", rules(d))
+
+    def test_cast_online_must_have_precondition_role(self):
+        d = self.decree()
+        d["observe"][0]["role"] = "check"
+        self.assertIn("online", rules(d))
+
+    def test_cast_online_cannot_also_declare_sql(self):
+        d = self.decree()
+        d["observe"][0]["sql"] = "SELECT guid FROM characters WHERE online = 1"
+        self.assertIn("online", rules(d))
+
+
 class CoordinatesTest(unittest.TestCase):
+    def test_family_at_each_anchor_forms_are_accepted(self):
+        self.assertEqual(errors(scattered_doc()), [])
+
+    def test_at_each_is_restricted_to_family_selectors(self):
+        d = scattered_doc()
+        d["cast"][0]["who"] = "Grug"
+        self.assertIn("scatter", rules(d))
+
+    def test_at_each_requires_at_least_two_points(self):
+        d = scattered_doc()
+        d["cast"][0]["set"]["at_each"] = [{"creature": "Some Creature"}]
+        self.assertIn("scatter", rules(d))
+
+    def test_at_each_rejects_repeated_point_references(self):
+        d = scattered_doc()
+        d["cast"][0]["set"]["at_each"] = [
+            {"creature": "Some Creature"},
+            {"creature": "Some Creature"},
+        ]
+        self.assertIn("scatter", rules(d))
+
+    def test_at_and_at_each_are_mutually_exclusive(self):
+        d = scattered_doc()
+        d["cast"][0]["set"]["at"] = {"creature": "Some Creature"}
+        self.assertIn("scatter", rules(d))
+
+    def test_at_each_rejects_literal_coordinates(self):
+        d = scattered_doc()
+        d["cast"][0]["set"]["at_each"][0] = {"x": 1, "y": 2, "z": 3}
+        self.assertIn("coordinates", rules(d))
+
+    def test_at_each_rejects_non_spawn_and_non_point_anchors(self):
+        d = scattered_doc()
+        d["cast"][0]["set"]["at_each"][0] = {"captured": "real-spot"}
+        self.assertIn("coordinates", rules(d))
+
+    def test_with_anchor_on_an_at_each_family_is_refused_naming_the_entry(self):
+        for key in ("at", "homebind"):
+            d = scattered_doc()
+            d["cast"].append(
+                {"who": "Zork", "set": {"alive": True, "at": {"creature": "X"}}}
+            )
+            d["cast"][1]["set"][key] = {"with": "family:grug"}
+            found = [f for f in errors(d) if f.rule == "scatter"]
+            self.assertEqual(len(found), 1, key)
+            self.assertIn(f"decree.cast[1].set.{key}", found[0].path)
+            self.assertIn("decree.cast[0]", found[0].message)
+
+    def test_with_anchor_on_a_plain_member_is_still_accepted(self):
+        d = scattered_doc()
+        d["cast"].append(
+            {"who": "Zork", "set": {"alive": True, "at": {"with": "Grug"}}}
+        )
+        self.assertNotIn("scatter", rules(d))
+
     def test_literal_position_list_is_rejected(self):
         d = doc()
         d["cast"][0]["set"]["at"] = [1.0, 2.0, 3.0]
@@ -140,6 +236,28 @@ class CoordinatesTest(unittest.TestCase):
         self.assertTrue(
             [f for f in run(d) if f.level == "warning" and f.rule == "anchor"]
         )
+
+    def test_numeric_issue_and_box_are_accepted_for_batch_reporting(self):
+        d = doc()
+        d["proves"] = 42
+        d["box"] = "The family leaves without a defeat"
+        self.assertEqual(errors(d), [])
+
+    def test_numeric_issue_requires_box_text(self):
+        d = doc()
+        d["proves"] = 42
+        self.assertIn("schema", rules(d))
+
+    def test_box_cannot_be_attached_to_legacy_issue_list(self):
+        d = doc()
+        d["box"] = "The family leaves without a defeat"
+        self.assertIn("schema", rules(d))
+
+    def test_numeric_issue_must_be_positive(self):
+        d = doc()
+        d["proves"] = 0
+        d["box"] = "The family leaves without a defeat"
+        self.assertIn("schema", rules(d))
 
     def test_two_anchor_keys_are_rejected(self):
         d = doc()

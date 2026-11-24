@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 import achievements
 import eventclips
+import eye
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +82,24 @@ NO_STREAMED_IN_RUN = "no streamed family member in the run"
 RUN_AMBIGUOUS = "run ambiguous"
 
 
+# A view is live while its clock is no older than this: the bound past which
+# the eye read calls the same clock stale, so the two agree on a view.
+VIEW_LIVE_SECONDS = eye.STALE_AFTER_SECONDS
+
+
+def view_live(seen, segment, now, within=VIEW_LIVE_SECONDS) -> bool:
+    """Is a streamed view live, by the cutter's clocks (epoch seconds)?
+
+    `segment` is when the view's recorder wrote its newest segment and `seen`
+    when the cutter's poll last named the view. A view with a segment clock is
+    judged by it alone: a recorder that still runs over a picture that stopped
+    moving is polled every time and is not live. A view with no clock at all
+    was never named by the cutter and is not live.
+    """
+    clock = seen if segment is None else segment
+    return clock is not None and now - clock <= within
+
+
 def _with_view(detail, extra):
     return "%s; %s" % (detail, extra) if detail else extra
 
@@ -99,10 +118,18 @@ class Views:
     event only when the run's leader is in the subject's family, and presence
     is limited to the leader's family. When the subject's family is unknown,
     one matching run is taken and several are ambiguous: no guess.
+
+    `live_of(name, path)` says whether a streamed view is live right now. With
+    it, a streamed tier whose view is down is passed over for the first tier
+    in the same order whose view is live. When no tier reads live, the first
+    streamed tier is still asked, as it is without `live_of`: the read is of
+    this moment, not of the event's, and its clocks are empty after a restart,
+    so the cutter, which holds the footage, keeps the last word.
     """
 
-    def __init__(self, path_of, roster, runs, rows, now, families=None):
+    def __init__(self, path_of, roster, runs, rows, now, families=None, live_of=None):
         self.path_of = path_of
+        self.live_of = live_of
         self.roster = list(roster)
         self.runs = sorted(runs, key=lambda r: (r["started_at"], r["id"]))
         self.rows = [r for r in rows if r.get("map") is not None]
@@ -141,28 +168,38 @@ class Views:
             and achievements.in_run(run, r["first_seen"], int(r["map"]), self.now)
         }
 
-    def pick(self, who, leader, members, detail, reason=NOT_IN_A_RUN):
-        """(path, detail) for `who`; `leader` is None when no run is known."""
-        self.tried = []
-        own = self.path_of(who)
-        self.tried.append(("subject", who, own))
-        if own:
-            return own, detail
+    def _tiers(self, who, leader, members):
+        """(tier, name) in the order the views are tried."""
+        yield "subject", who
         if leader is None:
-            return "", _with_view(detail, reason)
+            return
         if leader != who:
-            lead = self.path_of(leader)
-            self.tried.append(("leader", leader, lead))
-            if lead:
-                return lead, _with_view(detail, "view: %s (leader)" % leader)
+            yield "leader", leader
         present = set(members)
         for name in self.roster:
             if name in present and name not in (who, leader):
-                path = self.path_of(name)
-                self.tried.append(("party member", name, path))
-                if path:
-                    return path, _with_view(detail, "view: %s (party member)" % name)
-        return "", _with_view(detail, NO_STREAMED_IN_RUN)
+                yield "party member", name
+
+    def pick(self, who, leader, members, detail, reason=NOT_IN_A_RUN):
+        """(path, detail) for `who`; `leader` is None when no run is known."""
+        self.tried = []
+        down = None  # the first streamed tier, when its view was not live
+        for tier, name in self._tiers(who, leader, members):
+            path = self.path_of(name)
+            self.tried.append((tier, name, path))
+            if not path:
+                continue
+            note = (
+                detail
+                if tier == "subject"
+                else _with_view(detail, "view: %s (%s)" % (name, tier))
+            )
+            if self.live_of is None or self.live_of(name, path):
+                return path, note
+            down = down or (path, note)
+        if down:
+            return down
+        return "", _with_view(detail, reason if leader is None else NO_STREAMED_IN_RUN)
 
     def for_event(self, who, at, map_id, detail):
         found, ambiguous = self._matches(who, at, map_id)
@@ -265,6 +302,12 @@ def boss_key(subject_id, family) -> str:
     return "boss_kill:%s:%s" % (subject_id, family)
 
 
+def clear_key(map_id, family) -> str:
+    """The ledger key of one family's first clear of a dungeon. The ledger
+    and the run card both build it here."""
+    return "clear:%s:%s" % (map_id, family)
+
+
 def level_key(character) -> str:
     """The ledger key of a character's level 60 moment."""
     return "level_60:%s" % character
@@ -345,21 +388,22 @@ def _event_requests(rows, roster, views, families=None):
     return out
 
 
-def _clear_requests(runs, roster, views):
+def _clear_requests(runs, roster, views, families=None):
     out = []
-    by_map = {}
+    groups = dict(families) if families else {ROSTER_FAMILY: roster}
+    by_key = {}
     for run in runs:
-        by_map.setdefault(run["map_id"], []).append(run)
-    for map_id, group in by_map.items():
+        for family, members in groups.items():
+            if run["leader"] in members:
+                by_key.setdefault((run["map_id"], family), []).append(run)
+    for (map_id, family), group in by_key.items():
         run = earliest(group, "at")
-        if run["leader"] not in roster:
-            continue
         kind = eventclips.trigger_kind(
             {"kind": "clear", "family_member": True, "first_clear": True}
         )
         out.append(
             _request(
-                "clear:%s" % map_id,
+                clear_key(map_id, family),
                 kind,
                 run["leader"],
                 views,
@@ -372,18 +416,19 @@ def _clear_requests(runs, roster, views):
     return out
 
 
-def expired_ids(
+def expired_reasons(
     rows: Iterable[Mapping],
     *,
     now: datetime,
     max_age: timedelta = eventclips.MAX_AGE,
     max_count: int = eventclips.MAX_CLIPS,
-) -> list:
-    """Ids of ready ledger rows that fall outside the retention bounds.
+) -> dict:
+    """{id: reason} for ready ledger rows that fall outside the retention bounds.
 
-    Marks only: the caller sets state to expired. No file is deleted here or
-    there. Rows in any other state hold no saved clip, so they neither count
-    toward the cap nor expire.
+    The reason names the cap that fired: the age cap when the row is older
+    than it, else the count cap. Marks only: the caller sets state to
+    expired. No file is deleted here or there. Rows in any other state hold
+    no saved clip, so they neither count toward the cap nor expire.
     """
     ready = [
         {"id": r["id"], "saved_at": r["created_at"]}
@@ -394,7 +439,16 @@ def expired_ids(
         c["id"]
         for c in eventclips.retain(ready, now=now, max_age=max_age, max_count=max_count)
     }
-    return [c["id"] for c in ready if c["id"] not in kept]
+    cutoff = now - max_age
+    out = {}
+    for c in ready:
+        if c["id"] in kept:
+            continue
+        if c["saved_at"] < cutoff:
+            out[c["id"]] = "expired: age cap (%d days)" % max_age.days
+        else:
+            out[c["id"]] = "expired: count cap (%d)" % max_count
+    return out
 
 
 def plan_requests(
@@ -410,6 +464,7 @@ def plan_requests(
     runs: Iterable[Mapping] = (),
     families: Mapping[str, Iterable[str]] | None = None,
     late_horizon: timedelta = LATE_HORIZON,
+    live_of: Callable[[str, str], bool] | None = None,
 ) -> list[dict]:
     """The ledger rows to insert now, oldest event first.
 
@@ -419,15 +474,20 @@ def plan_requests(
     `runs` are the dungeon runs, open or ended, that an event may sit in; an
     event row names its map as `map`. `families` maps each family to its
     members; a run is matched to an event within the subject's family only.
+
+    `live_of(name, path)` says whether a streamed view is live; a view that is
+    down gives way to a live one in the same run (see Views).
     """
     guilds = frozenset(family_guilds)
     order = list(roster)
     names = frozenset(order)
     loot_rows, event_rows = list(loot_rows), list(event_rows)
-    views = Views(path_of, order, list(runs), loot_rows + event_rows, now, families)
+    views = Views(
+        path_of, order, list(runs), loot_rows + event_rows, now, families, live_of
+    )
     rows = _loot_requests(loot_rows, guilds, now, views)
     rows += _event_requests(event_rows, order, views, families)
-    rows += _clear_requests(list(cleared_runs), names, views)
+    rows += _clear_requests(list(cleared_runs), names, views, families)
     rows.sort(key=lambda r: r["event_at"])
     seen = set(existing_keys)
     out = []
@@ -631,6 +691,7 @@ NO_VIEW_LINE = "No live view was up, so no clip was saved."
 FAILED_LINE = "No clip was saved."
 SHELF_EMPTY = "No clips have been saved yet."
 SHELF_LIMIT = 100
+MISSED_LIMIT = 1000
 
 
 def clip_url(file_name: str) -> str:
@@ -643,18 +704,27 @@ def _iso(t) -> str | None:
     return t.isoformat() if isinstance(t, datetime) else (t or None)
 
 
-_VIEW_NOTE = re.compile(r"view: ([A-Za-z]{2,12}) \((?:leader|party member)\)")
+_VIEW_NOTE = re.compile(r"view: ([A-Za-z]{2,12}) \((leader|party member)\)")
+# What a story says under a clip filmed from another member's view: whose
+# view it is and which tier of the view rule that member was.
+VIEW_LINE = "Filmed from the view of %s (%s)."
 
 
-def view_owner(row: Mapping) -> str:
-    """Whose eyes a clip shows: the member the detail names, else the subject."""
+def _other_view(row: Mapping):
+    """(member, tier) when the clip is from another member's view, else None."""
     # The planner writes the marker at the start of a "; " part. Any other
     # text in the detail, such as a cutter's note, is never read for it.
     for part in (row.get("detail") or "").split("; "):
         found = _VIEW_NOTE.match(part)
         if found:
-            return found.group(1)
-    return row["character"]
+            return found.group(1), found.group(2)
+    return None
+
+
+def view_owner(row: Mapping) -> str:
+    """Whose eyes a clip shows: the member the detail names, else the subject."""
+    other = _other_view(row)
+    return other[0] if other else row["character"]
 
 
 SUBJECT_KINDS = ("loot", "boss_kill")
@@ -685,8 +755,48 @@ def failed_line(row: Mapping) -> str:
     return "%s: %s." % (FAILED_LINE[:-1], "; ".join(parts).rstrip(". "))
 
 
+MISSED_STATES = ("no_view", "failed")
+
+
+def missed(rows: Iterable[Mapping]) -> list:
+    """The moments that left no clip, counted per event day, newest day first.
+
+    A no_view row had no live view up; a failed row was recorded but not cut.
+    Each is counted, never listed as a card: [{day, no_view, failed}]. A row
+    with no event time has no day and is not counted."""
+    days: dict = {}
+    for r in rows:
+        state, at = r.get("state"), _iso(r.get("event_at"))
+        if state in MISSED_STATES and at:
+            days.setdefault(str(at)[:10], dict.fromkeys(MISSED_STATES, 0))[state] += 1
+    return [{"day": day, **days[day]} for day in sorted(days, reverse=True)]
+
+
+def repeats(rows: Iterable[Mapping]) -> dict:
+    """Where each ready clip stands among repeats of its item: {id: (nth, of)}.
+
+    Two drops of one item by one character are two real moments that read as a
+    duplicate. Clips of the same kind, character and subject are numbered oldest
+    first, so a card can say "2 of 2". A clip with no subject is never counted."""
+    groups: dict = {}
+    for r in rows:
+        if r.get("state") == "ready" and r.get("file_name") and subject(r):
+            key = (r.get("kind"), r.get("character"), subject(r))
+            groups.setdefault(key, []).append(r)
+    out: dict = {}
+    for group in groups.values():
+        group.sort(key=lambda r: (str(_iso(r.get("event_at")) or ""), r["id"]))
+        for n, r in enumerate(group, 1):
+            out[r["id"]] = (n, len(group))
+    return out
+
+
 def shelf(rows: Iterable[Mapping]) -> dict:
-    """The /api/clips payload: ready rows with a file, newest event first."""
+    """The /api/clips payload: ready rows with a file, newest event first, and
+    the moments missed per day (`missed`). A clip of an item its character
+    caught more than once carries `nth` and `of`."""
+    rows = list(rows)
+    again = repeats(rows)
     ready = [r for r in rows if r.get("state") == "ready" and r.get("file_name")]
     ready.sort(
         key=lambda r: (str(_iso(r.get("event_at")) or ""), r["id"]), reverse=True
@@ -701,9 +811,15 @@ def shelf(rows: Iterable[Mapping]) -> dict:
                 "subject": subject(r),
                 "at": _iso(r.get("event_at")),
                 "url": clip_url(r["file_name"]),
+                **(
+                    {"nth": again[r["id"]][0], "of": again[r["id"]][1]}
+                    if r["id"] in again and again[r["id"]][1] > 1
+                    else {}
+                ),
             }
             for r in ready[:SHELF_LIMIT]
         ],
+        "missed": missed(rows),
         "empty": SHELF_EMPTY,
     }
 
@@ -711,7 +827,9 @@ def shelf(rows: Iterable[Mapping]) -> dict:
 def link(row: Mapping | None) -> dict:
     """What a story or timeline entry adds for its event's ledger row.
 
-    A ready row with a file adds `clip` (url and kind). A no_view row adds
+    A ready row with a file adds `clip` (url and kind, plus `view_note` when
+    the clip was filmed from another member's view: it names that member and
+    the tier, leader or party member). A no_view row adds
     `clip_note`, saying no live view was up. A failed row adds `clip_note`
     with its recorded reason. Any other state, or no row at all, adds
     nothing: the entry says nothing about clips.
@@ -719,7 +837,11 @@ def link(row: Mapping | None) -> dict:
     if not row:
         return {}
     if row.get("state") == "ready" and row.get("file_name"):
-        return {"clip": {"url": clip_url(row["file_name"]), "kind": row["kind"]}}
+        clip = {"url": clip_url(row["file_name"]), "kind": row["kind"]}
+        other = _other_view(row)
+        if other:
+            clip["view_note"] = VIEW_LINE % other
+        return {"clip": clip}
     if row.get("state") == "no_view":
         return {"clip_note": NO_VIEW_LINE}
     if row.get("state") == "failed":

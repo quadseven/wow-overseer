@@ -78,6 +78,11 @@ def hearth_cooling(name=NAME):
     return (guildjobs.Recent(name, "hearth", 30, "applied"),)
 
 
+# A hearthstone bound in the loop's zone leaves the level walk as the only
+# escape, which these fixtures leave unread.
+BOUND = dict(home_map=0, home_x=3000.0, home_y=3000.0, home_zone=HILLSBRAD)
+
+
 class TheRosterEscape(unittest.TestCase):
     def test_a_roster_member_in_a_death_loop_walks_out_when_it_cannot_hearth(self):
         # Nothing rewarded: Hillsbrad's quests have NOT run out for it, so
@@ -168,6 +173,38 @@ class TheEscapeComesFirst(unittest.TestCase):
         self.assertEqual([s.action for s in result.steps], ["hearth"])
 
 
+class AFightDoesNotStopTheEscape(unittest.TestCase):
+    """A looper that dies with the combat flag set on most passes never got
+    an escape that waited for a gap in the fight (#2152)."""
+
+    def test_a_looper_in_combat_is_issued_the_hearth(self):
+        m = member(NAME, in_combat=True, rewarded=frozenset())
+        result = plan([m], plain_world(), loops={NAME: loop_of()})
+        self.assertEqual([s.action for s in result.steps], ["hearth"])
+
+    def test_the_hearth_in_combat_is_not_refused_by_the_pass(self):
+        m = member(NAME, in_combat=True, rewarded=frozenset())
+        step = guildjobs.death_loop_hearth(m, loop_of(), (), plain_world(), CAP)
+        self.assertIsNotNone(step)
+        self.assertFalse(guildjobs._step_refusal(m, set(), {}, 5, step))
+
+    def test_an_ordinary_step_in_combat_is_still_refused(self):
+        m = member(NAME, in_combat=True)
+        self.assertIn("in combat", guildjobs._step_refusal(m, set(), {}, 5, None))
+
+    def test_a_looper_in_combat_whose_hearth_cools_is_named_cooling(self):
+        found = guildjobs.death_loop_first(
+            member(NAME, in_combat=True),
+            loop_of(),
+            plain_world(),
+            hearth_cooling(),
+            CAP,
+            supply={},
+        )
+        self.assertIsNone(found[0])
+        self.assertIn("hearth cooling", line_of(found))
+
+
 class OneLoggedReasonPerBranch(unittest.TestCase):
     def found(self, m, world, recent=(), campaign=""):
         return guildjobs.death_loop_first(
@@ -175,7 +212,7 @@ class OneLoggedReasonPerBranch(unittest.TestCase):
         )
 
     def test_in_combat(self):
-        found = self.found(member(NAME, in_combat=True), plain_world())
+        found = self.found(member(NAME, in_combat=True, **BOUND), plain_world())
         self.assertIsNone(found[0])
         self.assertIn("in combat", line_of(found))
 
@@ -237,7 +274,7 @@ class OneLoggedReasonPerBranch(unittest.TestCase):
         self.assertIn("dead", line_of(found))
 
     def test_the_reason_is_one_line_in_the_plan_notes(self):
-        m = member(NAME, in_combat=True)
+        m = member(NAME, in_combat=True, **BOUND)
         result = plan([m], plain_world(), loops={NAME: loop_of()})
         named = [n for n in result.notes if "gets no death-loop escape" in n]
         self.assertEqual(len(named), 1)

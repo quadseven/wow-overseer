@@ -65,6 +65,10 @@ class World:
         self.clock = [1000.0]
         self.aims = {}
         self.maps = {"Zug": 0, "Oz": 0}
+        self.positions = {
+            "Zug": {"map_id": 1, "instance_id": 0, "pos_x": 0, "pos_y": 0, "pos_z": 0},
+            "Oz": {"map_id": 1, "instance_id": 0, "pos_x": 0, "pos_y": 0, "pos_z": 0},
+        }
         self.released = []
         self.writes = []
         self.logs = []
@@ -77,6 +81,7 @@ class World:
             return False
         self.released.append((name, aim))
         del self.aims[name]
+        self.positions[name]["pos_x"] = 0
         return True
 
     def write(self, errand):
@@ -84,6 +89,7 @@ class World:
             return False
         self.writes.append((errand.character, errand.travel_npc))
         self.aims[errand.character] = errand.travel_npc
+        self.positions[errand.character]["pos_x"] = 2500
         return True
 
     def members(self, leader, head_id):
@@ -109,11 +115,12 @@ class World:
             "jobs": jobs,
             "log": log,
             "professions": professions,
-            "raidrun": types.SimpleNamespace(MAPS={}),
+            "raidrun": types.SimpleNamespace(MAPS={}, is_raid=lambda keyword: False),
             "time": types.SimpleNamespace(monotonic=lambda: self.clock[0]),
             "townslot": townslot,
             "WEAPON_SKILL_CLAIMANT": "weapon master",
             "_DOOR_HOLD_SINCE": {},
+            "DOOR_HOLD_RECOVER_YARDS": 1500,
             "_ERRAND_HOLD_SAID": {},
             "_ERRAND_RECALLED": self.recalled,
             "_ERRAND_SERVED": {},
@@ -122,6 +129,14 @@ class World:
             "_door_wedge_evidence": self.members,
             "_fetch_live_maps": lambda names: {
                 n: self.maps[n] for n in names if n in self.maps
+            },
+            "_fetch_positions": lambda names: {
+                n: {
+                    **self.positions[n],
+                    "pos_x": 2500 if self.aims.get(n) else 0,
+                }
+                for n in names
+                if n in self.positions
             },
             "_head_now": lambda: "Oz",
             "_is_economy_aim": lambda aim: aim in ECONOMY_AIMS,
@@ -135,6 +150,7 @@ class World:
             "_door_held_verdict",
             "_door_wedge",
             "_door_wedge_ages",
+            "_door_wedge_member_recovered",
             "_members_inside_instance",
             "_recall_door_errands",
             "_release_instance_economy_aims",

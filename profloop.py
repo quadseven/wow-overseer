@@ -123,14 +123,36 @@ TOWN_SECONDS = 90 * 60.0
 TOWN_START_SECONDS = 10 * 60.0
 CRAFT_SECONDS = 90 * 60.0
 CRAFT_MIN_SECONDS = 5 * 60.0
+# One refresh of the saved bags, a little over one loop cycle: after a town
+# visit that fetched reagents the loop waits this long for the bags to show
+# them before it judges whether anyone can cast.
+BAGS_REFRESH_SECONDS = 150.0
 TRAIN_SECONDS = 45 * 60.0
 # A rank or recipe that falls due mid-gather pulls the family to the trainers
 # once this much gathering has passed, so a due item that keeps coming back
 # does not cut every gathering stretch short (#2501).
 GATHER_TRAIN_SECONDS = 60 * 60.0
 REASSERT_SECONDS = 10 * 60.0
+# THE QUEUED-RUN SLICE. While a campaign run is queued for a family, the loop
+# may hold the family (a trade turn, a questing pace, a released bag hold all
+# hand it the job) for at most this long. Past it the loop yields, and the
+# queue's dungeon job stands until the run opens or the queue's own stall
+# breaker fires. With no run queued the loop is unbounded, as it always was.
+QUEUED_SLICE_SECONDS = 20 * 60.0
+# The job a member out of reach of the queued run's door is given instead of a
+# far farm job: it roams where it stands, and the family stays together.
+QUEUED_FALLBACK = "quest"
 # "Reagents for the next crafts in hand" is the craft rhythm's own stocked bar.
 READY_CASTS = craft_rhythm.STOCK_CASTS
+
+# A TOWN VISIT THAT DID NOT LIFT A MEMBER'S BAGS IS NOT REPEATED FOR THAT MEMBER.
+# Every stack such a member carries is one a vendor will not buy (kept, a trade
+# tool, a quest item, or routed to a bank that is out of reach), so the next
+# visit changes nothing either, and the loop went gather -> town -> gather ->
+# town for hours (the bag-floor release counts these visits). The
+# member is left out of the low-bag trigger until its bags rise to the bar on
+# their own, or this long has passed and the visit is tried once more.
+FRUITLESS_SECONDS = 2 * 3600.0
 
 # The node trades a farm job can name (#2417), in the order a tie is broken.
 FARM_TRADES = ("mining", "herbalism")
@@ -201,6 +223,18 @@ class State:
     since: float = 0.0
     asserted: float = 0.0
     town_seen: bool = False
+    # name -> free slots read when the family went to town for low bags.
+    entered: tuple = ()
+    # Members a town visit left no roomier than it found them. They do not
+    # send the family back to town (see FRUITLESS_SECONDS).
+    fruitless: tuple = ()
+    # (name, when that member was found fruitless): each member expires on its
+    # own clock, so a later visit adding another name never extends an earlier one.
+    fruitless_stamps: tuple = ()
+    # When the loop first held a family that had a run queued ('' when no run
+    # is queued), and whether it has yielded the slice for that run.
+    queued_since: float = 0.0
+    yielded: bool = False
 
 
 @dataclass(frozen=True)
@@ -227,6 +261,8 @@ class Facts:
     errand_why: str = ""
     in_run: bool = False
     queue_owns: bool = False
+    # A campaign run is queued or active for this family, whoever holds the job.
+    run_queued: bool = False
     gather_job: str = "quest"
     gather_why: str = ""
     # name -> kill-drop job that crafter's own plan needs (#2502); read only
@@ -245,6 +281,7 @@ class Step:
     ask_town: str = ""
     line: str = ""
     moved: bool = False
+    yielded: bool = False  # the queued-run slice ended on this step
 
 
 def _kill_drop_gap(p):
@@ -383,13 +420,49 @@ def _joined(facts: Facts) -> str:
     return GATHER
 
 
-def _low(facts: Facts) -> list:
-    """'Name (N)' for each member below TOWN_FREE_SLOTS free bag slots."""
-    return [
-        "%s (%d)" % (name, slots)
+def _low_slots(facts: Facts) -> dict:
+    """name -> free slots for each member below TOWN_FREE_SLOTS."""
+    return {
+        name: int(slots)
         for name, slots in sorted((facts.free_slots or {}).items())
         if slots is not None and int(slots) < TOWN_FREE_SLOTS
+    }
+
+
+def _low(facts: Facts, skip=()) -> list:
+    """'Name (N)' for each member below TOWN_FREE_SLOTS free bag slots, except
+    the members a town visit could not help (`skip`)."""
+    return [
+        "%s (%d)" % (name, slots)
+        for name, slots in _low_slots(facts).items()
+        if name not in skip
     ]
+
+
+def _live_fruitless(state: State, facts: Facts) -> tuple:
+    """The members still left out of the low-bag trigger: still below the bar,
+    and not for longer than FRUITLESS_SECONDS."""
+    if not state.fruitless:
+        return ()
+    low = _low_slots(facts)
+    stamps = dict(state.fruitless_stamps)
+    return tuple(
+        name
+        for name in state.fruitless
+        if name in low and facts.now - stamps.get(name, 0.0) < FRUITLESS_SECONDS
+    )
+
+
+def _fruitless_after(state: State, facts: Facts) -> tuple:
+    """`state.fruitless` plus the members the town phase that ends now did not
+    lift: still below the bar and no roomier than when it began."""
+    low = _low_slots(facts)
+    new = {
+        name
+        for name, before in state.entered
+        if name in low and low[name] <= int(before)
+    }
+    return tuple(sorted(set(state.fruitless) | new))
 
 
 def _due(facts: Facts) -> list:
@@ -409,19 +482,21 @@ def _stocked_names(facts: Facts) -> list:
     )
 
 
+def _bags_may_lag(facts: Facts) -> bool:
+    """The errand fetched reagents, nobody shows a cast yet, and the bags have
+    not had one refresh since it ended."""
+    return (
+        bool(facts.fetch)
+        and not _casting(facts)
+        and facts.errand_ended > 0
+        and facts.now - facts.errand_ended < BAGS_REFRESH_SECONDS
+    )
+
+
 def _after_town(facts: Facts) -> tuple:
     casting = _casting(facts)
     if casting:
         return CRAFT, "%s can cast from the bags" % ", ".join(casting)
-    # The saved bags trail the world, so what the errand just bought or took
-    # out of a bank is not in them yet: a crafter whose every short reagent is
-    # one the errand fetches is sent to craft, and the phase ends by itself
-    # after CRAFT_MIN_SECONDS if the bags really are empty (#2501).
-    fetched = sorted(facts.fetch or ())
-    if fetched:
-        return CRAFT, "%s had reagents fetched in town (the saved bags may lag)" % (
-            ", ".join(fetched)
-        )
     due = _due(facts)
     if due:
         return TRAIN, "a rank or recipe is due for %s" % ", ".join(due)
@@ -438,7 +513,22 @@ def _after_craft(facts: Facts) -> tuple:
 def _move(state: State, facts: Facts, to: str, why: str, ask_town: str = "") -> Step:
     """A phase change, its job and its one log line."""
     job = phase_job(to, facts)
-    new = State(phase=to, since=facts.now, asserted=facts.now if job else 0.0)
+    fruitless, stamps = state.fruitless, state.fruitless_stamps
+    if state.phase == TOWN:
+        after = _fruitless_after(state, facts)
+        if after != fruitless:
+            # Members already waiting keep their own stamp; new ones start now.
+            kept = dict(stamps)
+            fruitless = after
+            stamps = tuple((n, kept.get(n, facts.now)) for n in after)
+    new = State(
+        phase=to,
+        since=facts.now,
+        asserted=facts.now if job else 0.0,
+        entered=tuple(sorted(_low_slots(facts).items())) if to == TOWN else (),
+        fruitless=fruitless,
+        fruitless_stamps=stamps,
+    )
     line = "%s -> %s: %s" % (state.phase or "joined", to, why)
     if job:
         line += "; job %s" % job
@@ -486,7 +576,16 @@ def _join(state: State, facts: Facts) -> Step:
 
 
 def _gather(state: State, facts: Facts, elapsed: float) -> Step:
-    low = _low(facts)
+    live = _live_fruitless(state, facts)
+    if live != state.fruitless:
+        state = replace(
+            state,
+            fruitless=live,
+            fruitless_stamps=tuple(
+                (n, at) for n, at in state.fruitless_stamps if n in live
+            ),
+        )
+    low = _low(facts, skip=live)
     if low:
         why = "%s below %d free bag slots" % (", ".join(low), TOWN_FREE_SLOTS)
         return _move(state, facts, TOWN, why, _town_ask(why))
@@ -512,6 +611,21 @@ def _town(state: State, facts: Facts, elapsed: float) -> Step:
     if facts.errand_active:
         return Step(replace(state, town_seen=True))
     if state.town_seen or facts.errand_ended >= state.since > 0:
+        if _bags_may_lag(facts):
+            # THE SAVED BAGS TRAIL THE WORLD: what the errand just bought or
+            # took out of a bank is not in them yet. A craft phase started on
+            # that guess ended within minutes with every crafter at zero casts
+            # (#2501), so the loop waits one refresh and judges the bags.
+            return Step(replace(state, town_seen=True))
+        if (
+            state.entered
+            and facts.errand_ended > 0
+            and facts.now - facts.errand_ended < BAGS_REFRESH_SECONDS
+        ):
+            # The same lag, for the bag count: a sale just made is not in the
+            # saved bags yet, and judging now would call a visit that worked
+            # fruitless.
+            return Step(replace(state, town_seen=True))
         to, why = _after_town(facts)
         said = "the town errand ended; " + why
         report = crafters_line(facts.plans)
@@ -565,14 +679,50 @@ _PHASE_STEP = {GATHER: _gather, TOWN: _town, CRAFT: _craft, TRAIN: _train}
 def decide(state: State, facts: Facts) -> Step:
     """The loop's next step for one family (or, later, one member)."""
     if facts.in_run:
-        return Step(state, line="waits: a dungeon run is under way")
+        # A run opened: the slice did its work, and the next one starts after it.
+        return Step(
+            replace(state, queued_since=0.0, yielded=False),
+            line="waits: a dungeon run is under way",
+        )
+    if not facts.run_queued:
+        if state.queued_since or state.yielded:
+            state = replace(state, queued_since=0.0, yielded=False)
+    elif state.yielded:
+        return Step(state)  # said once; the dungeon job stands
     if facts.queue_owns:
         return Step(state, line="waits: the campaign queue owns the job")
+    if facts.run_queued:
+        started = state.queued_since or facts.now
+        held = facts.now - started
+        if held >= QUEUED_SLICE_SECONDS:
+            return Step(
+                replace(state, queued_since=started, yielded=True),
+                line="yields: a campaign run is queued and the loop has held "
+                "the family %d minutes (the slice is %d); the dungeon job "
+                "stands until the run opens or the queue's stall breaker "
+                "fires" % (held // 60, QUEUED_SLICE_SECONDS // 60),
+                yielded=True,
+            )
+        state = replace(state, queued_since=started)
+    step = _decide_phase(state, facts)
+    if facts.run_queued and not step.state.queued_since:
+        step = replace(step, state=replace(step.state, queued_since=state.queued_since))
+    return step
+
+
+def _decide_phase(state: State, facts: Facts) -> Step:
     if not state.phase:
         return _join(state, facts)
     if facts.errand_active and state.phase != TOWN:
         return Step(
-            State(phase=TOWN, since=facts.now, town_seen=True),
+            replace(
+                state,
+                phase=TOWN,
+                since=facts.now,
+                asserted=0.0,
+                town_seen=True,
+                entered=tuple(sorted(_low_slots(facts).items())),
+            ),
             line="%s -> town: the town errand started on its own (%s)"
             % (state.phase, facts.errand_why or "no reason given"),
             moved=True,
@@ -581,6 +731,18 @@ def decide(state: State, facts: Facts) -> Step:
     if step is None:
         return _move(state, facts, GATHER, "unknown phase %r" % state.phase)
     return step(state, facts, facts.now - state.since)
+
+
+def queued_targets(targets: dict, reachable) -> dict:
+    """The gather targets while a run is queued: a farm job whose field is out
+    of reach of the run's door (`reachable(job)` is False) becomes the roaming
+    fallback, so no member is sent where the family cannot regroup from. A job
+    that is not a farm job is left as it is."""
+    out = {}
+    for name, job in (targets or {}).items():
+        farm = bool(job) and jobs.is_farm_job(job)
+        out[name] = QUEUED_FALLBACK if farm and not reachable(job) else job
+    return out
 
 
 def line(family: str, step: Step) -> str:

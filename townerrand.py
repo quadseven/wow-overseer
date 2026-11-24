@@ -42,6 +42,7 @@ PURE MODULE: no MySQL, no clock, no core. The caller passes `now`.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field, replace
 
 IDLE = "idle"
@@ -124,6 +125,37 @@ FLOOR_SALE_COOLDOWN_SECONDS = 1800.0
 # constant so this pure module imports nothing, and pinned equal by a test.
 HOLD_CEILING_SECONDS = 45 * 60.0
 BAG_PRESSURE_WHY = "campaign held at the dungeon door for bag room"
+
+
+# (name, raw value) of each environment read this module refused and replaced
+# with its default. The module imports no logger, so the bridge says them.
+ENV_REJECTED: list = []
+
+
+def _env_seconds(name: str, default: float) -> float:
+    """`name` from the environment as seconds; the default when unset or bad.
+
+    A value that is not a number, or is negative, is refused and noted in
+    ENV_REJECTED so the bridge can log it."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = -1.0
+    if not value >= 0:
+        ENV_REJECTED.append((name, raw))
+        return default
+    return value
+
+
+# ONE ERRAND PER RUN ATTEMPT. Once a family's errand has ended, however it
+# ended, the door claims that family again only after its queued run has
+# opened or after this window. Inside it the queue's dungeon job stands: three
+# schedulers write the family's job, and an errand that re-claimed it every
+# time the queue put the dungeon job back meant no run ever completed.
+RUN_WAIT_SECONDS = _env_seconds("TOWN_ERRAND_RUN_WAIT_SECONDS", 1800.0)
 # The reason profloop.py hands an errand starts with this (#2419). Spelled here
 # rather than imported, as TWO_HAND_SUBCLASSES is: this module imports nothing,
 # and test_profloop pins the two spellings equal.
@@ -250,6 +282,24 @@ def note_run(state: State) -> State:
     if state.active or not state.ended or state.ran_since:
         return state
     return replace(state, ran_since=True)
+
+
+def run_wait_until(
+    state: State, now: float, *, run_queued: bool, no_room: bool = False
+) -> float:
+    """When the door may claim this family again, or 0.0 when it may now.
+
+    The door waits only while a run is queued for the family, its last errand
+    has ended, and no run has opened since (`ran_since`). A member with no free
+    bag slot at all (`no_room`) cannot loot, which is a real blocker, so it is
+    never made to wait; being under the comfortable floor is not that.
+    """
+    if not run_queued or no_room or state.active or not state.ended:
+        return 0.0
+    if state.ran_since:
+        return 0.0
+    until = state.ended + RUN_WAIT_SECONDS
+    return until if now < until else 0.0
 
 
 def should_start(
@@ -622,6 +672,23 @@ def _was_released(spot: dict, released, now: float) -> bool:
     )
 
 
+def unreachable_hub(why: str, hub: dict, released, now: float) -> bool:
+    """Whether an errand for `why` must not start because its `hub` is one a
+    walk was released from as "did not land" in the last AIM_MEMORY_SECONDS.
+
+    A NEED THE TOWN CANNOT MEET IS NOT A TRIP (#1261). Only a bag-room errand
+    moves off a released hub (`choose_aim`); a gear, mail or supply errand has
+    no other aim, so the same capital mailbox was walked to again every
+    UNLANDED_RETRY_SECONDS. wow-dev: a family whose bought gear waited in the
+    post started the errand, stood still some 800 yards out until the stall
+    bound released it, and started it again five minutes later, for hours.
+    The memory expires on its own clock, and the next try may land.
+    """
+    if not hub or room_errand(why):
+        return False
+    return _was_released(hub, released, now)
+
+
 def vendor_stops(rows, side: int = 0, kind: str = "vendor") -> list:
     """Vendor spots from creature rows ({map_id, x, y, name, enemy_group}),
     nearest first as given, one per VENDOR_STOP_YARDS, none of the side that
@@ -817,6 +884,13 @@ def auction_route(
 BANKER_AT_HUB_YARDS = 120.0
 
 
+# The module walks a character to a town counter only within this many yards
+# (mod-overseer TOWN_COUNTER_MAX_WALK_YARDS). A banker or vault further off can
+# never be reached by the bank step, so aiming at it only re-issues a hub the
+# errand cannot finish (the Kargath hub, nearest banker 2119 yards, #1261).
+TOWN_SERVICE_YARDS = 1500.0
+
+
 def banker_at_hub(hub: dict, bankers) -> bool:
     """Whether a banker spot (`vendor_stops(..., kind="banker")`) stands within
     BANKER_AT_HUB_YARDS of `hub` on its map."""
@@ -884,13 +958,17 @@ def bank_route(
             and not _was_released(spot, released, now)
             and not lethal_stop(spot, here, deaths)
             and not walled(spot)
+            and _planar(spot, here) <= TOWN_SERVICE_YARDS
         )
 
     near = [(_planar(s, here), i, s) for i, s in enumerate(bankers or ()) if usable(s)]
     if near:
         _d, _i, spot = min(near, key=lambda t: (t[0], t[1]))
         return ROUTE_BANKER, dict(spot), "the nearest reachable banker"
-    refused = "no banker is reachable (passed over, released or on other ground)"
+    refused = (
+        "no banker is reachable (passed over, released, on other ground "
+        "or past the town-service limit)"
+    )
     if vault:
         spot = {
             "map_id": vault.get("map_id"),

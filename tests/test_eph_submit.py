@@ -64,6 +64,15 @@ class SubmitTest(Base):
         )  # fmt: skip
         return cm["data"]["playerbots.overrides.conf"]
 
+    def test_the_free_realm_ids_are_read_from_the_cluster_once(self):
+        """The realm range is 100 ids; reading the used ones per id was a hundred kubectl calls."""
+        self.submit(**CONTROL)
+        listed = [
+            c for c, _ in self.cluster.calls
+            if "configmaps" in c and any(a.startswith("eph/realm") or a == "-l" for a in c)
+        ]  # fmt: skip
+        self.assertEqual(len(listed), 1, listed)
+
     def test_a_control_prefix_renames_only_the_control_arms_playerbots_keys(self):
         rec = self.submit(control_playerbots_prefix="AiPlayerbot", **CONTROL)
         for suffix in ("-c1", "-c2", "-c3"):

@@ -68,9 +68,12 @@ NEVER_REASONS = (
 )
 ELSEWHERE_REASONS = ("character is inside an instance or battleground",)
 # A target out of reach: one walk toward it again may fix it.
+# A main-hand cast beside a spell focus names the forge it cannot reach in its own
+# words: the member is not near a Runeforge yet, so it walks to one again.
 OUT_OF_REACH = (
     "no such target within reach on this map",
     "the target is too far to use the item or object",
+    "no Runeforge is within spell range",
 )
 # A target that is not there yet: it respawns, so the wait is long.
 TARGET_DEAD = "the creature is dead"
@@ -82,6 +85,32 @@ REWALKS = 1
 # Seconds to wait before asking again, by what refused.
 LATER_WAIT_SECONDS = 20.0
 DEAD_WAIT_SECONDS = 60.0
+
+
+# Refusals in a row, the same words each time with no use done between, after
+# which the use is a defect and not a wait (#678): three steps of
+# MAX_ATTEMPTS asks each.
+STREAK_LIMIT = 9
+
+
+class RefusalStreaks:
+    """Per (member, quest): how many times in a row the module refused the use
+    with the same reason."""
+
+    def __init__(self):
+        self._by: dict = {}
+
+    def refused(self, name, quest, reason) -> bool:
+        """Record one refusal; True when the same reason has now stood
+        STREAK_LIMIT times running."""
+        key = (name, int(quest))
+        last, count = self._by.get(key, ("", 0))
+        count = count + 1 if last == reason else 1
+        self._by[key] = (reason, count)
+        return count >= STREAK_LIMIT
+
+    def done(self, name, quest) -> None:
+        self._by.pop((name, int(quest)), None)
 
 
 @dataclass(frozen=True)

@@ -115,3 +115,16 @@ sudo systemctl enable --now metric-watcher.timer
 
 `--api-root` and `--output`, or `METRIC_WATCHER_API_ROOT` and
 `METRIC_WATCHER_OUTPUT`, set the API root and output path.
+
+## Clip retention
+
+The clip scan expires saved clips beyond two caps, oldest first. Both come
+from the environment of the map server:
+
+- `CLIP_MAX_COUNT`: most saved clips kept (default 200).
+- `CLIP_MAX_AGE_DAYS`: days a clip is kept (default 30).
+
+A missing value uses the default. A value that is not a whole number of 1 or
+more uses the default and logs one line. An expired row records the cap that
+removed it in its detail: `expired: count cap (N)` or `expired: age cap (N
+days)`. Only the retention pass removes a saved clip.

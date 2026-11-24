@@ -73,6 +73,12 @@ class LootStories(unittest.TestCase):
         )
         self.assertNotIn("clip_note", story)
 
+    def test_a_clip_from_another_members_view_names_the_tier_on_the_story(self):
+        story = self.story(ledger(detail="Testblade; view: Otherchar (leader)"))
+        self.assertEqual(story["clip"]["url"], "/clips/clip-9-loot.mp4")
+        self.assertIn("Otherchar", story["clip"]["view_note"])
+        self.assertIn("leader", story["clip"]["view_note"])
+
     def test_a_no_view_row_says_no_live_view_was_up(self):
         story = self.story(ledger(state="no_view", file_name=None))
         self.assertEqual(story["clip_note"], clipledger.NO_VIEW_LINE)
@@ -243,6 +249,10 @@ class TimelineEntries(unittest.TestCase):
     def test_a_clear_of_the_same_dungeon_at_another_time_is_not_this_run(self):
         card = self.card([clear_row(age_seconds=90000)])
         self.assertNotIn("clip", card)
+
+    def test_a_family_keyed_clear_row_links_and_a_longer_map_id_does_not(self):
+        self.assertIn("clip", self.card([clear_row(event_key="clear:389:oaks")]))
+        self.assertNotIn("clip", self.card([clear_row(event_key="clear:3890:oaks")]))
 
     def test_a_clear_of_another_dungeon_is_not_this_run(self):
         card = self.card([clear_row(event_key="clear:33")])

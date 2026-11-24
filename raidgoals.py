@@ -1833,3 +1833,56 @@ def _basis() -> str:
         "made them would be deciding the thing it went out of its way not to "
         "decide."
     )
+
+
+# --- Blackwing Lair readiness (#2566) ---------------------------------------
+#
+# The one item Blackwing Lair's Shadow Flame is usually met with, the Onyxia
+# Scale Cloak, cannot be made on this realm, so this plan never lists it as
+# required or missing. What it does list is what the realm can actually
+# supply, and it labels each claim as read from the realm's tables or as a
+# convention, so a reader can tell the two apart.
+CLOAK_CRAFT_SPELL = 19093
+
+# (item entry, name, spell the item casts), each read from acore_world.item_template.
+SHADOW_FLAME_ALTERNATIVES = (
+    (13457, "Greater Fire Protection Potion", 17543),
+    (13459, "Greater Shadow Protection Potion", 17548),
+)
+
+
+def blackwing_lair_plan() -> dict:
+    """What Blackwing Lair needs for Nefarian's Shadow Flame, cloak excluded.
+
+    Pure: no rows in, because every line is a fixed fact about this realm's
+    item table or a stated convention. `required` and `missing` never carry the
+    cloak; it appears only in `excluded`, with the reason.
+    """
+    import raidcraft
+
+    product, why = raidcraft.UNOBTAINABLE_RECIPES[CLOAK_CRAFT_SPELL]
+    return {
+        "map_id": 469,
+        "name": "Blackwing Lair",
+        "required": [
+            {
+                "item": name,
+                "entry": entry,
+                "spell": spell,
+                "basis": "realm data: item_template row %d casts spell %d"
+                % (entry, spell),
+            }
+            for entry, name, spell in SHADOW_FLAME_ALTERNATIVES
+        ],
+        "missing": [],
+        "excluded": [{"item": product, "why": why}],
+        "unresolved": [
+            "Which of the two protections Shadow Flame answers is not "
+            "readable here: spell rows live in the client data this "
+            "deployment does not import. Carrying both is a convention, not "
+            "a measurement.",
+            "Nothing on this realm gives the permanent resistance the cloak "
+            "would; potions are timed, so the plan cannot promise a whole "
+            "fight covered.",
+        ],
+    }

@@ -1,0 +1,65 @@
+# Og starts as a ghost at the mountain graveyard with his corpse inside BRD.
+# This checks the outside-ghost state while four live members remain in the run;
+# it does not claim to witness the death and release sequence.
+decree: v1
+id: brd-four-live-members-not-split-failed
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1472, criterion: "a credited BRD encounter with one outside ghost and four live members inside does not close split_failed"}
+fix: {repo: quadseven/mod-overseer, commit: "d4c157e64c495cec30b2a1c7587eb7474d6d68ef"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 20m
+cast:
+  - who: family:grug
+    set: {alive: true, at: {creature: "Lord Roccor"}}
+    ceiling: "position only; no levels, gear, items, or gold granted"
+  - who: Og
+    set: {alive: false, corpse_at: {creature: "Lord Roccor"}, at: {graveyard: 1469}}
+    ceiling: "the dead-at-graveyard state is the scenario; nothing granted"
+arrange:
+  - instance: {map: "Blackrock Depths", as: brd, bind: family:grug}
+  - group: {members: family:grug, leader: Grug}
+act:
+  - at: 0s
+    roster: {who: family:grug, job: "dungeon:blackrock-depths"}
+observe:
+  - name: og-starts-dead-outside-with-a-brd-corpse
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM corpse c
+      JOIN characters ch ON ch.guid = c.guid
+      JOIN acore_world.game_graveyard g ON g.ID = 1469
+      WHERE c.guid = @Og AND ch.map = g.Map
+        AND POW(ch.position_x - g.x, 2) + POW(ch.position_y - g.y, 2) <= 1600
+    expect: {scalar: "= 1"}
+  - name: four-live-members-start-inside-brd
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters
+      WHERE guid IN (@cast) AND guid <> @Og AND map = 230 AND health > 0
+    expect: {scalar: "= 4"}
+  - name: a-brd-run-and-encounter-were-recorded
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run r
+      WHERE r.family = 'Grug' AND r.map_id = 230 AND r.started_at >= @t0
+        AND EXISTS (SELECT 1 FROM log_encounter le WHERE le.map = 230 AND le.time >= @t0)
+    expect: {scalar: ">= 1"}
+  - name: four-live-members-remain-inside
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM characters
+      WHERE guid IN (@cast) AND guid <> @Og AND map = 230 AND health > 0
+    expect: {scalar: ">= 4"}
+  - name: the-run-was-not-closed-split-failed
+    role: check
+    when: end
+    sql: |
+      SELECT id FROM overseer_dungeon_run
+      WHERE family = 'Grug' AND map_id = 230 AND started_at >= @t0
+        AND outcome = 'split_failed'
+    expect: {rows: 0}

@@ -35,6 +35,11 @@ def loop_of(name=NAME, level=26):
     )
 
 
+# A hearthstone bound in the loop's zone leaves the level walk as the only
+# escape, which these fixtures leave unread.
+BOUND = dict(home_map=0, home_x=3000.0, home_y=3000.0, home_zone=HILLSBRAD)
+
+
 class LoopMates(unittest.TestCase):
     def test_selects_an_online_guildmate_within_the_level_band(self):
         m = member(NAME)
@@ -68,7 +73,7 @@ class LoopMates(unittest.TestCase):
         self.assertEqual(guildjobs.loop_mates(m, [unknown]), [])
 
     def test_no_escape_names_no_mate_when_the_only_mate_is_out_of_reach(self):
-        m = member(NAME, in_combat=True)
+        m = member(NAME, in_combat=True, **BOUND)
         distant = member("Distant", level=28, x=m.x + 100000.0)
         found = guildjobs.death_loop_first(m, loop_of(), None, (), CAP, mates=[distant])
         self.assertIsNone(found[0])
@@ -96,7 +101,7 @@ class LoopMates(unittest.TestCase):
 
 class TheHelpOfferLine(unittest.TestCase):
     def test_no_escape_names_the_group_up_offer(self):
-        m = member(NAME, in_combat=True)
+        m = member(NAME, in_combat=True, **BOUND)
         mate = member("Helper", level=28)
         found = guildjobs.death_loop_first(m, loop_of(), None, (), CAP, mates=[mate])
         self.assertIsNone(found[0])
@@ -104,13 +109,13 @@ class TheHelpOfferLine(unittest.TestCase):
         self.assertIn("offered a group-up with Helper", found[2])
 
     def test_no_escape_and_no_mate_names_the_one_reason(self):
-        m = member(NAME, in_combat=True)
+        m = member(NAME, in_combat=True, **BOUND)
         found = guildjobs.death_loop_first(m, loop_of(), None, (), CAP, mates=[])
         self.assertIsNone(found[0])
         self.assertIn("no guildmate in reach", found[2])
 
     def test_two_flagged_members_in_one_zone_are_not_paired(self):
-        m = member(NAME, in_combat=True)
+        m = member(NAME, in_combat=True, **BOUND)
         fellow = member("Looper2", level=28)
         result = guildjobs.plan(
             [m, fellow],
@@ -125,7 +130,7 @@ class TheHelpOfferLine(unittest.TestCase):
         self.assertTrue(named)
 
     def test_the_offer_reaches_the_plan_notes(self):
-        m = member(NAME, in_combat=True)
+        m = member(NAME, in_combat=True, **BOUND)
         mate = member("Helper", level=28)
         result = guildjobs.plan(
             [m, mate],

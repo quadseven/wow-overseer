@@ -213,7 +213,7 @@ def headline(members) -> str:
     return "%d of %d in the world" % (here, len(members))
 
 
-def build_heads(families, observers=(), facts=None) -> dict:
+def build_heads(families, observers=(), facts=None, reread=None) -> dict:
     """The Watch wall across every family: only the characters with a picture.
 
     `families` is [(family key, family.build_family payload)], in the order
@@ -231,6 +231,9 @@ def build_heads(families, observers=(), facts=None) -> dict:
     `facts` is what nowstatus composes each tile's "Doing / Waiting for"
     sentence from: a name -> facts dict, or False when the feed could not be
     read (every tile then says so). None leaves the tiles without a `now` key.
+
+    `reread` is the roster's re-read of an Idle member (#2192): a callable
+    (name, now) -> now, so the wall words such a member as the roster does.
     """
     members = []
     keys = []
@@ -243,13 +246,13 @@ def build_heads(families, observers=(), facts=None) -> dict:
     return {
         "members": members,
         "families": keys,
-        "wall": build_wall(members, facts=facts),
+        "wall": build_wall(members, facts=facts, reread=reread),
         "here": sum(1 for m in members if m.get("present")),
         "expected": len(members),
     }
 
 
-def build_wall(members, chosen=None, facts=None) -> dict:
+def build_wall(members, chosen=None, facts=None, reread=None) -> dict:
     """The whole wall, composed, in roster order.
 
     ROSTER ORDER IS NEVER TOUCHED. `family.roster` is seniority, which is the
@@ -275,7 +278,10 @@ def build_wall(members, chosen=None, facts=None) -> dict:
         if facts is False:
             tile["now"] = nowstatus.unavailable()
         elif facts is not None:
-            tile["now"] = nowstatus.compose(m, facts.get(m.get("name")))
+            now = nowstatus.compose(m, facts.get(m.get("name")))
+            if reread is not None:
+                now = reread(m.get("name"), now)
+            tile["now"] = now
         tiles.append(tile)
     return {
         "modes": list(MODES),

@@ -2,7 +2,8 @@
 //
 // The server decides everything here. /api/clips lists the ready clips, newest
 // first, each with the URL the file is served at; a loot story or a run card
-// carries `clip` ({url, kind}) when its event has a saved clip, or `clip_note`
+// carries `clip` ({url, kind}, plus `view_note` when the clip was filmed from
+// another member's view) when its event has a saved clip, or `clip_note`
 // when no live view was up. This only draws them. A clip plays in place in the
 // browser's own video element; nothing is fetched but its metadata until Play.
 
@@ -25,11 +26,13 @@ const kept = new Map();
 
 function kindWord(kind) { return KIND[kind] || String(kind || "Clip").replace(/_/g, " "); }
 
-// The line under a story or run card: a link to its clip, the server's words
-// when no live view was up, or nothing.
+// The line under a story or run card: a link to its clip (with the server's
+// words for whose view filmed it, when not the subject's own), the server's
+// words when no live view was up, or nothing.
 export function clipLink(entry) {
   if (entry && entry.clip && entry.clip.url) {
-    return html`<a class="clip-link" href="${u(entry.clip.url)}" target="_blank" rel="noopener"><i class="ph-fill ph-play-circle" aria-hidden="true"></i>Watch the clip</a>`;
+    const from = entry.clip.view_note ? html` <span class="muted clip-note">${entry.clip.view_note}</span>` : "";
+    return html`<a class="clip-link" href="${u(entry.clip.url)}" target="_blank" rel="noopener"><i class="ph-fill ph-play-circle" aria-hidden="true"></i>Watch the clip</a>${from}`;
   }
   if (entry && entry.clip_note) return html`<span class="muted clip-note">${entry.clip_note}</span>`;
   return "";
@@ -48,7 +51,22 @@ function card(c) {
   const body = kept.has(c.url)
     ? html`<div class="clip-slot" data-clip-slot="${c.url}"></div>`
     : html`<button type="button" class="btn clip-play" data-clip="${c.url}"><i class="ph-fill ph-play" aria-hidden="true"></i>Play</button>`;
-  return html`<article class="card clip-card"><div class="clip-head"><span class="tag tag-outline">${kindWord(c.kind)}</span><span class="clip-who">${c.character}</span>${c.subject ? html`<span class="clip-subject">${c.subject}</span>` : ""}<span class="muted g-when">${since(c.at)}</span></div>${body}</article>`;
+  return html`<article class="card clip-card"><div class="clip-head"><span class="tag tag-outline">${kindWord(c.kind)}</span><span class="clip-who">${c.character}</span>${c.subject ? html`<span class="clip-subject">${c.subject}</span>` : ""}${c.of > 1 ? html`<span class="tag tag-outline clip-nth">${c.nth} of ${c.of}</span>` : ""}<span class="muted g-when">${since(c.at)}</span></div>${body}</article>`;
+}
+
+// The footer under the shelf: per day, how many moments left no clip and why.
+// Counts only; a missed moment is never a card.
+export function missedLine(d) {
+  const parts = [];
+  if (d.no_view) parts.push(`${d.no_view} with no streamed member in view`);
+  if (d.failed) parts.push(`${d.failed} where recording failed`);
+  return `${d.day}: ${parts.join(", ")}.`;
+}
+
+function missedFooter(missed) {
+  const days = (missed || []).filter((d) => d.no_view || d.failed);
+  if (!days.length) return "";
+  return html`<footer class="clip-missed muted">${days.map((d) => html`<p>${missedLine(d)}</p>`)}</footer>`;
 }
 
 // The shelf section's body, from the /api/clips read.
@@ -62,8 +80,9 @@ export function shelf(read) {
       kept.delete(url);
     }
   }
-  if (!clips.length) return state("empty", "No clips yet", (read.data && read.data.empty) || "No clips have been saved yet.");
-  return html`<div class="clip-grid">${clips.map(card)}</div>`;
+  const foot = missedFooter(read.data && read.data.missed);
+  if (!clips.length && !foot) return state("empty", "No clips yet", (read.data && read.data.empty) || "No clips have been saved yet.");
+  return html`<div class="clip-grid">${clips.map(card)}</div>${foot}`;
 }
 
 // Run after every draw. A slot gets back the kept element of its clip; a Play

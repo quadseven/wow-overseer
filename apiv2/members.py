@@ -58,6 +58,8 @@ online.
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 
 import agenda
@@ -70,6 +72,8 @@ from panel import _CLASS_NAMES, _RACE_NAMES
 
 from . import activity
 from ._scope import holes
+
+log = logging.getLogger(__name__)
 
 # A class quest ask newer than this means the blocker still stands: the bridge
 # asks again every pass it stands, ASK_COOLDOWN_MINUTES (15) apart at the most
@@ -198,6 +202,44 @@ def fetch(ctx) -> dict:
     return dict(rows, families=families, facts=facts or {})
 
 
+def _side_read(read, empty, what: str):
+    """`read()`, or `empty` when it raises: a read that only re-words an idle
+    member must degrade that one field, not turn the roster into a 503."""
+    try:
+        return read()
+    except Exception:
+        log.exception("%s could not be read; the roster is served without it", what)
+        return empty
+
+
+def reread_idle(rd, name: str, now: dict) -> dict:
+    """`nowstatus.idle_reading` for one member off its own reads, so a surface
+    that composes a single member (the current-goal banner) words an idle
+    member as the roster does (#2192). A read that fails leaves the member
+    as composed, never raises."""
+    if now.get("doing") != "Idle":
+        return now
+
+    def look():
+        level = rd.rows(CHARS_SQL.format(holes=holes(1)), (name,), what="characters")
+        leveled = rd.rows(
+            LEVELED_SQL.format(holes=holes(1)),
+            (name, LEVEL_DAYS),
+            what="overseer_level",
+        )
+        clock = rd.must("SELECT UNIX_TIMESTAMP() AS now_at")
+        at = leveled[0].get("at") if leveled else None
+        return nowstatus.idle_reading(
+            now,
+            name in guildrun.active_names(rd),
+            level[0].get("level") if level else None,
+            int(at) if at else None,
+            int(clock[0]["now_at"]) if clock else 0,
+        )
+
+    return _side_read(look, now, "idle re-read")
+
+
 def _read(ctx, names: list) -> dict:
     server = ctx.server
     rd = ctx.read
@@ -246,8 +288,12 @@ def _read(ctx, names: list) -> dict:
         (*everyone, deathloop.SLOW_READ_SECONDS),
         what="overseer_death",
     )
-    leveled = rd.rows(
-        LEVELED_SQL.format(holes=h), (*everyone, LEVEL_DAYS), what="overseer_level"
+    leveled = _side_read(
+        lambda: rd.rows(
+            LEVELED_SQL.format(holes=h), (*everyone, LEVEL_DAYS), what="overseer_level"
+        ),
+        [],
+        "overseer_level",
     )
     clock = rd.must("SELECT UNIX_TIMESTAMP() AS now_at")
     now_at = int(clock[0]["now_at"]) if clock else 0
@@ -265,8 +311,8 @@ def _read(ctx, names: list) -> dict:
             if r.get("at")
         },
         "deaths": deaths or [],
-        "in_run": guildrun.active_names(rd),
-        "run_of": guildrun.inside_runs(rd),
+        "in_run": _side_read(lambda: guildrun.active_names(rd), set(), "guild runs"),
+        "run_of": _side_read(lambda: guildrun.inside_runs(rd), {}, "guild runs"),
         "leveled": {r["name"]: int(r["at"]) for r in leveled or () if r.get("at")},
         "now_at": now_at,
     }
@@ -593,6 +639,12 @@ def standing_loop(name: str, loops: dict, rows: dict):
     loop = (loops or {}).get(name)
     if loop is None:
         return None
+    # A slow loop (#2615) dies once or twice an hour, so between deaths the
+    # member is routinely out of the zone (at its graveyard, on a corpse run,
+    # on the road back): a zone gate would hide most slow loops at any moment.
+    # It clears on its quiet clock or a level gain, as deathloop.loops judges.
+    if loop.slow:
+        return loop
     reading = rows["readings"].get(name) or {}
     snap = rows["snaps"].get(name) if reading.get("online") else None
     if not snap:
@@ -622,10 +674,50 @@ def loop_blocker(loop, now_at: int) -> dict | None:
 def _stuck_entry(member: dict, run: list, now_at: int, loop=None) -> dict | None:
     found = loop_blocker(loop, now_at)
     if found is not None:
+        # A class quest run beside deaths is the cause and the deaths the
+        # symptom (a death knight refused its Runeforge cast for 24 hours and
+        # read as a death loop): name the quest, keep the deaths in its words.
+        cause = ask_blocker(run, now_at)
+        if cause is not None and not loop.run:
+            cause["blocker"] += " Deaths meanwhile: " + found["blocker"]
+            cause["since"] = (
+                min(cause["since"] or found["since"], found["since"] or 0)
+                or cause["since"]
+            )
+            return cause
         return found
     if member["life"] in ("dead", "ghost"):
         return None
     return ask_blocker(run, now_at) or hold_blocker(member, now_at)
+
+
+# A member idle and level-less for this long is filed even with no blocker
+# recorded (#2248); the one-day stall reading alone files nothing.
+MEMBER_STALL_BOUND_SECONDS = 7 * 24 * 3600
+
+
+def member_stall_entry(member: dict, now_at: int | None) -> dict | None:
+    """The stuck entry for a member whose stall reading (nowstatus.idle_reading)
+    passed MEMBER_STALL_BOUND_SECONDS with no other blocker, or None.
+
+    The reason is `unknown` and says so, so the stall is a record with a name
+    rather than an empty blocker. A dead, offline or in-run member is not filed:
+    the reading only runs for a member with no job, and idle_reading clears it
+    for a member in a run."""
+    held = member.get("stalled_s")
+    if not held or not now_at or held < MEMBER_STALL_BOUND_SECONDS:
+        return None
+    if member["life"] in ("dead", "ghost") or not member.get("online"):
+        return None
+    return {
+        "step": member["doing"],
+        "blocker": (
+            "unknown: no level gained for %s, with no errand, hold or refusal "
+            "recorded." % agenda.span(int(held))
+        ),
+        "since": int(now_at) - int(held),
+        "kind": "stall",
+    }
 
 
 def _newest(rows) -> dict:
@@ -814,7 +906,7 @@ def build(
         m = _member(name, guild_of.get(name, {}), rows)
         found[name] = _stuck_entry(
             m, streaks.get(name, []), rows["now_at"], standing_loop(name, loops, rows)
-        )
+        ) or member_stall_entry(m, rows["now_at"])
         followed = nowstatus.followed(rows["facts"].get(name), m)
         if followed and not _asking(found[name]):
             follows[name] = followed
@@ -837,6 +929,12 @@ def build(
 # Nobody stays stuck longer than this (#868): the digest counts who is past
 # it, so a tick reads the breach without doing the sum.
 STUCK_BOUND_SECONDS = 2 * 3600
+STUCK_REPORT_INTERVAL_SECONDS = 3600
+STUCK_NOTE_MEMO_KIND = "stuck_watch"
+STUCK_NOTE_SQL = (
+    "SELECT subject AS name, value FROM overseer_bridge_memo "
+    "WHERE kind = %s AND expires > UNIX_TIMESTAMP()"
+)
 # A follower's blocker ends with its leader's: the leader's hold is the cause.
 LEADER_HOLD = "'s own hold: "
 _DIGITS = re.compile(r"\d+")
@@ -861,6 +959,58 @@ def _waited(row: dict, checked_at: int | None) -> int | None:
     if row["since"] is None or not checked_at:
         return None
     return max(0, int(checked_at) - int(row["since"]))
+
+
+def over_bound_rows(rows: list, checked_at: int | None) -> list:
+    """Measured stuck rows strictly past the bound used by the digest."""
+    return [
+        row
+        for row in rows or ()
+        if (waited := _waited(row, checked_at)) is not None
+        and waited > STUCK_BOUND_SECONDS
+    ]
+
+
+def stuck_watch_updates(
+    rows: list,
+    checked_at: int | None,
+    refusals: dict,
+    previous: dict,
+    now: int | float,
+) -> tuple[dict, list[str]]:
+    """Return durable note values and the hourly lines for over-bound rows."""
+    notes = {}
+    lines = []
+    for row in over_bound_rows(rows, checked_at):
+        name = str(row.get("name") or "")
+        if not name:
+            continue
+        saved = previous.get(name)
+        old = saved[0] if saved else {}
+        since = int(row["since"])
+        same_episode = int(old.get("since") or 0) == since
+        last_logged = old.get("last_logged_at") if same_episode else None
+        log_due = (
+            last_logged is None
+            or now - float(last_logged) >= STUCK_REPORT_INTERVAL_SECONDS
+        )
+        refusal = re.sub(r"\s+", " ", str(refusals.get(name) or "")).strip()
+        refusal = refusal or "no refusal reason recorded"
+        kind = re.sub(r"\s+", " ", str(row.get("kind") or "unknown")).strip()
+        note = {
+            "kind": kind,
+            "last_refusal": refusal,
+            "since": since,
+            "observed_at": int(now),
+            "last_logged_at": int(now) if log_due else int(last_logged),
+        }
+        notes[name] = note
+        if log_due:
+            lines.append(
+                "stuck guard: member=%s kind=%s last_refusal=%s"
+                % (re.sub(r"\s+", " ", name).strip(), kind, refusal)
+            )
+    return notes, lines
 
 
 def stuck_digest(rows: list, checked_at: int | None) -> dict:
@@ -910,7 +1060,26 @@ def stuck_digest(rows: list, checked_at: int | None) -> dict:
     }
 
 
-def stuck_view(roster: dict) -> dict:
+def _stuck_notes(ctx) -> dict:
+    # Notes are optional decoration; a context without memo reads still serves
+    # the roster's stuck members.
+    if ctx.read is None:
+        return {}
+    rows = ctx.read.rows(
+        STUCK_NOTE_SQL, (STUCK_NOTE_MEMO_KIND,), what="overseer_bridge_memo"
+    )
+    out = {}
+    for row in rows or ():
+        try:
+            value = json.loads(row["value"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if isinstance(value, dict):
+            out[str(row.get("name") or "")] = value
+    return out
+
+
+def stuck_view(roster: dict, notes: dict | None = None) -> dict:
     """The /api/v2/stuck shape: the stuck members only, longest first, and
     their digest (stuck_digest)."""
     stuck = [m for m in roster["members"] if m["stuck"]]
@@ -926,6 +1095,17 @@ def stuck_view(roster: dict) -> dict:
         }
         for m in stuck
     ]
+    saved = notes or {}
+    for row in rows:
+        note = saved.get(row["name"])
+        waited = _waited(row, roster["checked_at"])
+        if (
+            note
+            and waited is not None
+            and waited > STUCK_BOUND_SECONDS
+            and int(note.get("since") or 0) == int(row["since"])
+        ):
+            row["note"] = note
     return {
         "members": rows,
         "digest": stuck_digest(rows, roster["checked_at"]),
@@ -975,8 +1155,10 @@ def roster(_query: dict, ctx) -> tuple[int, dict]:
 
 
 def stuck(_query: dict, ctx) -> tuple[int, dict]:
-    """GET /api/v2/stuck: the stuck members only, longest stuck first, and their digest."""
-    return 200, stuck_view(_roster_payload(ctx))
+    """GET /api/v2/stuck: the stuck members only, longest first, and their
+    digest; measured over-bound rows may also include persisted kind, last
+    refusal, first-seen time and last report time."""
+    return 200, stuck_view(_roster_payload(ctx), _stuck_notes(ctx))
 
 
 ROUTES = {"/api/v2/roster": roster, "/api/v2/stuck": stuck}

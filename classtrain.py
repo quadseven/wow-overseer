@@ -60,6 +60,19 @@ WALKS_PER_GUILD = 3
 # the walk answered: a trainer that taught what the purse covered has nothing
 # more to sell it until it earns more or levels.
 COOLDOWN_MINUTES = 180
+# A death knight on the start map is walked for the module's gryphon click, not
+# for a purchase, so the three-hour wait for a purse to refill does not apply:
+# one still on that map this long after its last walk is walked again. A knight
+# with no hearthstone has no other way off that map, so a three-hour gap leaves
+# it exposed to the creatures there for hours.
+KNIGHT_COOLDOWN_MINUTES = 20
+# A walk the module turned away for a passing reason (the member was held by
+# another verb, in combat, dead or on a flight path, or entered combat on the
+# way) bought nothing and learned nothing about the purse, so the three-hour
+# wait for a purse to refill does not apply: the member is asked again after
+# this short pause (#771). Without it the members who could pay for training
+# sat out three hours for a refusal that lasted a minute.
+TRANSIENT_RETRY_MINUTES = 10
 # A worldserver that does not know the class walk answers this, and is not
 # asked again for this long.
 MALFORMED = "malformed walk-to-trainer command"
@@ -230,6 +243,9 @@ class Walk:
     money: int
     cap: float = guildroute.FAR_WALK_YARDS
     kind: str = KIND
+    # A death knight on the start map, walked for the module's gryphon click
+    # rather than for a purchase.
+    gryphon: bool = False
 
     @property
     def command(self) -> str:
@@ -241,6 +257,12 @@ class Walk:
 
     @property
     def said(self) -> str:
+        if self.gryphon:
+            return (
+                "%s %s (%s, level %d) is a death knight on the start map: the "
+                "class walk asks the module for its gryphon click"
+                % (LOG_PREFIX, self.name, self.guild, self.level)
+            )
         return (
             "%s %s (%s, level %d) walks to its class trainer with %dc for %d "
             "waiting spell(s) costing %dc"
@@ -312,7 +334,7 @@ def pass_line(trainees, started) -> str:
     )
 
 
-def walk_refusal(walker, name) -> str:
+def walk_refusal(walker, name, start_map_knight=False) -> str:
     """Why this member is not walked to a trainer now, "" when it can be.
 
     The mailbox walk's own refusals (guildroute) without its mailbox distance:
@@ -330,6 +352,14 @@ def walk_refusal(walker, name) -> str:
         return "%s is %s" % (name, walker.unwalkable)
     if walker.in_combat:
         return "%s is in combat" % name
+    if start_map_knight:
+        # Map 609 is an instance to the classic lists; the module walks a
+        # knight there (its class walk and gryphon click) all the same.
+        return (
+            ""
+            if walker.by_row
+            else "%s cannot be walked by the trainer walk row" % name
+        )
     starting = classic.is_starting_land(walker.map_id, getattr(walker, "zone_id", None))
     if classic.stands_outside(walker):
         return classic.outside_note_for(name, walker)
@@ -346,26 +376,45 @@ def _is_no_trainer_refusal(result: dict) -> bool:
     return (
         result.get("outcome") == "refused"
         and result.get("retryable") is False
-        and reason.startswith(NO_TRAINER_REASON)
+        and reason.startswith(NO_TRAINER_REASONS)
     )
 
 
-def recent_walkers(rows, minutes=COOLDOWN_MINUTES) -> set:
+def _passing_refusal(row) -> bool:
+    """True when the module's answer says the member was not walked for a
+    reason that passes: its own `transient` flag, or a dead member."""
+    result = _result_of(row)
+    if result.get("outcome") not in ("refused", "entered_combat"):
+        return False
+    return (
+        result.get("transient") is True or result.get("reason") == "character is dead"
+    )
+
+
+def recent_walkers(rows, minutes=COOLDOWN_MINUTES, knights=()) -> set:
     """Members walked inside the cooldown, from the command log's rows.
 
     `rows` carry target_name, source and age (minutes). Refusals for lacking a
     trainer on the member's map are omitted so a stranded member can cross and
-    walk immediately after arriving on a trainer map.
+    walk immediately after arriving on a trainer map. A member named in
+    `knights` (death knights, walked for the gryphon click) is held only
+    KNIGHT_COOLDOWN_MINUTES. A passing refusal (`_passing_refusal`) holds the
+    member only TRANSIENT_RETRY_MINUTES.
     """
     out = set()
+    knights = {str(n) for n in knights or ()}
     for row in rows or ():
         source = str(row.get("source") or "")
         if not source.startswith(SOURCE + ":"):
             continue
         if _is_no_trainer_refusal(_result_of(row)):
             continue
-        if _int(row.get("age"), minutes + 1) <= minutes:
-            out.add(str(row.get("target_name") or source.split(":", 1)[1]))
+        who = str(row.get("target_name") or source.split(":", 1)[1])
+        window = min(minutes, KNIGHT_COOLDOWN_MINUTES) if who in knights else minutes
+        if _passing_refusal(row):
+            window = min(window, TRANSIENT_RETRY_MINUTES)
+        if _int(row.get("age"), window + 1) <= window:
+            out.add(who)
     return out
 
 
@@ -373,6 +422,15 @@ def recent_walkers(rows, minutes=COOLDOWN_MINUTES) -> set:
 # map it stands on (mod-overseer's walk_refusals fixture): not retryable, and
 # true for as long as the member stays on that map (ticket 2624).
 NO_TRAINER_REASON = "no trainer of this character's class on this map"
+# The module's other way of saying the same for a class walk: a trainer stands
+# on the map but no safe crossing reaches one with a spell to teach. Also not
+# retryable and also true for as long as the member stays, so it strands the
+# member the same way: a crossing is planned, no walk is repeated (#792).
+NO_REACHABLE_TRAINER_REASON = (
+    "no trainer of this character's class with a class spell to teach it "
+    "is reachable by a safe crossing"
+)
+NO_TRAINER_REASONS = (NO_TRAINER_REASON, NO_REACHABLE_TRAINER_REASON)
 # How far back the log is read for such a refusal: a member left on a map with
 # no trainer is not asked again for as long as it stays.
 STRANDED_READ_DAYS = 30
@@ -559,15 +617,24 @@ def unsupported(rows) -> bool:
     )
 
 
+def is_stranded_knight(trainee: Trainee, walker) -> bool:
+    """A death knight standing on the start map (Acherus, map 609)."""
+    return (
+        trainee.class_id == classquest.DEATH_KNIGHT
+        and getattr(walker, "map_id", None) == classquest.DEATH_KNIGHT_START_MAP
+    )
+
+
 def _plan_walk_step(
     trainee: Trainee,
     walker,
     started: dict[str, int],
     per_guild: int,
     cap: float,
+    gryphon: bool = False,
 ) -> tuple[Walk | None, str]:
     """Plan one trainer walk for a ready trainee, or explain why it waits."""
-    why = walk_refusal(walker, trainee.name)
+    why = walk_refusal(walker, trainee.name, gryphon)
     if why:
         return None, "%s waits: %s" % (trainee.name, why)
     if started.get(trainee.guild, 0) >= per_guild:
@@ -585,6 +652,7 @@ def _plan_walk_step(
             trainee.due.copper,
             trainee.money,
             cap,
+            gryphon=gryphon,
         ),
         "",
     )
@@ -592,6 +660,21 @@ def _plan_walk_step(
 
 def _step_for_trainee(t: Trainee, state: dict) -> tuple[Walk | Cross | None, str]:
     """Return (step or None, waiting_note) for one ordered trainee."""
+    knight = is_stranded_knight(t, state["walkers"].get(t.name))
+    if knight and t.online and t.name not in state["recent"]:
+        # The module's class walk is the only caller of its gryphon click for
+        # a knight whose class step and crossing are walled; it does not wait
+        # on a purchase, so the knight needs neither a due spell nor gold.
+        if t.name in state["busy"]:
+            return None, "%s is already on a guild walk" % t.name
+        return _plan_walk_step(
+            t,
+            state["walkers"][t.name],
+            state["started"],
+            state["per_guild"],
+            state["cap"],
+            gryphon=True,
+        )
     if not t.due.count:
         return None, ""
     if not t.due.affords(t.money):

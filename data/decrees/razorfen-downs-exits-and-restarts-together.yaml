@@ -1,0 +1,76 @@
+# A Razorfen Downs campaign exits through trigger 444 and starts its next run
+# with the same five members together (mod-overseer issue 1269).
+# The start precondition requires a five-member family; another size is INVALID.
+# Fix: mod-overseer pull 1277.
+decree: v1
+id: razorfen-downs-exits-and-restarts-together
+proves:
+  - {repo: quadseven/mod-overseer, issue: 1269, criterion: "a Razorfen Downs attempt walks all five members out through trigger 444, then starts the same campaign's next run with the full family together"}
+fix: {repo: quadseven/mod-overseer, commit: "8a98f69519e4a384a0c2f78d7849aeb5f12994f1"}
+world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+runs: {control: 3, treatment: 3}
+duration: 90m
+cast:
+  - who: family:grug
+    set: {alive: true, health_pct: 100, at: {creature: "Amnennar the Coldbringer"}}
+    ceiling: "nothing granted but position"
+arrange:
+  - group: {members: family:grug, leader: Grug}
+  - instance: {map: "Razorfen Downs", as: rfd, bind: family:grug}
+act:
+  - at: 90s
+    roster: {who: family:grug, job: "dungeon:razorfen-downs"}
+observe:
+  - name: exactly-five-family-members-start-inside-rfd
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND map_id = 129 AND instance_id = @rfd
+    expect: {scalar: "= 5"}
+  - name: encounter-credited
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM log_encounter
+      WHERE map = 129 AND time >= @t0
+    expect: {scalar: ">= 1"}
+  - name: all-five-walk-out-through-trigger-444
+    role: check
+    log:
+      pattern: "all 5 roster members came back out through areatrigger 444 and are on map 0 - the run is over"
+      expect: {at_least: 1}
+  - name: the-next-run-is-in-the-same-campaign
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run first_run
+      JOIN overseer_dungeon_run next_run ON next_run.campaign_id = first_run.campaign_id
+        AND next_run.run_number = first_run.run_number + 1
+      WHERE first_run.map_id = 129 AND first_run.family = 'Grug' AND first_run.started_at >= @t0
+        AND first_run.run_number = 1 AND next_run.map_id = 129 AND next_run.family = 'Grug'
+        AND next_run.started_at >= @t0 AND next_run.run_number = 2
+    expect: {scalar: ">= 1"}
+  - name: all-five-start-the-next-run-together
+    role: check
+    when: end
+    sql: |
+      SELECT COUNT(DISTINCT s.guid) FROM overseer_snapshot s
+      JOIN overseer_dungeon_run_damage d ON d.instance_id = s.instance_id
+      JOIN overseer_dungeon_run next_run ON next_run.id = d.run_id
+      WHERE s.guid IN (@cast) AND s.map_id = 129 AND next_run.map_id = 129
+        AND next_run.family = 'Grug' AND next_run.run_number = 2 AND next_run.started_at >= @t0
+    expect: {scalar: "= 5"}
+  - name: no-exit-hearth-was-used
+    role: check
+    when: end
+    sql: |
+      SELECT id FROM overseer_dungeon_run_event
+      WHERE family = 'Grug' AND created_at >= @t0 AND kind = 'exit_hearth'
+    expect: {rows: 0}
+  - name: no-rfd-run-ended-stalled
+    role: check
+    when: end
+    sql: |
+      SELECT id FROM overseer_dungeon_run
+      WHERE map_id = 129 AND family = 'Grug' AND started_at >= @t0 AND outcome = 'stalled'
+    expect: {rows: 0}

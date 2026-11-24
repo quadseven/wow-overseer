@@ -360,7 +360,8 @@ def submit(
         for arm in arms
         if n <= decree["runs"][arm]
     ]
-    free = [r for r in REALM_RANGE if r not in _used_realms(kube)]
+    taken = _used_realms(kube)
+    free = [r for r in REALM_RANGE if r not in taken]
     if len(free) < len(plan):
         raise SubmitError("no free realm ids")
     nodecfg = cfg.nodes[node]
@@ -399,6 +400,7 @@ def submit(
         "batch": batch, "decree_id": decree_id, "decree_sha256": sha,
         "decree_path": str(decree_path), "decree_pr": args.get("decree_pr"),
         "submitted_at": int(clock()), "class": klass, "proves": decree["proves"],
+        "box": decree.get("box"),
         "fix": decree["fix"], "runs_wanted": {a: decree["runs"][a] for a in arms},
         "presence": presence, "fidelity_deltas": deltas, "runs": runs,
     }  # fmt: skip

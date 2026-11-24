@@ -285,12 +285,14 @@ class Stuck:
         )
 
 
-def silent_run(keyword: str, seconds) -> Stuck | None:
+def silent_run(keyword: str, seconds, doing: str = "") -> Stuck | None:
     """Name a dungeon job with no progress evidence for two hours.
 
     `seconds` is measured from the queue head's start or the family's newest
     quest, level, equip, or boss progress event. The run table's presence
-    heartbeat is deliberately not accepted as progress.
+    heartbeat is deliberately not accepted as progress. `doing` is what the
+    family's job was and who last wrote it (bridge._job_story): the reason
+    then says what the family was doing, not only that nothing was recorded.
     """
     if seconds is None or float(seconds) < NO_PROGRESS_AFTER.total_seconds():
         return None
@@ -301,6 +303,8 @@ def silent_run(keyword: str, seconds) -> Stuck | None:
         "no quest, level, gear, or boss progress event and no stall reason "
         "recorded for at least 2 hours"
     )
+    if doing:
+        reason += " (%s)" % doing
     stall = Stall(0, 0, reason)
     return Stuck(door, stall, stall)
 
@@ -388,7 +392,48 @@ def door_unreachable(keyword: str, restarts) -> Stuck | None:
     return None
 
 
+# The restart slope, before the wedge (#2636). The breaker's bounds above
+# judge a walk that has already failed ten times in a quarter hour (or
+# four times in an hour): by then the run has sat split across its door
+# for as long as the wedge takes to form. The climb is visible far
+# earlier: a walk restarted this many times inside the same quarter-hour
+# fold, on the same walk, is not staging either, and reissuing it
+# identically until the bound trips is not a plan. The slope verdict
+# leaves the door with the breaker's own stand-down, only sooner; the
+# breaker's bounds and verdict are untouched, and at its bound the
+# breaker speaks, not the slope.
+SLOPE_RESTART_BOUND = 3
+
+
+def door_restart_slope(keyword: str, restarts) -> Stuck | None:
+    """The leader's walk to this door is restarting on the slope.
+
+    `restarts` is the same fold `door_unreachable` reads: a bare count is
+    the quarter-hour count, and a pair is (quarter-hour count, hour
+    count). Only the quarter-hour count speaks here: restarts spread over
+    the hour, or over different walks (which the fold keeps apart), are
+    the breaker's wider window or no slope at all. Below SLOPE_RESTART_BOUND
+    the walk is staging; at RESTART_BOUND the breaker owns the verdict,
+    so this returns None there and the run is left once, by the breaker.
+    """
+    if restarts is None:
+        return None
+    if isinstance(restarts, (tuple, list)):
+        quick = int(restarts[0] or 0)
+    else:
+        quick = int(restarts)
+    if quick < SLOPE_RESTART_BOUND or quick >= RESTART_BOUND:
+        return None
+    return _wedged(
+        keyword,
+        "the leader's walk to the door ended and restarted %d times without "
+        "arriving, on the climb to the wedge; the run is stood down and "
+        "the door left before the wedge forms" % quick,
+    )
+
+
 ERRAND_STATE = "on an errand of its own"
+CATCH_UP_UNREACHABLE_STATE = "held where it stands, too far to walk back"
 
 # A member on an errand of its own this long while its family waits at a door
 # is handed the errand back (#2280): well inside HOLD_SECONDS, so the party
@@ -549,6 +594,43 @@ def held_args(key: str) -> tuple:
     return (WINDOW_HOURS, key, DECISION, WINDOW_HOURS)
 
 
+# THE DOORS LEFT WITH NO RUN FORMED (campaignplan.unformed_rest, #1261): the
+# breaker's leaves inside the window written after the family's newest run
+# ended (an open run reads as now, so nothing counts while one is under way),
+# less RUN_LEAVE_GRACE_MINUTES, because the leave after two stalls is written
+# as the second stalled run closes. Then the seconds since the newest leave.
+RUN_LEAVE_GRACE_MINUTES = 10
+UNFORMED_SQL = (
+    "SELECT COUNT(*) AS n, TIMESTAMPDIFF(SECOND, MAX(created_at), NOW()) AS age_s "
+    "FROM overseer_dungeon_pace WHERE family = %s AND decision = %s "
+    "AND created_at >= NOW() - INTERVAL %s HOUR AND created_at > COALESCE(("
+    "SELECT MAX(COALESCE(ended_at, NOW())) FROM overseer_dungeon_run "
+    "WHERE leader_name IN ({holes})) + INTERVAL %s MINUTE, '1970-01-01')"
+)
+
+
+def unformed_args(key: str, names) -> tuple:
+    """UNFORMED_SQL's arguments (the `{holes}` count is len(names))."""
+    return (
+        key,
+        DECISION,
+        WINDOW_HOURS,
+        *[str(n) for n in names],
+        RUN_LEAVE_GRACE_MINUTES,
+    )
+
+
+def unformed(rows) -> tuple | None:
+    """campaignplan.Facts.unformed off UNFORMED_SQL's row: (leaves, seconds
+    since the newest), or None when unread."""
+    if not rows:
+        return None
+    row = rows[0]
+    count = int(row.get("n") or 0)
+    age = row.get("age_s")
+    return count, None if age is None else int(age)
+
+
 def held_barred(rows: list) -> dict:
     """Run keyword -> why the planner refuses a door the breaker left inside
     the window (campaignplan.Facts.stalled), from HELD_SQL's rows."""
@@ -620,9 +702,36 @@ class Leave:
 # runs after the hold.
 
 
-def leave(rows: list, stuck: dict) -> Leave | None:
+# HOW MANY TIMES AN ORDER MAY BE HELD WITH NO RUN FORMED BETWEEN (#1261).
+# Each hold runs the order again after its backoff and the same stand-down
+# (a member held far away, a walk that never arrives) holds it again, so a
+# family could cycle between "held" and "runs again" for days with no run
+# ever opening, the order never judged on a fought run and never given up.
+# Past this many holds with no run since the first, the order is left like
+# any other stuck door, and the family is released to other work.
+ORDER_HOLD_LIMIT = 4
+
+# The holds of the family's orders on one door since its newest run began.
+HOLDS_SQL = (
+    "SELECT COUNT(*) AS n FROM overseer_dungeon_pace WHERE family = %s "
+    "AND decision = %s AND door = %s AND created_at > (SELECT created_at "
+    "FROM overseer_dungeon_queue WHERE id = %s) AND created_at > COALESCE(("
+    "SELECT MAX(started_at) FROM overseer_dungeon_run WHERE leader_name IN "
+    "({holes})), '1970-01-01')"
+)
+
+
+def holds_args(key: str, door: str, head_id: int, names) -> tuple:
+    """HOLDS_SQL's arguments (the `{holes}` count is len(names)). Only holds
+    written after the head order was queued count: an older order's do not."""
+    return (key, ORDER_DECISION, door, int(head_id or 0), *[str(n) for n in names])
+
+
+def leave(rows: list, stuck: dict, holds: int = 0) -> Leave | None:
     """The leave for this family's queue `rows` (pending, in order), or None
-    when its head is not a stuck door."""
+    when its head is not a stuck door. `holds` is how many times the door's
+    order has been held with no run formed since (HOLDS_SQL): at
+    ORDER_HOLD_LIMIT the order is left instead of held again."""
     if not rows:
         return None
     door = campaignplan.wing_of(str(rows[0].get("keyword") or ""))
@@ -632,6 +741,8 @@ def leave(rows: list, stuck: dict) -> Leave | None:
         r for r in rows if campaignplan.wing_of(str(r.get("keyword") or "")) == door
     ]
     park = tuple(int(r["id"]) for r in ours if dungeonpace.operator_ordered(r))
+    if park and int(holds or 0) >= ORDER_HOLD_LIMIT:
+        return _given_up(rows, ours, stuck[door], holds)
     drop = tuple(int(r["id"]) for r in ours if int(r["id"]) not in park)
     rest = [r for r in rows if int(r["id"]) not in drop and int(r["id"]) not in park]
     after = (
@@ -657,6 +768,24 @@ def leave(rows: list, stuck: dict) -> Leave | None:
             regroup,
         )
     return Leave(door, drop, "%s; left, %s" % (stuck[door].why, after))
+
+
+def _given_up(rows: list, ours: list, why, holds) -> Leave:
+    """The order held ORDER_HOLD_LIMIT times with no run formed: cancelled."""
+    door = campaignplan.wing_of(str(rows[0].get("keyword") or ""))
+    drop = tuple(int(r["id"]) for r in ours)
+    rest = [r for r in rows if int(r["id"]) not in drop]
+    after = (
+        "%s runs next" % council.keyword_place(str(rest[0]["keyword"]))
+        if rest
+        else "back to %s until the planner finds another door" % jobs.DEFAULT
+    )
+    return Leave(
+        door,
+        drop,
+        "%s; the order was held %d times and no run formed between, so it is "
+        "given up; %s" % (why.why, int(holds), after),
+    )
 
 
 # The newest hold of an operator's order for this door: the seconds its
@@ -721,6 +850,12 @@ REGROUP = "regroup"
 # well inside the range a follower holds, far outside a member in another
 # town.
 REGROUP_YARDS = 40.0
+# HOW LONG PAST ITS BACKOFF A REGROUP HOLD MAY WAIT FOR THE PARTY. Nothing
+# closes a gap between a leader and a follower on a job that does not walk the
+# party together, so a family spread wider than REGROUP_YARDS stayed apart for
+# ever and the order waited with it, the hold line saying only that it waited.
+# A wait with no one working to end it is bounded: past this the order runs.
+REGROUP_CEILING_SECONDS = 3600
 
 # Why `restart_after_hold` allowed or held the restart.
 BACKOFF = "backoff"
@@ -729,6 +864,7 @@ RUNNING = "running"
 UNREAD = "unread"
 APART = "apart"
 TOGETHER = "together"
+CEILING = "ceiling"
 
 _UNSEEN = "not seen in the world"
 
@@ -805,6 +941,8 @@ def restart_after_hold(
         return Restart(True, NOT_REGROUP)
     if running:
         return Restart(True, RUNNING)
+    if -int(hold.get("left_s") or 0) >= REGROUP_CEILING_SECONDS:
+        return Restart(True, CEILING)
     spots = {n: _spot((positions or {}).get(n)) for n in names}
     if not any(spots.values()):
         return Restart(True, UNREAD)

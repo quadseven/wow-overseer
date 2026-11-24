@@ -127,6 +127,7 @@ import craft_rhythm
 import craft_supply
 import dungeonpath
 import gearup
+import corpstickets
 import guildcorps
 import guildlevel
 import guildroute
@@ -694,6 +695,10 @@ class Member:
     # Bag slots free in the backpack and the worn bags; None when unread, which
     # keeps no quest waiting on room (class_room_needed).
     free_slots: int | None = None
+    # True when the last reading is away from where the pass before it read this
+    # member (standstill.walking): its own AI is walking it, and the module
+    # refuses a cast then, so no craft step is written (#2401).
+    moving: bool = False
     # Maps the module has refused to cross this member to for good, with its
     # reason (class_walls): classquest then names a MAP blocker, not a CROSS.
     no_crossing: dict = field(default_factory=dict)
@@ -741,6 +746,9 @@ class Member:
     # holds only what a vendor buys, so the plan reads the whole bags), and the
     # banker nearest it. Empty for any member that is not a seat short of room.
     plan_sales: tuple = ()  # Carried
+    # Guids of the pieces a set swap (setswap.py, #540) took off and left in the
+    # bags to be put back or banked after the run: no sale rule lets them go.
+    swapped_out: frozenset = frozenset()
     plan_bank: tuple = ()  # Carried
     banker: object = None  # a Spot
     # What the item plan routes to the auction house (auction.Sale) and the
@@ -886,6 +894,10 @@ class JobsPlan:
     # pass, and why (#2152). Its own field: plan.notes is logged five lines a
     # pass, which hid every one of these.
     loop_lines: tuple = ()
+    # One line per online member standing in the starting lands of map 530,
+    # past where it stands, that got no level step this pass, and why (#2400).
+    # Its own field for the same reason as loop_lines.
+    isle_lines: tuple = ()
     # guild -> {skill: name} of each trade's guinea pig (guineapig.pick).
     pigs: dict = field(default_factory=dict)
     # name -> the (skill, skill) each approved raid seat should hold
@@ -1050,6 +1062,12 @@ def passing_hearth_row(r) -> bool:
     )
 
 
+def _refused_for_room(r) -> bool:
+    """Whether the module refused this row for bag room."""
+    said = "%s %s %s" % (r.result, r.reason, r.refusal)
+    return any(w in said for w in corpstickets.BAG_REASONS)
+
+
 def _step_row_wait(r, minutes: int, passing_wait: int | None = None) -> int:
     """Keep long waits for completed walks and persistent failures.
 
@@ -1066,6 +1084,10 @@ def _step_row_wait(r, minutes: int, passing_wait: int | None = None) -> int:
         and (r.refusal or r.reason) in PASSING_TRAIN_REASONS
     ):
         return min(minutes, LEVEL_TRANSIENT_RETRY_MINUTES)
+    if r.action == "collect" and not r.walk and _refused_for_room(r):
+        # Bags do not empty by themselves: a collect the module refused for
+        # bag room waits as long as a corps collect does (#2633).
+        return max(minutes, guildcorps.FULL_BAGS_COLLECT_MINUTES)
     if r.action == "train" and passing_train_row(r):
         # A profession errand asks again on the next pass (passing_wait); any
         # other trainer walk waits the base hour.
@@ -2593,6 +2615,8 @@ def _craft_or_room(m, kept, recent, cap, crafters, master):
     ladder a class quest uses, and the craft comes the pass after. Bags not
     read (free_slots None) keep the old behaviour.
     """
+    if m.moving:
+        return None, ""
     step = _craft_step(m)
     if step is None or m.free_slots is None or int(m.free_slots) >= 1:
         return step, ""
@@ -2844,13 +2868,16 @@ def vendor_stacks(member, kept, protected=frozenset()) -> list:
         for c in (member.carried or ())
         if (vendorsale.sells(c, judge) or int(c.guid) in second_best)
         and not _kept(member.name, c, kept)
+        and int(c.guid) not in member.swapped_out
     ]
     # A raid seat's item plan sales (#2609) go over the same counter, once.
     have = {int(c.guid) for c in own}
     own += [
         c
         for c in (member.plan_sales or ())
-        if int(c.guid) not in have and not _kept(member.name, c, kept)
+        if int(c.guid) not in have
+        and not _kept(member.name, c, kept)
+        and int(c.guid) not in member.swapped_out
     ]
     return sorted(
         own,
@@ -2882,6 +2909,18 @@ def junk_sales(member, kept, action="gear") -> tuple:
         )
         for c in _junk(member, kept)
     )
+
+
+def sale_spares_step(step, row) -> bool:
+    """Whether a sell row that was not served leaves the rest of `step` to run.
+
+    A supply trip sells junk first to make room, then buys. The guild loot
+    policy refuses a sell row for any stack it files for a route other than the
+    vendor, and a refused row is not written at all; if that ended the step,
+    the walk to the vendor would arrive and nothing would be bought. The sale is
+    only room-making: a buy that finds no room is refused by the world itself.
+    Every other step keeps its rule that a row which fails ends it."""
+    return step.action == restsupply.ACTION and row.kind == "sell"
 
 
 def sale_notes(stacks) -> tuple:
@@ -3937,6 +3976,17 @@ def _class_reagent_first(m, offer, recent, cap, kept=None, spell_reagents=None):
 # to the guild bank's Materials tab.
 CRAFTER_FLOOR = 5
 
+# COOKING IS THE ONE TRADE THAT CAN BE CAST AT 1 (#534). The floor above was
+# written when every Cooking recipe needed a Cooking Fire nobody could light,
+# so a cook at 1 could not work meat and a post to it was a letter never used.
+# The module now lights Basic Campfire before the recipe, and both meat
+# recipes grant a point from skill 1 (COOK_BANDS). With the floor at 5 a cook
+# at 1 was never posted meat, never carried any, so was never asked to cook,
+# and could never leave 1: the cycle that kept Cooking at 1 on every cook.
+# A cook at 1 now qualifies. The unopened-post and full-mailbox guards
+# (without_unclaimed, MAILBOX_FULL_LETTERS) still bound what one cook is sent.
+CRAFTER_FLOORS = {COOKING: 1}
+
 # The subject every post carries, which is also how an unopened one is found.
 POST_SUBJECT = "Guild materials"
 
@@ -3973,13 +4023,18 @@ def consumes_at(skill: int, value: int, entry: int) -> bool:
     A master tailor is read one bracket ahead (guildcorps.LADDER_AHEAD): the
     cloth and the leather its next rung and bag eat reach it before the cast.
     """
-    if int(value) < CRAFTER_FLOOR:
+    if int(value) < CRAFTER_FLOORS.get(int(skill), CRAFTER_FLOOR):
         return False
     ahead = guildcorps.LADDER_AHEAD if int(skill) == TAILORING else 0
     if int(entry) in _bag_inputs(skill, value):
         return True
     for recipe in craft.RECIPES.get(int(skill), ()):
-        if recipe.min_skill > int(value) + ahead:
+        low = recipe.min_skill
+        if int(skill) == COOKING and recipe.spell_id in COOK_BANDS:
+            # Both meat rungs grant a point from 1 (COOK_BANDS), not only
+            # from the ladder's own bracket edge.
+            low = min(low, COOK_BANDS[recipe.spell_id][0])
+        if low > int(value) + ahead:
             continue
         if any(
             r.entry == int(entry)
@@ -5485,6 +5540,7 @@ def _finish_plan(inputs, state):
         yields=class_yields(all_members, inputs.classes, inputs.recent),
         ask_yields=tuple(state.ask_yields),
         loop_lines=_loop_lines(inputs, state, all_members),
+        isle_lines=_isle_lines(inputs, state, all_members),
         pigs=inputs.pigs,
         assigned=state.assigned,
     )
@@ -5527,6 +5583,83 @@ def _loop_line_reason(m, loop, inputs, state) -> str:
     if not _in_loop_zone(m, loop):
         return "already out of the zone"
     return _death_loop_reason(m, loop, inputs.leveling, inputs.recent, inputs.campaign)
+
+
+# A MEMBER LEFT IN THE STARTING LANDS IS NAMED, WITH THE REASON (#2400). A
+# member past its zone's quests on map 530 could be given no step pass after
+# pass with nothing in the log saying why. The boat rung
+# (isle_crossing_first) reads level_step and
+# returns nothing for every branch that issues no crossing, and four of
+# level_step's branches say nothing themselves: blocked (fighting, a roster
+# member, the cap), already at the flight master, the walk's cooldown, and not
+# outgrown. Each of those is quiet for good reason on a continent, where most
+# members are in one of them every pass. In the starting lands a member past
+# its zone has one way on, so there the reason is said: _level_decision names
+# the quiet branch, and this is the line for it.
+def _isle_lines(inputs, state, all_members) -> tuple:
+    """One line per online member standing in the starting lands of map 530
+    (classic.is_starting_land) that has outgrown where it stands
+    (_level_outgrown) and got no level step this pass.
+
+    A member whose level step started (its boat, its orb, or a walk to a hub
+    still on map 530) is named by that step's own line. Every other one is
+    named here with the branch that issued nothing (_isle_line_reason). An
+    offline member is not listed: nothing is asked of it anywhere. Nothing is
+    listed while the level world is unread, when no member can be judged."""
+    world = inputs.leveling
+    if world is None:
+        return ()
+    levelled = {s.holder for s in state.steps if s.action == guildlevel.ACTION}
+    out = []
+    for m in sorted(all_members, key=lambda m: m.name):
+        if m.name in levelled or not m.online:
+            continue
+        if not classic.is_starting_land(m.map_id, m.zone_id):
+            continue
+        loop = _offer_for(inputs.loops, m.name)
+        why = _level_outgrown(m, world, loop)[0]
+        if not why:
+            continue
+        reason = _isle_line_reason(m, inputs, state)
+        # A held crossing's own line already says why the zone is outgrown.
+        where = "" if why in reason else ", where %s" % why
+        out.append(
+            "%s at level %d gets no level step off map %d%s: %s"
+            % (m.name, int(m.level), int(m.map_id), where, reason)
+        )
+    return tuple(out)
+
+
+def _isle_line_reason(m, inputs, state) -> str:
+    """Why a member _isle_lines lists got no level step: its seat takes none
+    in this pass, the level step's own reason (its note, its quiet branch, or
+    the crossing or orb it is held on), or what the pass did with the step it
+    planned (refused, behind another step, or not started)."""
+    if m.role == BANKER:
+        return "it is a banker and stays beside its vault"
+    if m.role == FAMILY:
+        return "roster member (the family route walks it)"
+    if m.role == UNASSIGNED:
+        return "it holds no seat in the lineup, which is offered a class step only"
+    step, doing, note, quiet = _level_decision(
+        m,
+        inputs.leveling,
+        inputs.recent,
+        inputs.cap,
+        _offer_for(inputs.loops, m.name),
+        inputs.campaign,
+        avoid_zones=_member_value(inputs.avoided, m.name, ()),
+    )
+    if step is None:
+        return note or quiet or "it is held on the way it has started: %s" % doing
+    if m.name in state.refused:
+        return "the step was refused: %s" % state.refused[m.name]
+    first = [s for s in state.steps if s.holder == m.name]
+    if first:
+        return "another step came first this pass: %s" % first[0].said
+    return "its level step was planned and not started: %s" % (
+        state.lines.get(m.name) or doing
+    )
 
 
 def _plan_family_class_member(
@@ -6640,21 +6773,27 @@ def _join_once(*parts) -> str:
     return "; ".join(said)
 
 
-def _level_blocked(m, world, campaign, loop) -> bool:
-    """The level walk starts nowhere: no world read, a member offline or
-    fighting, a member at the level cap, or a roster family member whose
-    family holds a campaign or who is not standing in its death loop's
+def _level_blocked_why(m, world, campaign, loop) -> str:
+    """Why the level walk starts nowhere, or "": no world read, a member
+    offline or fighting, a member at the level cap, or a roster family member
+    whose family holds a campaign or who is not standing in its death loop's
     zone (levelroute walks roster members; the loop's escape is the one
     exception, #1620, and a campaign holds it off, #1873)."""
     # EVERY MEMBER, NATURAL OR NOT (2026-10-05). The natural reset gates what
     # a member contributes, not where it walks: on the dev realm 1 of Cave's
     # 60 and none of Bonkers' 56 held a reset, so a step gated on it walked
     # nobody, and Cave's level 14-15 priests stayed in their starting zones.
-    if world is None or not m.online or m.in_combat:
-        return True
+    if world is None:
+        return "the level world is unread"
+    if not m.online:
+        return "it is offline"
+    if m.in_combat:
+        return "it is fighting"
     if m.level >= guildlevel.LEVEL_CAP and not _in_loop_zone(m, loop):
-        return True
-    return bool(m.name in world.roster and (campaign or not _in_loop_zone(m, loop)))
+        return "it is at the level cap"
+    if m.name in world.roster and (campaign or not _in_loop_zone(m, loop)):
+        return "it is a roster family member, walked by the family route"
+    return ""
 
 
 def _level_avoid(loop, avoid_zones):
@@ -6691,11 +6830,12 @@ def level_step(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
     from it. levelroute keeps the member, as it keeps every roster member
     outside a death loop.
     """
-    # The opening refusals (no world, offline or fighting, at the cap, and
-    # the roster refusal with the death loop's escape ahead of it) are
-    # _level_blocked's read.
-    if _level_blocked(m, world, campaign, loop):
-        return None, "", ""
+    return _level_decision(m, world, recent, cap, loop, campaign, avoid_zones)[:3]
+
+
+def _level_outgrown(m, world, loop):
+    """(why the member has outgrown where it stands or "", its side's bands,
+    its open quests or None) as the level step reads them."""
     bands = world.bands.get(guildlevel.side_of(m.race), {})
     # A ZONE IS LEFT WHEN ITS QUESTS RUN OUT (2026-10-10): its open quests for
     # this member (guildlevel.open_quests), once its rewarded quests are read.
@@ -6708,14 +6848,31 @@ def level_step(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
     why = guildlevel.outgrown(
         m.level, m.race, m.map_id, m.zone_id, bands, opens
     ) or _loop_why(m, loop)
+    return why, bands, opens
+
+
+def _level_decision(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
+    """level_step's (step or None, what it does, a note), and fourth the
+    reason of a branch that returns none of the three: blocked
+    (_level_blocked_why), not outgrown, already at the flight master, or the
+    walk's cooldown. level_step keeps those quiet, as most members are in one
+    of them every pass; _isle_lines names them for a member that waits on its
+    crossing off the starting lands (#2400)."""
+    # The opening refusals (no world, offline or fighting, at the cap, and
+    # the roster refusal with the death loop's escape ahead of it) are
+    # _level_blocked_why's read.
+    blocked = _level_blocked_why(m, world, campaign, loop)
+    if blocked:
+        return None, "", "", blocked
+    why, bands, opens = _level_outgrown(m, world, loop)
     if not why:
-        return None, "", ""
+        return None, "", "", "it has not outgrown where it stands"
     # A GHOST IS WALKED NOWHERE (2026-10-09). On the dev realm 45 of 207 level
     # walks in a day went to a dead member: each was refused "character is
     # dead" and started the walk's two hour cooldown, so the member stood in
     # its outgrown zone up to two hours longer once it was alive again.
     if not m.alive:
-        return None, "", _held_note(m, 0)
+        return None, "", _held_note(m, 0), ""
     choice = guildlevel.choose(
         m.level,
         m.race,
@@ -6729,19 +6886,20 @@ def level_step(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
         avoid=_level_avoid(loop, avoid_zones),
     )
     if choice.refused:
-        return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
+        return None, "", guildlevel.refused_note(m.name, m.level, why, choice), ""
     if choice.orb is not None:
-        return level_orb_step(m, choice, why, recent, cap)
+        return (*level_orb_step(m, choice, why, recent, cap), "")
     if choice.crosses:
-        return level_cross_step(m, choice, why, recent)
+        return (*level_cross_step(m, choice, why, recent), "")
     master = choice.master
+    place = choice.place or master.name
     if guildlevel.there(m.map_id, m.x, m.y, master):
-        return None, "", ""
+        return None, "", "", "it already stands at the flight master at %s" % place
     deadly = deadly_hub_note(m, master, choice, recent)
     if deadly:
-        return None, "", deadly
+        return None, "", deadly, ""
     if _cooling(m, guildlevel.ACTION, recent):
-        return None, "", ""
+        return None, "", "", "its last level walk to %s is still cooling down" % place
     said = guildlevel.said(m.name, m.level, why, choice)
     spot = Spot(
         kind="creature",
@@ -6752,7 +6910,7 @@ def level_step(m, world, recent, cap, loop=None, campaign="", avoid_zones=()):
         name=master.name or choice.place,
         why=why,
     )
-    return _spot_step(m, spot, guildlevel.ACTION, cap, said), said, ""
+    return _spot_step(m, spot, guildlevel.ACTION, cap, said), said, "", ""
 
 
 def _loop_why(m, loop) -> str:
@@ -6778,6 +6936,11 @@ def _in_loop_zone(m, loop) -> bool:
 # level, and gained no level. Every spirit healer and corpse run put it back
 # where its own AI kept choosing to quest. A player in that loop stops, goes to
 # town to repair, sell and train, and quests somewhere else.
+# What marks a death loop's hearth step among the hearth steps; _step_refusal
+# reads it so only this step, and no other hearth, is asked in a fight.
+LOOP_HEARTH_ERRAND = " for a town errand"
+
+
 def death_loop_hearth(m, loop, recent, world=None, cap=None):
     """The hearth home of a member in its death loop's zone, or None.
 
@@ -6791,12 +6954,18 @@ def death_loop_hearth(m, loop, recent, world=None, cap=None):
         return None
     if home_in_loop_zone(m, loop):
         return None
-    if not (m.online and m.alive and not m.in_combat) or not _in_the_open(m):
+    # IN A FIGHT TOO (#2152). A looper is in combat at most passes: a member
+    # left idle in a hostile camp dies again and again with the combat flag
+    # set, and an escape that gave up on the flag never issued at all. The module refuses the cast for the fight
+    # at no cost and the hearth is asked again (PASSING_HEARTH_REASONS), so the
+    # ask that lands is the one in a gap, as the stranded knight's recall is.
+    if not (m.online and m.alive) or not _in_the_open(m):
         return None
     if _cooling(m, "hearth", recent):
         return None
-    said = "%s hearths home to town for a town errand (repair, sell, train): %s" % (
+    said = "%s hearths home to town%s (repair, sell, train): %s" % (
         m.name,
+        LOOP_HEARTH_ERRAND,
         loop.reason(),
     )
     rows = (guildcorps.Row("hearth", "use", "", source_for("hearth", m.name)),)
@@ -6956,6 +7125,17 @@ def home_in_loop_zone(m, loop) -> bool:
     return home is not None and int(home) == int(loop.zone)
 
 
+def _on_start_map_knight(m) -> bool:
+    """A death knight standing on the start map (Acherus and the ground below
+    it), where the hearth and the level walk do not run: its way out is the
+    class walk (classtrain, the module's gryphon click), which is asked every
+    classtrain.KNIGHT_COOLDOWN_MINUTES while it stays."""
+    return (
+        int(m.class_id) == classquest.DEATH_KNIGHT
+        and m.map_id == classquest.DEATH_KNIGHT_START_MAP
+    )
+
+
 def _death_loop_reason(m, loop, leveling, recent, campaign="", level_note=""):
     """Why the death loop's escape issued no step for `m`, as one phrase.
 
@@ -6966,12 +7146,15 @@ def _death_loop_reason(m, loop, leveling, recent, campaign="", level_note=""):
     hearth's own blocks (its cooldown, a hearthstone bound in the loop's
     zone), then the level walk's cooldown, and last the hub choice
     itself: no reachable hub (#2152)."""
-    if m.in_combat:
-        return "in combat"
     if not m.online:
         return "not online"
     if not m.alive:
         return "dead"
+    if _on_start_map_knight(m):
+        return (
+            "death knight on the start map: the class walk's gryphon click "
+            "is its way out"
+        )
     if not _in_the_open(m):
         return "not in the open world"
     if leveling is not None and m.name in leveling.roster:
@@ -6984,9 +7167,13 @@ def _death_loop_reason(m, loop, leveling, recent, campaign="", level_note=""):
     if _cooling(m, "hearth", recent):
         return "hearth cooling"
     if home_in_loop_zone(m, loop):
-        return "hearthstone bound in the loop zone"
+        return "hearthstone bound in the loop zone" + (
+            ", in combat" if m.in_combat else ""
+        )
     if _cooling(m, guildlevel.ACTION, recent):
         return "level walk cooling"
+    if m.in_combat:
+        return "in combat"
     return "no reachable hub"
 
 
@@ -9966,6 +10153,15 @@ def hearth_step(m):
 # reached them: no job was left, no zone was outgrown and the pass read no
 # position history (standstill.py). A player whose character will not move uses
 # the hearthstone, and its own AI starts again at the inn.
+def _still_minutes_for(m) -> int:
+    """How long a member stands before its hearth. A seat levelling first is
+    left to its dungeon asks with no step, so it stands waiting for a party by
+    design: it waits longer, and a stuck one is still got moving."""
+    if levelling_first(m):
+        return standstill.SEAT_STILL_MINUTES
+    return standstill.STILL_MINUTES
+
+
 def stood_still_step(m, still_for, recent, leveling=None):
     """The hearth of a member that has stood on one spot (standstill.track)
     for standstill.STILL_MINUTES with nothing asked of it, or None.
@@ -9976,7 +10172,7 @@ def stood_still_step(m, still_for, recent, leveling=None):
     its own hearth written for it while it stood, and no hearth inside the
     hearth cooldown."""
     minutes = int(still_for or 0)
-    if minutes < standstill.STILL_MINUTES:
+    if minutes < _still_minutes_for(m):
         return None
     if not (m.online and m.alive and not m.in_combat):
         return None
@@ -10166,13 +10362,26 @@ def _is_recall(step) -> bool:
     return bool(rows) and rows[0].kind == "hearth" and rows[0].command == "recall"
 
 
+def _is_loop_hearth(step) -> bool:
+    """Whether the step is a death loop's hearth home (death_loop_hearth), asked
+    in a fight because the module refuses it for the fight at no cost (#2152)."""
+    rows = getattr(step, "rows", None) or ()
+    return (
+        getattr(step, "action", "") == "hearth"
+        and LOOP_HEARTH_ERRAND in str(getattr(step, "said", ""))
+        and bool(rows)
+        and rows[0].kind == "hearth"
+        and rows[0].command == "use"
+    )
+
+
 def _step_refusal(m, busy, started, per_guild, step=None):
     if not m.online:
         return "%s is offline" % m.name
     # A recall is asked in a fight too (2026-10-08): the module refuses the cast
     # for the fight at no cost, and the ask that lands is the one in a gap. A
     # stranded knight fights almost without a pause.
-    if m.in_combat and not _is_recall(step):
+    if m.in_combat and not (_is_recall(step) or _is_loop_hearth(step)):
         return "%s is in combat" % m.name
     if m.name in busy:
         return "%s is already on another guild walk" % m.name
@@ -10527,7 +10736,9 @@ def _refusal_of(row) -> dict:
     result = str(row.get("result") or "")
     if '"outcome":"refused"' not in result:
         return {}
-    found = re.search(r'"reason":"((?:[^"\\]|\\.)*)"', result)
+    # The closing quote may be missing: the read keeps the head of `result`,
+    # and a crossing's per-transport reason can run past it (#2994).
+    found = re.search(r'"reason":"((?:[^"\\]|\\.)*)(?:"|$)', result)
     refusal = found.group(1) if found else ""
     raw_refusal = ""
     if "no trainer" in refusal.lower() and refusal != NO_TRAINER_ON_MAP_REFUSAL:

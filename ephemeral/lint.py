@@ -13,7 +13,7 @@ from . import dbschema, gamedata
 from .miniyaml import YamlError, loads
 
 TOP_KEYS = {
-    "decree", "id", "family", "proves", "fix", "world", "runs", "duration",
+    "decree", "id", "family", "proves", "box", "fix", "world", "runs", "duration",
     "cast", "arrange", "act", "observe",
 }  # fmt: skip
 REQUIRED_TOP = (
@@ -29,7 +29,7 @@ REQUIRED_TOP = (
 )
 SET_KEYS = {
     "level", "alive", "health_pct", "money", "skills", "spells_add", "spells_remove",
-    "items", "quests", "homebind", "at", "corpse_at", "free_backpack_slots",
+    "items", "quests", "homebind", "at", "at_each", "corpse_at", "free_backpack_slots",
 }  # fmt: skip
 GRANT_KEYS = ("money", "skills", "spells_add", "items")  # level has its own range check
 ANCHOR_KINDS = (
@@ -217,9 +217,26 @@ def _todo_or(lint, path, value, ok, what):
 
 def _header_proves(lint, doc):
     proves = doc.get("proves")
+    if _is_int(proves):
+        lint.ensure(
+            proves > 0,
+            "decree.proves",
+            "schema",
+            "must be a positive issue number",
+        )
+        box = doc.get("box")
+        lint.ensure(
+            isinstance(box, str) and bool(box.strip()),
+            "decree.box",
+            "schema",
+            "is required with numeric proves and must name one checkbox",
+        )
+        return
     if not isinstance(proves, list) or not proves:
         lint.err("decree.proves", "schema", "must be a non-empty list")
         return
+    if "box" in doc:
+        lint.err("decree.box", "schema", "requires numeric proves")
     fields = ("repo", "issue", "criterion")
     for i, p in enumerate(proves):
         path = f"decree.proves[{i}]"
@@ -371,7 +388,38 @@ def _cast(lint, doc):
         s = entry.get("set")
         if lint.keys(f"{path}.set", s, SET_KEYS):
             _cast_set(lint, path, entry, s)
+    _scattered_with(lint, cast)
     return whos
+
+
+def _scattered_with(lint, cast):
+    """Refuse a `with` anchor that names a family placed by at_each.
+
+    Such a family has one position per member, not one of its own, so there is
+    no single spot for `with` to mean.
+    """
+    scattered = {
+        e["who"]: i
+        for i, e in enumerate(cast)
+        if isinstance(e, dict)
+        and isinstance(e.get("who"), str)
+        and isinstance(e.get("set"), dict)
+        and "at_each" in e["set"]
+    }
+    for i, entry in enumerate(cast):
+        s = entry.get("set") if isinstance(entry, dict) else None
+        if not isinstance(s, dict):
+            continue
+        for key in ("at", "homebind", "corpse_at"):
+            a = s.get(key)
+            if isinstance(a, dict) and len(a) == 1 and a.get("with") in scattered:
+                lint.err(
+                    f"decree.cast[{i}].set.{key}",
+                    "scatter",
+                    f"with: {a['with']!r} names the family placed by at_each in "
+                    f"decree.cast[{scattered[a['with']]}]; its members have separate "
+                    "positions, so there is no single anchor to follow",
+                )
 
 
 def _guild_role(lint, path, who):
@@ -402,7 +450,7 @@ def _cast_set(lint, path, entry, s):
         "must be an integer from 1 to 16",
     )
     _set_quests(lint, sp, s.get("quests"))
-    _set_places(lint, sp, s)
+    _set_places(lint, sp, s, entry.get("who"))
     _set_ceiling(lint, path, entry, s)
 
 
@@ -499,7 +547,7 @@ def _set_quests(lint, sp, quests):
         )
 
 
-def _set_places(lint, sp, s):
+def _set_places(lint, sp, s, who):
     for key in ("at", "homebind", "corpse_at"):
         if key in s:
             _anchor(
@@ -509,6 +557,45 @@ def _set_places(lint, sp, s):
                 nearest=(key == "at"),
                 has_corpse="corpse_at" in s,
             )
+    if "at_each" in s:
+        anchors = s["at_each"]
+        lint.ensure(
+            isinstance(who, str) and bool(_FAMILY.match(who)),
+            f"{sp}.at_each",
+            "scatter",
+            "at_each is only valid for a family selector",
+        )
+        lint.ensure(
+            "at" not in s,
+            f"{sp}.at_each",
+            "scatter",
+            "at_each cannot be combined with at",
+        )
+        if not isinstance(anchors, list):
+            lint.err(
+                f"{sp}.at_each", "scatter", "must be a list of at least two anchors"
+            )
+        else:
+            lint.ensure(
+                len(anchors) >= 2,
+                f"{sp}.at_each",
+                "scatter",
+                "needs at least two anchors",
+            )
+            seen = []
+            for i, anchor in enumerate(anchors):
+                path = f"{sp}.at_each[{i}]"
+                _anchor(
+                    lint,
+                    path,
+                    anchor,
+                    allowed_kinds=("creature", "gameobject", "areatrigger"),
+                )
+                if isinstance(anchor, dict) and len(anchor) == 1:
+                    if any(anchor == previous for previous in seen):
+                        lint.err(path, "scatter", "anchor reference is repeated")
+                    else:
+                        seen.append(anchor)
     lint.ensure(
         s.get("alive") is not False or "corpse_at" in s,
         f"{sp}.alive",
@@ -553,18 +640,13 @@ def _set_ceiling(lint, path, entry, s):
 # -- anchors ---------------------------------------------------------------------
 
 
-def _anchor(lint, path, val, nearest=False, has_corpse=False):
-    if (
-        not isinstance(val, dict)
-        or len(val) != 1
-        or next(iter(val)) not in ANCHOR_KINDS
-    ):
+def _anchor(lint, path, val, nearest=False, has_corpse=False, allowed_kinds=None):
+    kinds = ANCHOR_KINDS if allowed_kinds is None else allowed_kinds
+    if not isinstance(val, dict) or len(val) != 1 or next(iter(val)) not in kinds:
         lint.err(
             path,
             "coordinates",
-            "must be one anchor: "
-            + ", ".join(ANCHOR_KINDS)
-            + " (no literal coordinates)",
+            "must be one anchor: " + ", ".join(kinds) + " (no literal coordinates)",
         )
         return
     kind, v = next(iter(val.items()))
@@ -886,7 +968,10 @@ def _observe(lint, doc, whos, aliases):
     for i, o in enumerate(obs):
         path = f"decree.observe[{i}]"
         if lint.keys(
-            path, o, ("name", "role", "sql", "log", "expect", "when"), ("name", "role")
+            path,
+            o,
+            ("name", "role", "sql", "log", "expect", "when", "online"),
+            ("name", "role"),
         ):
             roles.append(o.get("role"))
             _observe_one(lint, path, o, seen, known_var)
@@ -915,6 +1000,9 @@ def _observe_one(lint, path, o, seen, known_var):
         "schema",
         "must be precondition or check",
     )
+    if "online" in o:
+        _observe_online(lint, path, o)
+        return
     lint.ensure(
         ("sql" in o) != ("log" in o), path, "schema", "needs exactly one of sql or log"
     )
@@ -922,6 +1010,27 @@ def _observe_one(lint, path, o, seen, known_var):
         _observe_sql(lint, path, o, known_var)
     if "log" in o:
         _observe_log(lint, path, o)
+
+
+def _observe_online(lint, path, o):
+    lint.ensure(
+        o.get("online") == "cast",
+        f"{path}.online",
+        "online",
+        "must be cast",
+    )
+    lint.ensure(
+        o.get("role") == "precondition" and o.get("when") == "start",
+        f"{path}.online",
+        "online",
+        "cast online is a start precondition",
+    )
+    lint.ensure(
+        not any(key in o for key in ("sql", "log", "expect")),
+        f"{path}.online",
+        "online",
+        "cannot be combined with sql, log or expect",
+    )
 
 
 def _observe_log(lint, path, o):
