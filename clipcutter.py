@@ -124,6 +124,15 @@ def is_mp4(head: bytes) -> bool:
     return len(head) >= 8 and head[4:8] == b"ftyp"
 
 
+def poster_name(row_id: int, kind: str) -> str | None:
+    """The poster frame name beside a row's clip: clip-<id>-<kind>.jpg, or
+    None for a kind that is not a plain word. A cutter that saves a clip
+    writes one frame of it under this name, next to the video."""
+    if not isinstance(kind, str) or not _KIND.fullmatch(kind):
+        return None
+    return "clip-%d-%s.jpg" % (row_id, kind)
+
+
 def file_name(row_id: int, kind: str) -> str | None:
     """The one name a row's clip is saved under, or None for a kind that is
     not a plain word."""

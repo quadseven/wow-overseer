@@ -54,6 +54,7 @@ class ShelfList(unittest.TestCase):
                     "subject": "Test Warden",
                     "at": "2026-11-09T11:30:00",
                     "url": "/clips/clip-2-boss_kill.mp4",
+                    "poster": "/clips/clip-2-boss_kill.jpg",
                 },
                 {
                     "id": 1,
@@ -63,6 +64,7 @@ class ShelfList(unittest.TestCase):
                     "subject": "Test Blade",
                     "at": "2026-11-09T10:00:00",
                     "url": "/clips/clip-1-loot.mp4",
+                    "poster": "/clips/clip-1-loot.jpg",
                 },
             ],
         )

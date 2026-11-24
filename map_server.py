@@ -4680,9 +4680,12 @@ def _ready_clip_path(name: str):
     root = os.path.realpath(CLIPS_DIR) if CLIPS_DIR else ""
     if not root or not os.path.isdir(root):
         return ""
+    # A poster frame is named for its clip: asking for clip-N-kind.jpg looks
+    # up the ready row of clip-N-kind.mp4 and serves the .jpg beside it.
+    lookup = name[:-4] + ".mp4" if name.endswith(".jpg") else name
     try:
         with realmread.Session(_connect) as rd:
-            rows = rd.rows(_CLIP_FILE_SQL, (name,), what="a clip file")
+            rows = rd.rows(_CLIP_FILE_SQL, (lookup,), what="a clip file")
     except (pymysql.err.MySQLError, OSError):
         # What a ledger read raises: the driver's errors (the same class the
         # rest of this file catches) and a refused or dropped connection. A
@@ -4692,6 +4695,8 @@ def _ready_clip_path(name: str):
     stored = (rows[0].get("file_name") or "") if rows else ""
     if not stored or stored != os.path.basename(stored) or stored.startswith("."):
         return ""
+    if lookup != name:
+        stored = name
     full = os.path.realpath(os.path.join(root, stored))
     return full if full.startswith(root + os.sep) and os.path.isfile(full) else ""
 
@@ -6014,7 +6019,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             self.send_response(206 if span else 200)
-            clipserve.headers(size, span, send=self.send_header)
+            if name.endswith(".jpg"):
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(size))
+            else:
+                clipserve.headers(size, span, send=self.send_header)
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             first, last = span if span else (0, size - 1)

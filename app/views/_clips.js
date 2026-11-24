@@ -47,11 +47,26 @@ export function clipLinks(entry) {
   return html`${list.map((c) => html`<span class="clip-named"><span class="muted">${c.who || c.character}</span> ${clipLink(c)}</span>`)}`;
 }
 
+const ORDINAL = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"];
+function ordinal(n) { return ORDINAL[n - 1] || `${n}th`; }
+
+// The repeat line in plain words, so two drops of one item do not read as a
+// duplicate: "second Test Blade, BRD run 1898" (context when the server
+// sends it, the run and boss for a dungeon drop or the zone for a world one).
+export function repeatLine(c) {
+  if (!(c.of > 1 && c.nth >= 1)) return "";
+  const what = c.subject ? `${ordinal(c.nth)} ${c.subject}` : `${ordinal(c.nth)} clip`;
+  return c.context ? `${what}, ${c.context}` : what;
+}
+
 function card(c) {
   const body = kept.has(c.url)
     ? html`<div class="clip-slot" data-clip-slot="${c.url}"></div>`
     : html`<button type="button" class="btn clip-play" data-clip="${c.url}"><i class="ph-fill ph-play" aria-hidden="true"></i>Play</button>`;
-  return html`<article class="card clip-card"><div class="clip-head"><span class="tag tag-outline">${kindWord(c.kind)}</span><span class="clip-who">${c.character}</span>${c.subject ? html`<span class="clip-subject">${c.subject}</span>` : ""}${c.of > 1 ? html`<span class="tag tag-outline clip-nth">${c.nth} of ${c.of}</span>` : ""}<span class="muted g-when">${since(c.at)}</span></div>${body}</article>`;
+  const poster = c.poster && !kept.has(c.url) ? html`<img class="clip-poster" src="${u(c.poster)}" alt="" loading="lazy">` : "";
+  const loot = c.kind === "loot" && c.subject ? html`<span class="clip-subject" ${c.quality != null ? html`data-quality="${c.quality}"` : ""}>${c.icon ? html`<img class="clip-icon" src="${u(c.icon)}" alt="">` : ""}${c.subject}</span>` : (c.subject ? html`<span class="clip-subject">${c.subject}</span>` : "");
+  const repeat = repeatLine(c);
+  return html`<article class="card clip-card"><div class="clip-head"><span class="tag tag-outline">${kindWord(c.kind)}</span><span class="clip-who">${c.character}</span>${loot}${c.of > 1 ? html`<span class="tag tag-outline clip-nth">${c.nth} of ${c.of}</span>` : ""}<span class="muted g-when">${since(c.at)}</span></div>${repeat ? html`<p class="clip-context">${repeat}</p>` : (c.context ? html`<p class="clip-context">${c.context}</p>` : "")}${poster}${body}</article>`;
 }
 
 // The footer under the shelf: per day, how many moments left no clip and why.
