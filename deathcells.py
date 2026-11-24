@@ -61,6 +61,13 @@ FALL_CLEARANCE_YARDS = MIN_FALL_YARDS
 # two ends both stand at least this far above the liquid's surface (the highest
 # death z in the disc) is on a bridge, a ledge or a city floor over it.
 LIQUID_CLEARANCE_YARDS = 10.0
+# A walker this far (or more) under a pool's surface is not on lower ground, it
+# is under the world: a fall through the floor lands near z -500 over a pool at
+# z 130, and the road from there to a ledge is not a line over dry ground. The
+# goal-over-the-pool exemption (`_goal_over_the_liquid`) does not apply to it.
+# A real lower-ground start (a Stormwind walker 270 yards under the Ironforge
+# pool) stays inside this.
+UNDER_WORLD_YARDS = 400.0
 # A fall disc whose every drop began at least this far BELOW both ends of a
 # walk condemns nothing the walk stands on: that is a fall through the world,
 # and the void under the ground is not the ground (wow-dev 2026-11-16, drops
@@ -289,13 +296,16 @@ def _goal_over_the_liquid(disc, start, goal) -> bool:
     stretch of the line the disc can touch is then the last approach to a
     counter 10 yards or more over the surface), and the walker must not stand
     within LIQUID_CLEARANCE_YARDS of the surface either way: a walker at the
-    liquid's own level is the one the disc is for. A line that crosses a disc
+    liquid's own level is the one the disc is for, and a walker UNDER_WORLD_YARDS
+    or more under the surface is under the world, which is no lower ground. A line that crosses a disc
     and ends past it, a goal or start with no height, a pool with no surface
     and a fall disc are all judged as before."""
     if disc.surface_z is None:
         return False
     z0, z1 = _num(start, "z"), _num(goal, "z")
     if z0 is None or z1 is None:
+        return False
+    if z0 <= disc.surface_z - UNDER_WORLD_YARDS:
         return False
     g = _point(goal)
     if g is None or math.hypot(disc.x - g[1], disc.y - g[2]) > disc.radius:

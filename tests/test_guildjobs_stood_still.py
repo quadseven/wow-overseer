@@ -23,6 +23,7 @@ import unittest
 import guildjobs
 import guildlevel
 import guildroute
+import legacy_ladder
 import standstill
 from test_guildsocial_bridge import bridge
 
@@ -30,6 +31,12 @@ OUTLAND, EASTERN_KINGDOMS, KALIMDOR = 530, 0, 1
 BLOOD_ELF, WARLOCK = 10, 9
 EVERSONG, WAILING_CAVERNS = 3430, 718
 MINUTE = 60.0
+
+
+def setUpModule():
+    # These pin the one-hour hearth of a member named after a seat; a seat's
+    # longer wait is in test_seats_stand_still.py.
+    legacy_ladder.switch_off()
 
 
 def member(name="Highlights", **over):

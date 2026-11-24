@@ -202,7 +202,7 @@ class OtherTriggerTests(unittest.TestCase):
         clear = {"map_id": 36, "dungeon": "Test Mines", "leader": "Alder", "at": at}
         rows = plan(cleared_runs=[clear])
         self.assertEqual(["clear"], [r["kind"] for r in rows])
-        self.assertEqual("clear:36", rows[0]["event_key"])
+        self.assertEqual("clear:36:roster", rows[0]["event_key"])
         self.assertEqual("Alder", rows[0]["character"])
         self.assertEqual(at + secs(15), rows[0]["window_end"])
 
@@ -220,6 +220,31 @@ class OtherTriggerTests(unittest.TestCase):
             "at": NOW - timedelta(minutes=3),
         }
         self.assertEqual([], plan(cleared_runs=[new, old]))
+
+    def test_two_families_each_land_their_own_first_clear_of_one_dungeon(self):
+        at = NOW - timedelta(minutes=3)
+        oaks = {"map_id": 36, "dungeon": "T", "leader": "Alder", "at": at}
+        pines = dict(oaks, leader="Cedar", at=at + secs(30))
+        rows = plan(
+            cleared_runs=[oaks, pines],
+            roster=["Alder", "Birch", "Cedar", "Dogwood"],
+            families={"oaks": ["Alder", "Birch"], "pines": ["Cedar", "Dogwood"]},
+        )
+        self.assertEqual(
+            ["clear:36:oaks", "clear:36:pines"], [r["event_key"] for r in rows]
+        )
+        self.assertEqual(["Alder", "Cedar"], [r["character"] for r in rows])
+
+    def test_a_later_clear_by_a_family_with_a_row_writes_nothing(self):
+        at = NOW - timedelta(minutes=3)
+        run = {"map_id": 36, "dungeon": "T", "leader": "Cedar", "at": at}
+        rows = plan(
+            cleared_runs=[run],
+            roster=["Alder", "Cedar"],
+            families={"oaks": ["Alder"], "pines": ["Cedar"]},
+            existing_keys=["clear:36:pines"],
+        )
+        self.assertEqual([], rows)
 
 
 class NoViewTests(unittest.TestCase):
@@ -564,6 +589,54 @@ class ShelfViewOwnerTests(unittest.TestCase):
         self.assertEqual("Cedar", clip["view_owner"])
 
 
+class ShelfRepeatTests(unittest.TestCase):
+    def row(self, id, minutes, **over):
+        row = {
+            "id": id,
+            "kind": "loot",
+            "character": "Cedar",
+            "event_at": NOW - timedelta(minutes=minutes),
+            "state": "ready",
+            "file_name": "clip-%d-loot.mp4" % id,
+            "detail": "Test Blade",
+        }
+        row.update(over)
+        return row
+
+    def clips(self, *rows):
+        return {c["id"]: c for c in clipledger.shelf(list(rows))["clips"]}
+
+    def test_two_drops_of_one_item_are_numbered_oldest_first(self):
+        got = self.clips(self.row(1, 600), self.row(2, 10))
+        self.assertEqual((1, 2), (got[1]["nth"], got[1]["of"]))
+        self.assertEqual((2, 2), (got[2]["nth"], got[2]["of"]))
+
+    def test_two_drops_a_failed_and_an_unviewed_row_give_two_cards_and_a_count(self):
+        shelf = clipledger.shelf(
+            [
+                self.row(1, 600),
+                self.row(2, 10),
+                self.row(3, 5, state="failed", file_name=None),
+                self.row(4, 5, state="no_view", file_name=None),
+            ]
+        )
+        self.assertEqual([2, 1], [c["id"] for c in shelf["clips"]])
+        self.assertEqual(["Test Blade"] * 2, [c["subject"] for c in shelf["clips"]])
+        (day,) = shelf["missed"]
+        self.assertEqual((1, 1), (day["no_view"], day["failed"]))
+
+    def test_a_single_clip_and_other_items_carry_no_number(self):
+        got = self.clips(
+            self.row(1, 600),
+            self.row(2, 10, detail="Test Staff"),
+            self.row(3, 5, character="Alder"),
+            self.row(4, 5, state="failed"),
+        )
+        for clip in got.values():
+            self.assertNotIn("nth", clip)
+            self.assertNotIn("of", clip)
+
+
 class EventKeyTests(unittest.TestCase):
     def test_the_key_functions_spell_what_the_planner_writes(self):
         at = NOW - timedelta(minutes=3)
@@ -731,12 +804,12 @@ class RetentionTests(unittest.TestCase):
             self.ledger_row(1, timedelta(days=31)),
             self.ledger_row(2, timedelta(days=29)),
         ]
-        self.assertEqual([1], clipledger.expired_ids(rows, now=NOW))
+        self.assertEqual([1], list(clipledger.expired_reasons(rows, now=NOW)))
 
     def test_the_count_cap_keeps_the_newest_and_expires_the_rest(self):
         rows = [self.ledger_row(i, timedelta(hours=i)) for i in range(1, 6)]
         self.assertEqual(
-            [4, 5], sorted(clipledger.expired_ids(rows, now=NOW, max_count=3))
+            [4, 5], sorted(clipledger.expired_reasons(rows, now=NOW, max_count=3))
         )
 
     def test_only_ready_rows_count_and_expire(self):
@@ -747,11 +820,26 @@ class RetentionTests(unittest.TestCase):
             self.ledger_row(4, timedelta(days=40), state="expired"),
             self.ledger_row(5, timedelta(days=40), state="ready"),
         ]
-        self.assertEqual([5], clipledger.expired_ids(rows, now=NOW))
+        self.assertEqual([5], list(clipledger.expired_reasons(rows, now=NOW)))
+
+    def test_a_burst_over_the_count_cap_expires_the_oldest_with_the_cap_named(self):
+        rows = [self.ledger_row(i, timedelta(minutes=i)) for i in range(1, 8)]
+        why = clipledger.expired_reasons(rows, now=NOW, max_count=4)
+        self.assertEqual([5, 6, 7], sorted(why))
+        self.assertEqual({"expired: count cap (4)"}, set(why.values()))
+        self.assertTrue(all(r["state"] == "ready" for r in rows))
+
+    def test_an_old_row_names_the_age_cap(self):
+        rows = [
+            self.ledger_row(1, timedelta(days=9)),
+            self.ledger_row(2, timedelta(days=1)),
+        ]
+        why = clipledger.expired_reasons(rows, now=NOW, max_age=timedelta(days=7))
+        self.assertEqual({1: "expired: age cap (7 days)"}, why)
 
     def test_retention_returns_ids_only_and_leaves_the_rows_alone(self):
         rows = [self.ledger_row(1, timedelta(days=40))]
-        clipledger.expired_ids(rows, now=NOW)
+        clipledger.expired_reasons(rows, now=NOW)
         self.assertEqual("ready", rows[0]["state"])
 
 

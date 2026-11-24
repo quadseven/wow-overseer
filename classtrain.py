@@ -66,6 +66,13 @@ COOLDOWN_MINUTES = 180
 # with no hearthstone has no other way off that map, so a three-hour gap leaves
 # it exposed to the creatures there for hours.
 KNIGHT_COOLDOWN_MINUTES = 20
+# A walk the module turned away for a passing reason (the member was held by
+# another verb, in combat, dead or on a flight path, or entered combat on the
+# way) bought nothing and learned nothing about the purse, so the three-hour
+# wait for a purse to refill does not apply: the member is asked again after
+# this short pause (#771). Without it the members who could pay for training
+# sat out three hours for a refusal that lasted a minute.
+TRANSIENT_RETRY_MINUTES = 10
 # A worldserver that does not know the class walk answers this, and is not
 # asked again for this long.
 MALFORMED = "malformed walk-to-trainer command"
@@ -369,7 +376,18 @@ def _is_no_trainer_refusal(result: dict) -> bool:
     return (
         result.get("outcome") == "refused"
         and result.get("retryable") is False
-        and reason.startswith(NO_TRAINER_REASON)
+        and reason.startswith(NO_TRAINER_REASONS)
+    )
+
+
+def _passing_refusal(row) -> bool:
+    """True when the module's answer says the member was not walked for a
+    reason that passes: its own `transient` flag, or a dead member."""
+    result = _result_of(row)
+    if result.get("outcome") not in ("refused", "entered_combat"):
+        return False
+    return (
+        result.get("transient") is True or result.get("reason") == "character is dead"
     )
 
 
@@ -380,7 +398,8 @@ def recent_walkers(rows, minutes=COOLDOWN_MINUTES, knights=()) -> set:
     trainer on the member's map are omitted so a stranded member can cross and
     walk immediately after arriving on a trainer map. A member named in
     `knights` (death knights, walked for the gryphon click) is held only
-    KNIGHT_COOLDOWN_MINUTES.
+    KNIGHT_COOLDOWN_MINUTES. A passing refusal (`_passing_refusal`) holds the
+    member only TRANSIENT_RETRY_MINUTES.
     """
     out = set()
     knights = {str(n) for n in knights or ()}
@@ -392,6 +411,8 @@ def recent_walkers(rows, minutes=COOLDOWN_MINUTES, knights=()) -> set:
             continue
         who = str(row.get("target_name") or source.split(":", 1)[1])
         window = min(minutes, KNIGHT_COOLDOWN_MINUTES) if who in knights else minutes
+        if _passing_refusal(row):
+            window = min(window, TRANSIENT_RETRY_MINUTES)
         if _int(row.get("age"), window + 1) <= window:
             out.add(who)
     return out
@@ -401,6 +422,15 @@ def recent_walkers(rows, minutes=COOLDOWN_MINUTES, knights=()) -> set:
 # map it stands on (mod-overseer's walk_refusals fixture): not retryable, and
 # true for as long as the member stays on that map (ticket 2624).
 NO_TRAINER_REASON = "no trainer of this character's class on this map"
+# The module's other way of saying the same for a class walk: a trainer stands
+# on the map but no safe crossing reaches one with a spell to teach. Also not
+# retryable and also true for as long as the member stays, so it strands the
+# member the same way: a crossing is planned, no walk is repeated (#792).
+NO_REACHABLE_TRAINER_REASON = (
+    "no trainer of this character's class with a class spell to teach it "
+    "is reachable by a safe crossing"
+)
+NO_TRAINER_REASONS = (NO_TRAINER_REASON, NO_REACHABLE_TRAINER_REASON)
 # How far back the log is read for such a refusal: a member left on a map with
 # no trainer is not asked again for as long as it stays.
 STRANDED_READ_DAYS = 30

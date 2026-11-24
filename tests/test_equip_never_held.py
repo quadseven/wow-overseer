@@ -36,6 +36,7 @@ import bag_pressure
 import gear
 import guildjobs
 import nowstatus
+import standstill
 from test_classquest import class_plan, who
 from test_classquest_room import grey, room_steps
 from test_equip_upgrades import EQUIP_READS, _block
@@ -618,7 +619,7 @@ class TheWayOutComesFirstAndNoPassIsLost(unittest.TestCase):
             [m],
             classes=None,
             equip_room={"Bonk": (1, ROOM_WORDS, 0)},
-            still={"Bonk": 70},
+            still={"Bonk": standstill.SEAT_STILL_MINUTES + 10},
         )
         self.assertEqual([s.action for s in plan.steps], ["hearth"])
 

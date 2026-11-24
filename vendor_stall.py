@@ -366,8 +366,20 @@ def family_progress(
                 moved = True
                 break
     steady_since = now if moved else previous.steady_since
+    # A CLOCK STARTED OVER A DIFFERENT PARTY IS NOT THIS PARTY'S (#2568). The
+    # banker trip is judged over the leader and the members with bank work, so
+    # a clock a straggler began under the whole-family judgment, or restored
+    # from before that judgment, would defer the trip for a party that was
+    # never split. A changed membership starts the clock over.
+    same_party = {row[0] for row in previous.positions} == {
+        row[0] for row in current_rows
+    }
     if split:
-        split_since = previous.split_since if previous.split_since is not None else now
+        split_since = (
+            previous.split_since
+            if previous.split_since is not None and same_party
+            else now
+        )
     else:
         split_since = None
     current = FamilyMovement(current_rows, steady_since, split_since)

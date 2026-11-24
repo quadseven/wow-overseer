@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from eventclips import clip_window, retain, trigger_kind
+from eventclips import clip_window, retain, retention_caps, trigger_kind
 
 
 class TriggerKindTests(unittest.TestCase):
@@ -66,3 +66,18 @@ class RetentionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RetentionCapsTests(unittest.TestCase):
+    def test_unset_uses_the_defaults_without_a_line(self):
+        self.assertEqual((200, timedelta(days=30), []), retention_caps({}))
+
+    def test_values_are_read_from_the_environment(self):
+        env = {"CLIP_MAX_COUNT": "12", "CLIP_MAX_AGE_DAYS": "3"}
+        self.assertEqual((12, timedelta(days=3), []), retention_caps(env))
+
+    def test_an_invalid_value_uses_the_default_and_logs_one_line(self):
+        env = {"CLIP_MAX_COUNT": "lots", "CLIP_MAX_AGE_DAYS": "0"}
+        count, age, lines = retention_caps(env)
+        self.assertEqual((200, timedelta(days=30)), (count, age))
+        self.assertEqual(2, len(lines))

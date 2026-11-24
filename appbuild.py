@@ -16,9 +16,10 @@ The page's modulepreload links are made here too (boot_graph, preload): one per
 file of the entry script's static import closure, read from the files' own
 import statements, so the list cannot drift from the code.
 
-Each call lists the files and stats them; their contents are read and
-hashed again only when a file was added or removed or one changed its size
-or modification time, so the realm poll does not hash forty files each time.
+Each call reuses a cached build for FINGERPRINT_TTL_SECONDS without walking
+disk; once that TTL expires, it lists and stats the files and hashes contents
+again only when a file was added or removed or one changed its size or
+modification time, so the realm poll does not walk or hash forty files each time.
 """
 
 from __future__ import annotations
@@ -29,13 +30,27 @@ import json
 import os
 import posixpath
 import re
+import time
 
 BUILD_PLACEHOLDER = "__OVERSEER_BUILD__"
 SHELL_PLACEHOLDER = "__OVERSEER_SHELL__"
 APP_KINDS = (".js", ".css", ".woff2")
 _APP_LINK_PREFIX = re.compile(r"/app/(?:__OVERSEER_BUILD__|[0-9a-f]{12})/(.+)$")
 
-_memo: dict[str, tuple[tuple, str]] = {}
+FINGERPRINT_TTL_SECONDS = 5.0
+_clock = time.monotonic
+
+_memo: dict[str, tuple[float, tuple, str]] = {}
+
+
+def clear_cache(root: str | None = None) -> None:
+    """Drop cached fingerprints and preload links for `root`, or all roots."""
+    if root is None:
+        _memo.clear()
+        _preload_memo.clear()
+    else:
+        _memo.pop(root, None)
+        _preload_memo.pop(root, None)
 
 
 def _app_files(root: str) -> list[str]:
@@ -62,13 +77,18 @@ def _signature(root: str, files: list[str]) -> tuple:
     return tuple(sig)
 
 
-def fingerprint(root: str) -> str:
+def fingerprint(root: str, *, ttl: float | None = None) -> str:
     """Twelve hex characters naming the app's files as they sit on disk now."""
+    max_age = FINGERPRINT_TTL_SECONDS if ttl is None else ttl
+    now = _clock()
+    kept = _memo.get(root)
+    if kept is not None and max_age > 0 and (now - kept[0]) < max_age:
+        return kept[2]
     files = _app_files(root)
     sig = _signature(root, files)
-    kept = _memo.get(root)
-    if kept is not None and kept[0] == sig:
-        return kept[1]
+    if kept is not None and kept[1] == sig:
+        _memo[root] = (now, sig, kept[2])
+        return kept[2]
     digest = hashlib.sha256()
     for rel in files:
         digest.update(rel.replace(os.sep, "/").encode() + b"\0")
@@ -79,7 +99,7 @@ def fingerprint(root: str) -> str:
             digest.update(b"missing")
         digest.update(b"\0")
     build = digest.hexdigest()[:12]
-    _memo[root] = (sig, build)
+    _memo[root] = (now, sig, build)
     return build
 
 

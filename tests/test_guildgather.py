@@ -57,6 +57,44 @@ class Who(unittest.TestCase):
         self.assertNotEqual("", gg.refusal(seat(herb=300)))
 
 
+class OtherSidesGround(unittest.TestCase):
+    """Ticket 2624: no gather grant to a seat on the other side's home ground."""
+
+    DRAENEI, ORC, HUMAN = 11, 2, 1
+    MULGORE, THUNDER_BLUFF, BARRENS, DARKSHORE, ELWYNN = 215, 1638, 17, 148, 12
+
+    def test_an_alliance_seat_in_hordes_home_ground_is_not_granted(self):
+        for zone in (self.MULGORE, self.THUNDER_BLUFF, self.BARRENS):
+            got = gg.refusal(seat(herb=5, race=self.DRAENEI, zone_id=zone))
+            self.assertIn("other side's ground", got, zone)
+
+    def test_a_horde_seat_in_alliance_home_ground_is_not_granted(self):
+        got = gg.refusal(seat(herb=5, race=self.ORC, zone_id=self.ELWYNN))
+        self.assertIn("other side's ground", got)
+
+    def test_a_seat_on_its_own_side_is_granted(self):
+        self.assertEqual(
+            "", gg.refusal(seat(herb=5, race=self.DRAENEI, zone_id=self.DARKSHORE))
+        )
+        self.assertEqual(
+            "", gg.refusal(seat(herb=5, race=self.ORC, zone_id=self.MULGORE))
+        )
+
+    def test_an_unknown_race_or_zone_is_not_refused(self):
+        self.assertEqual("", gg.refusal(seat(herb=5, race=0, zone_id=self.MULGORE)))
+        self.assertEqual("", gg.refusal(seat(herb=5, race=self.DRAENEI, zone_id=0)))
+
+    def test_plan_writes_no_row_for_such_a_seat(self):
+        s = seat(herb=5, race=self.DRAENEI, zone_id=self.THUNDER_BLUFF)
+        seen = {}
+        self.assertEqual([], gg.plan([s], seen, now=0.0))
+        self.assertEqual({}, seen)
+
+    def test_the_bridge_reads_race_and_zone_into_the_seat(self):
+        self.assertIn('race=int(r["race"] or 0)', BRIDGE)
+        self.assertIn('zone_id=int(r["zone_id"] or 0)', BRIDGE)
+
+
 class Rows(unittest.TestCase):
     def test_the_pair_goes_in_the_order_the_family_gets_it(self):
         rows = gg.plan([seat(herb=3)], {}, now=1000.0)

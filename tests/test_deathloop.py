@@ -348,6 +348,16 @@ def roster_at(rows, zone_id, life="alive", level=21):
 
 
 class TheLoopClearsOnceTheMemberLeaves(unittest.TestCase):
+    def test_a_slow_loop_still_lists_a_member_standing_in_another_zone(self):
+        view = members.stuck_view(roster_at(slow_deaths(32), WESTFALL))
+        rows = {r["name"]: r for r in view["members"]}
+        self.assertEqual(rows["Clunk"]["kind"], "death-loop")
+        self.assertIn("in a day", rows["Clunk"]["blocker"])
+
+    def test_a_slow_loop_still_clears_on_a_level_gained(self):
+        view = members.stuck_view(roster_at(slow_deaths(32), WESTFALL, level=22))
+        self.assertEqual(view["members"], [])
+
     def test_a_member_standing_in_another_zone_is_not_listed(self):
         view = members.stuck_view(roster_at(deaths(6), WESTFALL))
         self.assertEqual(view["members"], [])

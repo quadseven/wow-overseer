@@ -149,7 +149,7 @@ class TheBridgeSendsTheWithdrawalThroughTheGuildBankPass(unittest.TestCase):
         ]
         # An operator hold stands the wearer's family down for this writer.
         self.assertIn("self._operator_held(", helper)
-        self.assertIn('"gear routing"', helper)
+        self.assertIn('"gearrouting"', helper)
 
     def test_the_guild_bank_pass_plans_them_with_the_other_withdrawals(self):
         self.assertIn(

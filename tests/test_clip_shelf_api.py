@@ -93,6 +93,30 @@ class ShelfList(unittest.TestCase):
         self.assertEqual(payload["clips"], [])
         self.assertTrue(payload["empty"])
 
+    def test_missed_moments_are_counted_per_day_and_never_listed(self):
+        day = datetime(2026, 11, 9, 10, 0, 0)
+        later = datetime(2026, 11, 10, 8, 0, 0)
+        rows = [
+            clip_row(id=1, file_name="clip-1-loot.mp4", event_at=day),
+            clip_row(id=2, state="no_view", file_name=None, event_at=day),
+            clip_row(id=3, state="failed", file_name=None, event_at=day),
+            clip_row(id=4, state="no_view", file_name=None, event_at=later),
+            clip_row(id=5, state="pending", file_name=None, event_at=later),
+        ]
+        _status, payload = self.ask(rows)
+        self.assertEqual([c["id"] for c in payload["clips"]], [1])
+        self.assertEqual(
+            payload["missed"],
+            [
+                {"day": "2026-11-10", "no_view": 1, "failed": 0},
+                {"day": "2026-11-09", "no_view": 1, "failed": 1},
+            ],
+        )
+
+    def test_no_missed_moments_is_an_empty_list(self):
+        _status, payload = self.ask([])
+        self.assertEqual(payload["missed"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

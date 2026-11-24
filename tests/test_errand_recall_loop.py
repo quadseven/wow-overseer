@@ -115,7 +115,7 @@ class World:
             "jobs": jobs,
             "log": log,
             "professions": professions,
-            "raidrun": types.SimpleNamespace(MAPS={}),
+            "raidrun": types.SimpleNamespace(MAPS={}, is_raid=lambda keyword: False),
             "time": types.SimpleNamespace(monotonic=lambda: self.clock[0]),
             "townslot": townslot,
             "WEAPON_SKILL_CLAIMANT": "weapon master",

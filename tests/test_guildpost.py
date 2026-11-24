@@ -147,6 +147,20 @@ class AGroundedWalkerHearthsOut(unittest.TestCase):
         self.assertIn("guildroute.grounded(answer)", body)
         self.assertIn("await self._hearth_grounded(holder)", body)
 
+    def test_only_a_no_room_answer_backs_a_refused_take_off(self):
+        self.assertEqual(
+            guildpost.NO_ROOM_BACKOFF_SECONDS,
+            guildpost.take_backoff("no room in the bags"),
+        )
+        self.assertEqual(0.0, guildpost.take_backoff("item not found"))
+        self.assertEqual(0.0, guildpost.take_backoff(None))
+
+    def test_the_visit_loop_holds_the_receiver_after_a_no_room_take(self):
+        body = BRIDGE[BRIDGE.index("    async def _follow_post_visit(") :]
+        body = body[: body.index("\n    async def _crafter_mail_loop(")]
+        self.assertIn("guildpost.take_backoff(detail)", body)
+        self.assertIn("self._post_held_until[take.receiver]", body)
+
 
 if __name__ == "__main__":
     unittest.main()
