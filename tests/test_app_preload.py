@@ -292,6 +292,7 @@ class ServedPageTests(unittest.TestCase):
             (pathlib.Path(root) / "app" / "main.js").write_text(
                 'import "./a.js";\nimport "./b.js";\n', encoding="utf-8"
             )
+            appbuild._memo.pop(root, None)
             again = appbuild.preload_links(root)
         finally:
             appbuild.boot_graph = real
