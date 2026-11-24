@@ -201,7 +201,7 @@ class ThePageNamesTheBuild(unittest.TestCase):
             first = appbuild.fingerprint(tmp)
             f.write_text("b")
             os.utime(f, (1, 1))
-            self.assertNotEqual(first, appbuild.fingerprint(tmp))
+            self.assertNotEqual(first, appbuild.fingerprint(tmp, ttl=0))
 
     def test_the_build_changes_when_a_font_changes(self):
         import tempfile
@@ -214,7 +214,7 @@ class ThePageNamesTheBuild(unittest.TestCase):
             font.write_bytes(b"first")
             first = appbuild.fingerprint(tmp)
             font.write_bytes(b"second")
-            self.assertNotEqual(first, appbuild.fingerprint(tmp))
+            self.assertNotEqual(first, appbuild.fingerprint(tmp, ttl=0))
 
 
 def app_url(base, build, path):

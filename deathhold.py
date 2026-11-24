@@ -83,6 +83,18 @@ def _same_zone(old, loop) -> bool:
     )
 
 
+def flagged(loops, forming) -> dict:
+    """name -> the loop to flag: the judged loop and the forming one (#3196),
+    whichever is in the member's newest zone (the smaller `last_age`; the
+    judged loop on a tie)."""
+    out = dict(forming or {})
+    for name, loop in (loops or {}).items():
+        other = out.get(name)
+        if other is None or loop.last_age <= other.last_age:
+            out[name] = loop
+    return out
+
+
 def plan(loops, levels, memos, now, roster=()) -> Plan:
     """What to write for the members this pass judged.
 

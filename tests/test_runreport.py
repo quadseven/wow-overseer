@@ -218,7 +218,7 @@ class ThePageShowsWhatDiscordWasSent(unittest.TestCase):
         bridge = BRIDGE.read_text(encoding="utf-8")
         server = (BRIDGE.parent / "map_server.py").read_text(encoding="utf-8")
         self.assertIn("runreport.read(rd.must, run_id)", bridge)
-        self.assertIn("runreport.read(rd.must, run_id)", server)
+        self.assertIn("runreport.read_many(rd.must, ids)", server)
 
     def test_a_run_still_under_way_has_no_report_card(self):
         fetch, _ = _fetcher()
