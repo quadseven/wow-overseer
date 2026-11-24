@@ -327,7 +327,7 @@ def _run_mail(world, standing=None, environ=GRUG):
             _recent_mail_keys=lambda minutes: set(),
             _fetch_free_slots=lambda names: {},
             _fetch_positions=lambda names: {n: standing.get(n, far) for n in names},
-            _nearest_mailbox=lambda name: dict(BOX),
+            _nearest_mailbox=lambda name, skip=None: dict(BOX),
             _mail_range_refusals=lambda names, minutes: set(),
             _dues_fund_tab=lambda names: False,
             _insert_mail=lambda take, command: (

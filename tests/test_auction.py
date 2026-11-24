@@ -1258,3 +1258,29 @@ class AuctionRangeReachTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AuctionTripNeedsListingTest(unittest.TestCase):
+    """A walk for reagents the house lists none of holds the column for nothing."""
+
+    NEEDS = [
+        auction.Need(shopper="A", entry=2835, label="Rough Stone", short=10),
+        auction.Need(shopper="B", entry=2447, label="Peacebloom", short=5),
+    ]
+
+    def test_nothing_listed_means_no_need_worth_a_trip(self):
+        self.assertEqual(auction.stocked_needs(self.NEEDS, {2835: 0, 2447: 0}), [])
+
+    def test_one_listed_need_keeps_only_that_need(self):
+        kept = auction.stocked_needs(self.NEEDS, {2835: 0, 2447: 3})
+        self.assertEqual([n.entry for n in kept], [2447])
+
+    def test_an_unread_house_keeps_every_need(self):
+        self.assertEqual(auction.stocked_needs(self.NEEDS, None), self.NEEDS)
+
+    def test_the_pass_checks_the_house_before_it_claims_the_traveller(self):
+        body = BRIDGE.read_text(encoding="utf-8")
+        body = body[body.index("async def _auction_once(") :]
+        body = body[: body.index("async def _auction_loop(")]
+        gate = body.index("auction.stocked_needs(needs, listed)")
+        self.assertLess(gate, body.index("self._claim_town_slot("))

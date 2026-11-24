@@ -183,6 +183,9 @@ SELL_COOLDOWN_MINUTES = 20
 # sale step runs first; if it cannot make room, a three-hour window keeps the
 # same refusal from recurring every pass while still retrying in bounded time.
 BAG_HUNT_RETRY_MINUTES = 3 * 60
+# Refusals a free-slot read may release inside that window before it is
+# distrusted: the module refused with room read (#3042).
+BAG_HUNT_ROOM_RELEASES = 1
 # A quester's crossing row has its own source action (quest takes, hand-ins
 # and hunts are ACTION), so it shares the one crossing clock and the walls of
 # the class quest's and the level step's crossings (guildjobs.CROSS_ACTIONS).
@@ -259,6 +262,9 @@ GIVER_MISSING = "the quest giver is not in the world"
 # to satisfy these objectives.
 UNSUPPORTED_OBJECTIVE = "it requires speaking to an NPC, which questers cannot do"
 CRAFTED_CRAB_CAKES = "requires crafted Crab Cakes (item 2683); questers cannot cook"
+SEASONED_WOLF_KABOBS = (
+    "requires crafted Seasoned Wolf Kabobs (item 1017); questers cannot cook"
+)
 FARGODEEP_EXPLORATION = (
     "requires exploring Fargodeep Mine; questers cannot earn exploration credit"
 )
@@ -271,6 +277,22 @@ DEFIAS_BROTHERHOOD = (
 GHOST_HAIR_THREAD = (
     "Ghost Hair Thread (quest 149) requires Spectral Comb (item 1453), "
     "which no spawned creature drops"
+)
+HEART_OF_MOKK = (
+    "Stranglethorn Fever (quest 348) requires Heart of Mokk (item 2797), "
+    "which only Mokk the Savage drops; he has no spawn and a script summons "
+    "him when quest 349 is turned in"
+)
+GREEN_HILLS_CHAPTERS = (
+    "The Green Hills of Stranglethorn (quest 338) requires four chapter items "
+    "(items 2756 to 2759), which no creature drops and no vendor sells; each "
+    "is the reward of its own quest (quests 339 to 342), so the chapters come "
+    "from finishing those four quests first"
+)
+FLAGON_OF_MEAD = (
+    "The Third Fleet (quest 288) requires Flagon of Mead (item 2594), which "
+    "only Malgin Barleybrew drops: one vendor spawn on another continent than "
+    "the quest's zone, and questers cannot buy the item from a vendor"
 )
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
@@ -1360,18 +1382,24 @@ def bag_room_refused(name, tried) -> frozenset:
 def bags_full_hunt(name, tried, free_slots=None) -> bool:
     """Whether a full-bag hunt refusal still holds this quester.
 
-    A free slot releases the hold early after the sale step makes room. With
-    no room (or unread bags), the hold lasts through BAG_HUNT_RETRY_MINUTES so
-    the retry is bounded without repeating the same refusal every pass.
+    A free slot releases the hold early after the sale step makes room, but
+    only once: a second refusal inside the window means the room the bridge
+    read is not room the module can use (#3042), so the hold then lasts the
+    whole of BAG_HUNT_RETRY_MINUTES. With no room (or unread bags) the hold
+    lasts through it too, so the retry is bounded without repeating the same
+    refusal every pass.
     """
-    if free_slots is not None and int(free_slots) > 0:
-        return False
+    refusals_seen = 0
     for a in tried or ():
         if a.name != name or not a.failed or a.age_minutes >= BAG_HUNT_RETRY_MINUTES:
             continue
         if classhunt.is_hunt_row(a.command) and classhunt.BAGS_FULL_REASON in a.reason:
-            return True
-    return False
+            refusals_seen += 1
+    if not refusals_seen:
+        return False
+    if free_slots is not None and int(free_slots) > 0:
+        return refusals_seen >= BAG_HUNT_ROOM_RELEASES + 1
+    return True
 
 
 def cannot_turn_in(name, tried) -> dict:
@@ -1845,6 +1873,8 @@ def _broken_reason(
         return UNSUPPORTED_OBJECTIVE
     if quest.id == 93 and status == STATUS_INCOMPLETE and (2683, 6) in quest.items:
         return CRAFTED_CRAB_CAKES
+    if quest.id == 90 and status == STATUS_INCOMPLETE and (1017, 10) in quest.items:
+        return SEASONED_WOLF_KABOBS
     if quest.id == 62 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
         return FARGODEEP_EXPLORATION
     if quest.id == 127 and status == STATUS_INCOMPLETE and played >= STALL_SECONDS:
@@ -1865,6 +1895,27 @@ def _broken_reason(
         and played >= STALL_SECONDS
     ):
         return GHOST_HAIR_THREAD
+    if (
+        quest.id == 348
+        and status == STATUS_INCOMPLETE
+        and (2797, 1) in quest.items
+        and played >= STALL_SECONDS
+    ):
+        return HEART_OF_MOKK
+    if (
+        quest.id == 338
+        and status == STATUS_INCOMPLETE
+        and (2756, 1) in quest.items
+        and played >= STALL_SECONDS
+    ):
+        return GREEN_HILLS_CHAPTERS
+    if (
+        quest.id == 288
+        and status == STATUS_INCOMPLETE
+        and (2594, 1) in quest.items
+        and played >= STALL_SECONDS
+    ):
+        return FLAGON_OF_MEAD
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that

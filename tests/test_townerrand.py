@@ -670,6 +670,46 @@ class TheAdapter(unittest.TestCase):
         self.assertIn("town errand", self.fam.slot.reserved)
         self.assertEqual(("town errand", "Grug", "at:0:100,100,10"), self.fam.aims[-1])
 
+    def test_a_gear_errand_is_not_sent_again_to_a_hub_its_walk_never_reached(self):
+        # #1261: bought gear waited in the post, the walk to the capital
+        # mailbox stalled out as "did not land", and five minutes later the
+        # same errand took the traveller for the same walk, for hours.
+        import dataclasses
+
+        said = []
+        self.ns["dataclasses"] = dataclasses
+        self.ns["log"] = types.SimpleNamespace(
+            info=lambda fmt, *a: said.append(fmt % a if a else fmt)
+        )
+        self.ns["_TOWN_ERRAND_RELEASED"] = {
+            ("Bork", "Grug"): [(dict(HUB), self.now - te.UNLANDED_RETRY_SECONDS - 1)]
+        }
+        before = te.State(ended=self.now - te.UNLANDED_RETRY_SECONDS - 1, unlanded=True)
+        state = asyncio.run(
+            self.fam._town_errand_start(
+                before, ["Bork", "Grug"], "Grug", False, self.now, ""
+            )
+        )
+        self.assertFalse(state.active)
+        self.assertEqual(self.now, state.ended)
+        self.assertTrue(state.unlanded)
+        self.assertEqual([], self.jobs)
+        self.assertEqual([], self.hearths)
+        self.assertTrue(any("released unlanded" in line for line in said), said)
+
+    def test_a_gear_errand_goes_again_once_the_memory_has_expired(self):
+        self.ns["_TOWN_ERRAND_RELEASED"] = {
+            ("Bork", "Grug"): [(dict(HUB), self.now - te.AIM_MEMORY_SECONDS - 1)]
+        }
+        before = te.State(ended=self.now - te.UNLANDED_RETRY_SECONDS - 1, unlanded=True)
+        state = asyncio.run(
+            self.fam._town_errand_start(
+                before, ["Bork", "Grug"], "Grug", False, self.now, ""
+            )
+        )
+        self.assertTrue(state.active)
+        self.assertEqual(["town run"], self.jobs)
+
     def ended_errand_start(self, ended_ago, ran_since=False, free=None, said=None):
         """Try to start an errand for a family whose last one ended
         `ended_ago` seconds ago, while a run is queued for it."""
@@ -1875,6 +1915,36 @@ def replace_phase(state, phase):
     import dataclasses
 
     return dataclasses.replace(state, phase=phase)
+
+
+class AHubThatNeverLandedIsNotATrip(unittest.TestCase):
+    """#1261: only a bag-room errand has another aim to choose, so any other
+    errand does not start for a hub its walk was released from unlanded."""
+
+    WHY = "bought gear waits in the mailbox for Bork"
+
+    def test_a_gear_errand_refuses_a_released_hub(self):
+        self.assertTrue(te.unreachable_hub(self.WHY, HUB, [(dict(HUB), 0.0)], 600.0))
+
+    def test_the_memory_expires(self):
+        released = [(dict(HUB), 0.0)]
+        self.assertFalse(
+            te.unreachable_hub(self.WHY, HUB, released, te.AIM_MEMORY_SECONDS + 1)
+        )
+
+    def test_a_hub_elsewhere_is_not_refused(self):
+        far = dict(HUB, x=HUB["x"] + te.AIM_SAME_YARDS + 50.0)
+        self.assertFalse(te.unreachable_hub(self.WHY, HUB, [(far, 0.0)], 600.0))
+
+    def test_a_bag_room_errand_keeps_its_own_fallback(self):
+        released = [(dict(HUB), 0.0)]
+        self.assertFalse(te.unreachable_hub(te.BAG_PRESSURE_WHY, HUB, released, 600.0))
+        self.assertFalse(
+            te.unreachable_hub(te.LOOP_WHY + "bags low", HUB, released, 600.0)
+        )
+
+    def test_no_hub_is_not_this_refusal(self):
+        self.assertFalse(te.unreachable_hub(self.WHY, {}, [(dict(HUB), 0.0)], 600.0))
 
 
 class TheLeaderThatCannotWalk(unittest.TestCase):

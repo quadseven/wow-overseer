@@ -248,6 +248,8 @@ When a file already violates this, fix the lines being edited. Do not scrub a wh
 
 Keep README.md to the sections its test pins, plus How it deploys, Layout and Docs, with a last-checked date; a change that makes it false fixes it in the same PR.
 
+Optional: a `## Player story` section in the PR body, one sentence in game terms naming who or what was affected and the effect (for example: "Two members could not sell their loot, so a dungeon run waited on their bags"). The ship note lists each included PR by its story, and by its title when it has none. `playerstory.py` reads it; omitting it never fails a check.
+
 ## Filing issues
 
 Give every ticket and epic in this repo and in `quadseven/mod-overseer` exactly one `area:` label, plus topic labels such as `dungeon:blackfathom` or `trade:leatherworking`. An epic sits in one area, holds at most 15 tickets, and splits by topic when it outgrows that. Never file into a generic intake epic. The areas, topic labels and reasons are in `docs/agents/area-taxonomy.md`.

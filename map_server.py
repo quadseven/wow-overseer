@@ -28,6 +28,7 @@ import pymysql
 
 import achievements
 import apiv2
+from apiv2 import members as v2_members
 from apiv2 import operator as v2_operator
 from apiv2 import presence as v2_presence
 from apiv2._context import Context as _V2Context
@@ -52,6 +53,7 @@ import decree
 import priorities
 import director
 import dungeonplan
+import eventclips
 import eye
 import families
 import family
@@ -3158,6 +3160,9 @@ def _fetch_raidgoals() -> dict:
             _RAID_HOLDINGS.format(holes=rholes),  # noqa: S608
             tuple(roster), what="character_inventory")
         list_items = _list_items(rd)
+        crossings = rd.rows(
+            raidready.HEALER_CROSSINGS_SQL.format(holes=rholes),  # noqa: S608
+            tuple(roster), what="overseer_level healer pace")
         worn = rd.rows(_RAID_WORN.format(holes=rholes),  # noqa: S608
                        (len(armory.EQUIPPED_SLOTS), *roster),
                        fallback=_RAID_WORN_OLD.format(holes=rholes),  # noqa: S608
@@ -3202,7 +3207,7 @@ def _fetch_raidgoals() -> dict:
             "trainer_rows": trainer, "char_rows": chars,
             "skill_rows": skills, "spell_rows": known,
             "holding_rows": holdings, "worn_rows": worn,
-            "list_items": list_items,
+            "list_items": list_items, "level_rows": crossings,
             "vendor_rows": vendor, "creature_rows": creature,
             "object_rows": objects, "guild_rows": guild,
             "attuned_rows": attuned, "quest_rows": quest_log,
@@ -3913,20 +3918,18 @@ _LOOT_CLIPS_SQL = (
 
 def _run_reports(rd, rows: list, limit: int) -> dict:
     """Each recent run's post-run report (mod-overseer#152), by run id: the
-    newest `limit` run ids in the timeline rows, read through runreport.read,
-    the same read the bridge posts to Discord. A realm without the summary
-    view shows no report rather than one that says nothing dropped."""
+    newest `limit` run ids in the timeline rows, read in batch through
+    runreport.read_many, the same builder the bridge posts to Discord. A realm
+    without the summary view shows no report rather than one that says nothing
+    dropped."""
     ids = sorted({int(r.get("run_id") or 0) for r in rows} - {0}, reverse=True)[:limit]
-    reports: dict = {}
+    if not ids:
+        return {}
     try:
-        for run_id in ids:
-            report = runreport.read(rd.must, run_id)
-            if report is not None:
-                reports[run_id] = report
+        return runreport.read_many(rd.must, ids)
     except realmread.Gap:
         log.info("run reports unavailable (no overseer_dungeon_run_summary yet)")
         return {}
-    return reports
 
 
 # --- the live dungeon recap and the loot board (infra#2597) ------------------
@@ -4241,7 +4244,10 @@ def _leader_now(name: str | None):
         "combat": False,
         "life": life,
     }
-    return nowstatus.compose(member, (facts or {}).get(name), None)
+    now = nowstatus.compose(member, (facts or {}).get(name), None)
+    # The roster's re-read of an Idle member (#2192): one function words it.
+    with realmread.Session(_connect) as rd:
+        return v2_members.reread_idle(rd, name, now)
 
 
 def _fetch_agenda(names=None) -> dict:
@@ -4657,6 +4663,12 @@ _CLIP_SHELF_SQL = (
     " ORDER BY event_at DESC, id DESC LIMIT %s"
 )
 
+_CLIP_MISSED_SQL = (
+    "SELECT state, event_at FROM overseer_clip"
+    " WHERE state IN ('no_view', 'failed') AND event_at IS NOT NULL"
+    " ORDER BY event_at DESC, id DESC LIMIT %s"
+)
+
 _LEDGER_DOWN = object()
 
 
@@ -4697,7 +4709,9 @@ _CLIP_INSERT = (
     " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
 )
 _CLIP_EXPIRE = (
-    "UPDATE overseer_clip SET state = 'expired' WHERE id = %s AND state = 'ready'"
+    "UPDATE overseer_clip SET state = 'expired', detail = "
+    "CONCAT_WS('; ', NULLIF(detail, ''), NULLIF(%s, ''))"
+    " WHERE id = %s AND state = 'ready'"
 )
 
 
@@ -4779,9 +4793,13 @@ def scan_clips() -> dict:
         cur.execute(
             "SELECT id, event_key, state, created_at FROM overseer_clip"
             " WHERE state = 'ready'")
-        stale = clipledger.expired_ids(cur.fetchall(), now=found["now"])
+        max_count, max_age, notes = eventclips.retention_caps(os.environ)
+        for note in notes:
+            log.info("%s", note)
+        stale = clipledger.expired_reasons(
+            cur.fetchall(), now=found["now"], max_age=max_age, max_count=max_count)
         if stale:
-            cur.executemany(_CLIP_EXPIRE, [(i,) for i in stale])
+            cur.executemany(_CLIP_EXPIRE, [(why, i) for i, why in stale.items()])
         timed_out = clipledger.time_out(cur, now=found["now"])
     _clip_last_scan = began
     return {"written": len(planned), "expired": len(stale), "timed_out": timed_out}
@@ -5245,11 +5263,18 @@ def _accepts_gzip(handler) -> bool:
     return False
 
 
+def _will_gzip(handler, ctype: str, body: bytes) -> bool:
+    """Whether `_gzipped` would compress this response."""
+    return (
+        _compressible(ctype)
+        and len(body) >= GZIP_MIN_BYTES
+        and _accepts_gzip(handler)
+    )
+
+
 def _gzipped(handler, ctype: str, body: bytes) -> bytes | None:
     """The body gzipped, or None when it should go out as it is."""
-    if not _compressible(ctype) or len(body) < GZIP_MIN_BYTES:
-        return None
-    if not _accepts_gzip(handler):
+    if not _will_gzip(handler, ctype, body):
         return None
     if ctype.split(";")[0].strip() == _GZIP_JSON:
         return gzip.compress(body, 5, mtime=0)
@@ -5781,7 +5806,52 @@ def _family_scope(query: dict):
     return rosters.get(chosen, []), chosen, list(rosters)
 
 
+# The only Content-Length the handler accepts: plain ASCII digits.
+_CONTENT_LENGTH_RE = re.compile(r"[0-9]+")
+
+
+class _CountingReader:
+    """The request socket's reader, counting every byte it hands out.
+
+    The handler compares the count against Content-Length to learn whether a
+    request body was read in full before the response goes out. Anything not
+    defined here passes straight through to the wrapped reader.
+    """
+
+    def __init__(self, raw) -> None:
+        self._raw = raw
+        self.count = 0
+
+    def _counted(self, data: bytes) -> bytes:
+        self.count += len(data)
+        return data
+
+    def read(self, *args) -> bytes:
+        return self._counted(self._raw.read(*args))
+
+    def read1(self, *args) -> bytes:
+        return self._counted(self._raw.read1(*args))
+
+    def readline(self, *args) -> bytes:
+        return self._counted(self._raw.readline(*args))
+
+    def readinto(self, buf) -> int | None:
+        n = self._raw.readinto(buf)
+        self.count += n or 0
+        return n
+
+    def __getattr__(self, name):
+        return getattr(self._raw, name)
+
+
 class Handler(BaseHTTPRequestHandler):
+    # Persistent connections avoid paying a fresh TCP handshake on every poll
+    # and asset request. Every response either sends Content-Length or has no
+    # body (304), and `timeout` bounds idle sockets. A response sent before
+    # the request body was read in full closes the connection (end_headers):
+    # the unread bytes would otherwise be parsed as the next request, which
+    # is request smuggling behind the ingress.
+    protocol_version = "HTTP/1.1"
     # Socket reads and writes give up after this long. Without it a client
     # that opens a connection and sends nothing, or declares a body it never
     # sends, holds one thread of the threading server for as long as it
@@ -6109,9 +6179,17 @@ class Handler(BaseHTTPRequestHandler):
             # The tiles still draw; each says its sentence is unavailable.
             log.exception("wall status feed failed")
             facts = False
-        payload = watchwall.build_heads(built, family.build_observers(
-            _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,)),
-            facts=facts)
+        observers = family.build_observers(
+            _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,))
+        # The roster's re-read of an Idle member (#2192): one function words it.
+        try:
+            with realmread.Session(_connect) as rd:
+                payload = watchwall.build_heads(
+                    built, observers, facts=facts,
+                    reread=lambda name, now: v2_members.reread_idle(rd, name, now))
+        except (pymysql.err.MySQLError, OSError):
+            log.exception("wall idle re-read failed")
+            payload = watchwall.build_heads(built, observers, facts=facts)
         return 200, payload
 
     def _auras(self, query: dict) -> None:
@@ -6202,6 +6280,7 @@ class Handler(BaseHTTPRequestHandler):
         snapshots = _metric_snapshots()
         prep = fetched.pop("preraid")
         list_items = fetched.pop("list_items")
+        level_rows = fetched.pop("level_rows")
         # ONE CARD PER GUILD. raidgoals counts one roster at a time, so it
         # is handed one guild's rows and that guild's family as the
         # fallback; handed both guilds at once it would see a family split
@@ -6215,7 +6294,7 @@ class Handler(BaseHTTPRequestHandler):
                 group, fetched["char_rows"], fetched["worn_rows"],
                 attuned, min_level, goals, quest_rows=quest_rows,
                 holding_rows=fetched["holding_rows"],
-                item_rows=list_items,
+                item_rows=list_items, level_rows=level_rows,
                 supply=dict(supply.get(group["guildid"]) or {},
                             snapshots=snapshots),
                 preraid=preraid.family_view(
@@ -7554,9 +7633,9 @@ class Handler(BaseHTTPRequestHandler):
                 and getattr(self, "command", "") == "GET"):
             cache_control = "no-cache"
             tag = _etag(body)
-        packed = _gzipped(self, ctype, body)
+        will_gz = _will_gzip(self, ctype, body)
         if tag:
-            if packed is not None:
+            if will_gz:
                 tag = tag[:-1] + '-gz"'
             asked = self.headers.get("If-None-Match", "") if getattr(self, "headers", None) else ""
             if tag in [t.strip() for t in asked.split(",")]:
@@ -7568,6 +7647,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header(hkey, hval)
                 self.end_headers()
                 return
+        packed = _gzipped(self, ctype, body) if will_gz else None
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         if packed is not None:
@@ -7584,12 +7664,66 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def setup(self) -> None:
+        super().setup()
+        self.rfile = _CountingReader(self.rfile)
+        self._body_mark = None
+
+    def parse_request(self) -> bool:
+        # The mark is where this request's body starts, set only once its
+        # headers parsed. An error response before that point has no body to
+        # account for, and the stdlib closes the connection itself.
+        self._body_mark = None
+        ok = super().parse_request()
+        if not ok:
+            return False
+        # A body whose length cannot be known is refused before routing.
+        # int() takes "-5", " 5", "+5" and "5_0", and a front proxy may read
+        # any of those differently, so only plain ASCII digits count as a
+        # length. Two Content-Length headers, or one beside
+        # Transfer-Encoding, are the classic smuggling shapes. send_error
+        # sends Connection: close, so whatever bytes follow are dropped.
+        lengths = self.headers.get_all("Content-Length") or []
+        if len(lengths) > 1 or (lengths and (
+                not _CONTENT_LENGTH_RE.fullmatch(lengths[0])
+                or self.headers.get("Transfer-Encoding") is not None)):
+            self.send_error(400, "Bad Content-Length")
+            return False
+        self._body_mark = self.rfile.count
+        return True
+
+    def _body_unread(self) -> bool:
+        """True when the request declared a body not yet read in full.
+
+        Only Content-Length bodies are ever read here, so a chunked body
+        (any Transfer-Encoding) always counts as unread.
+        """
+        mark = getattr(self, "_body_mark", None)
+        headers = getattr(self, "headers", None)
+        if mark is None or headers is None:
+            return False
+        if headers.get("Transfer-Encoding") is not None:
+            return True
+        raw = headers.get("Content-Length")
+        if raw is None:
+            return False
+        # parse_request already refused anything else; fail closed anyway.
+        if not _CONTENT_LENGTH_RE.fullmatch(raw):
+            return True
+        length = int(raw)
+        return length != 0 and self.rfile.count - mark < length
+
     def end_headers(self) -> None:
         # Every response, however it was built, says not to leak the page's
         # address and not to be indexed (basepath.PRIVACY_HEADERS): the one
         # place all of them pass through, so a new response cannot forget.
         for name, value in basepath.PRIVACY_HEADERS:
             self.send_header(name, value)
+        # The same one place closes a kept-alive connection whose request
+        # body is still (partly) on the socket. send_header sets
+        # close_connection when it sees this header.
+        if self._body_unread() and not getattr(self, "close_connection", False):
+            self.send_header("Connection", "close")
         super().end_headers()
 
     def log_message(self, fmt, *args):
@@ -7627,7 +7761,9 @@ class Handler(BaseHTTPRequestHandler):
         """
         rows = ctx.read.rows(_CLIP_SHELF_SQL, (clipledger.SHELF_LIMIT,),
                              what="the clip shelf")
-        return 200, clipledger.shelf(rows)
+        lost = ctx.read.rows(_CLIP_MISSED_SQL, (clipledger.MISSED_LIMIT,),
+                             what="the clip shelf")
+        return 200, clipledger.shelf([*rows, *lost])
 
     def _cutter_refused(self) -> bool:
         """True after answering a cutter call that lacks the cutter token."""

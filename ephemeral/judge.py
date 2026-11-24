@@ -406,6 +406,15 @@ class Judge:
                 if problems:
                     raise JudgeError(f"observation {name}: " + "; ".join(problems))
                 rendered[name] = sql
+            elif o.get("online") == "cast":
+                sql = render_sql(
+                    "SELECT guid FROM characters WHERE guid IN (@cast) AND online = 1",
+                    variables,
+                )
+                problems = dbschema.check_select(sql, self.schema)
+                if problems:
+                    raise JudgeError(f"observation {name}: " + "; ".join(problems))
+                rendered[name] = sql
         return rendered
 
     def _window(self, steps, duration, started):
@@ -428,9 +437,16 @@ class Judge:
         why = []
         for r in self.records.values():
             if r["role"] == "precondition" and r["status"] != "held":
-                why.append(
-                    f"precondition {r['name']} {self._phrase(r)}: the scenario was never reached"
-                )
+                missing = r.get("missing_members") or []
+                if missing:
+                    why.append(
+                        f"precondition {r['name']} is waiting for cast members to log in: "
+                        + ", ".join(missing)
+                    )
+                else:
+                    why.append(
+                        f"precondition {r['name']} {self._phrase(r)}: the scenario was never reached"
+                    )
             elif r["role"] == "check" and r["status"] in ("timeout", "error"):
                 why.append(f"check {r['name']} {self._phrase(r)}")
         why.extend(self._credit_reasons())
@@ -574,6 +590,8 @@ class Judge:
         """One look at one observation: a record dict, not yet merged."""
         o = self.observes[name]
         role = o["role"]
+        if o.get("online") == "cast":
+            return self._evaluate_cast_online(name, o)
         rec = {
             "name": name,
             "role": role,
@@ -609,6 +627,31 @@ class Judge:
         except QueryTimeout as exc:
             rec["status"], rec["detail"] = "timeout", str(exc)[:MAX_CELL_CHARS]
         except Exception as exc:  # noqa: BLE001 - any failure to look is INVALID, never a pass
+            rec["status"], rec["detail"] = "error", repr(exc)[:MAX_CELL_CHARS]
+        return rec
+
+    def _evaluate_cast_online(self, name, observation):
+        rec = {
+            "name": name,
+            "role": observation["role"],
+            "when": "start",
+            "online": "cast",
+        }
+        members = self.handoff.get("members") or []
+        try:
+            rows = self.world.select(self.rendered[name])
+            online = {int(row[0]) for row in rows}
+            missing = [
+                member["name"]
+                for member in members
+                if int(member["guid"]) not in online
+            ]
+            rec["status"] = "held" if not missing else "violated"
+            rec["observed"] = f"online={len(members) - len(missing)}/{len(members)}"
+            rec["missing_members"] = missing
+        except QueryTimeout as exc:
+            rec["status"], rec["detail"] = "timeout", str(exc)[:MAX_CELL_CHARS]
+        except Exception as exc:  # noqa: BLE001 - a failed look cannot release the act gate
             rec["status"], rec["detail"] = "error", repr(exc)[:MAX_CELL_CHARS]
         return rec
 

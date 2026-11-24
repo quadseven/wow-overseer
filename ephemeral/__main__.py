@@ -89,7 +89,7 @@ def _runner(args):
 
 
 def _guarded(fn):
-    from . import collect, dispatch, ghx, kube, runcfg, submit
+    from . import collect, dispatch, ghx, kube, report, runcfg, submit
 
     def run(args):
         try:
@@ -99,7 +99,7 @@ def _guarded(fn):
             return 3
         except (
             runcfg.ConfigError, submit.SubmitError, dispatch.DispatchError,
-            collect.CollectError, kube.KubeError, ghx.GhError, OSError,
+            collect.CollectError, kube.KubeError, ghx.GhError, report.ReportError, OSError,
         ) as exc:  # fmt: skip
             print(f"error: {exc}")
             return 2
@@ -154,6 +154,15 @@ def _collect(args):
     cfg, k, gh = _runner(args)
     col = collect.Collector(cfg, k, gh, env=os.environ)
     col.run(post=not args.dry_run)
+    return 0
+
+
+def _report(args):
+    from . import report
+
+    cfg, k, gh = _runner(args)
+    reporter = report.Reporter(cfg, k, gh, env=os.environ)
+    reporter.run(args.batches, dry_run=args.dry_run)
     return 0
 
 
@@ -289,6 +298,20 @@ def main(argv=None):
         "--dry-run", action="store_true", help="decide and print, post nothing"
     )
     cl.set_defaults(func=_guarded(_collect))
+    rp = sub.add_parser(
+        "report",
+        help="post one batch's evidence to its named issue; tick one box, never close",
+    )
+    rp.add_argument(
+        "batches",
+        nargs="+",
+        help="one or more six-character batch ids from eph submit",
+    )
+    rp.add_argument("--config", help=cfg_help)
+    rp.add_argument(
+        "--dry-run", action="store_true", help="print the comment and proposed box edit"
+    )
+    rp.set_defaults(func=_guarded(_report))
     args = parser.parse_args(argv)
     return args.func(args)
 
