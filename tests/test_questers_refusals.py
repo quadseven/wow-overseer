@@ -9,10 +9,15 @@ there was room, so nothing moved and the quest stalled."""
 import unittest
 
 import classhunt
+import classquest
+import questledger
 import questers
-from test_questers import mirra, world
+from test_questers import ended, giver, mirra, quest, spawn, started, world
 
 NOT_ELIGIBLE = "not eligible (level, race, class, prerequisite or exclusive group)"
+NO_GIVER_IN_REACH = "no giver of that quest in reach"
+DEFENSE_QUEST = 263
+LOCH_MODAN = 38
 
 
 def refused_take(qid=1, age=10, name="Mirra"):
@@ -51,6 +56,132 @@ class ARefusedTakeIsNotBrokenForGood(unittest.TestCase):
         tried = [refused_take(age=m) for m in (300, 200, 100)]
         held = {1: questers.REFUSED_TAKE}
         self.assertEqual(questers.retry_take_refusals("Mirra", held, tried), set())
+
+
+def defense_catalogue():
+    """The ticket's quest row and objective counts with fixture-only positions.
+
+    The ticket gives no spawn coordinates or maps. The positions below only
+    exercise the normal quester path; they do not claim live spawn locations.
+    """
+    row = quest(
+        DEFENSE_QUEST,
+        LOCH_MODAN,
+        15,
+        min_level=10,
+        prev=237,
+        kill=1197,
+        count=10,
+        title="In Defense of the King's Lands",
+    )
+    row.update(npc2=1164, npc_count2=10)
+    givers = [
+        giver(DEFENSE_QUEST, "start", 12630, 9000, 0, 0, name="Test giver"),
+        giver(DEFENSE_QUEST, "end", 12631, 9001, 0, 0, name="Test ender"),
+    ]
+    spawns = [
+        spawn(13000 + i, 1197, 100 + i, 0, level=13, name="Objective creature")
+        for i in range(23)
+    ] + [
+        spawn(14000 + i, 1164, 200 + i, 0, level=13, name="Objective creature")
+        for i in range(17)
+    ]
+    cat = questers.catalogue(
+        [row],
+        givers,
+        spawns,
+        [],
+        [started(DEFENSE_QUEST, 9000)],
+        [ended(DEFENSE_QUEST, 9001)],
+    )
+    member = mirra(
+        name="TestQuester",
+        level=15,
+        zone_id=LOCH_MODAN,
+        quests_done=frozenset({237}),
+    )
+    return cat, member
+
+
+class RetryableQuestGiverRefusal(unittest.TestCase):
+    def test_quest_263_can_retry_a_giver_wait_and_finish(self):
+        cat, member = defense_catalogue()
+        refusal = questers.Attempt(
+            member.name,
+            "take quest:263",
+            "error",
+            reason=NO_GIVER_IN_REACH,
+            age_minutes=10,
+            retryable=True,
+        )
+
+        waiting = questers.plan(cat, member, questers.Clock(), 0.0, tried=[refusal])
+
+        self.assertEqual(waiting.broken, ())
+        self.assertNotEqual(
+            (getattr(waiting.move, "kind", None), getattr(waiting.move, "quest", None)),
+            (classquest.TAKE, DEFENSE_QUEST),
+        )
+        self.assertEqual(
+            questers.refusals(member.name, [refusal]),
+            {},
+        )
+
+        retry = questers.Attempt(
+            **{**refusal.__dict__, "age_minutes": questers.TAKE_GIVER_RETRY_MINUTES}
+        )
+        ready = questers.plan(cat, member, questers.Clock(), 0.0, tried=[retry])
+        self.assertEqual((ready.move.kind, ready.move.quest), (classquest.TAKE, 263))
+
+        held = questers.Member(
+            **{
+                **member.__dict__,
+                "quest_log": {DEFENSE_QUEST: questers.STATUS_INCOMPLETE},
+                "quest_progress": {DEFENSE_QUEST: 0},
+                "quest_objectives": {DEFENSE_QUEST: {1197: 0, 1164: 0}},
+            }
+        )
+        first_hunt = questers.plan(cat, held, questers.Clock(), 0.0).move
+        self.assertEqual((first_hunt.kind, first_hunt.quest), (classquest.HUNT, 263))
+        first_done = questers.Member(
+            **{
+                **held.__dict__,
+                "quest_progress": {DEFENSE_QUEST: 10},
+                "quest_objectives": {DEFENSE_QUEST: {1197: 10, 1164: 0}},
+            }
+        )
+        second_hunt = questers.plan(cat, first_done, questers.Clock(), 60.0).move
+        self.assertEqual((second_hunt.kind, second_hunt.quest), (classquest.HUNT, 263))
+        complete = questers.Member(
+            **{
+                **held.__dict__,
+                "quest_progress": {DEFENSE_QUEST: 20},
+                "quest_objectives": {DEFENSE_QUEST: {1197: 10, 1164: 10}},
+            }
+        )
+        hand_in = questers.plan(cat, complete, questers.Clock(), 120.0).move
+        self.assertEqual((hand_in.kind, hand_in.quest), (classquest.TURN_IN, 263))
+
+        (ledger_update,) = questledger.changes(
+            {7: member.name},
+            [
+                {
+                    "quest": DEFENSE_QUEST,
+                    "guid": 7,
+                    "character_name": member.name,
+                    "state": questledger.BROKEN,
+                    "first_taken": None,
+                    "finished": None,
+                    "reason": questers.REFUSED_TAKE + ": " + NO_GIVER_IN_REACH,
+                }
+            ],
+            [],
+            [{"guid": 7, "quest": DEFENSE_QUEST}],
+            "now",
+        )
+        self.assertEqual(
+            (ledger_update.state, ledger_update.reason), (questledger.COMPLETED, "")
+        )
 
 
 class AnItemHuntRefusedForBagRoomSellsFirst(unittest.TestCase):

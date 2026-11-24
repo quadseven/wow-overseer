@@ -93,6 +93,8 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     item): it stalls, and its stall says so (STALLED_UNSOURCED);
   * REFUSED_TAKE / REFUSED_TURN_IN: the world refused the take or the hand-in
     FAILS_BEFORE_BROKEN times in a day, with its own words appended;
+    a retryable "no giver in reach" take is a wait: it is not counted as a
+    broken quest and is retried after TAKE_GIVER_RETRY_MINUTES;
   * CANNOT_TURN_IN: the world refused the hand-in once and said no retry
     can help (`"retryable":false`, mod-overseer#19), with its own
     words appended. That is "could not", not "did not yet": the quest is
@@ -306,6 +308,8 @@ STALLED_UNSOURCED = (
 )
 REFUSED_TAKE = "the quest giver would not give it"
 REFUSED_TURN_IN = "the turn-in NPC would not take it"
+NO_GIVER_IN_REACH = "no giver of that quest in reach"
+TAKE_GIVER_RETRY_MINUTES = 30
 # The module refused the hand-in and marked it never retryable (#19 in
 # quadseven/mod-overseer): the world names nothing that takes the quest in,
 # or no such quest. Distinct from REFUSED_TURN_IN so the ledger never reads a
@@ -1334,7 +1338,8 @@ def reward_room_refused(name, tried, free_slots) -> frozenset:
 def refusals(name, tried, free_slots=None) -> dict:
     """(verb, quest id) -> (times refused, the last words) for this quester's
     takes and hand-ins the world refused. A hand-in the core refused to reward
-    while the quester's bags read full (`free_slots`) is not counted."""
+    while the quester's bags read full (`free_slots`) and a retryable take with
+    no giver in reach are not counted."""
     out: dict = {}
     for a in sorted(tried or (), key=lambda a: -a.age_minutes):
         if a.name != name or not a.failed or a.reason in LOG_STATE_REFUSALS:
@@ -1343,6 +1348,8 @@ def refusals(name, tried, free_slots=None) -> dict:
             continue
         found = _CHAIN_ROW.match(a.command)
         if not found:
+            continue
+        if found.group(1) == "take" and a.reason == NO_GIVER_IN_REACH and a.retryable:
             continue
         key = (found.group(1), int(found.group(2)))
         count, _words = out.get(key, (0, ""))
@@ -1360,6 +1367,20 @@ def retry_take_refusals(name, held, tried) -> frozenset:
         for qid, reason in held.items()
         if str(reason).startswith(REFUSED_TAKE)
         and now.get(("take", int(qid)), (0, ""))[0] < FAILS_BEFORE_BROKEN
+    )
+
+
+def waiting_for_giver(name, quest, tried) -> bool:
+    """Whether this quester's retryable no-giver refusal is still cooling."""
+    command = "take quest:%d" % int(quest)
+    return any(
+        a.name == name
+        and a.command == command
+        and a.failed
+        and a.retryable
+        and a.reason == NO_GIVER_IN_REACH
+        and a.age_minutes < TAKE_GIVER_RETRY_MINUTES
+        for a in tried or ()
     )
 
 
@@ -2295,12 +2316,15 @@ def _hand_in(
 def _takes(cat: Catalogue, member, skip, left, tried) -> tuple:
     """(the (yards, quest id, quest, giver) of each quest in reach in the
     quester's zone with a giver it can walk to, Broken rows for those whose
-    giver fails). A quest found broken here is added to `skip`."""
+    giver fails). Retryable no-giver refusals wait briefly without filing a
+    broken row. A quest found broken here is added to `skip`."""
     gone = gone_spawns(member.name, tried)
     refused = refusals(member.name, tried)
     never_held = []
     takes = []
     for qid in in_reach(cat, member, member.zone, skip):
+        if waiting_for_giver(member.name, qid, tried):
+            continue
         why = _giver_failure(cat, member, qid, gone, refused)
         if why:
             never_held.append(Broken(member.name, qid, cat.quest(qid).title, why))
