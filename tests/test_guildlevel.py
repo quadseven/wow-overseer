@@ -432,5 +432,76 @@ class TheWiring(unittest.TestCase):
             self.assertIn(str(zone), levelroute.QUESTS_SQL)
 
 
+class DangerousMobs(unittest.TestCase):
+    """A zone whose quests fit but whose mobs are too high should be avoided.
+
+    Measured on the dev realm: Thousand Needles has quests 26-41 but elite
+    basilisks and boulderkin at 35-45; Hinterlands has quests 40-50 but owlbeasts
+    and trolls at 50-55. A member sent there by quest band alone dies repeatedly.
+    """
+
+    def masters(self):
+        return guildlevel.hub_masters(master_rows())
+
+    def test_a_zone_with_high_mobs_near_the_hub_is_refused(self):
+        # Barrens quests 10-25, but add a cell of level 35 hostile mobs
+        # right at the Crossroads flight point (hub center).
+        barrens_hub = levelroute.BY_KEY["barrens"]
+        point = barrens_hub.point
+        dangerous_spawns = (
+            levelroute.Cell(
+                map_id=KALIMDOR,
+                x=point[1],
+                y=point[2],
+                level=35,
+                elite=False,
+                side=levelroute.SIDE_MONSTER,
+                n=10,
+            ),
+        )
+        # Build a world with the danger data.
+        w = guildlevel.world(QUESTS, master_rows(), spawns=dangerous_spawns)
+        # A level 20 member: band fits (10-25), but mobs are 35 (15 levels over).
+        got = guildlevel.choose(
+            20,
+            ORC,
+            KALIMDOR,
+            w.bands[levelroute.HORDE],
+            self.masters(),
+            spawns=w.spawns,
+        )
+        # The zone should be refused because mobs are too high.
+        self.assertIsNone(got.master)
+        self.assertIn("mobs", got.refused.lower())
+
+    def test_a_zone_with_mobs_at_the_member_level_is_accepted(self):
+        # Same Barrens hub, but mobs at level 20 (member's level).
+        barrens_hub = levelroute.BY_KEY["barrens"]
+        point = barrens_hub.point
+        safe_spawns = (
+            levelroute.Cell(
+                map_id=KALIMDOR,
+                x=point[1],
+                y=point[2],
+                level=20,
+                elite=False,
+                side=levelroute.SIDE_MONSTER,
+                n=10,
+            ),
+        )
+        w = guildlevel.world(QUESTS, master_rows(), spawns=safe_spawns)
+        got = guildlevel.choose(
+            20,
+            ORC,
+            KALIMDOR,
+            w.bands[levelroute.HORDE],
+            self.masters(),
+            spawns=w.spawns,
+        )
+        # The zone should be accepted.
+        self.assertEqual(got.hub.key, "barrens")
+        self.assertEqual(got.refused, "")
+
+
 if __name__ == "__main__":
     unittest.main()

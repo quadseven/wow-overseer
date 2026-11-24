@@ -6884,6 +6884,7 @@ def _level_decision(m, world, recent, cap, loop=None, campaign="", avoid_zones=(
         opens=opens,
         nodes=m.taxi_nodes,
         avoid=_level_avoid(loop, avoid_zones),
+        spawns=getattr(world, "spawns", None),
     )
     if choice.refused:
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice), ""

@@ -845,6 +845,7 @@ def choose(
     opens=None,
     nodes=None,
     avoid=None,
+    spawns=None,
 ) -> Choice:
     """The hub a member of this level and race is walked to from `map_id`.
 
@@ -857,17 +858,28 @@ def choose(
     orbs_from) lands on, and from a continent, on the ground its side's
     zeppelin or boat lands on (`Choice.cross_to`); see the module docstring.
     A hub in zone `avoid` (a zone the member keeps dying in, deathloop.py) is
-    never chosen.
+    never chosen. A hub whose nearby hostile mobs are far above the member's
+    level (`spawns`) is also refused.
     """
     team = side_of(race)
     if not team:
         return Choice(refused="its side cannot be read off its race")
     level = int(level)
-    fitting = _fitting(team, level, map_id, zone_id, bands, masters, opens, nodes)
+    fitting, refused_mobs = _fitting(
+        team, level, map_id, zone_id, bands, masters, opens, nodes, spawns
+    )
     if avoid:
         avoided = {int(avoid)} if isinstance(avoid, int) else {int(z) for z in avoid}
         fitting = [f for f in fitting if f.hub.zone_id not in avoided]
     if not fitting:
+        if refused_mobs:
+            # All fitting hubs were refused due to high mobs; name the worst one.
+            worst = max(refused_mobs, key=lambda rm: rm[1])
+            hub, highest = worst
+            return Choice(
+                refused="no %s hub fits level %d: %s has hostile mobs up to level %d"
+                % (team, level, hub.zone, highest)
+            )
         return Choice(refused="no %s hub fits level %d" % (team, level))
     ground = ground_of(team, map_id, zone_id)
     home = [
@@ -914,17 +926,26 @@ def _orb_for(team, map_id, zone_id, orbs):
     return (orbs or {}).get(team)
 
 
-def _fitting(team, level, map_id, zone_id, bands, masters, opens=None, nodes=None):
+def _fitting(
+    team, level, map_id, zone_id, bands, masters, opens=None, nodes=None, spawns=None
+):
     """_Fit of every friendly hub of `team` whose band fits `level` (with its
     open quests, when `opens` is read) and whose flight master is known, best
-    first (see `choose`)."""
+    first (see `choose`). Also refuses hubs where nearby hostile mobs are
+    more than levelroute.DANGER_GAP levels above the member."""
     fitting = []
+    refused_mobs = []  # (hub, highest_mob_level) for hubs refused due to high mobs
     for order, hub in enumerate(hubs_from(team, map_id, zone_id)):
         band = (bands or {}).get(hub.zone_id)
         master = (masters or {}).get(hub.key)
         left = None if opens is None else int(opens.get(hub.zone_id, 0))
         if not hub.friendly or master is None or not fits(band, level, left):
             continue
+        if spawns is not None:
+            mobs_high, highest = _mobs_too_high(hub, spawns, level, team)
+            if mobs_high:
+                refused_mobs.append((hub, highest))
+                continue
         if left is None:
             rank = (int(band[0]), order)
         else:
@@ -932,7 +953,27 @@ def _fitting(team, level, map_id, zone_id, bands, masters, opens=None, nodes=Non
             rank = (-left, not flies, int(band[0]), order)
         fitting.append(_Fit(rank, hub, band, master, left))
     fitting.sort(key=lambda f: f.rank)
-    return fitting
+    return fitting, refused_mobs
+
+
+def _mobs_too_high(hub, spawns, level, team) -> tuple[bool, int]:
+    """Whether hostile mobs near `hub`'s flight point exceed the member's level
+    by more than levelroute.DANGER_GAP. Returns (too_high, highest_mob_level)."""
+    point = hub.point
+    if point is None:
+        return False, 0
+    map_id, hx, hy, _hz = point
+    highest = 0
+    for cell in spawns:
+        if not levelroute.hostile_to(cell, team):
+            continue
+        if cell.map_id != map_id:
+            continue
+        if math.hypot(cell.x - hx, cell.y - hy) > levelroute.DANGER_YARDS:
+            continue
+        if cell.level > highest:
+            highest = cell.level
+    return highest > level + levelroute.DANGER_GAP, highest
 
 
 def _away(team, level, map_id, fitting, orb=None) -> Choice:
@@ -1211,13 +1252,15 @@ def refused_note(name, level, why, choice: Choice) -> str:
 class World:
     """What every member's level step is chosen from, read once per pass.
 
-    bands    side -> levelroute.bands for that side
-    masters  hub key -> HubMaster (`hub_masters`)
-    roster   every roster family member's name: levelroute serves those
-    orbs     side -> Orb (`orbs_from`), its way off map 530 by an orb
-    inns     hub key -> HubMaster of its innkeeper (`hub_inns`)
-    quests   side -> {quest id: Quest} (`quest_book`), None while unread, which
-             judges every zone by its band alone
+    bands  side -> levelroute.bands for that side
+        masters  hub key -> HubMaster (`hub_masters`)
+        roster   every roster family member's name: levelroute serves those
+        orbs     side -> Orb (`orbs_from`), its way off map 530 by an orb
+        inns     hub key -> HubMaster of its innkeeper (`hub_inns`)
+        quests   side -> {quest id: Quest} (`quest_book`), None while unread, which
+                 judges every zone by its band alone
+        spawns   levelroute Cells from DANGER_SQL (`levelroute.cells`), for checking
+                 mob levels near each hub
     """
 
     bands: dict
@@ -1226,14 +1269,21 @@ class World:
     orbs: dict = field(default_factory=dict)
     inns: dict = field(default_factory=dict)
     quests: dict | None = None
+    spawns: tuple = ()
 
 
 def world(
-    quest_rows, master_rows, roster=(), orb_rows=(), inn_rows=(), fact_rows=None
+    quest_rows,
+    master_rows,
+    roster=(),
+    orb_rows=(),
+    inn_rows=(),
+    fact_rows=None,
+    spawns=None,
 ) -> World | None:
     """The World off levelroute.QUESTS_SQL's rows, the flight-master rows, the
-    orb's gameobject rows, the innkeeper rows and QUEST_FACTS_SQL's rows, or
-    None while the quests are unread (no step is taken from no bands)."""
+    orb's gameobject rows, the innkeeper rows, QUEST_FACTS_SQL's rows, and
+    levelroute Cells from DANGER_SQL, or None while the quests are unread."""
     if quest_rows is None:
         return None
     return World(
@@ -1246,4 +1296,5 @@ def world(
         orbs=orbs_from(orb_rows),
         inns=hub_inns(inn_rows),
         quests=quest_book(quest_rows, fact_rows),
+        spawns=tuple(spawns or ()),
     )

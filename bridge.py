@@ -40005,13 +40005,14 @@ def _guild_campaign_door(cohort=None) -> str:
 def _job_leveling(facts):
     """guildlevel.World for the level step: levelroute's hub quests (read once
     per process by `_level_world`), the hub flight masters, the roster, the
-    Silvermoon orb, the innkeepers and the hub quests' givers and chains. None
-    while the quests are unread, which takes no level step."""
-    quests, _spawns = _level_world()
+    Silvermoon orb, the innkeepers, the hub quests' givers and chains, and
+    the hub spawn cells from DANGER_SQL. None while the quests are unread."""
+    quests, spawns = _level_world()
     return guildlevel.world(quests, facts.get("hub_masters"), facts.get("roster", ()),
                             orb_rows=facts.get("orbs", ()),
                             inn_rows=facts.get("inns", ()),
-                            fact_rows=facts.get("quest_facts"))
+                            fact_rows=facts.get("quest_facts"),
+                            spawns=spawns)
 
 
 def _guild_gathering_skills(member):
