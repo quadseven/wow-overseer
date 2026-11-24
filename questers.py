@@ -1587,6 +1587,8 @@ def open_to(cat: Catalogue, member, quest_id, broken=frozenset()) -> bool:
         return False
     if facts.provided_item and member.free_slots is not None and member.free_slots < 1:
         return False
+    if (quest.kills or quest.items) and not quest.fields and not _chested(quest):
+        return False
     return not _exclusive_closed(cat, member, quest)
 
 
