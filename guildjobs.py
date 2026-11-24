@@ -7065,6 +7065,29 @@ def death_loop_onward(m, loop, world, recent, cap):
 # the hub of another zone now.
 RESUME_MINUTES = 90
 
+# A landed death-loop hearth can keep its verb hold for a short time. Retry its
+# onward walk at most twice, with a bounded pause between asks.
+LOOP_HEARTH_WALK_RETRIES = 2
+LOOP_HEARTH_WALK_RETRY_SECONDS = 30
+LOOP_HEARTH_WALK_HELD = "character is held by another verb"
+
+
+def is_loop_hearth_walk(step, row) -> bool:
+    """Whether row is the onward level walk in a death-loop hearth step."""
+    return (
+        getattr(step, "action", "") == "hearth"
+        and LOOP_HEARTH_ERRAND in str(getattr(step, "said", ""))
+        and str(getattr(row, "source", "")).startswith("guildjobs:level:")
+        and str(getattr(row, "command", "")).startswith("walk-to-spawn ")
+    )
+
+
+def loop_hearth_walk_held(status, detail) -> bool:
+    """Whether this walk was refused only because the hearth still holds it."""
+    return str(status or "") == "error" and str(detail or "").startswith(
+        LOOP_HEARTH_WALK_HELD
+    )
+
 
 def death_loop_resume(m, loop, recent, world, cap):
     """The walk on to a hub of another zone, for a member that hearthed out of
