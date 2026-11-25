@@ -2,17 +2,17 @@
 # is placed at the Spire approach and an order for the 'ubrs' raid keyword starts the run; the first
 # precondition witnesses the ten seats. The family must be level 56 or more, which both families are in
 # the template, so nothing is granted.
-# Scope: `dc on ubrs` being accepted is worldserver log text and a log assertion is an exact count that
-# cannot demand presence, so it is not asserted. A run still active when the window closes does NOT pass:
-# every Spire run started in the window must have ended, with a named reason or an outcome.
-# The raid arranges no instance row, but its run is credited by the core: a Spire encounter credit is a
-# precondition, so a run that earns none is INVALID and not a pass. `dc on ubrs` acceptance is log text; see
-# wow-overseer#2767 (positive log assertions).
+# Scope: the dungeon brain being accepted for the raid is worldserver log text. The module writes it as
+# "'<member>' is inside map 229 (run <id>) - issuing 'dc on' as '<issuer>': accepted" (229 is the Spire; the
+# line carries the map, not the `ubrs` keyword), and it is required at least once (wow-overseer issue 2767).
+# A run still active when the window closes does NOT pass: every Spire run started in the window must have
+# ended, with a named reason or an outcome. The raid arranges no instance row, but its run is credited by the
+# core: a Spire encounter credit is a precondition, so a run that earns none is INVALID and not a pass.
 # Fix: mod-overseer pull 1310.
 decree: v1
 id: ubrs-ten-seat-run
 proves:
-  - {repo: quadseven/mod-overseer, issue: 1187, criterion: "the order forms ten seats, walks the approach and enters; and every run started ends with a clear or a named reason, with no ASSERTION FAILED (the dc on ubrs acceptance line is not asserted here)"}
+  - {repo: quadseven/mod-overseer, issue: 1187, criterion: "the order forms ten seats, walks the approach and enters; and every run started ends with a clear or a named reason, with no ASSERTION FAILED; the worldserver log shows dc on accepted for a member inside the Spire"}
 fix: {repo: quadseven/mod-overseer, commit: "6ed78a52f5ca6e6b73167b60fbf11e571bd70c22"}
 world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -62,3 +62,7 @@ observe:
   - name: no-assertion-failure
     role: check
     log: {pattern: "ASSERTION FAILED", expect: {count: 0}}
+  # The module's acceptance line on the Spire's map; pinned by tests/test_eph_required_lines.py.
+  - name: the-dungeon-brain-was-accepted-in-the-spire
+    role: check
+    log: {pattern: "is inside map 229 \\(run [0-9]+\\) - issuing 'dc on' as '[^']+': accepted", expect: {at_least: 1}}
