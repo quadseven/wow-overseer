@@ -9,8 +9,9 @@ adds the verb that makes an arrived bot do it:
   hunt-spawn creature:<entry> [count:<n>] [max:<seconds>]      kind='job'
 
 `<entry>` is a creature TEMPLATE entry, not a spawn id; `count:` is 1..200 kills
-after which the row is done; `max:` is 1..1800 seconds (default 600). While it
-runs the row is `verifying` and its result JSON is rewritten every 15 seconds
+after which the row is done, or with `item:` the total number of that item the
+bot must hold; `max:` is 1..1800 seconds (default 600). While it runs the row is
+`verifying` and its result JSON is rewritten every 15 seconds
 (`outcome` hunting, then done / timeout / refused, with `reason`, `retry`
 later / elsewhere / never, `kills`, `pulls`, `loot_count`, `loot_items`). The
 final status is `applied` (done, or timeout with kills), `unchanged` (timeout
@@ -20,8 +21,8 @@ with no kill) or `error` (refused). The bridge ends a row by moving it off
 WHAT THE BRIDGE DOES (bridge._class_hunt_row), after the walk row arrives:
 
   1. writes the hunt row for the entry of the creature at the pack it walked to
-     (kill objective: `count:` is the quest's own kill count; an item that drops:
-     no count, the counters decide);
+     (kill objective: `count:` is the quest's own kill count; item objective:
+     `item:` names the drop and `count:` is the required total);
   2. reads the member's quest counters from character_queststatus at every poll
      and ends the row the moment they say the objective is complete (finished);
   3. on a refusal, `later` waits and asks again (MAX_ATTEMPTS), `elsewhere`
@@ -140,13 +141,14 @@ def command(quest: classquest.Quest, entry, held=None, item_form=True) -> str:
     or "" when the quest has no creature to hunt there.
 
     A kill objective asks for its own kill count, so the row finishes by itself.
-    An item the creature drops (mod-overseer#871) names the item and how many
-    are still missing, `item:<entry> count:<needed>`: the module loots the
-    corpse itself and ends the row `done` when the bot holds that many. `held`
-    is the member's count of an item (guildjobs.Member.count). With
-    `item_form` False (a worldserver that rejects `item:`) or no known item,
-    the row asks for neither, and the bridge ends it when the member's counters
-    say the quest is complete.
+    An item the creature drops names the item and its total
+    required count, `item:<entry> count:<required>`: the module ends the row
+    when the bot holds that many. `held` is the member's count of each item; it
+    selects an incomplete item when one creature drops more than one required
+    item, but does not reduce the module's absolute target. With `item_form`
+    False (a worldserver that rejects `item:`) or no known item, the row asks
+    for neither, and the bridge ends it when the member's counters say the
+    quest is complete.
     """
     entry = int(entry or 0)
     if entry <= 0:
@@ -163,9 +165,8 @@ def command(quest: classquest.Quest, entry, held=None, item_form=True) -> str:
     )
     word = ""
     if item and item_form:
-        have = int(held(item)) if callable(held) else 0
-        need = min(MAX_COUNT, max(1, int(wants[item]) - have))
-        word = " item:%d count:%d" % (item, need)
+        target = min(MAX_COUNT, max(1, int(wants[item])))
+        word = " item:%d count:%d" % (item, target)
     return "%s creature:%d%s max:%d" % (VERB, entry, word, MAX_SECONDS)
 
 

@@ -2339,7 +2339,7 @@ class ASummonedObjectEnder(unittest.TestCase):
         self.assertEqual(
             [row.command for row in step.rows],
             [
-                "hunt-spawn creature:1002 item:1080 count:1 max:%d"
+                "hunt-spawn creature:1002 item:1080 count:5 max:%d"
                 % classhunt.MAX_SECONDS
             ],
         )
@@ -2483,3 +2483,56 @@ class ASummonedObjectEnder(unittest.TestCase):
         p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
         self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+class ANewPlague(unittest.TestCase):
+    def test_item_hunt_uses_the_required_total_and_reaches_turn_in(self):
+        # The quest, item and dropper entries are from the brief's world rows;
+        # the helper-built giver and spawn rows let the catalogue plan locally.
+        tirisfal = 85
+        plague = quest(368, tirisfal, 9, min_level=6, prev=367, title="A New Plague")
+        plague.update(item1=2859, item_count1=5)
+        droppers = (1543, 1544, 1545, 1767, 1768, 1908, 1909, 1957, 1958)
+        cat = world(
+            extra_quests=[plague],
+            extra_givers=[
+                giver(368, "start", 7368, 736, 0, 0),
+                giver(368, "end", 8368, 837, 400, 0),
+            ],
+            extra_spawns=[
+                spawn(7368 + index, entry, 10 + index * 10, 0, level=9)
+                for index, entry in enumerate(droppers)
+            ],
+            extra_loot=[{"item": 2859, "entry": entry} for entry in droppers],
+        )
+        member = mirra(
+            level=9,
+            zone_id=tirisfal,
+            quest_log={368: questers.STATUS_INCOMPLETE},
+            quest_progress={368: 3},
+            quest_item_objectives={368: {2859: 3}},
+            quests_done=frozenset({367}),
+        )
+
+        plan = questers.plan(cat, member, questers.Clock(), 0.0)
+        step = questers.step_for(member, plan.move, 0, cat.quest(368))
+
+        self.assertEqual((plan.move.kind, plan.move.quest), (classquest.HUNT, 368))
+        self.assertEqual(plan.move.spot.entry, droppers[0])
+        self.assertEqual(
+            [row.command for row in step.rows],
+            [
+                "hunt-spawn creature:1543 item:2859 count:5 max:%d"
+                % classhunt.MAX_SECONDS
+            ],
+        )
+
+        complete = questers.Member(
+            **{
+                **member.__dict__,
+                "quest_progress": {368: 5},
+                "quest_item_objectives": {368: {2859: 5}},
+            }
+        )
+        hand_in = questers.plan(cat, complete, questers.Clock(), 0.0).move
+        self.assertEqual((hand_in.kind, hand_in.quest), (classquest.TURN_IN, 368))

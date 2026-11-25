@@ -47,7 +47,7 @@ def hunt_rows(step):
 
 
 class TheRow(unittest.TestCase):
-    def test_an_item_objective_names_the_item_and_how_many_are_missing(self):
+    def test_an_item_objective_names_the_item_and_total_target(self):
         quest = warrior_book().quests[1498]
         self.assertEqual(
             classhunt.command(quest, 3130),
@@ -56,13 +56,13 @@ class TheRow(unittest.TestCase):
         held = {6486: 2}.get
         self.assertEqual(
             classhunt.command(quest, 3130, lambda i: held(i, 0)),
-            "hunt-spawn creature:3130 item:6486 count:3 max:%d" % classhunt.MAX_SECONDS,
+            "hunt-spawn creature:3130 item:6486 count:5 max:%d" % classhunt.MAX_SECONDS,
         )
         self.assertLessEqual(classhunt.MAX_SECONDS, 600)
 
-    def test_a_count_already_held_still_asks_for_one(self):
+    def test_the_count_remains_an_absolute_target_when_items_are_already_held(self):
         quest = warrior_book().quests[1498]
-        self.assertIn("count:1 ", classhunt.command(quest, 3130, lambda i: 9))
+        self.assertIn("count:5 ", classhunt.command(quest, 3130, lambda i: 9))
 
     def test_an_item_hunt_skips_a_completed_item_from_the_same_creature(self):
         quest = classquest.Quest(
@@ -82,7 +82,7 @@ class TheRow(unittest.TestCase):
 
         self.assertEqual(
             classhunt.command(quest, 1001, held),
-            "hunt-spawn creature:1001 item:1080 count:1 max:%d" % classhunt.MAX_SECONDS,
+            "hunt-spawn creature:1001 item:1080 count:5 max:%d" % classhunt.MAX_SECONDS,
         )
 
     def test_an_older_worldserver_gets_the_row_with_no_item_key(self):
@@ -251,13 +251,13 @@ class ThePlan(unittest.TestCase):
         self.assertEqual(step.spot.spawn, 4788)
         self.assertTrue(row.source.endswith("classquest:Bigzug"))
 
-    def test_the_row_names_the_item_and_what_the_bags_still_lack(self):
+    def test_the_row_names_the_item_and_its_total_target(self):
         have = (guildjobs.Carried(1, 6486, 2),)
         m = who(**HUNTING, **BESIDE, carried=have)
         (step,) = class_steps(class_plan([m], hunts=hunters(classhunt.Slots(2))))
         self.assertTrue(
             step.rows[0].command.startswith(
-                "hunt-spawn creature:3130 item:6486 count:3 "
+                "hunt-spawn creature:3130 item:6486 count:5 "
             )
         )
 
