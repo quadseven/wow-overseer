@@ -12,7 +12,6 @@ functions and the two clocks.
 
 from __future__ import annotations
 
-import dataclasses
 import time
 
 # How long a stored clock is kept. Longer than any hold's own ceiling, so an

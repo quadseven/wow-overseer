@@ -50,7 +50,7 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      mailrun.py mountbuy.py holdings.py hunterpet.py \
      realm.py realmread.py basepath.py appbuild.py deployinfo.py realmmaint.py watchwall.py nowstatus.py realmnav.py classic.py \
      needs.py partystatus.py partyvoice.py lootcard.py lootstory.py epicjourney.py towntrip.py \
-     townerrand.py deathcells.py profloop.py production.py townslot.py claims.py tradechoice.py \
+     townerrand.py deathcells.py profloop.py holdclock.py production.py townslot.py claims.py tradechoice.py \
      hearthcast.py hearthcast_data.py strandhearth.py \
      enroll.py \
      tabard.py crossing.py \
