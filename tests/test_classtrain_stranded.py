@@ -88,6 +88,24 @@ class WhoIsStranded(unittest.TestCase):
         rows = [{"target_name": "X", "source": "guildtrain:X", "result": "not json"}]
         self.assertEqual(classtrain.stranded(rows), {})
 
+    def test_only_latest_nonretryable_refusal_extends_cooldown(self):
+        reason = "the way to the nearest trainer crosses the other side's ground"
+        older = classtrain.COOLDOWN_MINUTES + 1
+        rows = [
+            dict(refusal("A", age=older, reason=reason), id=1, target_arg="20"),
+            dict(refusal("B", age=older, reason=reason), id=2, target_arg="20"),
+            dict(refusal("B", age=older, reason=reason, retryable=True), id=3),
+        ]
+        walkers = {name: walker(name) for name in ("A", "B")}
+        levels = {"A": 20, "B": 20}
+        self.assertEqual(
+            classtrain.recent_walkers(rows, levels=levels, walkers=walkers), {"A"}
+        )
+        levels["A"] = 21
+        self.assertEqual(
+            classtrain.recent_walkers(rows, levels=levels, walkers=walkers), set()
+        )
+
 
 class InThePlan(unittest.TestCase):
     def trainee(self, name):
