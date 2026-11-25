@@ -106,6 +106,70 @@ class Pass:
 
 
 class TheQuesterPass(unittest.TestCase):
+    def test_a_quest_waiting_for_a_hunt_slot_does_not_stall(self):
+        # The item/dropper values mirror the ticket's world rows in the
+        # quest, loot and spawn row shapes read by questers and classquest.
+        wanted = quest(398, 85, 10, min_level=4, title="Wanted: Maggot Eye")
+        wanted.update(item1=3635, item_count1=1)
+        cat = questers.catalogue(
+            [wanted],
+            [
+                giver(398, "start", 5398, 100, 0, 0),
+                giver(398, "end", 5399, 101, 0, 0),
+            ],
+            [spawn(51753, 1753, 20, 0, level=0, name="Maggot Eye")],
+            [{"item": 3635, "entry": 1753}],
+            [{"quest": 398, "kind": "creature", "entry": 100}],
+            [{"quest": 398, "kind": "creature", "entry": 101}],
+        )
+        member = quester(
+            name="Quester",
+            level=10,
+            zone_id=85,
+            x=20.0,
+            quest_log={398: questers.STATUS_INCOMPLETE},
+            quest_progress={398: 0},
+            quest_objectives={398: {}},
+            quest_item_objectives={398: {3635: 0}},
+        )
+        clock = questers.Clock()
+        started = []
+        bridge_state = types.SimpleNamespace(
+            _job_steps={},
+            _quester_last={},
+            _start_quester_step=lambda step, cap: started.append(step),
+        )
+
+        first = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual((first.move.kind, first.move.quest), ("hunt", 398))
+        self.assertFalse(
+            bridge.Bridge._quester_start(
+                bridge_state, member, first, cat, 0, 0.0, hunt=False
+            )
+        )
+        self.assertEqual(started, [])
+
+        for minute in range(5, 125, 5):
+            waiting = questers.plan(
+                cat,
+                member,
+                clock,
+                minute * 60.0,
+                last_quest=bridge_state._quester_last.get(member.name, 0),
+            )
+
+        self.assertEqual(waiting.broken, ())
+        ready = questers.plan(cat, member, clock, 7500.0)
+        self.assertTrue(
+            bridge.Bridge._quester_start(
+                bridge_state, member, ready, cat, 0, 7500.0, hunt=True
+            )
+        )
+        self.assertEqual(
+            [row.command for row in started[0].rows],
+            ["hunt-spawn creature:1753 item:3635 count:1 max:480"],
+        )
+
     def test_a_stalled_quest_with_remote_droppers_is_retried_and_unheld(self):
         wanted = quest(180, REDRIDGE, 26, title="Wanted: Lieutenant Fangore")
         wanted.update(item1=3632, item_count1=1)
