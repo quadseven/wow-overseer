@@ -12,9 +12,14 @@ import unittest
 
 import classquest
 import questers
-from test_questers import WESTFALL, giver, mirra, quest
+from test_questers import WESTFALL, ended, giver, mirra, quest, spawn
 
 WATCH, WARDROBE = 841, 290
+SILVERPINE = 130
+WILD_HEARTS, WORG_HEART = 429, 3164
+WORG_ENTRIES = (1765, 1766, 1923, 12431)
+# Fixture-only entries: the ticket does not include the giver or spawn rows.
+WILD_GIVER, WILD_CHEST = 9002, 9003
 
 
 def chest_spawn(guid, entry, x, y, map_id=0):
@@ -46,6 +51,34 @@ def heirloom_world(chests=True):
     )
 
 
+def wild_hearts_world(spawn_droppers=True, spawn_chest=False):
+    wild_hearts = quest(WILD_HEARTS, SILVERPINE, 11, min_level=10, title="Wild Hearts")
+    wild_hearts.update(item1=WORG_HEART, item_count1=6)
+    giver_rows = [
+        giver(WILD_HEARTS, "start", 9901, WILD_GIVER, 0, 0, name="Quest giver"),
+        giver(WILD_HEARTS, "end", 9901, WILD_GIVER, 0, 0, name="Quest giver"),
+    ]
+    source_spawns = (
+        [
+            spawn(9910 + i, entry, 100.0 + 30.0 * i, 0.0, level=11, name="Worg")
+            for i, entry in enumerate(WORG_ENTRIES)
+        ]
+        if spawn_droppers
+        else []
+    )
+    object_rows = [chest_spawn(9990, WILD_CHEST, 250.0, 0.0)] if spawn_chest else []
+    return questers.catalogue(
+        [wild_hearts],
+        giver_rows,
+        source_spawns,
+        [{"item": WORG_HEART, "entry": entry} for entry in WORG_ENTRIES],
+        [{"quest": WILD_HEARTS, "kind": "creature", "entry": WILD_GIVER}],
+        [ended(WILD_HEARTS, WILD_GIVER)],
+        chest_rows=[{"item": WORG_HEART, "entry": WILD_CHEST}],
+        object_rows=object_rows,
+    )
+
+
 def holder(**kw):
     base = dict(
         level=12,
@@ -74,6 +107,114 @@ class TheCatalogueReadsTheChest(unittest.TestCase):
 
     def test_with_no_chest_rows_the_quest_has_no_use(self):
         self.assertEqual(heirloom_world(chests=False).quest(64).uses, ())
+
+    def test_unspawned_gameobject_loot_does_not_make_an_item_huntable(self):
+        # The issue's rows name creature loot and a gameobject loot source for
+        # item 3164. Those template rows do not say that any source is spawned.
+        # The fixture uses bridge._quester_catalogue's result shapes from
+        # questers.QUESTS_SQL, classquest.LOOT_SQL, classquest.SPAWNS_SQL,
+        # classquest.CHEST_SQL and classquest.OBJECT_SPAWNS_SQL, with no spawn
+        # row for any item source.
+        cat = wild_hearts_world(spawn_droppers=False)
+        wild_hearts = cat.quest(WILD_HEARTS)
+        (use,) = wild_hearts.uses
+
+        self.assertEqual(
+            (use.verb, use.item, use.spots), (classquest.USE_OBJECT, WORG_HEART, ())
+        )
+        self.assertFalse(questers._chested(wild_hearts))
+        member = mirra(level=11, zone_id=SILVERPINE)
+        self.assertNotIn(WILD_HEARTS, questers.in_reach(cat, member, SILVERPINE))
+        self.assertFalse(questers.open_to(cat, member, WILD_HEARTS))
+
+    def test_wild_hearts_ledger_explains_template_rows_without_a_spawn(self):
+        cat = wild_hearts_world(spawn_droppers=False)
+        holder = mirra(
+            level=11,
+            zone_id=SILVERPINE,
+            quest_log={WILD_HEARTS: questers.STATUS_INCOMPLETE},
+            quest_progress={WILD_HEARTS: 0},
+            quest_item_objectives={WILD_HEARTS: {WORG_HEART: 0}},
+        )
+        clock = questers.Clock()
+        plan = questers.plan(cat, holder, clock, 0.0, last_quest=WILD_HEARTS)
+
+        for minute in range(1, 13):
+            plan = questers.plan(
+                cat, holder, clock, 600.0 * minute, last_quest=WILD_HEARTS
+            )
+
+        self.assertEqual([b.quest for b in plan.broken], [WILD_HEARTS])
+        self.assertEqual(plan.broken[0].reason, questers.STALLED_UNSOURCED)
+
+    def test_wild_hearts_can_take_hunt_and_hand_in_with_spawned_item_sources(self):
+        cat = wild_hearts_world(spawn_droppers=True)
+        member = mirra(level=11, zone_id=SILVERPINE)
+
+        take = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(
+            (take.move.kind, take.move.quest), (classquest.TAKE, WILD_HEARTS)
+        )
+
+        holder = mirra(
+            level=11,
+            zone_id=SILVERPINE,
+            quest_log={WILD_HEARTS: questers.STATUS_INCOMPLETE},
+            quest_progress={WILD_HEARTS: 0},
+            quest_item_objectives={WILD_HEARTS: {WORG_HEART: 0}},
+        )
+        hunt = questers.plan(cat, holder, questers.Clock(), 0.0)
+        self.assertEqual(
+            (hunt.move.kind, hunt.move.quest), (classquest.HUNT, WILD_HEARTS)
+        )
+        self.assertIn(hunt.move.spot.entry, WORG_ENTRIES)
+        step = questers.step_for(holder, hunt.move, 0, cat.quest(WILD_HEARTS))
+        self.assertIn("item:%d" % WORG_HEART, step.rows[0].command)
+
+        completed = mirra(
+            level=11,
+            zone_id=SILVERPINE,
+            quest_log={WILD_HEARTS: questers.STATUS_INCOMPLETE},
+            quest_progress={WILD_HEARTS: 6},
+            quest_item_objectives={WILD_HEARTS: {WORG_HEART: 6}},
+        )
+        hand_in = questers.plan(cat, completed, questers.Clock(), 0.0)
+        self.assertEqual(
+            (hand_in.move.kind, hand_in.move.quest), (classquest.TURN_IN, WILD_HEARTS)
+        )
+
+    def test_wild_hearts_can_open_a_spawned_gameobject_source(self):
+        cat = wild_hearts_world(spawn_droppers=False, spawn_chest=True)
+        member = mirra(level=11, zone_id=SILVERPINE)
+        take = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(
+            (take.move.kind, take.move.quest), (classquest.TAKE, WILD_HEARTS)
+        )
+
+        holder = mirra(
+            level=11,
+            zone_id=SILVERPINE,
+            quest_log={WILD_HEARTS: questers.STATUS_INCOMPLETE},
+            quest_progress={WILD_HEARTS: 0},
+            quest_item_objectives={WILD_HEARTS: {WORG_HEART: 0}},
+        )
+        use = questers.plan(cat, holder, questers.Clock(), 0.0)
+        self.assertEqual((use.move.kind, use.move.quest), (classquest.USE, WILD_HEARTS))
+        self.assertEqual(use.move.spot.guid, 9990)
+        step = questers.step_for(holder, use.move, 0, cat.quest(WILD_HEARTS))
+        self.assertEqual(step.rows[0].command, "use-gameobject %d" % WILD_CHEST)
+
+        completed = mirra(
+            level=11,
+            zone_id=SILVERPINE,
+            quest_log={WILD_HEARTS: questers.STATUS_INCOMPLETE},
+            quest_progress={WILD_HEARTS: 6},
+            quest_item_objectives={WILD_HEARTS: {WORG_HEART: 6}},
+        )
+        hand_in = questers.plan(cat, completed, questers.Clock(), 0.0)
+        self.assertEqual(
+            (hand_in.move.kind, hand_in.move.quest), (classquest.TURN_IN, WILD_HEARTS)
+        )
 
 
 class TheQuesterOpensTheChest(unittest.TestCase):

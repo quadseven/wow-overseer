@@ -249,14 +249,16 @@ def _stands_ahead(rows: list) -> list:
     return ahead
 
 
-def order_slot(rows: list, last: Last | None, now: float) -> Slot | None:
+def order_slot(
+    rows: list, last: Last | None, now: float, keyword: str = KEYWORD
+) -> Slot | None:
     """Where to write the order this pass, or None when none is owed.
 
     NEVER OVER A RUNNING CAMPAIGN OR A PERSON'S ORDER. Those keep their turn
     and this sits behind them, in front of what a planner queued, which only
     waits a turn. Nothing is cancelled either way.
     """
-    if any(str(r.get("keyword")) == KEYWORD for r in rows):
+    if any(str(r.get("keyword")) == keyword for r in rows):
         return None
     if last is not None:
         if last.cancelled:

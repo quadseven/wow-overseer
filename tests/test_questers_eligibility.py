@@ -13,6 +13,7 @@ import contextlib
 import unittest
 from unittest import mock
 
+import classquest
 import questers
 from test_guildsocial_bridge import bridge
 from test_questers import ended, giver, started
@@ -50,7 +51,7 @@ def row(qid, title, sort, level, min_level, races=0, **extra):
     return out
 
 
-def catalogue(rows, links=()):
+def catalogue(rows, links=(), conditions=()):
     """The quester catalogue of these rows, each quest given and taken by one
     creature spawned in Kalimdor or the Eastern Kingdoms."""
     givers, starts, ends = [], [], []
@@ -60,7 +61,9 @@ def catalogue(rows, links=()):
             givers.append(giver(r["id"], role, guid, entry, 10.0 * n, 0.0, map_id=1))
         starts.append(started(r["id"], entry))
         ends.append(ended(r["id"], entry))
-    return questers.catalogue(rows, givers, [], [], starts, ends, links)
+    return questers.catalogue(
+        rows, givers, [], [], starts, ends, links, condition_rows=conditions
+    )
 
 
 def member(name, race, level, zone, class_id=1, **kw):
@@ -165,6 +168,36 @@ class AQuestNamedAsNextIsAPrerequisite(unittest.TestCase):
             "Pindle", NIGHT_ELF, 29, STONETALON, quests_done=frozenset({1083, 1084})
         )
         self.assertIn(1082, questers.in_reach(cat, both, STONETALON))
+
+
+class ARewardConditionIsAPrerequisite(unittest.TestCase):
+    """Quest-available condition rows (SourceType 19) are part of the core's
+    take gate, even when a quest has no objective rows or NextQuestID links.
+    The condition values here are synthetic and test the reader path only."""
+
+    def test_a_no_objective_quest_waits_for_its_reward_condition(self):
+        quest_id, prerequisite = 90001, 90002
+        cat = catalogue(
+            [row(quest_id, "Conditional quest", ASHENVALE, 30, 20)],
+            links=[link(90005, next_id=quest_id)],
+            conditions=[
+                {
+                    "quest": quest_id,
+                    "grp": 0,
+                    "kind": 47,
+                    "value1": prerequisite,
+                    "value2": classquest.QUEST_STATE_REWARDED,
+                    "negative": 0,
+                }
+            ],
+        )
+        waiting = member("Quester", ORC, 30, ASHENVALE)
+        ready = member(
+            "Quester", ORC, 30, ASHENVALE, quests_done=frozenset({prerequisite})
+        )
+
+        self.assertNotIn(quest_id, questers.in_reach(cat, waiting, ASHENVALE))
+        self.assertIn(quest_id, questers.in_reach(cat, ready, ASHENVALE))
 
 
 class ABreadcrumbClosesWithItsTarget(unittest.TestCase):
@@ -288,6 +321,10 @@ class TheBridgeReadsWhatTheRulesNeed(unittest.TestCase):
         ):
             self.assertIn(column, questers.LINKS_SQL)
 
+    def test_the_condition_read_uses_the_worlds_quest_available_rows(self):
+        self.assertIn("SourceTypeOrReferenceId = 19", classquest.CONDITIONS_SQL)
+        self.assertIn("ConditionTypeOrReference", classquest.CONDITIONS_SQL)
+
     def test_reputation_rows_become_the_members_standing(self):
         rows = [{"guid": 7, "name": "Gorvash", "level": 33, "race": ORC, "class_id": 1}]
         rep = [{"guid": 7, "faction": WARSONG_OUTRIDERS, "standing": 2500}]
@@ -379,6 +416,72 @@ class TheBridgeHandsTheQuesterItsRoom(unittest.TestCase):
             )
             cat = bridge._quester_catalogue()
         self.assertEqual(cat.facts[1082].before, ((1083, 1084),))
+
+    def test_the_catalogue_reads_and_applies_quest_available_conditions(self):
+        quest_id, prerequisite = 90003, 90004
+        quest = row(quest_id, "Conditional quest", ASHENVALE, 30, 20)
+        condition_row = {
+            "quest": quest_id,
+            "grp": 0,
+            "kind": 47,
+            "value1": prerequisite,
+            "value2": classquest.QUEST_STATE_REWARDED,
+            "negative": 0,
+        }
+
+        def rows_for(sql):
+            if sql == questers.QUESTS_SQL:
+                return [quest]
+            if sql == questers.LINKS_SQL:
+                return []
+            if sql == classquest.CONDITIONS_SQL.format(quests=str(quest_id)):
+                return [condition_row]
+            if "creature_queststarter" in sql:
+                return [started(quest_id, 900)]
+            return []
+
+        class Cur:
+            def execute(self, sql, args=()):
+                self.rows = rows_for(sql)
+
+            def fetchall(self):
+                return self.rows
+
+        class Conn:
+            def cursor(self):
+                return contextlib.nullcontext(Cur())
+
+        spawned = [giver(quest_id, "start", 5000, 900, 0.0, 0.0, map_id=1)]
+        with (
+            mock.patch.multiple(
+                bridge,
+                _QUESTER_CATALOGUE=None,
+                _connect=lambda: contextlib.nullcontext(Conn()),
+                _class_rows=lambda *a: [],
+            ),
+            mock.patch.object(bridge, "_job_read") as read,
+        ):
+            read.side_effect = lambda cur, what, sql, params=(): (
+                spawned if what == "quester quest givers" else rows_for(sql)
+            )
+            cat = bridge._quester_catalogue()
+
+        waiting = member("Quester", ORC, 30, ASHENVALE)
+        self.assertNotIn(quest_id, questers.in_reach(cat, waiting, ASHENVALE))
+        self.assertIn(
+            quest_id,
+            questers.in_reach(
+                cat,
+                member(
+                    "Quester",
+                    ORC,
+                    30,
+                    ASHENVALE,
+                    quests_done=frozenset({prerequisite}),
+                ),
+                ASHENVALE,
+            ),
+        )
 
 
 class Quest120MessengerToStormwind(unittest.TestCase):
