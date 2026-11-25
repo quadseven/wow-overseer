@@ -2035,6 +2035,71 @@ class Broken(unittest.TestCase):
         self.assertNotEqual(p.move.quest, 1)
 
 
+# Coarse Thread (item 2320) is sold by vendors only; no creature drops it, no
+# chest holds it and no take hands it over. The objective's creature is hunted
+# all the same, so the quest was never judged unsourced (#3149).
+COARSE_THREAD = 2320
+
+
+def thread_world(extra_quests=(), extra_givers=(), extra_loot=()):
+    thread = quest(9, NORTHSHIRE, 2, kill=200, title="The Chill of Thread")
+    thread.update(item1=COARSE_THREAD, item_count1=1)
+    return world(
+        extra_quests=[thread, *extra_quests],
+        extra_givers=[
+            giver(9, "start", 1009, 109, 0, 0),
+            giver(9, "end", 1009, 109, 0, 0),
+            *extra_givers,
+        ],
+        extra_loot=extra_loot,
+    )
+
+
+class VendorOnlyItemQuest(unittest.TestCase):
+    def test_a_quest_with_a_vendor_only_item_is_not_taken(self):
+        cat = thread_world()
+        p = questers.plan(cat, mirra(), questers.Clock(), 0.0)
+        self.assertNotEqual((p.move.kind, p.move.quest), (classquest.TAKE, 9))
+        reason = next(b.reason for b in p.broken if b.quest == 9)
+        self.assertEqual(reason, questers.UNSOURCED_ITEM % COARSE_THREAD)
+        self.assertIn("questers cannot buy items from vendors", reason)
+
+    def test_a_quester_already_carrying_the_item_may_take_it(self):
+        cat = thread_world()
+        carrying = mirra(quest_item_objectives={9: {COARSE_THREAD: 1}})
+        self.assertEqual(questers._vendor_item(cat.quest(9), {COARSE_THREAD: 1}), 0)
+        p = questers.plan(cat, carrying, questers.Clock(), 0.0)
+        self.assertFalse([b for b in p.broken if b.quest == 9])
+
+    def test_a_drop_of_the_item_makes_it_sourced(self):
+        cat = thread_world(extra_loot=[{"item": COARSE_THREAD, "entry": 200}])
+        self.assertEqual(questers._vendor_item(cat.quest(9), {}), 0)
+
+    def test_a_held_quest_with_a_huntable_objective_is_explained_on_stall(self):
+        reason = questers._broken_reason(
+            thread_world().quest(9),
+            thread_world().facts[9],
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+            vendor_item=COARSE_THREAD,
+        )
+        self.assertEqual(reason, questers.STALLED_UNSOURCED)
+
+    def test_a_stall_with_a_huntable_objective_and_no_vendor_item_stays_stalled(self):
+        cat = thread_world()
+        reason = questers._broken_reason(
+            cat.quest(9),
+            cat.facts[9],
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+        self.assertEqual(reason, questers.STALLED)
+
+
 if __name__ == "__main__":
     unittest.main()
 

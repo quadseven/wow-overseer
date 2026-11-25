@@ -87,6 +87,11 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     (#1594). An incomplete quest one of whose enders is an object with no
     static spawn is not judged on its ender at all: a script or an event
     summons that object, so it is worked and only a stall breaks it (#1606);
+  * UNSOURCED_ITEM: a required item no creature drops, no chest holds and no
+    quest hands over, and the quester does not carry, is sold by vendors only
+    (questers cannot buy from a vendor). The take is not made, and a held quest
+    is broken as STALLED_UNSOURCED at once, even when its creature objective
+    can be hunted (#3149);
   * SOURCE_MISSING: the world refused every spawn of its objective as gone.
     A quest whose objective no spawned creature is or drops is not judged on
     that alone (a script may summon it, a chest or a vendor may hold the
@@ -305,6 +310,12 @@ STALLED_UNSOURCED = (
     + ", no huntable source supplies what it asks for, and questers cannot buy items from vendors"
 )
 REFUSED_TAKE = "the quest giver would not give it"
+# A required item no creature drops, no chest holds and no take hands over: the
+# quester cannot buy it from a vendor, so the quest cannot be finished (#3149).
+UNSOURCED_ITEM = (
+    "requires item %d, which no creature drops, no chest holds and no quest "
+    "hands over; questers cannot buy items from vendors"
+)
 REFUSED_TURN_IN = "the turn-in NPC would not take it"
 # The module refused the hand-in and marked it never retryable (#19 in
 # quadseven/mod-overseer): the world names nothing that takes the quest in,
@@ -1841,7 +1852,16 @@ def failures(
         if quest is None or facts is None:
             continue
         reason = _broken_reason(
-            quest, facts, status, played, gone, refused, final, object_gone, prog
+            quest,
+            facts,
+            status,
+            played,
+            gone,
+            refused,
+            final,
+            object_gone,
+            prog,
+            _vendor_item(quest, member.quest_item_objectives.get(qid, {})),
         )
         if reason.startswith(STALLED):
             fields = _held_objective_fields(member, qid, quest)
@@ -1865,6 +1885,7 @@ def _broken_reason(
     final=None,
     object_gone=frozenset(),
     progress=0,
+    vendor_item=0,
 ) -> str:
     """Why a quest the quester holds is broken, "" when it is not (yet). A
     complete quest's objectives cannot move, so stillness never stalls it:
@@ -1941,7 +1962,8 @@ def _broken_reason(
     if played < STALL_SECONDS or complete:
         return ""
     # A chest that holds the item is a source: its quest is worked, not unsourced.
-    unsourced = (
+    # A vendor-only item is unsourced whatever the quest's other objectives are.
+    unsourced = bool(vendor_item) or (
         (quest.kills or quest.items) and not quest.fields and not _chested(quest)
     )
     return STALLED_UNSOURCED if unsourced else STALLED
@@ -1949,6 +1971,18 @@ def _broken_reason(
 
 def _refused_words(reason, words) -> str:
     return "%s: %s" % (reason, words) if words else reason
+
+
+def _vendor_item(quest, item_progress) -> int:
+    """The first required item no source supplies that the quester's counters
+    show it lacks, 0 when none. An item use may credit the objective, so a
+    quest that uses an item on a creature is not judged here (`_unmet`)."""
+    if any(u.verb == classquest.USE_ITEM for u in quest.uses):
+        return 0
+    for item, count in classquest.unsourced_items(quest):
+        if item_progress.get(item, 0) < count:
+            return item
+    return 0
 
 
 def _giver_failure(cat: Catalogue, member, qid, gone, refused):
@@ -1962,6 +1996,9 @@ def _giver_failure(cat: Catalogue, member, qid, gone, refused):
         return SCRIPTED_EVENT
     if int(qid) in (35, 109):
         return UNSUPPORTED_OBJECTIVE
+    vendor = _vendor_item(quest, member.quest_item_objectives.get(qid, {}))
+    if vendor:
+        return UNSOURCED_ITEM % vendor
     count, words = refused.get(("take", qid), (0, ""))
     if count >= FAILS_BEFORE_BROKEN:
         return _refused_words(REFUSED_TAKE, words)
