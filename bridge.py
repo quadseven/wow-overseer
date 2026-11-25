@@ -112,6 +112,7 @@ import guildwork
 import workorders
 import workorderstore
 import gearup
+import holdclock
 import weaponskill
 import natural
 import nowstatus
@@ -2982,11 +2983,15 @@ def _withheld(reasons, reason: str) -> tuple:
 TOWN_FIRST_SOURCE = "overseer:town-first"
 
 # When each family's campaign was last handed to town, keyed by its sorted
-# names, for bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS. In-process on
-# purpose: a restart starts the clock again, which costs a longer stay in town
-# and never a run into full bags.
-_TOWN_FIRST_SINCE: dict = {}
-_GEAR_HOLD_SINCE: dict = {}
+# names, for bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS.
+# Both clocks are kept in the bridge memo store (holdclock.py, #3226), so a
+# restart resumes them instead of handing the family back to town.
+_TOWN_FIRST_SINCE: dict = holdclock.Clocks(
+    holdclock.TOWN_FIRST_KIND, lambda k: _memo_read(k),
+    lambda *a: _memo_upsert(*a), lambda *a: _memo_delete(*a))
+_GEAR_HOLD_SINCE: dict = holdclock.Clocks(
+    holdclock.GEAR_HOLD_KIND, lambda k: _memo_read(k),
+    lambda *a: _memo_upsert(*a), lambda *a: _memo_delete(*a))
 
 # HOW LONG A FAMILY'S QUEUE HAS GONE WITHOUT A RUN, READ FROM THE STORE. The
 # two clocks above live in this process, so a restart began every hold's 45
@@ -12918,8 +12923,11 @@ class Bridge(discord.Client):
         door_known, door = await asyncio.to_thread(_queued_run_door, key)
         facts = dataclasses.replace(facts, jobs=on_job, run_queued=door_known)
         gather_why = facts.gather_why
+        if key not in _PROF_LOOPS:
+            await asyncio.to_thread(_prof_loop_restore, key)
         step = profloop.decide(_PROF_LOOPS.get(key, profloop.State()), facts)
         _PROF_LOOPS[key] = step.state
+        await asyncio.to_thread(_prof_loop_keep, key, step.state)
         if step.state.yielded:
             _PROF_LOOP_YIELD.add(key)
         else:
@@ -43030,9 +43038,30 @@ def _record_production(names: list, skills: dict) -> None:
 
 
 # --- the profession loop (profloop.py, #2419) ---------------------------------
-# Family key -> profloop.State. In memory: a restart joins each family at the
-# phase its jobs say it is in.
+# Family key -> profloop.State. Kept in the memo store too (holdclock.py), so a
+# restart resumes each family's clocks.
 _PROF_LOOPS: dict = {}
+
+
+def _prof_loop_restore(key: str) -> None:
+    """Resume a family's loop state a restart left in the memo store."""
+    held = _memo_read(holdclock.PROF_LOOP_KIND).get(str(key))
+    if not held:
+        return
+    state = holdclock.state_from_wall(
+        profloop.State, held[0], time.monotonic(), time.time())
+    if state is not None:
+        _PROF_LOOPS[key] = state
+
+
+def _prof_loop_keep(key: str, state) -> None:
+    """Store a family's loop state so a restart resumes its clocks."""
+    now = time.time()
+    _memo_upsert(holdclock.PROF_LOOP_KIND, str(key),
+                 holdclock.state_to_wall(state, time.monotonic(), now),
+                 now, now + holdclock.KEEP_SECONDS)
+
+
 # The town errand's family key (sorted names) -> the loop's reason to go, read
 # by _town_errand_start.
 _PROF_LOOP_TOWN: dict = {}
