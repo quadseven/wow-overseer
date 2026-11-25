@@ -331,6 +331,24 @@ def _level_blockers(raiders: list, min_level) -> tuple:
     return hard, soft
 
 
+def _online_blockers(raiders: list) -> list:
+    """HARD: a placed seat that is offline cannot be ordered to the door.
+
+    The order path refuses a seat that is not online at the raid's level
+    (seat_eligibility_refusal). `raiders` carry online from the character
+    row; a seat with no online reading is not judged.
+    """
+    offline = [m for m in raiders if m.get("online") == 0]
+    if not offline:
+        return []
+    named = _names(offline)
+    return [
+        "%s offline and cannot be ordered to the door: an order is refused "
+        "until every approved seat is online: %s."
+        % (_count(len(offline), "seat is", "seats are"), named)
+    ]
+
+
 # THE GEAR FLOOR IS A PLANNING NUMBER (#2573): raidfloor derives it from assumed
 # boss damage. The order path, the module and the instance's access row (min
 # average item level 0) never read it, so it stops nothing and is drawn SOFT.
@@ -632,6 +650,7 @@ def _blockers(
         _staffing_blockers(lineup, raiders, runnable, clears, gathers)
         + level_hard
         + _quorum_blockers(raiders, min_level)
+        + _online_blockers(raiders)
     )
     soft = (
         _floor_soft(raidfloor.hard_blockers(raiders, worn_rows))

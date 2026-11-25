@@ -634,6 +634,21 @@ class TheRealBlockerIsLevelAndTheQuorum(unittest.TestCase):
         self.assertEqual(50, below["gate"])
         self.assertEqual(10, below["tanks"] + below["healers"] + below["damage"])
 
+    def test_an_offline_seat_is_a_hard_blocker_naming_it(self):
+        """The order path refuses an offline seat (seat_eligibility_refusal);
+        the card must treat it as a hard blocker naming the seat."""
+        rows = _guild("Cave", 23, self.SPEC)
+        names = [r["name"] for r in rows]
+        chars = [
+            dict(r, online=0 if r["name"] == names[-1] else 1)
+            for r in rows
+        ]
+        card = _card(rows, names[:1], chars=chars)
+        hard = " ".join(b["text"] for b in card["blockers"] if b["tone"] == "hard")
+        self.assertIn(names[-1], hard)
+        self.assertIn("offline", hard)
+        self.assertFalse(card["ready"])
+
 
 class SeatsAreChosenByPreRaidReadiness(unittest.TestCase):
     """Ten warriors, eight tank seats: the two who wear pre-raid best in slot
