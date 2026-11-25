@@ -83,7 +83,9 @@ def shortage(roster: raidrun.FirstKillRoster, quorum: tuple) -> str:
     have = (len(roster.seats), roles.count("tank"), roles.count("healer"))
     gaps = [
         "%d %s" % (want - got, name)
-        for got, want, name in zip(have, quorum, ("seats", "tanks", "healers"), strict=True)
+        for got, want, name in zip(
+            have, quorum, ("seats", "tanks", "healers"), strict=True
+        )
         if got < want
     ]
     return "short by " + ", ".join(gaps) if gaps else ""
