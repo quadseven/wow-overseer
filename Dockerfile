@@ -60,7 +60,7 @@ COPY core.py bridge.py voice.py transform.py world_data.py \
      preraid.py fireplan.py recipehunt.py gearscore.py gearupgrades.py pvpgear.py equipscore.py \
      runtimeline.py runreport.py runstory.py places.py commandwords.py orderrecord.py \
      vclient.py guildgear.py gearfetch.py gearrouting.py gearroutingexec.py gearroutingread.py gearroomwait.py \
-     situation.py standstill.py deathhold.py deathloop.py restsupply.py classreagents.py vision.py llmmode.py llmpool.py jev_movement.py jev_family_intent.py jev_outcomes.py leadcmd.py strategybook.py rebind.py \
+     situation.py standstill.py deathhold.py deathloop.py mcorder.py restsupply.py classreagents.py vision.py llmmode.py llmpool.py jev_movement.py jev_family_intent.py jev_outcomes.py leadcmd.py strategybook.py rebind.py \
      realmroller.py realmroller_world.py realmroller_plan.py realmroller_act.py \
      zones.json entrances.json shapes.json \
      talents.json items.json icons.json bagicons.json spells.json bagspells.json viewerdisplays.json \
