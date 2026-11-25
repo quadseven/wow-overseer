@@ -1569,7 +1569,11 @@ def open_to(cat: Catalogue, member, quest_id, broken=frozenset()) -> bool:
         return False
     if not quest.admits(member.race) or not _class_ok(facts, member.class_id):
         return False
-    if quest.starters and not friendly_starters(cat, member, quest):
+    # A quest with a named creature giver must have at least one friendly,
+    # spawned giver the quester can reach. If the world names a giver but
+    # none are spawned (or all are hostile/on the other side's ground), the
+    # take command will be refused with "no giver of that quest in reach".
+    if facts.giver_named and not friendly_starters(cat, member, quest):
         return False
     if int(member.level) < quest.min_level:
         return False

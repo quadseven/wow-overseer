@@ -1598,13 +1598,14 @@ class Broken(unittest.TestCase):
         )
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
 
-    def test_a_quest_giver_not_in_the_world_is_recorded_and_not_taken(self):
+    def test_a_quest_giver_not_in_the_world_is_not_in_reach(self):
         cat = world(drop={1002})
         p = questers.plan(cat, mirra(x=60.0), questers.Clock(), 0.0)
-        self.assertIn(
-            (2, questers.GIVER_MISSING, False),
-            [(b.quest, b.reason, b.held) for b in p.broken],
-        )
+        # Quest 2 has a named giver (creature 101) but no spawn (dropped).
+        # It should not be in reach, so the quester does not attempt it.
+        self.assertNotIn(2, questers.in_reach(cat, mirra(x=60.0), ELWYNN))
+        # The quest is not recorded as broken because it was never attempted.
+        self.assertEqual(p.broken, ())
         self.assertNotEqual(p.move.quest, 2)
 
     def test_further_concerns_is_recorded_as_an_unsupported_speak_objective(self):

@@ -489,5 +489,85 @@ class Quest131DeliveringDaffodils(unittest.TestCase):
         self.assertIn("a.MaxLevel, 0) AS max_level", questers.QUESTS_SQL)
 
 
+class Quest374ProofOfDemise(unittest.TestCase):
+    """Quest 374 Proof of Demise in Tirisfal Glades: the world names a creature
+    giver in creature_queststarter, but that creature has no spawns in the
+    creature table. The quester mirror must not offer it as in reach, otherwise
+    the take command is refused with 'no giver of that quest in reach'."""
+
+    def _make_cat(self, rows, givers, starts, ends, links=()):
+        """Build a catalogue with explicit giver/start/end rows."""
+        return questers.catalogue(rows, givers, [], [], starts, ends, links)
+
+    def test_a_quest_with_a_named_giver_but_no_spawn_is_not_in_reach(self):
+        # Quest 374 has a creature_queststarter entry (giver_named=True) but
+        # no creature spawns for that entry (quest.starters is empty). The
+        # catalogue's giver_rows (from GIVERS_SQL) are empty for this quest,
+        # while start_rows (from STARTERS_SQL) name the creature entry.
+        # Add a dummy quest in Tirisfal with a spawned giver to make Tirisfal
+        # a classic zone, so quest 374 passes the classic_zones filter.
+        # Remove the prerequisite so the quest is available.
+        rows = [
+            row(999, "Dummy Quest", TIRISFAL, 5, 3, HORDE),
+            row(
+                374,
+                "Proof of Demise",
+                TIRISFAL,
+                7,
+                5,
+                HORDE,
+            ),
+        ]
+        # Dummy quest has a spawned giver on Eastern Kingdoms (map 0)
+        givers = [
+            giver(999, "start", 5000, 1999, 100.0, 0.0, map_id=0),
+            giver(999, "end", 5001, 1999, 100.0, 0.0, map_id=0),
+            # No giver rows for quest 374 - the creature has no spawns
+        ]
+        # STARTERS_SQL names creature 1999 for dummy, 1535 for quest 374
+        starts = [started(999, 1999), started(374, 1535)]
+        ends = [ended(999, 1999), ended(374, 1535)]
+        cat = self._make_cat(rows, givers, starts, ends)
+        # A Horde quester in Tirisfal meets race, level, and chain requirements
+        quester = member("Hulani", TAUREN, 7, TIRISFAL)
+        # The quest should NOT be in reach because its named giver has no spawns
+        self.assertNotIn(374, questers.in_reach(cat, quester, TIRISFAL))
+        # open_to should also return False
+        self.assertFalse(questers.open_to(cat, quester, 374))
+        # The facts should show giver_named=True but no starters
+        self.assertTrue(cat.facts[374].giver_named)
+        self.assertEqual(len(cat.quest(374).starters), 0)
+        # But the dummy quest should be in reach
+        self.assertIn(999, questers.in_reach(cat, quester, TIRISFAL))
+
+    def test_a_quest_with_a_spawned_giver_is_in_reach(self):
+        # Same quest but with a spawned giver - should be in reach
+        # Remove the prerequisite so the quest is available
+        rows = [
+            row(
+                374,
+                "Proof of Demise",
+                TIRISFAL,
+                7,
+                5,
+                HORDE,
+            ),
+        ]
+        # Giver rows from GIVERS_SQL - creature 1535 has a spawn on Eastern Kingdoms
+        givers = [
+            giver(374, "start", 5000, 1535, 100.0, 0.0, map_id=0),
+            giver(374, "end", 5001, 1535, 100.0, 0.0, map_id=0),
+        ]
+        # STARTERS_SQL names creature 1535 as the starter
+        starts = [started(374, 1535)]
+        ends = [ended(374, 1535)]
+        cat = self._make_cat(rows, givers, starts, ends)
+        quester = member("Hulani", TAUREN, 7, TIRISFAL)
+        self.assertIn(374, questers.in_reach(cat, quester, TIRISFAL))
+        self.assertTrue(questers.open_to(cat, quester, 374))
+        self.assertTrue(cat.facts[374].giver_named)
+        self.assertEqual(len(cat.quest(374).starters), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
