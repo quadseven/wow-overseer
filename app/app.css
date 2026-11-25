@@ -3,7 +3,7 @@
    switches at 760px (phone: header + bottom tab bar; wider: sidebar). */
 
 *, *::before, *::after { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; scrollbar-gutter: stable; }
 html, body { margin: 0; background: var(--color-bg); color: var(--color-text); }
 body {
   font-family: var(--font-body); font-size: var(--fs-2); line-height: 1.5;
@@ -177,6 +177,7 @@ a.card:hover { box-shadow: var(--shadow-sm); }
 main.main {
   flex: 1; width: 100%; padding: 24px 28px 48px;
   display: flex; flex-direction: column; gap: 20px;
+  overflow-anchor: none;
 }
 @media (min-width: 1600px) { main.main { padding-inline: clamp(28px, 2.5vw, 64px); } }
 .tabbar {
@@ -441,17 +442,13 @@ html { -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; }
 .sheet, .search-results, .tabs, .hscroll { overscroll-behavior: contain; }
 .age { font-variant-numeric: tabular-nums; }
 
-/* The header, the page tabs under it and the tab bar are translucent, so
-   the page shows through as it scrolls beneath them. */
-@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  .topbar, .tabs {
-    background: color-mix(in srgb, var(--color-bg) 76%, transparent);
-    -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
-  }
-  .tabbar {
-    background: color-mix(in srgb, var(--color-surface) 78%, transparent);
-    -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
-  }
+/* The header, the page tabs under it and the tab bar stay crisp and opaque
+   so scrolling over live WebRTC video never stalls on backdrop-filter blur. */
+.topbar, .tabs {
+  background: color-mix(in srgb, var(--color-bg) 96%, transparent);
+}
+.tabbar {
+  background: color-mix(in srgb, var(--color-surface) 96%, transparent);
 }
 
 /* Notch, rounded corners and home indicator (viewport-fit=cover). */
@@ -490,11 +487,10 @@ a.card:active, a.kpi:active, .stretch-card:has(.stretch-link:active) { transform
 .search-hit:active { background: var(--color-neutral-900); }
 a:not([class]):active { opacity: 0.6; }
 
-/* A page eases in when it opens and when its first data replaces its
-   skeletons (main.js easeIn). Children move, not main, so nothing inside
-   loses its sticky or fixed place. */
-@keyframes enter { from { opacity: 0.35; transform: translateY(8px); } }
-main.main.enter > :not([data-stale-cache]) { animation: enter 300ms cubic-bezier(0.16, 1, 0.3, 1); }
+/* A page fades in cleanly when it opens and when its first data replaces its
+   skeletons (main.js easeIn), with opacity only so nothing bounces vertically. */
+@keyframes enter { from { opacity: 0.85; } }
+main.main.enter > :not([data-stale-cache]) { animation: enter 140ms ease-out; }
 
 /* Sheets rise from the bottom edge; the search box settles in. */
 @keyframes sheet-in { from { transform: translateY(100%); } }

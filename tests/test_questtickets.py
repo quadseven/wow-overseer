@@ -192,11 +192,19 @@ class Filing(unittest.TestCase):
         self.assertEqual(text.count("Reason: " + reason), 2)
         self.assertEqual(text.count("Last objective counts: not in the log now"), 2)
         self.assertEqual(
-            text.count("The take command found no quest giver in reach"), 1
+            text.count(
+                "The take step asks the world for a living creature linked to the quest "
+                "within the 20-yard arrival radius."
+            ),
+            1,
         )
-        self.assertIn("The stored rows leave open why the lookup failed.", text)
+        self.assertIn(
+            "The refusal means none matched then; the stored rows do not distinguish "
+            "a missing, distant, dead, or otherwise unavailable creature.",
+            text,
+        )
         self.assertNotIn(
-            "The take command found no quest giver in reach",
+            "The take step asks the world for a living creature",
             qt.body(218, None, [row(218)], [], ""),
         )
 
