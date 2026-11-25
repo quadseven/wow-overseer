@@ -91,6 +91,9 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     A quest whose objective no spawned creature is or drops is not judged on
     that alone (a script may summon it, a chest or a vendor may hold the
     item): it stalls, and its stall says so (STALLED_UNSOURCED);
+  * NO_OBJECTIVES: two hours of play pass while the quest is incomplete and
+    the world rows define no required creature, item, or object objective a
+    quester can work;
   * REFUSED_TAKE / REFUSED_TURN_IN: the world refused the take or the hand-in
     FAILS_BEFORE_BROKEN times in a day, with its own words appended;
   * CANNOT_TURN_IN: the world refused the hand-in once and said no retry
@@ -254,7 +257,7 @@ def _quest_complete(quest, status, progress=0) -> bool:
 # ledger's own words for it (questledger.FAILED_REASON, #923).
 FAILED = "the quest failed in the log"
 STALLED = "its objectives did not move for 2 hours of play"
-NO_OBJECTIVES = "the world defines no required objectives to complete"
+NO_OBJECTIVES = "the world rows define no required creature, item, or object objective a quester can work"
 SCRIPTED_EVENT = "the quest completes only by a scripted event no lone quester drives"
 GIVER_MISSING = "the quest giver is not in the world"
 # Further Concerns and Report to Gryan Stoutmantle require speaking to an NPC
