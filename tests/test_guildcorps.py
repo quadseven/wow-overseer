@@ -850,7 +850,7 @@ class TheCrewShopsForTheMasters(unittest.TestCase):
         self.assertEqual(letter.target_arg, "Og")
 
     def test_nothing_is_bought_while_the_master_has_thread_or_it_is_on_its_way(self):
-        crew = [member("Arran")]
+        crew = [member("Shopper")]
         vendors = {EVERLOOK: frozenset({self.FINE_THREAD})}
         carried = self.og(carried=(held(self.FINE_THREAD, 1),))
         self.assertEqual(gc.shop_steps(carried, crew, vendors, set()), [])
@@ -873,6 +873,47 @@ class TheCrewShopsForTheMasters(unittest.TestCase):
             }
         ]
         self.assertEqual(gc.recent_from_rows(rows)[("to:Og", "shop", 2321)], 7)
+
+    def test_a_refused_shop_buy_is_backed_off_for_bag_room(self):
+        og = self.og()
+        crew = [member("Arran")]
+        vendors = {EVERLOOK: frozenset({self.FINE_THREAD})}
+        row = {
+            "source": "guildcorps:shop:2321",
+            "target_name": "Shopper",
+            "target_arg": "Og",
+            "status": "error",
+            "result": (
+                '{"outcome":"refused",'
+                '"reason":"bags cannot take the item"}'
+            ),
+            "age": 121,
+        }
+        recent = gc.recent_from_rows([row])
+        notes = []
+
+        self.assertEqual(
+            [], gc.shop_steps(og, crew, vendors, set(), recent, notes=notes)
+        )
+        self.assertTrue(any("bag room" in note for note in notes))
+
+        row["age"] = gc.FULL_BAGS_SHOP_MINUTES
+        recent = gc.recent_from_rows([row])
+        self.assertEqual(
+            ["shop"],
+            [step.action for step in gc.shop_steps(og, crew, vendors, set(), recent)],
+        )
+
+        self.assertIn("SELECT target_name, target_arg, status, source", BRIDGE)
+        self.assertIn("OR source LIKE '%%:shop:%%', result", BRIDGE)
+
+    def test_a_shop_buy_row_names_the_tailor_for_its_refusal(self):
+        og = self.og()
+        vendors = {EVERLOOK: frozenset({self.FINE_THREAD})}
+
+        (step,) = gc.shop_steps(og, [member("Shopper")], vendors, set())
+
+        self.assertEqual("Og", step.rows[0].target_arg)
 
     def test_the_family_never_shops_and_a_busy_member_is_not_asked(self):
         og = self.og()

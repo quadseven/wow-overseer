@@ -297,6 +297,12 @@ COOLDOWN_MINUTES = {
 FULL_BAGS_COLLECT_MINUTES = 240
 FULL_BAGS_COLLECT = "collect-full"
 
+# A shop buy refused for bag room has no following mail row, so its normal
+# recipient cooldown cannot see it. Four hours keeps repeated refusals under
+# ten a day while leaving time for the tailor's bags to change.
+FULL_BAGS_SHOP_MINUTES = 240
+FULL_BAGS_SHOP = "shop-full"
+
 # A BAG IS CRAFTED AT A MAILBOX AND POSTED IN THE SAME STAND (2026-09-24).
 # Measured on dev: Baldam crafted a Runecloth Bag at 08:09, its post walk ended
 # in a fight and then off the map, and by 09:54 the bag was gone from the realm.
@@ -1197,7 +1203,9 @@ def _shop_step(shopper, master, why, entry, count, cap) -> Step:
                 "buy",
                 "entry:%d count:%d max:%d"
                 % (int(entry), count, _ceiling(VENDOR_PRICE[int(entry)] * count)),
-                "",
+                # kind='buy' ignores target_arg; keep the tailor here so a
+                # refusal can cool its shop before a mail row exists.
+                master.name,
                 source_for("shop", entry),
             ),
             _walk_to_mailbox("shop", entry, cap),
@@ -1257,16 +1265,30 @@ def _shop_wants(master) -> dict:
     return wants
 
 
-def shop_steps(master, crew, vendors_by_map, busy, recent=None, cap=NEAR) -> list:
+def shop_steps(
+    master, crew, vendors_by_map, busy, recent=None, cap=NEAR, notes=None
+) -> list:
     """The crew's shopping for one family master: thread and dye, bought and
     posted, for the bag it sews and the garment rungs it climbs.
 
     Nothing is bought twice inside the shop cooldown: `recent` holds
     ("to:<master>", "shop", entry) for every purchase already made for it.
+    A bag-room refusal also holds ("to:<master>", "shop-full", entry) for
+    FULL_BAGS_SHOP_MINUTES and leaves a note explaining the wait.
     """
     steps = []
     for entry, (stocked, buy, why) in sorted(_shop_wants(master).items()):
         if master.count(entry) + master.incoming(entry) >= stocked:
+            continue
+        full = (recent or {}).get(("to:" + master.name, FULL_BAGS_SHOP, int(entry)))
+        if full is not None and full < FULL_BAGS_SHOP_MINUTES:
+            if notes is not None:
+                remaining = FULL_BAGS_SHOP_MINUTES - full
+                notes.append(
+                    "%s waits to shop for item %d: previous buy refused for "
+                    "bag room; retry in %d minutes"
+                    % (master.name, int(entry), remaining)
+                )
             continue
         asked = (recent or {}).get(("to:" + master.name, "shop", int(entry)))
         if asked is not None and asked < COOLDOWN_MINUTES["shop"]:
@@ -1545,7 +1567,9 @@ def _guild_steps(
         by_post = patterns_by_post(tailor, crew, vendors_by_map)
         if tailor.family and tailor.online:
             steps.extend(
-                shop_steps(tailor, crew, vendors_by_map, busy, recent, travel[0])
+                shop_steps(
+                    tailor, crew, vendors_by_map, busy, recent, travel[0], notes
+                )
             )
         step, why = tailor_step(
             tailor,
@@ -1858,6 +1882,14 @@ def recent_from_rows(rows, prefix=SOURCE) -> dict:
             and any(r in str(row.get("result") or "") for r in corpstickets.BAG_REASONS)
         ):
             note((str(row.get("target_name") or ""), FULL_BAGS_COLLECT, key), age)
+        if (
+            action == "shop"
+            and parts[1] == "shop"
+            and str(row.get("status") or "") == "error"
+            and row.get("target_arg")
+            and any(r in str(row.get("result") or "") for r in corpstickets.BAG_REASONS)
+        ):
+            note(("to:" + str(row["target_arg"]), FULL_BAGS_SHOP, key), age)
         if action in ("supply", "shop") and row.get("target_arg"):
             note(("to:" + str(row["target_arg"]), action, key), age)
     return out
