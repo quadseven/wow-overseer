@@ -3137,6 +3137,8 @@ _riding_hold_logged: dict = {}
 def log_riding_hold(m, hold: str) -> None:
     """One log line when a level 60 family member with no Riding changes hold;
     silent while the hold stays the same pass after pass."""
+    if m.role != FAMILY:
+        return
     try:
         wants = m.level >= 60 and not m.skill(purse.RIDING_SKILL)[1]
     except Exception:
@@ -5742,8 +5744,7 @@ def _plan_family_class_member(
     classes, recent, cap, now, far, kept, crafters, masters = reads
     counters, busy, per_guild = limits
     if not familyclass.enabled() or m.role != FAMILY:
-        if m.role == FAMILY:
-            log_riding_hold(m, "family_switch_off")
+        log_riding_hold(m, "family_switch_off")
         return
     master = str(masters.get(m.guild) or "")
     step, doing, note = class_step(
@@ -5784,7 +5785,7 @@ def _plan_family_class_member(
         )
         return
     gap_hold = familyclass.holds(m, step.move, recent)
-    log_riding_hold(m, "gap_hold" if gap_hold else "class_step_first")
+    log_riding_hold(m, ("class_step_first", "gap_hold")[bool(gap_hold)])
     if gap_hold:
         class_holds[m.name] = _class_hold_reason(m.name, gap_hold)
         _release_slots(m.name, far, None)
