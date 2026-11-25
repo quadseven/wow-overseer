@@ -192,11 +192,19 @@ class Filing(unittest.TestCase):
         self.assertEqual(text.count("Reason: " + reason), 2)
         self.assertEqual(text.count("Last objective counts: not in the log now"), 2)
         self.assertEqual(
-            text.count("The take command found no quest giver in reach"), 1
+            text.count(
+                "The recorded take refusal means no creature that starts this quest "
+                "was in reach when the command ran."
+            ),
+            1,
         )
-        self.assertIn("The stored rows leave open why the lookup failed.", text)
+        self.assertIn(
+            "The ledger does not record enough detail to explain why the giver "
+            "lookup failed.",
+            text,
+        )
         self.assertNotIn(
-            "The take command found no quest giver in reach",
+            "The recorded take refusal means no creature that starts this quest",
             qt.body(218, None, [row(218)], [], ""),
         )
 

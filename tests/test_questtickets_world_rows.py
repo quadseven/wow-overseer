@@ -147,6 +147,60 @@ class WorldRows(unittest.TestCase):
         self.assertIn("3 spawn(s) on the quest's map, 5 total", text)
         self.assertNotIn("in zone", text)
 
+    def test_quest_427_explains_what_the_take_refusal_and_spawn_rows_prove(self):
+        # These result shapes come from questcatalogue's world reads. The
+        # failed-take reason is the value questers records through
+        # bridge._record_quest_broken; the quest ledger keeps that reason but
+        # not the giver's live position.
+        quest = quest_row(
+            quest=427,
+            title="At War With The Scarlet Crusade",
+            level=8,
+            min_level=5,
+            sort=85,
+            objective1=1535,
+            objective_count1=10,
+        )
+        catalogue = self.catalogue(
+            quest,
+            {
+                qc.CREATURE_NAMES_SQL.format(ids="1535"): [
+                    {"entry": 1535, "name": "Scarlet Warrior"}
+                ],
+                qc.SPAWN_COUNTS_SQL.format(ids="1535"): [
+                    {"entry": 1535, "map": 0, "n": 35}
+                ],
+            },
+        )
+        refused = qt.NO_GIVER_IN_REACH
+        rows = [
+            {"guid": 1, "character_name": "QuestTesterOne", "reason": refused},
+            {"guid": 2, "character_name": "QuestTesterTwo", "reason": refused},
+        ]
+
+        text = qt.body(427, catalogue[0], rows, [], "")
+
+        self.assertIn("QuestLevel: 8; MinLevel: 5", text)
+        self.assertIn(
+            "Required creature/object 1535 x10 (Scarlet Warrior): "
+            "35 spawn(s) on the quest's map, 35 total",
+            text,
+        )
+        self.assertIn(
+            "The recorded take refusal means no creature that starts this quest "
+            "was in reach when the command ran.",
+            text,
+        )
+        self.assertIn(
+            "Objective spawn counts do not establish that a giver was in reach.",
+            text,
+        )
+        self.assertIn(
+            "The ledger does not record enough detail to explain why the giver "
+            "lookup failed.",
+            text,
+        )
+
     def test_spawn_sql_groups_by_map_and_never_reads_zone_id(self):
         for sql in (qc.SPAWN_COUNTS_SQL, qc.OBJECT_COUNTS_SQL):
             self.assertNotIn("zoneId", sql)

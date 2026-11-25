@@ -333,8 +333,10 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
     if no_giver_in_reach:
         lines += [
             "",
-            "The take command found no quest giver in reach, blocking acceptance. "
-            "The world names a creature giver. The stored rows leave open why the lookup failed.",
+            "The recorded take refusal means no creature that starts this quest "
+            "was in reach when the command ran. Objective spawn counts do not "
+            "establish that a giver was in reach. The ledger does not record "
+            "enough detail to explain why the giver lookup failed.",
         ]
     lines += [
         "",
