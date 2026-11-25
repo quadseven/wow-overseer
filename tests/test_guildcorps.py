@@ -874,6 +874,43 @@ class TheCrewShopsForTheMasters(unittest.TestCase):
         ]
         self.assertEqual(gc.recent_from_rows(rows)[("to:Og", "shop", 2321)], 7)
 
+    def test_a_shop_buy_refused_for_bag_room_waits_with_a_reason(self):
+        og = self.og(skills={gc.TAILORING: (140, 150)})
+        vendors = {EVERLOOK: frozenset({self.FINE_THREAD, 6260})}
+        # _shop_step writes this source with an empty target_arg; the bridge
+        # persists target_name and result in _insert_corps_row.
+        row = {
+            "target_name": "Chopp",
+            "target_arg": "",
+            "source": "guildcorps:shop:2321",
+            "age": 30,
+            "result": '{"outcome":"refused","reason":"bags cannot take the item"}',
+        }
+        recent = gc.recent_from_rows([row])
+        self.assertEqual(30, recent.get(("Chopp", gc.FULL_BAGS_SHOP, 0)))
+
+        plan = gc.plan(
+            [og, member("Chopp")], {"Cave": [og]}, TRAINABLE, vendors, recent, set()
+        )
+        self.assertFalse(any(step.action == "shop" for step in plan.steps))
+        self.assertTrue(
+            any("bags refused a shop item" in note.lower() for note in plan.notes)
+        )
+        self.assertLess(24 * 60 / gc.FULL_BAGS_SHOP_MINUTES, 10)
+
+        row["age"] = gc.FULL_BAGS_SHOP_MINUTES + 1
+        recent = gc.recent_from_rows([row])
+        self.assertEqual(
+            1,
+            len(gc.shop_steps(og, [member("Chopp")], vendors, set(), recent)),
+        )
+
+    def test_the_recent_query_keeps_shop_refusal_results(self):
+        self.assertIn(
+            "IF(source LIKE '%%:collect:%%' OR source LIKE '%%:shop:%%', result, '') AS result",
+            BRIDGE,
+        )
+
     def test_the_family_never_shops_and_a_busy_member_is_not_asked(self):
         og = self.og()
         vendors = {EVERLOOK: frozenset({self.FINE_THREAD})}
