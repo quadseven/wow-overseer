@@ -91,15 +91,14 @@ function table(rows, ilvl, xp, at, f, cam) {
   return html`<div class="card ro-table"><table class="table"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
 }
 
-function body(roster, gg, xp, q, cam) {
-  const f = filters(q);
+function body(roster, gg, xp, q, cam, f = filters(q), rows = null) {
   const ilvl = gearRows(gg);
   const all = roster.members || [];
-  const rows = all.filter((m) => keep(m, f)).sort(sorter(f.sort, f.dir, ilvl, xp));
-  if (!rows.length) {
+  const list = (rows || all.filter((m) => keep(m, f))).slice().sort(sorter(f.sort, f.dir, ilvl, xp));
+  if (!list.length) {
     return html`${state("empty", "No members match", "No member fits every filter you have on. Nothing is hidden by the server.")}<div><button type="button" class="btn btn-ghost" data-clear>Clear filters</button></div>`;
   }
-  return html`${cards(rows, ilvl, xp, roster.checked_at, cam)}${table(rows, ilvl, xp, roster.checked_at, f, cam)}`;
+  return html`${cards(list, ilvl, xp, roster.checked_at, cam)}${table(list, ilvl, xp, roster.checked_at, f, cam)}`;
 }
 
 // A chip that filters to one guild: its key is the guild's slug.
@@ -155,10 +154,11 @@ export default {
     const wait = pendingRead(roster, 4);
     if (wait) return html`${head("Members")}${sectionTabs("roster")}${wait}`;
     const q = liveQuery();
-    const total = (roster.data.members || []).length;
-    const shown = (roster.data.members || []).filter((m) => keep(m, filters(q))).length;
+    const f = filters(q);
+    const all = roster.data.members || [];
+    const matched = all.filter((m) => keep(m, f));
     const xp = xpRates(ctx.get);
-    return html`${head("Members", shown + " of " + total, pageLine(roster.data))}${sectionTabs("roster")}${watchNotice()}<div class="ro-wrap">${controls(roster.data, q)}<div data-region="roster">${body(roster.data, gg.data, xp, q, camOf(ctx))}</div></div><p class="dim mb-s">${roster.data.basis || ""} ${xpNote(roster.data, xp)}</p>`;
+    return html`${head("Members", matched.length + " of " + all.length, pageLine(roster.data))}${sectionTabs("roster")}${watchNotice()}<div class="ro-wrap">${controls(roster.data, q)}<div data-region="roster">${body(roster.data, gg.data, xp, q, camOf(ctx), f, matched)}</div></div><p class="dim mb-s">${roster.data.basis || ""} ${xpNote(roster.data, xp)}</p>`;
   },
   after(main, ctx) {
     const roster = ctx.get("/api/v2/roster").data;

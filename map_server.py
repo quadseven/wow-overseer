@@ -5229,13 +5229,16 @@ def _get_route(what: str, **dumps):
 GZIP_MIN_BYTES = 4096
 
 
-# What is compressed. JSON answers are built per request, so each is compressed
-# on the way out. The app's scripts and styles are the same bytes until the next
-# deploy, so theirs are compressed once (at the best level) and kept, bounded.
+# What is compressed. Static scripts and styles are compressed once at the best
+# level and kept in _GZIP_KEPT; JSON bodies (including /shapes.json and shared
+# API polls) are compressed at level 5 and kept in a separate bounded LRU so
+# dynamic JSON never evicts static app assets.
 _GZIP_JSON = "application/json"
 _GZIP_STATIC = ("text/javascript", "text/css")
 GZIP_KEPT_MAX = 128
+GZIP_JSON_KEPT_MAX = 64
 _GZIP_KEPT: "collections.OrderedDict" = collections.OrderedDict()
+_GZIP_JSON_KEPT: "collections.OrderedDict" = collections.OrderedDict()
 _GZIP_KEPT_LOCK = threading.Lock()
 
 
@@ -5272,29 +5275,44 @@ def _will_gzip(handler, ctype: str, body: bytes) -> bool:
     )
 
 
-def _gzipped(handler, ctype: str, body: bytes) -> bytes | None:
+def _gzipped(
+    handler,
+    ctype: str,
+    body: bytes,
+    *,
+    digest: bytes | None = None,
+) -> bytes | None:
     """The body gzipped, or None when it should go out as it is."""
     if not _will_gzip(handler, ctype, body):
         return None
-    if ctype.split(";")[0].strip() == _GZIP_JSON:
-        return gzip.compress(body, 5, mtime=0)
-    key = (ctype, len(body), hashlib.sha256(body).digest())
+    kind = ctype.split(";")[0].strip()
+    is_json = kind == _GZIP_JSON
+    cache = _GZIP_JSON_KEPT if is_json else _GZIP_KEPT
+    limit = GZIP_JSON_KEPT_MAX if is_json else GZIP_KEPT_MAX
+    level = 5 if is_json else 9
+    body_digest = digest if digest is not None else hashlib.sha256(body).digest()
+    key = (kind, len(body), body_digest)
     with _GZIP_KEPT_LOCK:
-        kept = _GZIP_KEPT.get(key)
+        kept = cache.get(key)
         if kept is not None:
-            _GZIP_KEPT.move_to_end(key)
+            cache.move_to_end(key)
             return kept
-    packed = gzip.compress(body, 9, mtime=0)
+    packed = gzip.compress(body, level, mtime=0)
     with _GZIP_KEPT_LOCK:
-        _GZIP_KEPT[key] = packed
-        while len(_GZIP_KEPT) > GZIP_KEPT_MAX:
-            _GZIP_KEPT.popitem(last=False)
+        cache[key] = packed
+        while len(cache) > limit:
+            cache.popitem(last=False)
     return packed
+
+
+def _etag_from_digest(digest: bytes) -> str:
+    """A strong validator from a SHA-256 digest: same bytes, same tag."""
+    return '"' + digest.hex()[:24] + '"'
 
 
 def _etag(body: bytes) -> str:
     """A strong validator for a response body: same bytes, same tag."""
-    return '"' + hashlib.sha256(body).hexdigest()[:24] + '"'
+    return _etag_from_digest(hashlib.sha256(body).digest())
 
 
 def _fetch_decree() -> dict:
@@ -7629,10 +7647,12 @@ class Handler(BaseHTTPRequestHandler):
         # was measured at several MB of plain JSON. The gzipped form gets a
         # "-gz" tag, so the two representations never share a validator.
         tag = ""
+        digest: bytes | None = None
         if (revalidate and code == 200 and cache_control == "no-store"
                 and getattr(self, "command", "") == "GET"):
             cache_control = "no-cache"
-            tag = _etag(body)
+            digest = hashlib.sha256(body).digest()
+            tag = _etag_from_digest(digest)
         will_gz = _will_gzip(self, ctype, body)
         if tag:
             if will_gz:
@@ -7647,7 +7667,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header(hkey, hval)
                 self.end_headers()
                 return
-        packed = _gzipped(self, ctype, body) if will_gz else None
+        packed = _gzipped(self, ctype, body, digest=digest) if will_gz else None
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         if packed is not None:

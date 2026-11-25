@@ -390,7 +390,18 @@ function ageTick() {
   });
 }
 
-window.setInterval(() => { if (!document.hidden) { ageTick(); applyAudio(); } }, 1000);
+function hasActiveTile() {
+  for (const t of tiles.values()) {
+    if (t.started || t.state === "live" || t.state === "dark") return true;
+  }
+  return false;
+}
+
+window.setInterval(() => {
+  if (document.hidden || !hasActiveTile()) return;
+  ageTick();
+  if (heard !== null) applyAudio();
+}, 1000);
 
 // Leaving Now stops the pictures (the broadcasts keep running).
 window.addEventListener("hashchange", () => {
