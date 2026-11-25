@@ -2339,7 +2339,7 @@ class ASummonedObjectEnder(unittest.TestCase):
         self.assertEqual(
             [row.command for row in step.rows],
             [
-                "hunt-spawn creature:1002 item:1080 count:1 max:%d"
+                "hunt-spawn creature:1002 item:1080 count:5 max:%d"
                 % classhunt.MAX_SECONDS
             ],
         )
@@ -2483,3 +2483,112 @@ class ASummonedObjectEnder(unittest.TestCase):
         p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
         self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+class OperationRecombobulation(unittest.TestCase):
+    """Quest 412's item objectives use the world rows carried by the ticket."""
+
+    def test_operation_recombobulation_hunts_to_the_full_item_totals(self):
+        # The ticket's quest requirements follow questers.QUESTS_SQL; drop and
+        # spawn rows follow classquest.LOOT_SQL and SPAWNS_SQL. The fixture uses
+        # the ticket's source entries; neutral positions and a giver drive the
+        # plan. Objective counters follow questers.LOG_SQL.
+        recombobulation = quest(
+            412, 1, 10, min_level=7, title="Operation Recombobulation"
+        )
+        recombobulation.update(
+            item1=3083,
+            item_count1=8,
+            item2=3084,
+            item_count2=8,
+        )
+        cat = world(
+            extra_quests=[recombobulation],
+            extra_givers=[
+                giver(412, "start", 1412, 9412, 0, 0, name="Quest giver"),
+                giver(412, "end", 1412, 9412, 0, 0, name="Quest giver"),
+            ],
+            extra_spawns=[
+                spawn(61211, 1211, 20, 0, level=0, name="Source creature"),
+                spawn(68503, 8503, 40, 0, level=0, name="Source creature"),
+            ],
+            extra_loot=[
+                {"item": item, "entry": entry}
+                for item in (3083, 3084)
+                for entry in (1211, 8503)
+            ],
+        )
+
+        def holder(counts):
+            log_row = {
+                "guid": 8,
+                "quest": 412,
+                "status": questers.STATUS_INCOMPLETE,
+                "progress": sum(counts.values()),
+                "item1": 3083,
+                "itemcount1": counts.get(3083, 0),
+                "item2": 3084,
+                "itemcount2": counts.get(3084, 0),
+            }
+            (member,) = questers.members_from_rows(
+                [
+                    {
+                        "guid": 8,
+                        "name": "Quester",
+                        "level": 10,
+                        "race": HUMAN,
+                        "class_id": PRIEST,
+                        "online": 1,
+                        "map_id": 0,
+                        "pos_x": 0.0,
+                        "pos_y": 0.0,
+                        "zone_id": 1,
+                    }
+                ],
+                [log_row],
+                [],
+            )
+            return member
+
+        counts = {3083: 0, 3084: 0}
+        clock = questers.Clock()
+        move = questers.plan(cat, holder(counts), clock, 0.0, last_quest=412).move
+        self.assertEqual(
+            (move.kind, move.quest, move.spot.entry), (classquest.HUNT, 412, 1211)
+        )
+        step = questers.step_for(holder(counts), move, 0, cat.quest(412))
+        self.assertIn("item:3083 count:8", step.rows[0].command)
+
+        # A hunt can end after a partial result. The next row's count must
+        # still match the absolute carried-item check used by hunt-spawn.
+        counts[3083] = 3
+        member = holder(counts)
+        plan = questers.plan(
+            cat, member, clock, 2 * questers.STALL_SECONDS, last_quest=412
+        )
+        self.assertEqual(plan.broken, ())
+        move = plan.move
+        step = questers.step_for(member, move, 0, cat.quest(412))
+        self.assertIn("item:3083 count:8", step.rows[0].command)
+
+        counts[3083] = 8
+        member = holder(counts)
+        move = questers.plan(
+            cat,
+            member,
+            clock,
+            2 * questers.STALL_SECONDS + 60,
+            last_quest=412,
+        ).move
+        step = questers.step_for(member, move, 0, cat.quest(412))
+        self.assertIn("item:3084 count:8", step.rows[0].command)
+
+        counts[3084] = 8
+        move = questers.plan(
+            cat,
+            holder(counts),
+            clock,
+            2 * questers.STALL_SECONDS + 120,
+            last_quest=412,
+        ).move
+        self.assertEqual((move.kind, move.quest), (classquest.TURN_IN, 412))
