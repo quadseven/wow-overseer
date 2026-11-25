@@ -501,13 +501,32 @@ def guild(query: dict, ctx) -> tuple[int, dict]:
     name = _scope.guild(ctx, asked)
     if name is None:
         return 404, _scope.no_such_guild(ctx)
-    server = ctx.server
-    zones = server.recap.zone_names(server.GEO.continents)
-    maps = server.achievements.MAP_NAMES
-    found = ctx.read.must(_GUILD_SQL, (name,))
-    if not found:
-        return 404, {"error": "no such guild", "guild": name}
-    return 200, build(ctx.read, found[0], zones, maps, ctx.families.guilds())
+
+    def _make() -> tuple[int, dict]:
+        server = ctx.server
+        zones = server.recap.zone_names(server.GEO.continents)
+        maps = server.achievements.MAP_NAMES
+        found = ctx.read.must(_GUILD_SQL, (name,))
+        if not found:
+            return 404, {"error": "no such guild", "guild": name}
+        return 200, build(ctx.read, found[0], zones, maps, ctx.families.guilds())
+
+    shared = getattr(ctx, "shared", None)
+    if shared is None:
+        return _make()
+    not_found: list[tuple[int, dict]] = []
+
+    def _cached() -> dict:
+        code, payload = _make()
+        if code != 200:
+            not_found.append((code, payload))
+            raise LookupError("not a cacheable guild answer")
+        return payload
+
+    try:
+        return 200, shared.get("/api/v2/guild?guild=" + name, _cached)
+    except LookupError:
+        return not_found[0]
 
 
 ROUTES = {"/api/v2/guild": guild}
