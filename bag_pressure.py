@@ -1551,6 +1551,8 @@ class BagBuyer:
     bank: bool = False
     max_slots: int = 0  # 0 leaves worn-bag purchases unrestricted
     excluded_entries: frozenset = frozenset()
+    min_slots: int = 0
+    min_free_slots: int = 1
 
 
 @dataclass(frozen=True)
@@ -1633,13 +1635,15 @@ def bag_offer_fits(buyer: BagBuyer, offer: BagOffer) -> bool:
         offer.price > 0
         and offer.slots > 0
         and (not buyer.max_slots or offer.slots <= buyer.max_slots)
+        and offer.slots >= buyer.min_slots
         and offer.entry not in buyer.excluded_entries
     )
 
 
 def bag_purchase_has_room(buyer: BagBuyer) -> bool:
     """A worn bag can land directly in its empty position; bank bags are cargo."""
-    return buyer.free_slots >= 1 or (not buyer.bank and buyer.open_positions > 0)
+    required = max(1, int(buyer.min_free_slots))
+    return buyer.free_slots >= required or (not buyer.bank and buyer.open_positions > 0)
 
 
 def bag_purchases(buyers, offers, campaign_waiting: bool = False) -> tuple:
