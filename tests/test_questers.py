@@ -2035,6 +2035,72 @@ class Broken(unittest.TestCase):
         self.assertNotEqual(p.move.quest, 1)
 
 
+class HauntedMillsItemQuest(unittest.TestCase):
+    def test_a_quester_can_take_hunt_and_hand_in_the_item_quest(self):
+        # The ticket's world rows give quest 362 at level 10, minimum level 7,
+        # requiring item 2831 from creature 1657. The fixture adds one giver,
+        # ender, and creature spawn so the planner can exercise the full path.
+        tirisfal = 85
+        mills = quest(362, tirisfal, 10, min_level=7, title="The Haunted Mills")
+        mills.update(item1=2831, item_count1=1)
+        cat = questers.catalogue(
+            [mills],
+            [
+                giver(362, "start", 5362, 100, 0, 0, name="Quest giver"),
+                giver(362, "end", 5363, 101, 200, 0, name="Quest ender"),
+            ],
+            [spawn(5165, 1657, 100, 0, level=10, name="Objective")],
+            [{"item": 2831, "entry": 1657}],
+            [started(362, 100)],
+            [ended(362, 101)],
+        )
+        member = mirra(
+            name="Questbot", level=10, race=ORC, zone_id=tirisfal, free_slots=4
+        )
+
+        take = questers.plan(cat, member, questers.Clock(), 0.0).move
+        self.assertEqual((take.kind, take.quest), (classquest.TAKE, 362))
+
+        member = questers.Member(
+            **{
+                **member.__dict__,
+                "quest_log": {362: questers.STATUS_INCOMPLETE},
+                "quest_item_objectives": {362: {2831: 0}},
+            }
+        )
+        hunt = questers.plan(cat, member, questers.Clock(), 0.0).move
+        self.assertEqual(
+            (hunt.kind, hunt.quest, hunt.spot.entry), (classquest.HUNT, 362, 1657)
+        )
+        step = questers.step_for(member, hunt, 0, cat.quest(362))
+        expected_hunt = (
+            "hunt-spawn creature:1657 item:2831 count:1 max:%d" % classhunt.MAX_SECONDS
+        )
+        self.assertEqual(
+            [row.command for row in step.rows],
+            [expected_hunt],
+        )
+
+        member = questers.Member(
+            **{
+                **member.__dict__,
+                "quest_progress": {362: 1},
+                "quest_item_objectives": {362: {2831: 1}},
+            }
+        )
+        hand_in = questers.plan(cat, member, questers.Clock(), 0.0).move
+        self.assertEqual(
+            (hand_in.kind, hand_in.quest, hand_in.spot.entry),
+            (classquest.TURN_IN, 362, 101),
+        )
+        step = questers.step_for(member, hand_in, 0, cat.quest(362))
+        self.assertEqual([row.command for row in step.rows], ["turnin quest:362"])
+        self.assertEqual(
+            questers.LEDGER_STALLED,
+            questers.ledger_state("broken", questers.STALLED),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
 
