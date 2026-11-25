@@ -1436,6 +1436,65 @@ class Broken(unittest.TestCase):
         # The reason is the one the catalogue proves, never a per-quest claim.
         self.assertEqual(questers.STALLED_UNSOURCED, p.broken[0].reason)
 
+    def test_quest_385_crocolisk_hunting_can_finish_with_loot_and_spawns(self):
+        # Crocolisk Hunting (385) asks for Crocolisk Meat (item 2924 x5) and
+        # Crocolisk Skin (item 2925 x6), dropped by creatures 1693, 2089, 2476,
+        # 2635, 3110, 3231 and 5053. When the world data includes loot links
+        # and spawns for these creatures in Loch Modan, a quester can hunt them
+        # and finish the quest.
+        crocolisk = quest(385, LOCH_MODAN, 15, min_level=10, title="Crocolisk Hunting")
+        crocolisk.update(item1=2924, item_count1=5, item2=2925, item_count2=6)
+        cat = world(
+            extra_quests=[crocolisk],
+            extra_givers=[
+                giver(385, "start", 1385, 646, 0, 0),
+                giver(385, "end", 1385, 646, 0, 0),
+            ],
+            extra_spawns=[
+                spawn(10001, 1693, 100.0, 0.0, level=12, name="Crocolisk"),
+                spawn(10002, 2089, 150.0, 0.0, level=14, name="Giant Loch Crocolisk"),
+            ],
+            extra_loot=[
+                {"item": 2924, "entry": 1693},
+                {"item": 2925, "entry": 1693},
+                {"item": 2924, "entry": 2089},
+                {"item": 2925, "entry": 2089},
+            ],
+        )
+        member = mirra(
+            level=15,
+            zone_id=LOCH_MODAN,
+            map_id=0,
+            x=50.0,
+            y=0.0,
+            quest_log={},
+            quests_done=frozenset({20, 21}),
+            quest_progress={},
+            quest_objectives={},
+            quest_item_objectives={},
+        )
+        clock = questers.Clock()
+        # First move: take the quest
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.move.kind, classquest.TAKE)
+        self.assertEqual(p.move.quest, 385)
+        # Simulate taking the quest
+        member = questers.Member(
+            **{
+                **member.__dict__,
+                "quest_log": {385: questers.STATUS_INCOMPLETE},
+            }
+        )
+        # Second move: hunt a crocolisk
+        p = questers.plan(cat, member, clock, 60.0)
+        self.assertEqual(p.move.kind, classquest.HUNT)
+        self.assertEqual(p.move.quest, 385)
+        self.assertIn(p.move.spot.entry, (1693, 2089))
+        # The quest has huntable fields, so it is not stalled/unsourced.
+        # Verify that the quest would not be marked as broken due to missing sources.
+        p = questers.plan(cat, member, clock, 2 * 60 * 60)
+        self.assertEqual(p.broken, ())
+
     def test_quest_124_a_baying_of_gnolls_stall_names_no_invented_cause(self):
         # Quest 124 (A Baying of Gnolls) once carried a hard-coded reason that
         # the world database contradicts: it needs creatures 426 and 430, which
