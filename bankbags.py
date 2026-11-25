@@ -67,6 +67,7 @@ class Bag:
     entry: int
     slots: int
     bound: bool = False
+    used: int = 0
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,7 @@ class Facts:
     placed: int = 0
     worn: tuple = ()  # slots of each worn bag
     spare: tuple = ()  # Bag, carried and not worn
+    banked: tuple = ()  # Bag, in bank bag positions
     crafter: bool = False  # holds tailoring: its ladder bags are the guild's
     bank_full_of_kept: bool = False
     purse_order: purse.Order | None = None
@@ -283,8 +285,17 @@ def _worn_guids(bag_rows) -> dict:
     return out
 
 
-def _where(row, worn_guids) -> str:
-    """ "worn", "banked", "carried" or "" for one container row."""
+def _bank_bag_guids(bag_rows) -> dict:
+    """holder -> the item guids of the bags in its bank bag positions."""
+    out: dict = {}
+    for r in bag_rows or ():
+        if _int(r.get("bag")) == 0 and _int(r.get("slot")) in BANK_BAG_POSITIONS:
+            out.setdefault(str(r.get("holder")), set()).add(_int(r.get("item_guid")))
+    return out
+
+
+def _where(row, worn_guids, bank_bag_guids) -> str:
+    """ "worn", "banked", "carried", "in_bank_bag" or "" for one container row."""
     bag, slot = _int(row.get("bag")), _int(row.get("slot"))
     if bag == 0 and slot in WORN_POSITIONS:
         return "worn"
@@ -292,16 +303,20 @@ def _where(row, worn_guids) -> str:
         return "banked"
     if (bag == 0 and slot in BACKPACK_SLOTS) or bag in worn_guids:
         return "carried"
+    if bag in bank_bag_guids:
+        return "in_bank_bag"
     return ""
 
 
-def _facts_for(person, rows, worn_guids, crafters) -> Facts:
+def _facts_for(person, rows, worn_guids, bank_bag_guids, crafters) -> Facts:
     from bag_pressure import item_binding
 
     name = str(person["name"])
     worn, spare, placed = [], [], 0
+    banked_bags = {}
+    banked_items = {}  # bank_bag_guid -> count of items
     for r in rows:
-        where = _where(r, worn_guids)
+        where = _where(r, worn_guids, bank_bag_guids)
         bag = Bag(
             _int(r.get("item_guid")),
             _int(r.get("entry")),
@@ -312,8 +327,22 @@ def _facts_for(person, rows, worn_guids, crafters) -> Facts:
             worn.append(bag.slots)
         elif where == "banked":
             placed += 1
+            banked_bags[bag.guid] = bag
+        elif where == "in_bank_bag":
+            container = _int(r.get("bag"))
+            banked_items[container] = banked_items.get(container, 0) + 1
         elif where == "carried" and bag.guid > 0:
             spare.append(bag)
+    banked = tuple(
+        Bag(
+            guid=guid,
+            entry=bag.entry,
+            slots=bag.slots,
+            bound=bag.bound,
+            used=banked_items.get(guid, 0),
+        )
+        for guid, bag in sorted(banked_bags.items())
+    )
     return Facts(
         name=name,
         money=_int(person.get("money")),
@@ -321,6 +350,7 @@ def _facts_for(person, rows, worn_guids, crafters) -> Facts:
         placed=placed,
         worn=tuple(sorted(worn)),
         spare=tuple(spare),
+        banked=banked,
         crafter=name in crafters,
     )
 
@@ -335,6 +365,7 @@ def facts_from_rows(people, bag_rows, crafters=frozenset()) -> list:
     bank bag or in a bank slot is not.
     """
     worn = _worn_guids(bag_rows)
+    bank_bags = _bank_bag_guids(bag_rows)
     by_holder: dict = {}
     for r in bag_rows or ():
         by_holder.setdefault(str(r.get("holder")), []).append(r)
@@ -343,7 +374,99 @@ def facts_from_rows(people, bag_rows, crafters=frozenset()) -> list:
             p,
             by_holder.get(str(p["name"]), []),
             worn.get(str(p["name"]), set()),
+            bank_bags.get(str(p["name"]), set()),
             crafters,
         )
         for p in sorted(people or (), key=lambda p: str(p["name"]))
     ]
+
+
+# ---------------------------------------------------------------------------
+# BANK BAG UPGRADES (#2608)
+#
+# Swap bank bags under 12 slots for 12-slot sacks (Huge Brown Sack, entry 4499,
+# 100000 copper = 10g). The swap is only planned when the bag's contents fit
+# in the rest of the bank (bank_free + bag.slots - bag.used >= bag.used).
+
+HUGE_BROWN_SACK_ENTRY = 4499
+HUGE_BROWN_SACK_PRICE = 100000
+HUGE_BROWN_SACK_SLOTS = 12
+
+
+@dataclass(frozen=True)
+class UpgradeNeed:
+    """One bank bag that should be upgraded to a 12-slot sack."""
+
+    guid: int
+    entry: int
+    slots: int
+    used: int
+
+
+def _bank_free(facts: Facts) -> int:
+    """Free slots in the bank, including bank bag capacity.
+
+    This is a simplified calculation. The bridge's bank.py computes this
+    exactly from the full inventory. Here we approximate: 28 base slots +
+    sum of banked bag slots - items in bank (approximated as sum of used
+    in banked bags, since items in base slots are not tracked here).
+    """
+    base = 28
+    bag_capacity = sum(b.slots for b in facts.banked)
+    items_in_bank = sum(b.used for b in facts.banked)
+    return max(0, base + bag_capacity - items_in_bank)
+
+
+def _upgrade_is_safe(bag: Bag, bank_free: int) -> bool:
+    """Can we swap this bag for a 12-slot sack without stranding items?
+
+    The bag's used slots must fit in the rest of the bank after removing
+    this bag's capacity. Rest of bank free = bank_free + (bag.slots - bag.used).
+    """
+    rest_free = bank_free + (bag.slots - bag.used)
+    return bag.used <= rest_free
+
+
+def upgrade_needs(family, floor: int = HUGE_BROWN_SACK_SLOTS) -> list[UpgradeNeed]:
+    """Bank bags under `floor` slots that can be safely upgraded.
+
+    Returns a list of UpgradeNeed, largest gain first (smallest bag first).
+    """
+    needs = []
+    for f in family or ():
+        if f.money < HUGE_BROWN_SACK_PRICE:
+            continue
+        bank_free = _bank_free(f)
+        for bag in f.banked:
+            if bag.slots >= floor:
+                continue
+            if not _upgrade_is_safe(bag, bank_free):
+                continue
+            needs.append(UpgradeNeed(bag.guid, bag.entry, bag.slots, bag.used))
+    # Smallest bag first = largest gain first
+    needs.sort(key=lambda n: n.slots)
+    return needs
+
+
+def upgrade_steps(facts: Facts, floor: int = HUGE_BROWN_SACK_SLOTS) -> list:
+    """Steps to upgrade the first eligible bank bag this visit.
+
+    Returns [buy_command, place_command] for the smallest bank bag under
+    `floor` slots, or empty list if none qualifies.
+    """
+    needs = upgrade_needs([facts], floor)
+    if not needs:
+        return []
+    need = needs[0]
+    buy_step = Step(
+        facts.name,
+        f"entry:{HUGE_BROWN_SACK_ENTRY} count:1 max:{HUGE_BROWN_SACK_PRICE}",
+        f"{facts.name} buys a {HUGE_BROWN_SACK_SLOTS}-slot sack for {HUGE_BROWN_SACK_PRICE} copper",
+    )
+    place_step = Step(
+        facts.name,
+        f"place-bag guid:{need.guid}",
+        f"{facts.name} places the {HUGE_BROWN_SACK_SLOTS}-slot sack in bank bag slot {facts.placed}",
+        HUGE_BROWN_SACK_SLOTS - need.slots,
+    )
+    return [buy_step, place_step]

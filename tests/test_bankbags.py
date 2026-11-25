@@ -290,5 +290,85 @@ class FullBankOfKeptSlots(unittest.TestCase):
         self.assertEqual(enriched[0].purse_order, order)
 
 
+class BankBagUpgrades(unittest.TestCase):
+    """#2608: swap bank bags under 12 slots for 12-slot sacks."""
+
+    def facts_with_banked(self, **over):
+        base = dict(
+            name="Grog",
+            money=500_000,
+            bought=4,
+            placed=4,
+            worn=(12,) * 4,
+            banked=(
+                bb.Bag(guid=101, entry=4240, slots=6, used=6),
+                bb.Bag(guid=102, entry=4240, slots=8, used=4),
+                bb.Bag(guid=103, entry=4240, slots=10, used=8),
+                bb.Bag(guid=104, entry=4240, slots=12, used=10),
+            ),
+        )
+        base.update(over)
+        return bb.Facts(**base)
+
+    def test_upgrade_need_identifies_bags_under_12_slots(self):
+        f = self.facts_with_banked()
+        needs = bb.upgrade_needs([f], 12)
+        self.assertEqual(len(needs), 3)
+        self.assertEqual([n.guid for n in needs], [101, 102, 103])
+        self.assertEqual([n.slots for n in needs], [6, 8, 10])
+
+    def test_upgrade_need_skips_12_slot_bags(self):
+        f = self.facts_with_banked(
+            banked=(bb.Bag(guid=101, entry=4240, slots=12, used=10),)
+        )
+        needs = bb.upgrade_needs([f], 12)
+        self.assertEqual(needs, [])
+
+    def test_upgrade_need_requires_gold_for_12_slot_sack(self):
+        f = self.facts_with_banked(money=50_000)
+        needs = bb.upgrade_needs([f], 12)
+        self.assertEqual(needs, [])
+
+    def test_upgrade_need_safety_check_contents_fit_in_rest_of_bank(self):
+        f = self.facts_with_banked(
+            money=500_000,
+            banked=(
+                bb.Bag(guid=101, entry=4240, slots=6, used=6),
+                bb.Bag(guid=102, entry=4240, slots=8, used=8),
+            ),
+        )
+        needs = bb.upgrade_needs([f], 12)
+        self.assertEqual([n.guid for n in needs], [101, 102])
+
+    def test_upgrade_need_floor_is_12_slots(self):
+        f = self.facts_with_banked()
+        needs = bb.upgrade_needs([f], 10)
+        self.assertEqual([n.guid for n in needs], [101, 102])
+        needs = bb.upgrade_needs([f], 8)
+        self.assertEqual([n.guid for n in needs], [101])
+
+    def test_upgrade_step_plans_buy_then_place(self):
+        f = self.facts_with_banked()
+        steps = bb.upgrade_steps(f, 12)
+        self.assertEqual(len(steps), 2)
+        self.assertEqual(steps[0].command, "entry:4499 count:1 max:100000")
+        self.assertEqual(steps[1].command, "place-bag guid:101")
+        self.assertEqual(steps[1].slots, 6)
+
+    def test_upgrade_need_lists_all_safe_upgrades(self):
+        f = self.facts_with_banked(
+            money=500_000,
+            banked=(
+                bb.Bag(guid=101, entry=4240, slots=6, used=6),
+                bb.Bag(guid=102, entry=4240, slots=8, used=8),
+                bb.Bag(guid=103, entry=4240, slots=10, used=10),
+                bb.Bag(guid=104, entry=4240, slots=10, used=10),
+                bb.Bag(guid=105, entry=4240, slots=10, used=10),
+            ),
+        )
+        needs = bb.upgrade_needs([f], 12)
+        self.assertEqual([n.guid for n in needs], [101, 102, 103, 104, 105])
+
+
 if __name__ == "__main__":
     unittest.main()
