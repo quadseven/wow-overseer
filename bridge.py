@@ -18400,9 +18400,15 @@ class Bridge(discord.Client):
         members = bag_upgrade.members_from_rows(
             await asyncio.to_thread(_fetch_bag_state, names), names)
         open_positions = bag_pressure.open_bag_positions(members)
-        bank_needs = {n.name: n for n in bankbags.supply_needs(
-            await asyncio.to_thread(_fetch_bank_bag_facts, names))
-            if open_positions.get(n.name, 0) == 0}
+        bank_facts = await asyncio.to_thread(_fetch_bank_bag_facts, names)
+        bank_needs = {
+            n.name: n
+            for n in bankbags.supply_needs(bank_facts)
+            if open_positions.get(n.name, 0) == 0
+        }
+        for need in bankbags.upgrade_needs(bank_facts):
+            if open_positions.get(need.name, 0) == 0:
+                bank_needs.setdefault(need.name, need)
         try:
             # One purchase per member: fill bought bank space before another
             # worn-bag upgrade can spend the same purse and landing slot.
@@ -18420,7 +18426,8 @@ class Bridge(discord.Client):
             _bag_buyers, wanting, open_positions)
         everyone = [dataclasses.replace(
             b, bank=True, max_slots=bank_needs[b.name].max_slots,
-            excluded_entries=bank_needs[b.name].excluded_entries)
+            excluded_entries=bank_needs[b.name].excluded_entries,
+            min_slots=bank_needs[b.name].min_slots)
             if b.name in bank_needs else b for b in everyone]
         buyers = [b for b in everyone if b.name in at_vendor]
         stocked = sorted({entry for b in buyers for entry in b.stocks})
@@ -19003,15 +19010,21 @@ class Bridge(discord.Client):
         # all-time `target not online` rows.
         watched = await asyncio.to_thread(_fetch_positions, names)
         planned = [(move, bank.command(move)) for move in bank_plan.moves]
-        unasked = [move for move, command in planned
-                   if (move.character, command) not in seen
-                   and move.character in watched]
         # A BANK BAG STEP IS A REASON TO WALK TOO (#625). Only a banker buys a
         # slot or takes a bag, and the quick look never claims the column, so
         # a member that could afford a slot logged "it waits for a banker"
         # every pass and was never walked to one.
         bag_facts, bag_steps = await self._bank_bag_pending(
             names, seen, watched, kept_full=bank_plan.kept_full)
+        bag_commands = {(step.name, step.command) for step in bag_steps}
+        planned = [
+            (move, command)
+            for move, command in planned
+            if (move.character, command) not in bag_commands
+        ]
+        unasked = [move for move, command in planned
+                   if (move.character, command) not in seen
+                   and move.character in watched]
         # THE SPLIT RULE GOVERNS THE FAMILY'S WALK, NOT A MEMBER'S OWN MOVES:
         # the reach read is per mover, so a deferral counts only the moves
         # whose holder has no banker within reach. The move loop reuses it.
@@ -19189,6 +19202,7 @@ class Bridge(discord.Client):
         """
         facts = bankbags.with_kept_full(
             await asyncio.to_thread(_fetch_bank_bag_facts, names), kept_full)
+        facts = bankbags.with_recent_withdrawals(facts, seen)
         steps = [
             s for s in bankbags.pending_steps(facts, bankbags.family_floor(facts))
             if (s.name, s.command) not in seen and s.name in watched
@@ -19199,13 +19213,14 @@ class Bridge(discord.Client):
                               facts=None) -> None:
         """Buy a bank bag slot, or put a spare bag in one, at a banker (#625).
 
-        bankbags.step decides one step per character; the row is written only
-        for a character standing at a banker now, the same gate the item moves
-        use, and never twice inside the retry window. `facts` is the bank
-        pass's own read when it has one, so the pass reads the bags once.
+        bankbags.visit_steps decides the ordered work per character; rows are
+        written only for a character standing at a banker now, the same gate
+        the item moves use, and never twice inside the retry window. `facts`
+        is the bank pass's own read when it has one, so the pass reads once.
         """
         if facts is None:
             facts = await asyncio.to_thread(_fetch_bank_bag_facts, names)
+        facts = bankbags.with_recent_withdrawals(facts, seen)
         floor = bankbags.family_floor(facts)
         notes = []
         for f in facts:
@@ -19242,6 +19257,7 @@ class Bridge(discord.Client):
             return 0
         seen = await asyncio.to_thread(_recent_bank_keys, GIVE_RETRY_MINUTES)
         await self._bank_bag_slots(names, seen, cohort)
+        seen = await asyncio.to_thread(_recent_bank_keys, GIVE_RETRY_MINUTES)
         bank_plan = await asyncio.to_thread(_plan_bank, names)
         if not bank_plan.moves:
             return 0
@@ -36166,7 +36182,10 @@ def _fetch_surplus_bags(names: list) -> list:
                 return []
             raise
         rows = [dict(row) for row in cur.fetchall()]
-    bank_keeps = bankbags.reserved_guids(_fetch_bank_bag_facts(names))
+    recent_bank = _recent_bank_keys(GIVE_RETRY_MINUTES)
+    bank_facts = bankbags.with_recent_withdrawals(
+        _fetch_bank_bag_facts(names), recent_bank)
+    bank_keeps = bankbags.reserved_guids(bank_facts)
     # Both the sale and the sellable-stack count use these same rows.
     for row in rows:
         row["bank_reserved"] = int(row["item_guid"]) in bank_keeps
@@ -45130,9 +45149,9 @@ def _recent_bank_keys(minutes: int) -> set:
         return {(row["target_name"], row["command"]) for row in cur.fetchall()}
 
 
-# Each character's purse and bank bag slots bought, every container it owns
-# (`bag` is the holding bag's item guid, 0 for its own slots), and who holds
-# tailoring (bankbags: a crafter's ladder bags are the guild's).
+# Each character's purse, bank bag slots bought, and every inventory row.
+# The bank bag planner needs item GUIDs inside a target bag and free space on
+# both sides of the counter before it can safely replace that bag.
 _BANK_BAG_PEOPLE_SQL = (
     "SELECT name, level, money, bankSlots AS bank_slots "
     "FROM characters WHERE name IN (%s)"
@@ -45143,8 +45162,8 @@ _BANK_BAG_ROWS_SQL = (
     "ii.flags AS instance_flags, it.bonding AS bonding FROM characters c "
     "JOIN character_inventory ci ON ci.guid = c.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
-    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
-    "WHERE c.name IN (%s) AND it.class = 1 AND it.ContainerSlots > 0"
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s)"
 )
 _BANK_BAG_CRAFTERS_SQL = (
     "SELECT c.name FROM character_skills cs JOIN characters c ON c.guid = cs.guid "

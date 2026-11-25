@@ -1551,6 +1551,7 @@ class BagBuyer:
     bank: bool = False
     max_slots: int = 0  # 0 leaves worn-bag purchases unrestricted
     excluded_entries: frozenset = frozenset()
+    min_slots: int = 0
 
 
 @dataclass(frozen=True)
@@ -1633,6 +1634,7 @@ def bag_offer_fits(buyer: BagBuyer, offer: BagOffer) -> bool:
         offer.price > 0
         and offer.slots > 0
         and (not buyer.max_slots or offer.slots <= buyer.max_slots)
+        and offer.slots >= buyer.min_slots
         and offer.entry not in buyer.excluded_entries
     )
 

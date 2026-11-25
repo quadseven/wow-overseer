@@ -175,7 +175,23 @@ class TheRowsReadAsFacts(unittest.TestCase):
             [2, 3],
             "a bag inside a bank bag is not carried",
         )
+        self.assertEqual(f.banked[0].contents, (5,))
+        self.assertEqual((f.bank_free, f.bag_free), (33, 24))
         self.assertTrue(f.crafter)
+
+    def test_a_nonempty_carried_bag_is_not_placeable(self):
+        people = [{"name": "Member", "money": 5000, "bank_slots": 1}]
+        rows = [
+            {"holder": "Member", "item_guid": 1, "entry": 1, "slots": 12,
+             "bag": 0, "slot": 19},
+            {"holder": "Member", "item_guid": 2, "entry": 2, "slots": 8,
+             "bag": 0, "slot": 23},
+            {"holder": "Member", "item_guid": 3, "entry": 3, "slots": 0,
+             "bag": 2, "slot": 0},
+        ]
+        (member,) = bb.facts_from_rows(people, rows)
+        self.assertEqual(member.spare[0].contents, (3,))
+        self.assertEqual(bb.placeable(member), [])
 
     def test_the_bank_look_asks_at_a_banker(self):
         body = BRIDGE[BRIDGE.index("    async def _bank_bag_slots(") :]
@@ -288,6 +304,89 @@ class FullBankOfKeptSlots(unittest.TestCase):
         )
         self.assertTrue(enriched[0].bank_full_of_kept)
         self.assertEqual(enriched[0].purse_order, order)
+
+
+class ABankBagCanBeUpgradedSafely(unittest.TestCase):
+    def facts(self, **changes):
+        values = dict(
+            name="Member",
+            money=120_000,
+            bought=1,
+            placed=1,
+            worn=(8,) * 4,
+            banked=(bb.Bag(701, 7001, 8, contents=(801, 802)),),
+            bank_free=8,
+            bag_free=5,
+        )
+        values.update(changes)
+        return bb.Facts(**values)
+
+    def test_a_member_with_gold_is_planned_for_a_12_slot_sack(self):
+        (need,) = bb.upgrade_needs([self.facts()])
+        self.assertEqual((need.name, need.min_slots, need.max_slots), ("Member", 12, 12))
+
+    def test_a_member_without_the_sack_price_gets_no_upgrade_plan(self):
+        self.assertEqual(bb.upgrade_needs([self.facts(money=99_999)]), [])
+
+    def test_contents_must_fit_in_free_slots_outside_the_target_bag(self):
+        self.assertEqual(bb.upgrade_needs([self.facts(bank_free=7)]), [])
+        self.assertEqual(len(bb.upgrade_needs([self.facts(bank_free=8)])), 1)
+
+    def test_staging_room_must_hold_contents_and_the_displaced_bag(self):
+        self.assertEqual(bb.upgrade_needs([self.facts(bag_free=3)]), [])
+
+    def test_contents_are_withdrawn_before_the_empty_bag_and_sack(self):
+        sack = bb.Bag(900, 9000, 12)
+        starting = self.facts(spare=(sack,))
+        self.assertEqual(
+            [s.command for s in bb.visit_steps(starting)],
+            ["withdraw guid:801", "withdraw guid:802"],
+        )
+
+        emptied = self.facts(
+            spare=(sack,),
+            banked=(bb.Bag(701, 7001, 8),),
+            bank_free=10,
+            bag_free=3,
+        )
+        self.assertEqual(
+            [s.command for s in bb.visit_steps(emptied)], ["withdraw guid:701"]
+        )
+
+        removed = self.facts(
+            bought=1,
+            placed=0,
+            spare=(sack, bb.Bag(701, 7001, 8)),
+            banked=(),
+            bank_free=2,
+            bag_free=2,
+            displaced=frozenset({701}),
+        )
+        self.assertEqual(
+            [s.command for s in bb.visit_steps(removed)], ["place-bag guid:900"]
+        )
+
+    def test_the_upgrade_sack_is_reserved_while_its_bank_bag_is_drained(self):
+        f = self.facts(spare=(bb.Bag(900, 9000, 12),))
+        self.assertEqual(bb.reserved_guids([f]), frozenset({900}))
+
+    def test_a_recently_withdrawn_bank_bag_marks_the_replacement_phase(self):
+        f = self.facts(
+            bought=1,
+            placed=0,
+            spare=(bb.Bag(900, 9000, 12), bb.Bag(701, 7001, 8)),
+            banked=(),
+            bank_free=2,
+            bag_free=2,
+        )
+        marked = bb.with_recent_withdrawals(
+            [f], {("Member", "withdraw guid:701")}
+        )
+        self.assertEqual(
+            [step.command for step in bb.visit_steps(marked[0])],
+            ["place-bag guid:900"],
+        )
+        self.assertEqual(bb.reserved_guids(marked), frozenset({900}))
 
 
 if __name__ == "__main__":
