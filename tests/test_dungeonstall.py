@@ -577,6 +577,7 @@ def _pass(world):
         [
             "_campaign_queue_family_once",
             "_campaign_queue_once",
+            "_mc_requeue",
             "_apply_queue_move",
             "_prune_bag_hold_stuck",
             "_queue_holds",

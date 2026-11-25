@@ -1884,27 +1884,33 @@ def _source_blocker(quest: Quest) -> tuple:
     )
 
 
-def _unmet(quest: Quest) -> bool:
-    """True when something the quest requires has no source at all: an item
-    no creature drops, no chest holds and the quest does not hand over, or a
-    kill with no spawn that no item use credits. A summoned creature (a
-    gameobject's use) is spawned, and an item what the take hands over holds
-    is given."""
-    spawned = {s.entry for s in quest.fields}
-    spawned.update(e for u in quest.uses for e in u.summons)
+def unsourced_items(quest: Quest) -> tuple:
+    """The (item, count) pairs of the quest's required items with no source at
+    all: no creature drops it, no chest holds it, the take does not hand it
+    over, and no use makes it. An item made by using another beside a forge is
+    no unmet source."""
     chested = {u.item for u in quest.uses if u.verb == USE_OBJECT and u.item}
     given = set(quest.provided) | set(quest.held)
+    made = any(u.verb == USE_HERE for u in quest.uses)
+    return tuple(
+        (i, n)
+        for i, n in quest.items
+        if i not in chested and i not in given and i not in quest.droppable and not made
+    )
+
+
+def _unmet(quest: Quest) -> bool:
+    """True when something the quest requires has no source at all: an item
+    unsourced_items names, or a kill with no spawn that no item use credits. A
+    summoned creature (a gameobject's use) is spawned."""
+    spawned = {s.entry for s in quest.fields}
+    spawned.update(e for u in quest.uses for e in u.summons)
     # A kill is credited by an item used on a creature, or by the creature an
     # item used beside a spell focus summons there (a warlock's Binding).
     fed = any(u.verb in (USE_ITEM, USE_HERE) for u in quest.uses)
-    # An item made by using another beside a forge is no unmet source.
-    made = any(u.verb == USE_HERE for u in quest.uses)
     if any(e not in spawned and not fed for e, _n in quest.kills):
         return True
-    return any(
-        i not in chested and i not in given and i not in quest.droppable and not made
-        for i, _n in quest.items
-    )
+    return bool(unsourced_items(quest))
 
 
 def _hunting(quest: Quest, member) -> bool:
