@@ -9,7 +9,7 @@ import classquest
 import guildjobs
 import questers
 
-ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE, DUSKWOOD = 12, 9, 40, 44, 10
+ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE, DUSKWOOD, TIRISFAL = 12, 9, 40, 44, 10, 85
 HUMAN, ORC = 1, 2
 PRIEST, WARRIOR = 5, 1
 ALLIANCE_MASK, HORDE_MASK = 1101, 690
@@ -1523,6 +1523,50 @@ class Broken(unittest.TestCase):
         # After 2 hours of play the quest stalls
         self.assertEqual(len(p.broken), 1)
         self.assertEqual(p.broken[0].quest, 128)
+        # The reason is the one the catalogue proves, never a per-quest claim.
+        self.assertEqual(questers.STALLED_UNSOURCED, p.broken[0].reason)
+
+    def test_quest_426_the_mills_overrun_stalls_with_no_creature_spawns(self):
+        # Quest 426 (The Mills Overrun) in Tirisfal Glades (level 8) requires
+        # collecting 5 Notched Ribs (item 3162) from creatures 1520 and 1523,
+        # and 3 Blackened Skulls (item 3163) from creature 1522.
+        # If there are no spawns of these creatures in Tirisfal, the quest has
+        # items but no fields -> STALLED_UNSOURCED.
+        mills = quest(426, TIRISFAL, 8, prev=404, title="The Mills Overrun")
+        # RequiredItemId1=3162 (Notched Rib), RequiredItemCount1=5
+        # RequiredItemId2=3163 (Blackened Skull), RequiredItemCount2=3
+        mills["item1"] = 3162
+        mills["item_count1"] = 5
+        mills["item2"] = 3163
+        mills["item_count2"] = 3
+        cat = world(
+            extra_quests=[mills],
+            extra_givers=[
+                giver(426, "start", 1426, 1426, 0, 0, map_id=0),
+                giver(426, "end", 1426, 1426, 0, 0, map_id=0),
+            ],
+            # No spawns of creatures 1520, 1522, 1523 -> no fields for this quest
+        )
+        member = mirra(
+            level=8,
+            zone_id=TIRISFAL,
+            quest_log={426: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({404}),
+            quest_progress={426: 0},
+            quest_objectives={426: {3162: 0, 3163: 0}},
+        )
+        clock = questers.Clock()
+        # First pass - quest is not yet stalled
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        # Advance clock in PLAY_GAP_SECONDS increments until stall
+        # Each call advances at most PLAY_GAP_SECONDS (10 min = 600 sec)
+        # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        # After 2 hours of play the quest stalls
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 426)
         # The reason is the one the catalogue proves, never a per-quest claim.
         self.assertEqual(questers.STALLED_UNSOURCED, p.broken[0].reason)
 
