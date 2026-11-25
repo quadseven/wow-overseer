@@ -373,11 +373,7 @@ def walk_refusal(walker, name, start_map_knight=False) -> str:
 def _is_no_trainer_refusal(result: dict) -> bool:
     """True when the module refused the walk for having no class trainer on map."""
     reason = str(result.get("reason") or "")
-    return (
-        result.get("outcome") == "refused"
-        and result.get("retryable") is False
-        and reason.startswith(NO_TRAINER_REASONS)
-    )
+    return _nonretryable(result) and reason.startswith(NO_TRAINER_REASONS)
 
 
 def _passing_refusal(row) -> bool:
@@ -391,36 +387,68 @@ def _passing_refusal(row) -> bool:
     )
 
 
-def recent_walkers(rows, minutes=COOLDOWN_MINUTES, knights=()) -> set:
-    """Members walked inside the cooldown, from the command log's rows.
+def _nonretryable(result: dict) -> bool:
+    # The module emits the same flag its walk_refusals.json fixture catalogs.
+    return result.get("outcome") == "refused" and result.get("retryable") is False
 
-    `rows` carry target_name, source and age (minutes). Refusals for lacking a
-    trainer on the member's map are omitted so a stranded member can cross and
-    walk immediately after arriving on a trainer map. A member named in
-    `knights` (death knights, walked for the gryphon click) is held only
-    KNIGHT_COOLDOWN_MINUTES. A passing refusal (`_passing_refusal`) holds the
-    member only TRANSIENT_RETRY_MINUTES.
+
+def recent_walkers(
+    rows, minutes=COOLDOWN_MINUTES, knights=(), *, levels=None, walkers=None
+) -> set:
+    """Members cooling down or held by their latest non-retryable refusal.
+
+    No-trainer refusals go through stranded() so the planner can offer a
+    crossing. A member in knights has a shorter time-based cooldown. A passing
+    refusal (`_passing_refusal`) holds the member only TRANSIENT_RETRY_MINUTES.
     """
     out = set()
+    newest = {}
     knights = {str(n) for n in knights or ()}
     for row in rows or ():
         source = str(row.get("source") or "")
         if not source.startswith(SOURCE + ":"):
             continue
-        if _is_no_trainer_refusal(_result_of(row)):
-            continue
         who = str(row.get("target_name") or source.split(":", 1)[1])
+        result = _result_of(row)
         window = min(minutes, KNIGHT_COOLDOWN_MINUTES) if who in knights else minutes
         if _passing_refusal(row):
             window = min(window, TRANSIENT_RETRY_MINUTES)
-        if _int(row.get("age"), window + 1) <= window:
+        age = _int(row.get("age"), 10**9)
+        order = (age, -_int(row.get("id")))
+        if who not in newest or order < newest[who][0]:
+            newest[who] = (order, row, result)
+        if age <= window and not _is_no_trainer_refusal(result):
             out.add(who)
+    if walkers is not None:
+        levels = levels or {}
+        for who, (_, row, result) in newest.items():
+            if _holds_walk(result, row, levels.get(who), walkers.get(who)):
+                out.add(who)
     return out
 
 
+def _same_level(row, level) -> bool:
+    # Older commands did not record a level, but still hold on the refused map.
+    queued_level = _int(row.get("target_arg"))
+    return level is None or not queued_level or queued_level == level
+
+
+def _holds_walk(result, row, level, walker) -> bool:
+    """Whether a refusal other than a trainer strand still applies."""
+    map_id = getattr(walker, "map_id", None)
+    return (
+        map_id is not None
+        and _nonretryable(result)
+        and not _is_no_trainer_refusal(result)
+        and not _passing_refusal(row)
+        and result.get("reason") != MALFORMED
+        and _int(result.get("map"), -1) == map_id
+        and _same_level(row, level)
+    )
+
+
 # The module's own refusal when no trainer of the member's class stands on the
-# map it stands on (mod-overseer's walk_refusals fixture): not retryable, and
-# true for as long as the member stays on that map (ticket 2624).
+# map it stands on (mod-overseer's walk_refusals fixture, ticket 2624).
 NO_TRAINER_REASON = "no trainer of this character's class on this map"
 # The module's other way of saying the same for a class walk: a trainer stands
 # on the map but no safe crossing reaches one with a spell to teach. Also not
@@ -447,10 +475,10 @@ def _result_of(row) -> dict:
     return result if isinstance(result, dict) else {}
 
 
-def stranded(rows, source_prefix: str = SOURCE) -> dict:
+def stranded(rows, source_prefix: str = SOURCE, *, levels=None) -> dict:
     """name -> the map each member's newest class trainer walk was refused on,
     for those whose newest walk was refused for no trainer of their class on
-    that map. A later walk of any other kind frees the member. `rows` carry
+    that map. A later walk or a different level frees the member. `rows` carry
     target_name, source, age (minutes) and result. `source_prefix` names the
     pass whose rows are read (the healer respec pass writes its own)."""
     newest: dict = {}
@@ -459,12 +487,18 @@ def stranded(rows, source_prefix: str = SOURCE) -> dict:
         if not source.startswith(source_prefix + ":"):
             continue
         name = str(row.get("target_name") or source.split(":", 1)[1])
-        age = _int(row.get("age"), 10**9)
-        if name not in newest or age < newest[name][0]:
-            newest[name] = (age, _result_of(row))
+        order = (_int(row.get("age"), 10**9), -_int(row.get("id")))
+        if name not in newest or order < newest[name][0]:
+            newest[name] = (order, row)
     out = {}
-    for name, (_age, result) in newest.items():
-        if _is_no_trainer_refusal(result) and result.get("map") is not None:
+    levels = levels or {}
+    for name, (_, row) in newest.items():
+        result = _result_of(row)
+        if (
+            _is_no_trainer_refusal(result)
+            and result.get("map") is not None
+            and _same_level(row, levels.get(name))
+        ):
             out[name] = _int(result.get("map"))
     return out
 
