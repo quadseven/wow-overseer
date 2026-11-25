@@ -50,7 +50,7 @@ WHAT IT REFUSES, WITH A NAMED BLOCKER (a member never waits in silence):
            all on map 530 are a CROSS too, from the continent the member's
            side's boat there sails from (cross_map, #2052); from anywhere
            else the blocker names the way back that is missing.
-  level    every spawn of the objective is more than OVERLEVEL_MAX levels over
+  level    every spawn of the objective is at least OVERLEVEL_MAX levels over
            the member: no pack is chosen that would kill it.
 
 A HUNT LEAVES WHAT THE MODULE REFUSED. A spawn the module refused, or a walk to
@@ -480,11 +480,11 @@ GIVE_UP_MINUTES = 120
 # the spawn cannot be reached.
 FAILED_WALKS = 2
 
-# NEVER A SPAWN WHOSE CREATURE IS MORE THAN THIS MANY LEVELS OVER THE MEMBER. On
-# the dev realm on 2026-10-06 members walked to spawns and were killed on the
-# way or at them (8 of 163 class quest walks ended "died on the way to the
-# spawn"). Three is the module's own lethal gap: it holds a revived character
-# out of combat on ground reaching three levels over it.
+# NEVER A SPAWN WHOSE CREATURE IS THIS MANY LEVELS OVER THE MEMBER. On the dev
+# realm on 2026-10-06 members walked to spawns and were killed on the way or at
+# them (8 of 163 class quest walks ended "died on the way to the spawn"). Three
+# is the module's own lethal gap: it refuses a hunt at three levels over, so a
+# chosen spawn must be less than three levels over the member.
 OVERLEVEL_MAX = 3
 
 # A MEMBER THIS MANY LEVELS OVER A QUEST'S MIN LEVEL SOLOS IT INSTEAD OF
@@ -2401,10 +2401,11 @@ def _nearest_untried(member, spawns, avoid=()):
 
 
 def within_level(member, spawns) -> tuple:
-    """The spawns whose creature is at most OVERLEVEL_MAX levels over the
-    member; a spawn whose level the world data does not give (0) is kept."""
+    """The spawns whose creature is less than OVERLEVEL_MAX levels over the
+    member; the hunt module refuses one at that gap. An unknown level (0) is
+    kept."""
     top = int(member.level) + OVERLEVEL_MAX
-    return tuple(s for s in spawns if int(s.level) <= top)
+    return tuple(s for s in spawns if int(s.level) < top)
 
 
 def outlevels_for_solo(member, quest) -> bool:

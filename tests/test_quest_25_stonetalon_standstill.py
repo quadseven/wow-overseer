@@ -3,7 +3,7 @@
 Quest 25, Stonetalon Standstill (Ashenvale, level 25), was dropped as stalled
 by five questers: "its objectives did not move for 2 hours of play". A quester
 may take a quest up to levelroute.ABOVE (3) levels over itself (`open_to`),
-but hunts only spawns at most classquest.OVERLEVEL_MAX (3) levels over itself
+but hunts only spawns fewer than classquest.OVERLEVEL_MAX (3) levels over itself
 (`_hunt`). A quester three levels under the quest whose objective creatures
 stand a level or more over the quest held it with nothing it would hunt, so
 `_unhuntable` ran its stall clock as if no one could work the quest, and two
@@ -114,7 +114,7 @@ class StonetalonStandstillOverTheQuestersLevel(unittest.TestCase):
         self.assertEqual([b.quest for b in plan.broken], [])
 
     def test_the_quester_hunts_it_once_it_levels(self):
-        move = hunt_of(holder(level=23))
+        move = hunt_of(holder(level=24))
         self.assertEqual((move.kind, move.quest), (classquest.HUNT, QUEST))
         self.assertEqual(getattr(move.spot, "entry", 0), TARGET)
 

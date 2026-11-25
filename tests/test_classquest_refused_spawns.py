@@ -177,9 +177,10 @@ class TheLevel(unittest.TestCase):
         result = self.plan(self.spawns(10, 17), level=15)
         self.assertEqual(hunt_target(result), 12197)
 
-    def test_the_gap_is_the_modules_lethal_three(self):
+    def test_the_module_lethal_gap_is_not_a_hunt_target(self):
         self.assertEqual(classquest.OVERLEVEL_MAX, 3)
-        self.assertEqual(hunt_target(self.plan(self.spawns(10, 18), level=15)), 12197)
+        self.assertEqual(hunt_target(self.plan(self.spawns(10, 18), level=15)), 4788)
+        self.assertEqual(hunt_target(self.plan(self.spawns(10, 17), level=15)), 12197)
         self.assertEqual(hunt_target(self.plan(self.spawns(10, 19), level=15)), 4788)
 
     def test_a_level_the_world_does_not_give_is_no_reason_to_skip(self):

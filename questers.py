@@ -45,7 +45,7 @@ WHAT A QUESTER DOES NEXT (`next_move`), one move a pass, in this order:
      the nearest quest giver first;
   4. work a quest it holds: open the nearest chest that holds an item it still
      lacks (`chest_spots`, the module's `use-gameobject` row), or walk to the
-     nearest objective spawn at most
+     nearest objective spawn less than
      classquest.OVERLEVEL_MAX levels over it and hunt its creature there with
      the module's `hunt-spawn` row, as a class hunt does (`step_for`);
   5. with nothing left in reach, go to the next zone (`next_zone`): the zone
