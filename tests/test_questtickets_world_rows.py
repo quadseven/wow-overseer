@@ -13,6 +13,7 @@ from _stub_modules import PYMYSQL, stub_modules  # noqa: E402
 with stub_modules(pymysql=PYMYSQL):
     import questcatalogue as qc
     import questtickets as qt
+    import questers
 
 
 def quest_row(quest=116, **values):
@@ -107,6 +108,62 @@ class WorldRows(unittest.TestCase):
         )
         self.assertIn(
             "no source in the world rows", qt.body(116, catalogue[0], [], [], "")
+        )
+
+    def test_pyrewood_ambush_ticket_explains_the_event_reason(self):
+        # This quest_template row mirrors the ticket's read-only world snapshot.
+        # Its ledger reason is written by bridge._record_quest_broken; the
+        # producer path is covered in test_guildlevel_event_quests.
+        world_row = quest_row(
+            452,
+            title="Pyrewood Ambush",
+            level=15,
+            min_level=12,
+            sort=130,
+        )
+        world_row.update(
+            {key: 0 for i in range(1, 7) for key in ("item%d" % i, "item_count%d" % i)}
+        )
+        world_row.update(
+            {
+                key: 0
+                for i in range(1, 5)
+                for key in ("objective%d" % i, "objective_count%d" % i)
+            }
+        )
+        info = self.catalogue(world_row, {})[0]
+        self.assertEqual(info.min_level, 12)
+        self.assertEqual(info.items, ())
+        self.assertEqual(info.objectives, ())
+        rows = [
+            {
+                "quest": 452,
+                "guid": 7,
+                "character_name": "Quester A",
+                "state": "broken",
+                "reason": questers.SCRIPTED_EVENT,
+            },
+            {
+                "quest": 452,
+                "guid": 8,
+                "character_name": "Quester B",
+                "state": "broken",
+                "reason": questers.SCRIPTED_EVENT,
+            },
+        ]
+
+        text = qt.body(452, info, rows, [], "")
+
+        self.assertIn("- Quest: 452, Pyrewood Ambush", text)
+        self.assertIn("- Zone: Silverpine Forest", text)
+        self.assertIn("- Level: 15", text)
+        self.assertIn("- No required item or creature/object rows.", text)
+        self.assertEqual(text.count("Reason: " + questers.SCRIPTED_EVENT), 2)
+        self.assertEqual(text.count("Last objective counts: not in the log now"), 2)
+        self.assertIn(
+            "The world rows list no required item or creature/object objectives, "
+            "so the stored reason is the only evidence of how it completes: a scripted event.",
+            text,
         )
 
     def test_quest_start_item_is_a_source_for_its_required_item(self):
