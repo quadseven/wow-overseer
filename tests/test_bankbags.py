@@ -8,6 +8,7 @@ import pathlib
 import unittest
 
 import bankbags as bb
+import bank
 import purse
 
 BRIDGE = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
@@ -43,6 +44,16 @@ class AVisitBuysThenPlacesInOrder(unittest.TestCase):
         spare = (bb.Bag(guid=77, entry=4245, slots=6),)
         gain = bb.room_gain([facts(spare=spare), facts(name="Og")])
         self.assertEqual(gain, {"Grog": 6})
+
+    def test_room_gain_for_a_swap_is_the_net_capacity_change(self):
+        upgraded = facts(
+            bought=1,
+            placed=1,
+            bank_bags=(bb.Bag(300, 4496, 6),),
+            spare=(bb.Bag(400, 4499, 12),),
+            bag_free=1,
+        )
+        self.assertEqual(bb.room_gain([upgraded]), {"Grog": 6})
 
 
 class ASlotIsBoughtWhenAffordable(unittest.TestCase):
@@ -102,6 +113,112 @@ class ASpareBagFillsTheSlot(unittest.TestCase):
             )[0].command,
             "place-bag guid:9",
         )
+
+
+class BankBagUpgrades(unittest.TestCase):
+    def test_a_full_bank_bag_is_emptied_into_free_regular_bank_slots_first(self):
+        f = facts(
+            bought=1,
+            placed=1,
+            bank_bags=(bb.Bag(300, 4496, 6, used=2, contents=(501, 502)),),
+            spare=(bb.Bag(400, 4499, 12),),
+            bag_free=1,
+            bank_base_free=2,
+        )
+        self.assertEqual(
+            [s.command for s in bb.visit_steps(f)],
+            [
+                "withdraw guid:501",
+                "deposit guid:501",
+                "withdraw guid:502",
+                "deposit guid:502",
+            ],
+        )
+
+    def test_a_nonempty_bank_bag_is_not_touched_without_room_for_its_contents(self):
+        f = facts(
+            money=0,
+            bought=1,
+            placed=1,
+            bank_bags=(bb.Bag(300, 4496, 6, used=2, contents=(501, 502)),),
+            spare=(bb.Bag(400, 4499, 12),),
+            bag_free=1,
+            bank_base_free=1,
+        )
+        self.assertEqual(bb.visit_steps(f), [])
+
+    def test_an_empty_bank_bag_is_withdrawn_before_the_new_sack_is_placed(self):
+        f = facts(
+            bought=1,
+            placed=1,
+            bank_bags=(bb.Bag(300, 4496, 6),),
+            spare=(bb.Bag(400, 4499, 12),),
+            bag_free=1,
+        )
+        self.assertEqual(
+            [s.command for s in bb.visit_steps(f)],
+            ["withdraw guid:300", "place-bag guid:400"],
+        )
+
+    def test_a_small_bank_bag_requests_an_exact_twelve_slot_replacement(self):
+        f = facts(
+            bought=1,
+            placed=1,
+            bank_bags=(bb.Bag(300, 4496, 6),),
+        )
+        (need,) = bb.supply_needs([f])
+        self.assertEqual(
+            (need.min_slots, need.max_slots, need.min_free_slots), (12, 12, 2)
+        )
+
+    def test_a_bank_upgrade_does_not_depend_on_a_worn_bag_floor(self):
+        f = facts(
+            bought=1,
+            placed=1,
+            worn=(),
+            bank_bags=(bb.Bag(300, 4496, 6),),
+        )
+        (need,) = bb.supply_needs([f])
+        self.assertEqual((need.min_slots, need.max_slots), (12, 12))
+
+    def test_bank_state_keeps_a_known_contents_block(self):
+        facts = [
+            bb.Facts(
+                "Grog",
+                bank_bags=(
+                    bb.Bag(
+                        300, 4496, 6, used=1, contents=(501,), contents_movable=False
+                    ),
+                ),
+            )
+        ]
+        members = [
+            bank.Member(
+                name="Grog",
+                level=80,
+                bag_free=10,
+                bank_free=28,
+                banked=(),
+            )
+        ]
+        (enriched,) = bb.with_bank_state(facts, members)
+        self.assertFalse(enriched.bank_bags[0].contents_movable)
+
+    def test_bank_bag_facts_keep_the_occupied_slot_count(self):
+        rows = [
+            dict(
+                holder="Grog",
+                item_guid=300,
+                entry=4496,
+                slots=6,
+                used=2,
+                subclass=0,
+                bag=0,
+                slot=67,
+            )
+        ]
+        (fact,) = bb.facts_from_rows([{"name": "Grog", "bank_slots": 1}], rows)
+        self.assertEqual((fact.bank_bags[0].used, fact.bank_bags[0].general), (2, True))
 
 
 class TheFamilysPendingSteps(unittest.TestCase):

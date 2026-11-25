@@ -92,6 +92,7 @@ class TheRowsBecomeTwoSidesOfACounter(unittest.TestCase):
         ]
         grug = bank.members_from_rows(rows, ["Grug"])[0]
         self.assertEqual([h.guid for h in grug.banked], [51])
+        self.assertEqual(grug.banked[0].container_guid, 50)
         self.assertEqual(grug.carried, ())
 
     def test_worn_equipment_is_neither(self):
@@ -141,6 +142,15 @@ class TheRoomIsCountedHereAndNotInSQL(unittest.TestCase):
         )[0]
         self.assertEqual(grug.bank_free, 36)
         self.assertEqual(grug.bag_free, 16)
+
+    def test_regular_bank_room_excludes_bank_bag_capacity(self):
+        rows = [
+            row(item_guid=50, slot=67, item_class=1, container_slots=6),
+            row(item_guid=51, bag=50, slot=0),
+            row(item_guid=52, slot=39),
+        ]
+        grug = bank.members_from_rows(rows, ["Grug"])[0]
+        self.assertEqual(grug.bank_base_free, 27)
 
     def test_every_carried_stack_costs_one_slot_whatever_its_size(self):
         rows = [row(item_guid=1, slot=23, count=20), row(item_guid=2, slot=24, count=1)]

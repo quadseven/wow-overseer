@@ -220,6 +220,7 @@ class Holding:
     lock_id: int = 0
     start_quest: int = 0
     bound: bool = True
+    container_guid: int = 0
 
 
 @dataclass(frozen=True)
@@ -239,6 +240,7 @@ class Member:
     bank_free: int
     carried: tuple = ()
     banked: tuple = ()
+    bank_base_free: int = 0
 
 
 @dataclass(frozen=True)
@@ -276,6 +278,9 @@ class Plan:
     guild: tuple = ()
     # Members whose full personal bank has nothing to withdraw or relocate (#2608).
     kept_full: frozenset = frozenset()
+    # The measured rows let the bank bag pass reuse this read when planning a
+    # safe replacement instead of issuing another inventory query.
+    measured: tuple = ()
 
 
 def _int(value, default=0):
@@ -396,6 +401,7 @@ def members_from_rows(rows, names):
     # bag adds its own capacity wherever it is worn.
     bag_room = {name: BACKPACK_SIZE for name in wanted}
     bank_room = {name: BANK_SIZE for name in wanted}
+    bank_base_room = {name: BANK_SIZE for name in wanted}
     for row in rows:
         holder = row.get("holder")
         if holder not in levels:
@@ -416,6 +422,8 @@ def members_from_rows(rows, names):
             bag_room[holder] -= 1
         elif place == BANK:
             bank_room[holder] -= 1
+            if bag == 0 and slot in BANK_ITEM_SLOTS:
+                bank_base_room[holder] -= 1
         else:
             continue
         item = item_from_row(row)
@@ -439,6 +447,7 @@ def members_from_rows(rows, names):
                 item.binding == disposition.BIND_ON_PICKUP
                 or bool(_int(row.get("instance_flags")) & _INSTANCE_SOULBOUND)
             ),
+            container_guid=bag,
         )
         (carried if place == BAGS else banked)[holder].append(holding)
 
@@ -450,6 +459,7 @@ def members_from_rows(rows, names):
             bank_free=max(0, bank_room[name]),
             carried=tuple(sorted(carried[name], key=_stack_order)),
             banked=tuple(sorted(banked[name], key=_stack_order)),
+            bank_base_free=max(0, bank_base_room[name]),
         )
         for name in sorted(wanted)
     )
@@ -1370,6 +1380,7 @@ def plan(
     fetch of its own reagent counts them as room, because they are sent ahead
     of it (`itemplan_route.merge`); nobody else's withdrawal does (#2502).
     """
+    members = tuple(members)
     totals = reagent_totals(members)
     moves, notes, guild, kept_full = [], [], [], []
     guild_room = _room_by_tab(storage)
@@ -1423,6 +1434,7 @@ def plan(
         notes=tuple(dict.fromkeys(notes)),
         guild=tuple(guild),
         kept_full=frozenset(kept_full),
+        measured=members,
     )
 
 

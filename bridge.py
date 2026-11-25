@@ -18400,8 +18400,14 @@ class Bridge(discord.Client):
         members = bag_upgrade.members_from_rows(
             await asyncio.to_thread(_fetch_bag_state, names), names)
         open_positions = bag_pressure.open_bag_positions(members)
-        bank_needs = {n.name: n for n in bankbags.supply_needs(
-            await asyncio.to_thread(_fetch_bank_bag_facts, names))
+        bank_facts = await asyncio.to_thread(_fetch_bank_bag_facts, names)
+        bank_rows = await asyncio.to_thread(_fetch_bank_items, names)
+        bank_members = bank.members_from_rows(bank_rows, names)
+        bank_facts = bankbags.with_bank_state(bank_facts, bank_members)
+        bank_facts = bankbags.with_displaced(
+            bank_facts, await asyncio.to_thread(
+                _recent_bank_keys, GIVE_RETRY_MINUTES))
+        bank_needs = {n.name: n for n in bankbags.supply_needs(bank_facts)
             if open_positions.get(n.name, 0) == 0}
         try:
             # One purchase per member: fill bought bank space before another
@@ -18420,6 +18426,8 @@ class Bridge(discord.Client):
             _bag_buyers, wanting, open_positions)
         everyone = [dataclasses.replace(
             b, bank=True, max_slots=bank_needs[b.name].max_slots,
+            min_slots=bank_needs[b.name].min_slots,
+            min_free_slots=bank_needs[b.name].min_free_slots,
             excluded_entries=bank_needs[b.name].excluded_entries)
             if b.name in bank_needs else b for b in everyone]
         buyers = [b for b in everyone if b.name in at_vendor]
@@ -19002,16 +19010,22 @@ class Bridge(discord.Client):
         # snapshot rows fresher than a minute, so this also ends the 17
         # all-time `target not online` rows.
         watched = await asyncio.to_thread(_fetch_positions, names)
-        planned = [(move, bank.command(move)) for move in bank_plan.moves]
-        unasked = [move for move, command in planned
-                   if (move.character, command) not in seen
-                   and move.character in watched]
         # A BANK BAG STEP IS A REASON TO WALK TOO (#625). Only a banker buys a
         # slot or takes a bag, and the quick look never claims the column, so
         # a member that could afford a slot logged "it waits for a banker"
         # every pass and was never walked to one.
         bag_facts, bag_steps = await self._bank_bag_pending(
-            names, seen, watched, kept_full=bank_plan.kept_full)
+            names, seen, watched, kept_full=bank_plan.kept_full,
+            bank_members=getattr(bank_plan, "measured", ()),
+            bank_busy={move.character for move in bank_plan.moves})
+        evacuating = {s.name for s in bag_steps if s.transfer}
+        planned = [
+            (move, bank.command(move)) for move in bank_plan.moves
+            if move.character not in evacuating
+        ]
+        unasked = [move for move, command in planned
+                   if (move.character, command) not in seen
+                   and move.character in watched]
         # THE SPLIT RULE GOVERNS THE FAMILY'S WALK, NOT A MEMBER'S OWN MOVES:
         # the reach read is per mover, so a deferral counts only the moves
         # whose holder has no banker within reach. The move loop reuses it.
@@ -19180,7 +19194,8 @@ class Bridge(discord.Client):
         return fresh, walking
 
     async def _bank_bag_pending(self, names: list, seen: set,
-                                watched, kept_full=frozenset()) -> tuple:
+                                watched, kept_full=frozenset(),
+                                bank_members=(), bank_busy=()) -> tuple:
         """(facts, steps): the bank bag read, and the steps a banker trip is for.
 
         A step already asked inside the retry window is not, and neither is
@@ -19189,6 +19204,8 @@ class Bridge(discord.Client):
         """
         facts = bankbags.with_kept_full(
             await asyncio.to_thread(_fetch_bank_bag_facts, names), kept_full)
+        facts = bankbags.with_bank_state(facts, bank_members, bank_busy)
+        facts = bankbags.with_displaced(facts, seen)
         steps = [
             s for s in bankbags.pending_steps(facts, bankbags.family_floor(facts))
             if (s.name, s.command) not in seen and s.name in watched
@@ -19196,37 +19213,46 @@ class Bridge(discord.Client):
         return facts, steps
 
     async def _bank_bag_slots(self, names: list, seen: set, cohort=None,
-                              facts=None) -> None:
-        """Buy a bank bag slot, or put a spare bag in one, at a banker (#625).
+                              facts=None, bank_busy=()) -> set:
+        """Buy, place or safely replace a bank bag at a banker (#625, #2608).
 
-        bankbags.step decides one step per character; the row is written only
-        for a character standing at a banker now, the same gate the item moves
-        use, and never twice inside the retry window. `facts` is the bank
+        bankbags chooses the ordered commands. Rows are written only for a
+        character standing at a banker now, through the same gate the item
+        moves use, and never twice inside the retry window. `facts` is the bank
         pass's own read when it has one, so the pass reads the bags once.
         """
         if facts is None:
             facts = await asyncio.to_thread(_fetch_bank_bag_facts, names)
+            rows = await asyncio.to_thread(_fetch_bank_items, names)
+            facts = bankbags.with_bank_state(
+                facts, bank.members_from_rows(rows, names), bank_busy)
+        facts = bankbags.with_displaced(facts, seen)
         floor = bankbags.family_floor(facts)
         notes = []
+        evacuating = set()
         for f in facts:
             steps = bankbags.visit_steps(f, floor)
             if not steps:
                 notes.append(bankbags.step(f, floor)[1])
                 continue
-            # BUY, THEN PLACE: the room exists before a deposit is judged.
+            if steps[0].transfer:
+                evacuating.add(f.name)
+            # Keep each transition in command order. A replacement withdraws
+            # the old empty bag before placing the new sack into that position.
             for step in steps:
                 if (step.name, step.command) in seen:
-                    continue
+                    break
                 town = await asyncio.to_thread(_fetch_town, step.name)
                 if not town.banker:
                     notes.append(_bank_bag_wait_note(step))
                     break
-                move = bank.Move(step.name, step.command.split(" ")[0], 0,
-                                 "bank bag slot", 1, step.why)
+                move = bank.Move(step.name, step.command.split(" ")[0], step.guid,
+                                 "bank bag", 1, step.why)
                 if await asyncio.to_thread(_insert_bank, move, step.command):
                     log.info("bank bags: %s (%s)%s", step.why, step.command,
                              _family_label(cohort))
         _log_changed("bank bags", notes, tuple(sorted(names)))
+        return evacuating
 
     async def _bank_passing_once(self, cohort=None) -> int:
         """The quick look: bank for whoever is at a banker, nothing else.
@@ -19241,11 +19267,15 @@ class Bridge(discord.Client):
         if not names:
             return 0
         seen = await asyncio.to_thread(_recent_bank_keys, GIVE_RETRY_MINUTES)
-        await self._bank_bag_slots(names, seen, cohort)
         bank_plan = await asyncio.to_thread(_plan_bank, names)
-        if not bank_plan.moves:
+        evacuating = await self._bank_bag_slots(
+            names, seen, cohort,
+            bank_busy={move.character for move in bank_plan.moves})
+        evacuating = evacuating or set()
+        moves = [m for m in bank_plan.moves if m.character not in evacuating]
+        if not moves:
             return 0
-        planned = [(move, bank.command(move)) for move in bank_plan.moves]
+        planned = [(move, bank.command(move)) for move in moves]
         fresh, _walking = await self._bank_at_the_counter(planned, seen)
         if fresh:
             for line in bank.lines(fresh):
@@ -36166,7 +36196,11 @@ def _fetch_surplus_bags(names: list) -> list:
                 return []
             raise
         rows = [dict(row) for row in cur.fetchall()]
-    bank_keeps = bankbags.reserved_guids(_fetch_bank_bag_facts(names))
+    bank_facts = bankbags.with_displaced(
+        _fetch_bank_bag_facts(names),
+        _recent_bank_keys(GIVE_RETRY_MINUTES),
+    )
+    bank_keeps = bankbags.reserved_guids(bank_facts)
     # Both the sale and the sellable-stack count use these same rows.
     for row in rows:
         row["bank_reserved"] = int(row["item_guid"]) in bank_keeps
@@ -42262,11 +42296,14 @@ def _plan_bank(names: list) -> "bank.Plan":
     # THE ITEM PLAN'S DEPOSITS ARE PLANNED FIRST (#2502): a crafter's fetch of
     # its own reagent counts the room they make, and merge sends them ahead.
     routed = _itemplan_bank_routes(names)
+    members = bank.members_from_rows(rows, names)
+    bag_facts = bankbags.with_bank_state(
+        _fetch_bank_bag_facts(names), members)
     plan = bank.plan(
-        bank.members_from_rows(rows, names), bank.family_from_skills(held),
+        members, bank.family_from_skills(held),
         storage=storage, room_floor=room_floor,
         # A bag placed on this visit is sent before the deposits (#2263).
-        room_gain=bankbags.room_gain(_fetch_bank_bag_facts(names)),
+        room_gain=bankbags.room_gain(bag_facts),
         planned_deposits=itemplan_route.personal_room(routed.moves),
     )
     # WHAT THE ITEM PLAN BANKS IS BANKED (#2136): its GUILD_BANK and
@@ -45139,11 +45176,14 @@ _BANK_BAG_PEOPLE_SQL = (
 )
 _BANK_BAG_ROWS_SQL = (
     "SELECT c.name AS holder, ci.item AS item_guid, ii.itemEntry AS entry, "
-    "it.ContainerSlots AS slots, ci.bag, ci.slot, "
+    "it.ContainerSlots AS slots, it.subclass AS subclass, "
+    "COALESCE(fill.n, 0) AS used, ci.bag, ci.slot, "
     "ii.flags AS instance_flags, it.bonding AS bonding FROM characters c "
     "JOIN character_inventory ci ON ci.guid = c.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "LEFT JOIN (SELECT bag, COUNT(*) AS n FROM character_inventory "
+    "           WHERE bag <> 0 GROUP BY bag) fill ON fill.bag = ii.guid "
     "WHERE c.name IN (%s) AND it.class = 1 AND it.ContainerSlots > 0"
 )
 _BANK_BAG_CRAFTERS_SQL = (
