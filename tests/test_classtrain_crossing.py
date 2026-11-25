@@ -10,8 +10,10 @@ import asyncio
 import json
 import types
 import unittest
+from dataclasses import replace
 from unittest import mock
 
+import modsource
 from _stub_modules import PYMYSQL, fresh_import, stub_modules
 
 with stub_modules(pymysql=PYMYSQL):
@@ -473,6 +475,70 @@ class BridgeTrainerCrossingWiring(unittest.TestCase):
                 )
             ],
         )
+
+    def test_nonretryable_refusal_holds_walk_until_map_or_level_changes(self):
+        fixture = json.loads(
+            modsource.read(modsource.SUBMODULE / "fixtures" / "walk_refusals.json")
+        )
+        refusal = next(
+            row
+            for row in fixture["rows"]
+            if row["reason"].endswith("on this map has a class spell to teach it now")
+        )
+        trainee = _trainee("Shamy", cost=500, money=2000)
+        row = {
+            "target_name": trainee.name,
+            "source": f"{classtrain.SOURCE}:{trainee.name}",
+            "age": classtrain.COOLDOWN_MINUTES + 1,
+            "status": "error",
+            "target_arg": str(trainee.level),
+            "result": json.dumps(dict(refusal, map=KALIMDOR)),
+        }
+        for map_id, level, should_walk in (
+            (KALIMDOR, trainee.level, False),
+            (EASTERN_KINGDOMS, trainee.level, True),
+            (KALIMDOR, trainee.level + 1, True),
+        ):
+            with self.subTest(map_id=map_id, level=level):
+                bot = bridge.Bridge.__new__(bridge.Bridge)
+                bot._train_walks = {}
+                bot._mail_walk_unsupported_until = 0.0
+                with (
+                    mock.patch.object(bridge, "_names_of", return_value=[trainee.name]),
+                    mock.patch.object(
+                        bridge,
+                        "_fetch_trainees",
+                        return_value=[replace(trainee, level=level)],
+                    ),
+                    mock.patch.object(bridge, "_guild_train_rows", return_value=[row]),
+                    mock.patch.object(
+                        bridge, "_class_trainer_spawns", return_value=None
+                    ),
+                    mock.patch.object(bridge, "_guild_cross_rows", return_value=[]),
+                    mock.patch.object(
+                        bridge,
+                        "_route_walkers",
+                        return_value={trainee.name: _walker(trainee.name, map_id, 12)},
+                    ),
+                    mock.patch.object(
+                        bridge, "_insert_crafter_row", return_value=901
+                    ) as insert,
+                    mock.patch.object(
+                        bot, "_guild_walkers_busy", return_value=frozenset()
+                    ),
+                    mock.patch.object(bot, "_guild_walk_cap", return_value=5000.0),
+                ):
+                    asyncio.run(bot._guild_train_once())
+                if should_walk:
+                    insert.assert_called_once()
+                    self.assertTrue(
+                        insert.call_args.args[1].startswith(classtrain.VERB)
+                    )
+                    self.assertEqual(
+                        insert.call_args.kwargs, {"target_arg": str(level)}
+                    )
+                else:
+                    insert.assert_not_called()
 
 
 if __name__ == "__main__":
