@@ -83,13 +83,15 @@ class OnlyLedgerNamesAreServed(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
-        root = pathlib.Path(self.dir.name)
+        base = pathlib.Path(self.dir.name)
+        root = base / "clips"
+        root.mkdir()
+        self.clips = str(root)
         (root / NAME).write_bytes(BODY)
         (root / "clip-2-loot.mp4").write_bytes(BODY)
         (root / "stray.mp4").write_bytes(BODY)
-        self.outside = root.parent / "outside-secret.txt"
+        self.outside = base / "outside-secret.txt"
         self.outside.write_bytes(b"secret")
-        self.addCleanup(self.outside.unlink)
         self.ledger = FakeLedger(
             [
                 clip_row(id=1, file_name=NAME),
@@ -99,7 +101,7 @@ class OnlyLedgerNamesAreServed(unittest.TestCase):
 
     def get(self, path, clips_dir=None):
         with serving(
-            self.ledger, self.dir.name if clips_dir is None else clips_dir
+            self.ledger, self.clips if clips_dir is None else clips_dir
         ) as get:
             return get(path)
 
@@ -159,7 +161,7 @@ class OnlyLedgerNamesAreServed(unittest.TestCase):
 
         self.ledger.connect = boom
         with mock.patch.object(map_server, "_connect", boom):
-            with mock.patch.object(map_server, "CLIPS_DIR", self.dir.name):
+            with mock.patch.object(map_server, "CLIPS_DIR", self.clips):
                 with self.assertRaises(RuntimeError):
                     map_server._ready_clip_path(NAME)
 
