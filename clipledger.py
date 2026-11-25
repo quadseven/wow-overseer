@@ -700,20 +700,6 @@ def clip_url(file_name: str) -> str:
     return CLIPS_PATH + quote(file_name, safe="")
 
 
-def poster_url(file_name: str) -> str:
-    """The poster frame path for a clip file: the same name with a .jpg
-    suffix, beside the video under CLIPS_PATH. The cutter writes that frame
-    when it saves a clip (clipcutter.poster_name); a clip whose frame was
-    never written simply 404s that image and the card draws without it."""
-    name = file_name[:-4] + ".jpg" if file_name.endswith(".mp4") else file_name + ".jpg"
-    return CLIPS_PATH + quote(name, safe="")
-
-
-def poster_name(file_name: str) -> str:
-    """The file name a clip's poster frame is written under, beside its video."""
-    return file_name[:-4] + ".jpg" if file_name.endswith(".mp4") else file_name + ".jpg"
-
-
 def _iso(t) -> str | None:
     return t.isoformat() if isinstance(t, datetime) else (t or None)
 
@@ -825,7 +811,6 @@ def shelf(rows: Iterable[Mapping]) -> dict:
                 "subject": subject(r),
                 "at": _iso(r.get("event_at")),
                 "url": clip_url(r["file_name"]),
-                "poster": poster_url(r["file_name"]),
                 **(
                     {"quality": int(r[LOOT_QUALITY_KEY])}
                     if isinstance(r.get(LOOT_QUALITY_KEY), int)

@@ -1071,7 +1071,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class ShelfPosterTests(unittest.TestCase):
+class ShelfCardFieldsTests(unittest.TestCase):
     def row(self, **over):
         row = {
             "id": 7,
@@ -1087,17 +1087,12 @@ class ShelfPosterTests(unittest.TestCase):
         row.update(over)
         return row
 
-    def test_a_clip_carries_its_poster_quality_and_context(self):
+    def test_a_clip_carries_its_quality_and_context(self):
         (clip,) = clipledger.shelf([self.row()])["clips"]
-        self.assertEqual("/clips/clip-7-loot.jpg", clip["poster"])
         self.assertEqual(4, clip["quality"])
         self.assertEqual("Test Mines run 42", clip["context"])
 
-    def test_poster_name_sits_beside_the_video(self):
-        self.assertEqual("clip-7-loot.jpg", clipledger.poster_name("clip-7-loot.mp4"))
-        self.assertEqual(
-            "/clips/clip-7-loot.jpg", clipledger.poster_url("clip-7-loot.mp4")
-        )
-        import clipcutter
-
-        self.assertEqual("clip-7-loot.jpg", clipcutter.poster_name(7, "loot"))
+    def test_a_clip_names_no_poster_while_nothing_writes_one(self):
+        (clip,) = clipledger.shelf([self.row()])["clips"]
+        self.assertNotIn("poster", clip)
+        self.assertFalse(any(str(v).endswith(".jpg") for v in clip.values()))

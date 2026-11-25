@@ -354,7 +354,7 @@ if __name__ == "__main__":
 
 
 @needs_node
-class ThePosterAndContext(unittest.TestCase):
+class TheCardContextAndFrame(unittest.TestCase):
     def draw(self, clips):
         out = run(
             'const C = await import("./views/_clips.js");\n'
@@ -363,11 +363,10 @@ class ThePosterAndContext(unittest.TestCase):
         )
         return out["m"]
 
-    def test_a_card_shows_its_poster_context_and_repeat_in_words(self):
+    def test_a_card_shows_its_context_and_repeat_in_words(self):
         clips = [
             dict(
                 CLIPS[1],
-                poster="/clips/clip-1-loot.jpg",
                 quality=4,
                 context="Test Mines run 42",
                 nth=2,
@@ -375,10 +374,15 @@ class ThePosterAndContext(unittest.TestCase):
             )
         ]
         m = self.draw(clips)
-        self.assertIn('class="clip-poster"', m)
-        self.assertIn("/clips/clip-1-loot.jpg", m)
         self.assertIn("second Test Blade, Test Mines run 42", m)
         self.assertIn('data-quality="4"', m)
+
+    def test_a_card_draws_a_frame_not_an_image_where_the_poster_goes(self):
+        m = self.draw([dict(CLIPS[1], poster="/clips/clip-1-loot.jpg")])
+        self.assertIn('class="clip-frame"', m)
+        self.assertIn('data-clip="/clips/clip-1-loot.mp4"', m)
+        self.assertNotIn(".jpg", m)
+        self.assertNotIn("clip-poster", m)
 
     def test_two_loot_rows_are_two_cards_and_missed_rows_are_a_footer(self):
         clips = [

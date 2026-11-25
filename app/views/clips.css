@@ -12,6 +12,8 @@
 .clip-note { font-size: var(--fs-1); }
 .clip-missed { margin-top: 12px; font-size: var(--fs-1); }
 .clip-missed p { margin: 0 0 4px; }
-.clip-poster { width: 100%; max-width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--radius-md); background: #000; }
+.clip-frame { display: grid; place-items: center; width: 100%; aspect-ratio: 16 / 9; border-radius: var(--radius-md); background: #000; }
+.clip-frame .clip-play { width: auto; }
+.clip-frame .clip-video { border-radius: inherit; }
 .clip-context { margin: 0; overflow-wrap: anywhere; }
 .clip-icon { width: 18px; height: 18px; vertical-align: text-bottom; }
