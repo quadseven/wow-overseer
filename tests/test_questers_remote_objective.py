@@ -2,6 +2,7 @@
 
 import unittest
 
+import classhunt
 import classquest
 import guildjobs
 import questers
@@ -9,6 +10,84 @@ from test_questers import DUROTAR, REDRIDGE, giver, mirra, quest, spawn
 
 DUSKWOOD = 10
 DUN_MOROGH = 1
+TIRISFAL = 85
+
+
+class NewPlagueQuest(unittest.TestCase):
+    """The ticket's quest and item rows, with synthetic giver geometry.
+
+    The ticket supplies quest 367, level 6, item 2858 x5, and creature
+    entries 1547, 1548, and 1549. It says a creature starts the quest but
+    does not include giver entries or spawn coordinates, so all spawn
+    geometry is modeled here only to exercise the planner's row contract.
+    """
+
+    def catalogue(self):
+        wanted = quest(
+            367,
+            TIRISFAL,
+            6,
+            min_level=6,
+            title="A New Plague",
+        )
+        wanted.update(item1=2858, item_count1=5)
+        giver_entry = 99999
+        givers = [
+            giver(367, "start", 9001, giver_entry, 0, 0, name="Quest NPC"),
+            giver(367, "end", 9001, giver_entry, 0, 0, name="Quest NPC"),
+        ]
+        starters = [{"quest": 367, "kind": "creature", "entry": giver_entry}]
+        enders = [{"quest": 367, "kind": "creature", "entry": giver_entry}]
+        entries = (1547, 1548, 1549)
+        spawns = [
+            spawn(9100 + i, entry, 100.0 + i * 10, 0, level=6)
+            for i, entry in enumerate(entries)
+        ]
+        loot = [{"item": 2858, "entry": entry} for entry in entries]
+        return questers.catalogue([wanted], givers, spawns, loot, starters, enders)
+
+    def test_the_ticket_objective_rows_support_take_hunt_and_hand_in(self):
+        cat = self.catalogue()
+        member = mirra(
+            name="Quest Tester",
+            level=6,
+            map_id=0,
+            x=0.0,
+            y=0.0,
+            zone_id=TIRISFAL,
+            online=True,
+        )
+
+        take = questers.plan(cat, member, questers.Clock(), 0.0).move
+        self.assertEqual((take.kind, take.quest), (classquest.TAKE, 367))
+
+        hunting = questers.Member(
+            **{
+                **member.__dict__,
+                "x": 100.0,
+                "quest_log": {367: questers.STATUS_INCOMPLETE},
+                "quest_progress": {367: 0},
+                "quest_item_objectives": {367: {2858: 0}},
+            }
+        )
+        hunt = questers.plan(cat, hunting, questers.Clock(), 0.0).move
+        self.assertEqual((hunt.kind, hunt.quest), (classquest.HUNT, 367))
+        self.assertIn(hunt.spot.entry, {1547, 1548, 1549})
+        self.assertEqual(
+            classhunt.command(cat.quest(367), hunt.spot.entry),
+            "hunt-spawn creature:%d item:2858 count:5 max:480" % hunt.spot.entry,
+        )
+
+        ready = questers.Member(
+            **{
+                **hunting.__dict__,
+                "x": 0.0,
+                "quest_progress": {367: 5},
+                "quest_item_objectives": {367: {2858: 5}},
+            }
+        )
+        hand_in = questers.plan(cat, ready, questers.Clock(), 0.0).move
+        self.assertEqual((hand_in.kind, hand_in.quest), (classquest.TURN_IN, 367))
 
 
 class HeldRemoteItemObjectives(unittest.TestCase):

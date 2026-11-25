@@ -334,7 +334,9 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
         lines += [
             "",
             "The take command found no quest giver in reach, blocking acceptance. "
-            "The world names a creature giver. The stored rows leave open why the lookup failed.",
+            "The no-giver refusal is retryable. The starter relation exists, "
+            "so this is a failed reach check, not evidence the quest has no "
+            "giver. The stored rows do not show why the lookup found none.",
         ]
     lines += [
         "",

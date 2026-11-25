@@ -194,7 +194,14 @@ class Filing(unittest.TestCase):
         self.assertEqual(
             text.count("The take command found no quest giver in reach"), 1
         )
-        self.assertIn("The stored rows leave open why the lookup failed.", text)
+        self.assertIn(
+            "The no-giver refusal is retryable. The starter relation exists, "
+            "so this is a failed reach check, not evidence the quest has no giver.",
+            text,
+        )
+        self.assertIn(
+            "The stored rows do not show why the lookup found none.", text
+        )
         self.assertNotIn(
             "The take command found no quest giver in reach",
             qt.body(218, None, [row(218)], [], ""),
