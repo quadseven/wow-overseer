@@ -357,25 +357,48 @@ def series(query: dict, ctx) -> tuple[int, dict]:
     # a family guild, and only a name the closed set answers for.
     if name and not _scope.name_shaped(name):
         return 400, {"error": "name= is a character name"}
-    if not name and not _scope.guild(ctx, guild):
+    guild_name = None if name else _scope.guild(ctx, guild)
+    if not name and not guild_name:
         return 404, _scope.no_such_guild(ctx)
     if name and not _scope.may_answer(ctx, name):
         return 404, {"error": "no such character", "name": name}
-    rd = ctx.read
-    now = float(_one(rd, _NOW_SQL)["now"])
-    table = {int(r["level"]): int(r["xp"]) for r in rd.must(_XP_TABLE_SQL, ())}
-    if name:
-        char = _one(rd, _MEMBER_SQL, (name,))
-        if not char:
-            return 404, {"error": "no such character", "name": name}
-        events = _events(rd, [int(char["guid"])], now)
-        return 200, member_series(char, events, table, now)
-    row = _one(rd, _GUILD_SQL, (_scope.guild(ctx, guild),))
-    if not row:
-        return 404, {"error": "no such guild", "guild": guild}
-    chars = rd.must(_GUILD_MEMBERS_SQL, (row["guildid"], MAX_MEMBERS))
-    events = _events(rd, [int(c["guid"]) for c in chars], now)
-    return 200, guild_series(row["name"], chars, events, table, now)
+
+    def _make() -> tuple[int, dict]:
+        rd = ctx.read
+        now = float(_one(rd, _NOW_SQL)["now"])
+        table = {int(r["level"]): int(r["xp"]) for r in rd.must(_XP_TABLE_SQL, ())}
+        if name:
+            char = _one(rd, _MEMBER_SQL, (name,))
+            if not char:
+                return 404, {"error": "no such character", "name": name}
+            events = _events(rd, [int(char["guid"])], now)
+            return 200, member_series(char, events, table, now)
+        row = _one(rd, _GUILD_SQL, (guild_name,))
+        if not row:
+            return 404, {"error": "no such guild", "guild": guild}
+        chars = rd.must(_GUILD_MEMBERS_SQL, (row["guildid"], MAX_MEMBERS))
+        events = _events(rd, [int(c["guid"]) for c in chars], now)
+        return 200, guild_series(row["name"], chars, events, table, now)
+
+    shared = getattr(ctx, "shared", None)
+    if shared is None:
+        return _make()
+    cache_key = (
+        "/api/v2/series?name=" + name if name else "/api/v2/series?guild=" + guild_name
+    )
+    not_found: list[tuple[int, dict]] = []
+
+    def _cached() -> dict:
+        code, payload = _make()
+        if code != 200:
+            not_found.append((code, payload))
+            raise LookupError("not a cacheable series answer")
+        return payload
+
+    try:
+        return 200, shared.get(cache_key, _cached)
+    except LookupError:
+        return not_found[0]
 
 
 ROUTES = {"/api/v2/series": series}
