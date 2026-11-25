@@ -234,13 +234,15 @@ def _deaths(deaths: list[dict]) -> list[dict]:
 
 
 def _identity(run: dict, map_name: str) -> dict:
-    """The run row's own facts, as the report heading reads them."""
+    """The run row's own facts, including its named party-lead supervisor."""
     seconds = run.get("duration_seconds")
     word = outcome(run)
+    leader = run.get("leader_name") or ""
     return {
         "run_id": int(run.get("id") or 0),
         "run_number": int(run.get("run_number") or 0),
-        "leader": run.get("leader_name") or "",
+        "leader": leader,
+        "supervisor": leader or "not recorded",
         "map_id": int(run.get("map_id") or 0),
         "map_name": map_name or "map %s" % (run.get("map_id") or 0),
         "ended": run.get("state") == "ended",
@@ -422,6 +424,7 @@ def lines(report: dict) -> list[str]:
     out = [_head(report)]
     if report["reason"]:
         out.append("Why it ended: %s" % report["reason"])
+    out.append("Run supervisor: %s" % report["supervisor"])
     out.append("Group: %s" % (", ".join(report["members"]) or "nobody recorded"))
     out.append(
         "Bosses killed (%d): %s"
