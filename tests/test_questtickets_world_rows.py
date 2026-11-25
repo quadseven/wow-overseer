@@ -223,6 +223,54 @@ class WorldRows(unittest.TestCase):
         self.assertIn("QuestLevel: 10; MinLevel: 8", text)
         self.assertIn("Previous quest: 117", text)
 
+    def test_rat_catching_rows_explain_the_take_refusal_without_guessing_why(self):
+        row = quest_row(
+            quest=416,
+            title="Rat Catching",
+            level=11,
+            min_level=10,
+            sort=38,
+            item1=3110,
+            item_count1=12,
+        )
+        catalogue = self.catalogue(
+            row,
+            {
+                qc.ITEM_NAMES_SQL.format(ids="3110"): [
+                    {"entry": 3110, "name": "Tunnel Rat Ear"}
+                ],
+                qc.DROP_SQL.format(ids="3110"): [
+                    {"item": 3110, "entry": entry}
+                    for entry in (1172, 1173, 1174, 1175, 1176, 1177, 1202)
+                ],
+                qc.REWARD_SQL.format(ids="3110"): [],
+                qc.VENDOR_SQL.format(ids="3110"): [],
+            },
+        )
+        reason = qt.NO_GIVER_IN_REACH
+        ticket = qt.body(
+            416,
+            catalogue[0],
+            [{"quest": 416, "guid": 7, "character_name": "Tharn", "reason": reason}],
+            [],
+            "",
+        )
+
+        self.assertIn("Required item 3110 x12 (Tunnel Rat Ear)", ticket)
+        self.assertIn(
+            "creature entries 1172, 1173, 1174, 1175, 1176, 1177, 1202", ticket
+        )
+        self.assertIn(
+            "The take step asks the world for a living creature linked to the quest "
+            "within the 20-yard arrival radius.",
+            ticket,
+        )
+        self.assertIn(
+            "The refusal means none matched then; the stored rows do not distinguish "
+            "a missing, distant, dead, or otherwise unavailable creature.",
+            ticket,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

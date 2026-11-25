@@ -351,8 +351,10 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
     if no_giver_in_reach:
         lines += [
             "",
-            "The take command found no quest giver in reach, blocking acceptance. "
-            "The world names a creature giver. The stored rows leave open why the lookup failed.",
+            "The take step asks the world for a living creature linked to the quest "
+            "within the 20-yard arrival radius. The refusal means none matched then; "
+            "the stored rows do not distinguish a missing, distant, dead, or otherwise "
+            "unavailable creature.",
         ]
     lines += [
         "",
