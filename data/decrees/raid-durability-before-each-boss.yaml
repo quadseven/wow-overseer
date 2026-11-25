@@ -6,17 +6,18 @@
 # (mod-overseer issue 923, wow-overseer issue 763). The second half of the wow-overseer box (force a raider
 # below the repair threshold) cannot be set here: a decree has no durability field, so the repair walk is
 # read only if a raider wears down naturally.
-# Scope: the durability read is a worldserver log line ("raid run: durability before <boss>: lowest ..."). It
-# leaves no database row, and a log assertion is an exact count that cannot demand presence, so the line is NOT
-# asserted and no per-boss correlation is claimed. What is proven is the precondition the line is owed at: the
-# raid enters Molten Core with its seats and the core credits at least one boss, and no repair_skipped
-# event is recorded. The live box (the line per boss reached) stays a live check.
+# Scope: the durability read is a worldserver log line, written by the module as "raid run for family
+# '<family>': lowest durability <seat> <pct>%; <n> seat(s) under the <floor>% floor (before encounter <k>)".
+# It leaves no database row, so it is required in the run's log at least once (wow-overseer issue 2767). One
+# count cannot pair a line with every boss reached, so the line for each boss is still not claimed: what is
+# proven is that the raid enters Molten Core with its seats, the core credits at least one boss, the lowest
+# durability is logged before an encounter, and no repair_skipped event is recorded.
 # Fix: mod-overseer pull 938 (durability before each boss).
 decree: v1
 id: raid-durability-before-each-boss
 proves:
-  - {repo: quadseven/mod-overseer, issue: 923, criterion: "a credited Molten Core boss was reached with seats seated, where the durability line is owed (the line itself is a log read, not asserted here)"}
-  - {repo: quadseven/wow-overseer, issue: 763, criterion: "a Molten Core run reaches a credited boss with no repair_skipped event (the per-boss durability line is not asserted here)"}
+  - {repo: quadseven/mod-overseer, issue: 923, criterion: "the raid logs the lowest durability of its seats before an encounter, with a credited Molten Core boss reached (one line is required, not one per boss)"}
+  - {repo: quadseven/wow-overseer, issue: 763, criterion: "a Molten Core run's worldserver log shows the lowest durability before an encounter, and the run reaches a credited boss with no repair_skipped event (one line is required, not one per boss)"}
 fix: {repo: quadseven/mod-overseer, commit: "2522c5cb9cf0e8d2067b8f8f7d35e966e3a29da1"}
 world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -64,3 +65,7 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_dungeon_run_event WHERE family = 'Grug' AND created_at >= @t0 AND kind = 'repair_skipped'
     expect: {scalar: "= 0"}
+  # The module's pre-pull durability line; pinned to its source by tests/test_eph_required_lines.py.
+  - name: the-lowest-durability-was-logged-before-an-encounter
+    role: check
+    log: {pattern: "raid run for family 'Grug': lowest durability [^ ]+ [0-9]+%; [0-9]+ seat\\(s\\) under the [0-9]+% floor \\(before encounter [0-9]+\\)", expect: {at_least: 1}}

@@ -13,6 +13,7 @@ from _stub_modules import PYMYSQL, stub_modules  # noqa: E402
 with stub_modules(pymysql=PYMYSQL):
     import questcatalogue as qc
     import questtickets as qt
+    import questers
 
 
 def quest_row(quest=116, **values):
@@ -109,6 +110,62 @@ class WorldRows(unittest.TestCase):
             "no source in the world rows", qt.body(116, catalogue[0], [], [], "")
         )
 
+    def test_pyrewood_ambush_ticket_explains_the_event_reason(self):
+        # This quest_template row mirrors the ticket's read-only world snapshot.
+        # Its ledger reason is written by bridge._record_quest_broken; the
+        # producer path is covered in test_guildlevel_event_quests.
+        world_row = quest_row(
+            452,
+            title="Pyrewood Ambush",
+            level=15,
+            min_level=12,
+            sort=130,
+        )
+        world_row.update(
+            {key: 0 for i in range(1, 7) for key in ("item%d" % i, "item_count%d" % i)}
+        )
+        world_row.update(
+            {
+                key: 0
+                for i in range(1, 5)
+                for key in ("objective%d" % i, "objective_count%d" % i)
+            }
+        )
+        info = self.catalogue(world_row, {})[0]
+        self.assertEqual(info.min_level, 12)
+        self.assertEqual(info.items, ())
+        self.assertEqual(info.objectives, ())
+        rows = [
+            {
+                "quest": 452,
+                "guid": 7,
+                "character_name": "Quester A",
+                "state": "broken",
+                "reason": questers.SCRIPTED_EVENT,
+            },
+            {
+                "quest": 452,
+                "guid": 8,
+                "character_name": "Quester B",
+                "state": "broken",
+                "reason": questers.SCRIPTED_EVENT,
+            },
+        ]
+
+        text = qt.body(452, info, rows, [], "")
+
+        self.assertIn("- Quest: 452, Pyrewood Ambush", text)
+        self.assertIn("- Zone: Silverpine Forest", text)
+        self.assertIn("- Level: 15", text)
+        self.assertIn("- No required item or creature/object rows.", text)
+        self.assertEqual(text.count("Reason: " + questers.SCRIPTED_EVENT), 2)
+        self.assertEqual(text.count("Last objective counts: not in the log now"), 2)
+        self.assertIn(
+            "The world rows list no required item or creature/object objectives, "
+            "so the stored reason is the only evidence of how it completes: a scripted event.",
+            text,
+        )
+
     def test_quest_start_item_is_a_source_for_its_required_item(self):
         row = quest_row(item1=1353, item_count1=1, provided_item=1353)
         catalogue = self.catalogue(
@@ -165,6 +222,54 @@ class WorldRows(unittest.TestCase):
         text = qt.body(116, info, [], [], "")
         self.assertIn("QuestLevel: 10; MinLevel: 8", text)
         self.assertIn("Previous quest: 117", text)
+
+    def test_rat_catching_rows_explain_the_take_refusal_without_guessing_why(self):
+        row = quest_row(
+            quest=416,
+            title="Rat Catching",
+            level=11,
+            min_level=10,
+            sort=38,
+            item1=3110,
+            item_count1=12,
+        )
+        catalogue = self.catalogue(
+            row,
+            {
+                qc.ITEM_NAMES_SQL.format(ids="3110"): [
+                    {"entry": 3110, "name": "Tunnel Rat Ear"}
+                ],
+                qc.DROP_SQL.format(ids="3110"): [
+                    {"item": 3110, "entry": entry}
+                    for entry in (1172, 1173, 1174, 1175, 1176, 1177, 1202)
+                ],
+                qc.REWARD_SQL.format(ids="3110"): [],
+                qc.VENDOR_SQL.format(ids="3110"): [],
+            },
+        )
+        reason = qt.NO_GIVER_IN_REACH
+        ticket = qt.body(
+            416,
+            catalogue[0],
+            [{"quest": 416, "guid": 7, "character_name": "Tharn", "reason": reason}],
+            [],
+            "",
+        )
+
+        self.assertIn("Required item 3110 x12 (Tunnel Rat Ear)", ticket)
+        self.assertIn(
+            "creature entries 1172, 1173, 1174, 1175, 1176, 1177, 1202", ticket
+        )
+        self.assertIn(
+            "The take step asks the world for a living creature linked to the quest "
+            "within the 20-yard arrival radius.",
+            ticket,
+        )
+        self.assertIn(
+            "The refusal means none matched then; the stored rows do not distinguish "
+            "a missing, distant, dead, or otherwise unavailable creature.",
+            ticket,
+        )
 
 
 if __name__ == "__main__":

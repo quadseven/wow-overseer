@@ -1043,11 +1043,11 @@ def _the_rest(rd, names: list) -> dict:
     }
 
 
-def fetch(ctx, names: list | None, guilds: list) -> dict:
+def fetch(ctx, names: list | None, guilds: list, roster: dict | None = None) -> dict:
     """The roster, the database's clock, and every row build() reads, for
     `names` (None: every member of `guilds`) and the runs of `guilds`."""
     rd = ctx.read
-    roster_ = _roster(ctx)
+    roster_ = _roster(ctx) if roster is None else roster
     now = rd.must(NOW_SQL)
     if names is None:
         names = sorted(n for n, g in roster_.items() if g in guilds)
@@ -1126,8 +1126,11 @@ def clear_cache() -> None:
 
 def _for_member(ctx, name: str) -> dict:
     def make():
-        guild = _roster(ctx).get(name, "")
-        return member_view(name, fetch(ctx, [name], [guild] if guild else []))
+        roster_ = _roster(ctx)
+        guild = roster_.get(name, "")
+        return member_view(
+            name, fetch(ctx, [name], [guild] if guild else [], roster=roster_)
+        )
 
     return _CACHE.get("name:" + name, make)
 

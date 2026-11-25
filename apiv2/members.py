@@ -240,6 +240,66 @@ def reread_idle(rd, name: str, now: dict) -> dict:
     return _side_read(look, now, "idle re-read")
 
 
+def idle_rereader(rd, names):
+    """A `(name, now) -> now` re-reader for a whole surface (the Watch wall).
+
+    Loads characters, recent level-ups, active guild-run seats, and the
+    database clock in one batched pass on the first Idle member, rather than
+    issuing four queries per Idle tile. Surfaces with no Idle tiles run zero
+    queries. Any read error degrades that pass and leaves tiles as composed.
+    """
+    candidates = list(dict.fromkeys(n for n in (names or ()) if n))
+    state: dict = {"loaded": False, "ok": False}
+
+    def _load() -> None:
+        state["loaded"] = True
+        if not candidates:
+            return
+
+        def read_batch():
+            h = holes(len(candidates))
+            chars = rd.rows(
+                CHARS_SQL.format(holes=h), tuple(candidates), what="characters"
+            )
+            leveled = rd.rows(
+                LEVELED_SQL.format(holes=h),
+                (*candidates, LEVEL_DAYS),
+                what="overseer_level",
+            )
+            clock = rd.must("SELECT UNIX_TIMESTAMP() AS now_at")
+            active = guildrun.active_names(rd)
+            return {
+                "levels": {r["name"]: r.get("level") for r in chars or ()},
+                "leveled": {
+                    r["name"]: int(r["at"]) for r in leveled or () if r.get("at")
+                },
+                "now_at": int(clock[0]["now_at"]) if clock else 0,
+                "active": active,
+            }
+
+        data = _side_read(read_batch, None, "idle re-read")
+        if data is not None:
+            state.update(data)
+            state["ok"] = True
+
+    def reread(name: str, now: dict) -> dict:
+        if now.get("doing") != "Idle":
+            return now
+        if not state["loaded"]:
+            _load()
+        if not state["ok"]:
+            return now
+        return nowstatus.idle_reading(
+            now,
+            name in state["active"],
+            state["levels"].get(name),
+            state["leveled"].get(name),
+            state["now_at"],
+        )
+
+    return reread
+
+
 def _read(ctx, names: list) -> dict:
     server = ctx.server
     rd = ctx.read

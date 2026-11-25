@@ -3,7 +3,7 @@
 THE GAP. A class quest hunt used to end at `walk-to-spawn creature:<spawn id>`:
 the member stood where its objective's creatures live and its own grind and
 loot strategies were supposed to do the rest. No hunt ever produced a drop (not
-one tank warrior has ever looted a Singed Scale). quadseven/mod-overseer#869
+one tank warrior has ever looted a Singed Scale). A module change
 adds the verb that makes an arrived bot do it:
 
   hunt-spawn creature:<entry> [count:<n>] [max:<seconds>]      kind='job'
@@ -90,7 +90,7 @@ RESTING = "resting"
 BAGS_FULL = "bags full"
 BAGS_FULL_REASON = "no free bag slot"
 # The module's answer to a key it does not know, from a worldserver before
-# mod-overseer#871: the item token is rejected as a malformed row.
+# the module gaining the item form: the item token is rejected as a malformed row.
 ITEM_KEY = " item:"
 ITEMLESS = "itemless"
 UNREADABLE = "unreadable"
@@ -140,7 +140,7 @@ def command(quest: classquest.Quest, entry, held=None, item_form=True) -> str:
     or "" when the quest has no creature to hunt there.
 
     A kill objective asks for its own kill count, so the row finishes by itself.
-    An item the creature drops (mod-overseer#871) names the item and how many
+    An item the creature drops names the item and how many
     are still missing, `item:<entry> count:<needed>`: the module loots the
     corpse itself and ends the row `done` when the bot holds that many. `held`
     is the member's count of an item (guildjobs.Member.count). With
