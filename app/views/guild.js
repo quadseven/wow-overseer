@@ -210,10 +210,18 @@ ${deathsCard(ctx, g)}`;
 
 function mine(ctx, list) { return (list || []).filter((r) => r.guild === gname(ctx)); }
 
-function upsFor(ctx, mapId) {
-  const u = peek(P.ups(ctx));
-  if (!Array.isArray(u.data)) return null;
-  return u.data.filter((x) => x.map_id === mapId);
+function upsByMap(upsRead) {
+  if (!Array.isArray(upsRead.data)) return null;
+  const byMap = new Map();
+  upsRead.data.forEach((x) => {
+    let list = byMap.get(x.map_id);
+    if (!list) {
+      list = [];
+      byMap.set(x.map_id, list);
+    }
+    list.push(x);
+  });
+  return byMap;
 }
 
 function upRow(x) {
@@ -221,8 +229,8 @@ function upRow(x) {
   return html`<div class="g-up">${item({ entry: x.item.entry, name: x.item.name, quality: x.item.quality, icon: x.item.icon })}<span class="muted">${x.boss}</span><a href="${memberHref(x.member, "upgrades")}" class="g-up-who">${x.member}, ${x.slot}${at}</a><span class="g-up-gain">+${x.gain} iLvl</span></div>`;
 }
 
-function pathRow(ctx, g, d, med, upsRead) {
-  const ups = d.map_id !== null ? upsFor(ctx, d.map_id) : null;
+function pathRow(ctx, g, d, med, upsRead, byMap) {
+  const ups = d.map_id !== null && byMap ? (byMap.get(d.map_id) || []) : null;
   const last = lastWord(d);
   const opens = med !== null && d.floor && med < d.floor;
   let upsText, upsTone = "dim";
@@ -253,6 +261,7 @@ function runsTab(ctx, g) {
   }
   const learned = model(ctx).learned();
   const med = model(ctx).medianLevel();
+  const byMap = upsByMap(upsRead);
   return html`
 <section class="section">${sectionHead("01", "Groups out now")}${now}</section>
 <section class="section">${sectionHead("02", "How they came back")}${done}</section>
@@ -262,7 +271,7 @@ ${learned.length ? html`<div class="card g-list g-narrow">${learned.map((d) => h
 <section class="section">${sectionHead("04", "The path, in level order")}
 <p class="muted g-lede">Run in this order: each dungeon opens when the median level of the guild reaches its floor. Open a row to see each drop that beats what ${family(ctx)}'s family wears, who it is for and from which boss.</p>
 ${g.family && g.family !== family(ctx) ? state("stale", "This guild's family reads as " + g.family + "'s here", "The upgrades below are for " + family(ctx) + "'s family.") : ""}
-<div class="card g-list g-pathlist">${g.dungeons.map((d) => pathRow(ctx, g, d, med, upsRead))}</div>
+<div class="card g-list g-pathlist">${g.dungeons.map((d) => pathRow(ctx, g, d, med, upsRead, byMap))}</div>
 </section>
 <section class="section">${sectionHead("05", "Run timelines", tl.data ? tl.data.line : "")}${timelines(ctx, tl)}</section>
 <section class="section">${sectionHead("06", "Tanks and healers ready, by dungeon")}${seatsSection(ctx)}</section>`;
