@@ -390,9 +390,13 @@ function ageTick() {
   });
 }
 
+// A tile can still change while it is started (connecting, live, dark, or off
+// and waiting for its retry) or while it is in any state but off: the stage
+// Retry restarts a released tile without marking it started. Only a settled,
+// unstarted, off tile has nothing for the tick to age, mark or retry.
 function hasActiveTile() {
   for (const t of tiles.values()) {
-    if (t.started || t.state === "live" || t.state === "dark") return true;
+    if (t.started || t.state !== "off") return true;
   }
   return false;
 }

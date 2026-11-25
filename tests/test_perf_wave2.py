@@ -179,11 +179,7 @@ console.log(JSON.stringify({
         self.assertTrue(got["compact"])
 
 
-@unittest.skipUnless(NODE, "node is required for app view tests")
-class StreamsIdleTickTests(unittest.TestCase):
-    def test_idle_tick_skips_dom_queries_and_muted_tick_skips_audio_query(self):
-        got = _run_node(
-            r"""
+_STREAMS_HARNESS = r"""
 const noop = () => {};
 const intervals = [];
 const queries = [];
@@ -229,6 +225,15 @@ globalThis.RTCPeerConnection = class {
 };
 const streams = await import("./app/views/now/streams.js");
 const tick = intervals[0];
+"""
+
+
+@unittest.skipUnless(NODE, "node is required for app view tests")
+class StreamsIdleTickTests(unittest.TestCase):
+    def test_idle_tick_skips_dom_queries_and_muted_tick_skips_audio_query(self):
+        got = _run_node(
+            _STREAMS_HARNESS
+            + r"""
 // Before any stream connects, tick does no DOM queries.
 tick();
 const idleQueries = queries.slice();
@@ -248,6 +253,39 @@ console.log(JSON.stringify({ idleQueries, activeMutedQueries, afterStopQueries }
         self.assertEqual(got["idleQueries"], [])
         self.assertEqual(got["activeMutedQueries"], ["[data-frame-age]"])
         self.assertEqual(got["afterStopQueries"], [])
+
+    def test_tick_still_ages_connecting_and_retry_wait_tiles(self):
+        got = _run_node(
+            _STREAMS_HARNESS
+            + r"""
+// A started tile the browser refused (mixed content) is off and waits for
+// its retry: the tick still ages it.
+location.protocol = "https:";
+streams.connect("Alpha", "http://stream.example/alpha");
+const retryWaitState = streams.stateOf("Alpha");
+queries.length = 0;
+tick();
+const retryWaitQueries = queries.slice();
+// Released, it is settled and the tick is idle.
+streams.disconnect("Alpha");
+queries.length = 0;
+tick();
+const releasedQueries = queries.slice();
+// The stage Retry restarts the released tile: connecting, though not started.
+location.protocol = "http:";
+streams.retry("Alpha");
+const connectingState = streams.stateOf("Alpha");
+queries.length = 0;
+tick();
+const connectingQueries = queries.slice();
+console.log(JSON.stringify({ retryWaitState, retryWaitQueries, releasedQueries, connectingState, connectingQueries }));
+"""
+        )
+        self.assertEqual(got["retryWaitState"], "off")
+        self.assertEqual(got["retryWaitQueries"], ["[data-frame-age]"])
+        self.assertEqual(got["releasedQueries"], [])
+        self.assertEqual(got["connectingState"], "connecting")
+        self.assertEqual(got["connectingQueries"], ["[data-frame-age]"])
 
 
 @unittest.skipUnless(NODE, "node is required for app view tests")
