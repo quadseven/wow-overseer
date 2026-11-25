@@ -395,7 +395,64 @@ def first_kill_card(raiders: list, min_level) -> dict:
     }
 
 
-def healer_levels_card(raiders: list) -> dict:
+HEALER_PACE_DAYS = 14
+HEALER_GATE = 50
+
+# Level-ups across the gate in the pace window, for the names bound (the pace
+# of the slowest seat, #2572). The window is applied here and again in Python.
+HEALER_CROSSINGS_SQL = (
+    "SELECT character_name AS name, old_level, new_level FROM overseer_level "
+    "WHERE character_name IN ({holes}) AND old_level < "
+    + str(HEALER_GATE)
+    + " AND new_level >= "
+    + str(HEALER_GATE)
+    + " AND created_at > NOW() - INTERVAL "
+    + str(HEALER_PACE_DAYS)
+    + " DAY"
+)
+
+
+def healer_projection(healers: list, want: int, level_rows) -> dict:
+    """When the guild reaches `want` healers at level 50, from the healers who
+    crossed 50 in the last HEALER_PACE_DAYS days (`level_rows`: name, old_level,
+    new_level). The basis is always stated; no crossing means no date."""
+    names = {m.get("name") for m in healers}
+    crossed = {
+        r.get("name")
+        for r in level_rows or ()
+        if r.get("name") in names
+        and int(r.get("old_level") or 0) < HEALER_GATE <= int(r.get("new_level") or 0)
+    }
+    have = len([m for m in healers if int(m.get("level") or 0) >= HEALER_GATE])
+    need = max(0, want - have)
+    basis = "%d healer(s) reached %d in the last %d days" % (
+        len(crossed),
+        HEALER_GATE,
+        HEALER_PACE_DAYS,
+    )
+    weeks = None
+    if need == 0:
+        line = "The guild has %d healers at %d." % (want, HEALER_GATE)
+    elif not crossed:
+        line = "No date for %d healers at %d (%s)." % (want, HEALER_GATE, basis)
+    else:
+        weeks = -(-need * HEALER_PACE_DAYS // (len(crossed) * 7))
+        line = "About %d week(s) to %d healers at %d (%s)." % (
+            weeks,
+            want,
+            HEALER_GATE,
+            basis,
+        )
+    return {
+        "crossed": len(crossed),
+        "need": need,
+        "weeks": weeks,
+        "basis": basis,
+        "line": line,
+    }
+
+
+def healer_levels_card(raiders: list, level_rows=()) -> dict:
     """Healers at level 50 and at level 60 against the door quorum's healer
     count, so the slowest seat to fill reads as a number on the Raid tab."""
     want = raidrun.door_quorum()[2]
@@ -408,6 +465,7 @@ def healer_levels_card(raiders: list) -> dict:
         "at_60": at_60,
         "line": "Healers at 50: %d of %d. At 60: %d of %d."
         % (at_50, want, at_60, want),
+        "projection": healer_projection(healers, want, level_rows),
     }
 
 
@@ -943,6 +1001,7 @@ def build_guild(
     supply: dict | None = None,
     preraid: dict | None = None,
     item_rows: dict | None = None,
+    level_rows: list = (),
 ) -> dict:
     """One guild's readiness card.
 
@@ -1044,7 +1103,7 @@ def build_guild(
         "blockers": blockers,
         "seats_below_level": _below_level_card(raiders, min_level),
         "first_kill": first_kill_card(raiders, min_level),
-        "healer_levels": healer_levels_card(raiders),
+        "healer_levels": healer_levels_card(raiders, level_rows),
         "blockers_line": (
             "Nothing stands between this guild and its first raid."
             if not blockers

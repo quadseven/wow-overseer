@@ -212,6 +212,34 @@ def _side_read(read, empty, what: str):
         return empty
 
 
+def reread_idle(rd, name: str, now: dict) -> dict:
+    """`nowstatus.idle_reading` for one member off its own reads, so a surface
+    that composes a single member (the current-goal banner) words an idle
+    member as the roster does (#2192). A read that fails leaves the member
+    as composed, never raises."""
+    if now.get("doing") != "Idle":
+        return now
+
+    def look():
+        level = rd.rows(CHARS_SQL.format(holes=holes(1)), (name,), what="characters")
+        leveled = rd.rows(
+            LEVELED_SQL.format(holes=holes(1)),
+            (name, LEVEL_DAYS),
+            what="overseer_level",
+        )
+        clock = rd.must("SELECT UNIX_TIMESTAMP() AS now_at")
+        at = leveled[0].get("at") if leveled else None
+        return nowstatus.idle_reading(
+            now,
+            name in guildrun.active_names(rd),
+            level[0].get("level") if level else None,
+            int(at) if at else None,
+            int(clock[0]["now_at"]) if clock else 0,
+        )
+
+    return _side_read(look, now, "idle re-read")
+
+
 def _read(ctx, names: list) -> dict:
     server = ctx.server
     rd = ctx.read

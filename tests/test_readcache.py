@@ -97,6 +97,93 @@ class TheCache(unittest.TestCase):
         self.assertEqual(sorted(cache._entries), ["/4"])
 
 
+class TheStaleWindow(unittest.TestCase):
+    """In the window the old answer is served at once; one build refreshes it."""
+
+    def setUp(self):
+        self.clock = Clock()
+        self.cache = readcache.ReadCache(5.0, clock=self.clock, stale=20.0)
+
+    def _settle(self, key):
+        flight = self.cache._flights.get(key)
+        if flight is not None:
+            self.assertTrue(flight.done.wait(5))
+        # the flight is popped just after it is set
+        for _ in range(500):
+            if key not in self.cache._flights:
+                return
+            threading.Event().wait(0.01)
+
+    def test_a_read_in_the_lifetime_does_not_call_the_builder(self):
+        build = Counter()
+        self.cache.get("/a", build)
+        self.clock.now += 4.9
+        self.assertEqual(self.cache.get("/a", build), "built 1")
+        self.assertEqual(build.calls, 1)
+
+    def test_a_stale_read_is_served_at_once_and_refreshed_once(self):
+        gate = threading.Event()
+        calls = []
+
+        def build():
+            calls.append(1)
+            if len(calls) > 1:
+                gate.wait(5)
+            return "built %d" % len(calls)
+
+        self.cache.get("/a", build)
+        self.clock.now += 10.0
+        # The refresh is held at the gate, so every caller below is concurrent with it.
+        answers = [self.cache.get("/a", build) for _ in range(4)]
+        self.assertEqual(answers, ["built 1"] * 4)
+        gate.set()
+        self._settle("/a")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.cache.get("/a", build), "built 2")
+
+    def test_beyond_the_window_the_caller_waits_for_the_build(self):
+        build = Counter()
+        self.cache.get("/a", build)
+        self.clock.now += 25.0
+        self.assertEqual(self.cache.get("/a", build), "built 2")
+        self.assertEqual(build.calls, 2)
+
+    def test_a_failing_refresh_keeps_the_good_answer_and_is_retried(self):
+        state = {"fail": False, "calls": 0}
+
+        def build():
+            state["calls"] += 1
+            if state["fail"]:
+                raise OSError("world unreachable")
+            return "good %d" % state["calls"]
+
+        self.cache.get("/a", build)
+        self.clock.now += 10.0
+        state["fail"] = True
+        self.assertEqual(self.cache.get("/a", build), "good 1")
+        self._settle("/a")
+        self.assertEqual(state["calls"], 2)
+        # The failure replaced nothing, and the next call tries again.
+        state["fail"] = False
+        self.assertEqual(self.cache.get("/a", build), "good 1")
+        self._settle("/a")
+        self.assertEqual(state["calls"], 3)
+        self.assertEqual(self.cache.get("/a", build), "good 3")
+
+    def test_a_path_may_name_its_own_lifetime_and_window(self):
+        build = Counter()
+        self.cache.get("/a", build, ttl=1.0, stale=0.0)
+        self.clock.now += 2.0
+        self.assertEqual(self.cache.get("/a", build, ttl=1.0, stale=0.0), "built 2")
+
+    def test_no_window_means_the_old_behaviour(self):
+        cache = readcache.ReadCache(5.0, clock=self.clock)
+        build = Counter()
+        cache.get("/a", build)
+        self.clock.now += 5.0
+        self.assertEqual(cache.get("/a", build), "built 2")
+
+
 class OneFlight(unittest.TestCase):
     """Callers that arrive while a build runs wait for it instead of building."""
 

@@ -93,10 +93,10 @@ class TheAppBuild(unittest.TestCase):
             view = root / "app" / "views" / "now.js"
             view.write_text("now, changed")
             os.utime(view, ns=(1, 1))
-            second = appbuild.fingerprint(str(root))
+            second = appbuild.fingerprint(str(root), ttl=0)
             self.assertNotEqual(second, first)
             (root / "app" / "views" / "new.css").write_text("x")
-            self.assertNotEqual(appbuild.fingerprint(str(root)), second)
+            self.assertNotEqual(appbuild.fingerprint(str(root), ttl=0), second)
 
     def test_the_page_carries_the_placeholder_and_is_stamped(self):
         page = (HERE / "index.html").read_text(encoding="utf-8")

@@ -925,3 +925,31 @@ class NewMoltenCoreRecipesInRaidgoals(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BlackwingLairPlanNeverNeedsTheCloak(unittest.TestCase):
+    """The cloak has no source here (#2566): it must not be asked for."""
+
+    def test_the_cloak_is_not_required_or_missing(self):
+        plan = raidgoals.blackwing_lair_plan()
+        for row in plan["required"] + plan["missing"]:
+            self.assertNotIn("Onyxia Scale Cloak", row["item"])
+
+    def test_the_cloak_is_listed_only_as_excluded_with_its_reason(self):
+        plan = raidgoals.blackwing_lair_plan()
+        self.assertEqual([r["item"] for r in plan["excluded"]], ["Onyxia Scale Cloak"])
+        self.assertIn(
+            "no trainer, vendor, loot or quest source", plan["excluded"][0]["why"]
+        )
+
+    def test_shadow_flame_names_reachable_protections_with_a_basis(self):
+        plan = raidgoals.blackwing_lair_plan()
+        names = [r["item"] for r in plan["required"]]
+        self.assertIn("Greater Fire Protection Potion", names)
+        self.assertIn("Greater Shadow Protection Potion", names)
+        for row in plan["required"]:
+            self.assertTrue(row["basis"].startswith("realm data"))
+
+    def test_the_unresolved_part_is_stated(self):
+        plan = raidgoals.blackwing_lair_plan()
+        self.assertTrue(any("convention" in u for u in plan["unresolved"]))

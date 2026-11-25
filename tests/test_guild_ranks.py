@@ -103,6 +103,20 @@ class MotdAndPlanTests(unittest.TestCase):
         self.assertEqual(guildranks.MAX_MOTD_BYTES, len(truncated))
         self.assertTrue(truncated.endswith("..."))
 
+    def test_motd_drops_control_bytes(self):
+        self.assertEqual(
+            "motd clear Deadmines (3x)",
+            guildranks.motd_command("clear \x00Deadmines\x7f (3x)"),
+        )
+        line = guildranks.motd_for_goal(
+            "Cave", {"kind": "dungeon", "instance": "Dead\x01mines\x1b", "target": 2}
+        )
+        self.assertEqual("Cave goal: clear Deadmines (2x)", line)
+        self.assertTrue(all(" " <= c <= "~" for c in line))
+        self.assertLessEqual(len(line), guildranks.MAX_MOTD_BYTES)
+        with self.assertRaises(ValueError):
+            guildranks.motd_command("\x00\x01\x7f")
+
     def test_plan_actions_promotes_and_sets_motd_when_master_online(self):
         seats = frozenset(s.name for s in raidteams.seats("Cave"))
         raider = sorted(seats)[0]

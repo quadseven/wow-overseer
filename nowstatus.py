@@ -944,6 +944,15 @@ def _restarts(steps, now_at, window=900) -> int:
     return n
 
 
+def _is_resumed_default(doing: str) -> bool:
+    """True for the quest drive taking the leader. It is the lowest-ranked
+    intent, the one every higher walk hands the leader back to when it ends, so
+    each hand-back is the default resuming, not a walk the leader could not
+    finish. Counting it read a head that was merely between errands and dungeon
+    walks as one whose walk "has ended and restarted" nine times."""
+    return doing.split(" took over: ", 1)[0].removeprefix("the ") == "quest drive"
+
+
 def _walk_restarts(steps, now_at, window=900) -> int:
     """The most times any ONE walk took over inside the window.
 
@@ -957,7 +966,11 @@ def _walk_restarts(steps, now_at, window=900) -> int:
     per_walk: dict = {}
     for s in steps:
         doing = str(s.get("doing") or "")
-        if s.get("kind") == "intent" and " took over: " in doing:
+        if (
+            s.get("kind") == "intent"
+            and " took over: " in doing
+            and not _is_resumed_default(doing)
+        ):
             if not now_at or now_at - int(s.get("last_at") or 0) <= window:
                 walk = doing.split(" took over: ", 1)[1]
                 per_walk[walk] = per_walk.get(walk, 0) + int(s.get("occurrences") or 1)
@@ -1000,6 +1013,7 @@ def _first_restart(steps, now_at, window=900):
         for s in steps
         if s.get("kind") == "intent"
         and " took over: " in str(s.get("doing"))
+        and not _is_resumed_default(str(s.get("doing")))
         and (not now_at or now_at - int(s.get("last_at") or 0) <= window)
     ]
     return min(firsts) if firsts else None

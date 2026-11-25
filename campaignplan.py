@@ -206,6 +206,60 @@ REFUSED_LOCKED = "locked"
 # (dungeonstall.py, #1041): a third would stall the same way.
 REFUSED_STALLED = "stalled"
 
+# A door across the sea the family was queued for and never started. The
+# module's `boards` build fact is realm-wide, so it cannot say whether THIS
+# family's origin has a berth; an entry that sits unstarted can.
+# Long enough for a ship to dock and the family to board and reach the door.
+UNSTARTED_WAIT_SECONDS = 30 * 60
+# Long enough for the berths to change, short enough not to bar a door all day.
+UNSTARTED_COOLDOWN_SECONDS = 3 * 3600
+
+# One row per queue entry of the family, with the map of each run that leader
+# started since the entry was made (NULL when none did). The run ledger keeps
+# no door keyword, so `unstarted` matches the entry to a run by map in Python:
+# a run at some other dungeon must not clear this door.
+UNSTARTED_SQL = (
+    "SELECT q.id AS entry, q.keyword AS keyword, "
+    "TIMESTAMPDIFF(SECOND, q.created_at, NOW()) AS age_s, r.map_id AS map_id "
+    "FROM overseer_dungeon_queue q LEFT JOIN overseer_dungeon_run r "
+    "ON r.leader_name IN ({holes}) AND r.started_at >= q.created_at "
+    "WHERE q.family = %s AND q.created_at >= NOW() - INTERVAL %s SECOND"
+)
+
+
+def unstarted_args(key: str, names) -> tuple:
+    """UNSTARTED_SQL's arguments (the `{holes}` count is len(names))."""
+    return (
+        *[str(n) for n in names],
+        key,
+        UNSTARTED_WAIT_SECONDS + UNSTARTED_COOLDOWN_SECONDS,
+    )
+
+
+def unstarted(rows) -> dict | None:
+    """Facts.unstarted off UNSTARTED_SQL's rows: Run keyword -> seconds since
+    its oldest entry, or None when unread."""
+    if rows is None:
+        return None
+    ages: dict = {}
+    started: set = set()
+    for row in rows:
+        door = wing_of(str(row.get("keyword") or ""))
+        age = row.get("age_s")
+        if not door or age is None:
+            continue
+        entry = row.get("entry")
+        ages[(entry, door)] = int(age)
+        map_id = row.get("map_id")
+        if map_id is not None and int(map_id) == BY_KEYWORD[door].map_id:
+            started.add((entry, door))
+    out: dict = {}
+    for (entry, door), age in ages.items():
+        if (entry, door) not in started:
+            out[door] = max(age, out.get(door, 0))
+    return out
+
+
 LEVEL_CAP = 60
 
 # How close the family's mean level may come to a door's ceiling before the
@@ -624,6 +678,8 @@ class Facts:
     keys        door key entries somebody carries (DOOR_KEYS), or None
     stalled     Run keyword -> why it stalled twice running
                 (dungeonstall.barred), or None when unread
+    unstarted   Run keyword -> seconds since the oldest queue entry for it
+                that started no run (UNSTARTED_SQL), or None when unread
     """
 
     family: str
@@ -641,12 +697,17 @@ class Facts:
     bosses: dict | None = None
     keys: frozenset | None = None
     stalled: dict | None = None
+    unstarted: dict | None = None
     # Run keyword -> completed runs since the family's last level (#1400,
     # `dry_doors`), or None when unread.
     dry: dict | None = None
     # Run keyword -> (guild runs cleared, guild runs that went in) over
     # CLEAR_RECORD_DAYS (guildrun.door_record), or None when unread.
     door_record: dict | None = None
+    # (doors the stall breaker left with no run formed since the family's
+    # last run, seconds since the newest of them), off dungeonstall.UNFORMED_SQL
+    # (`unformed_rest`), or None when unread.
+    unformed: tuple | None = None
 
     @property
     def mean_level(self) -> float:
@@ -945,12 +1006,32 @@ def _stalled(facts: Facts, run: Run) -> str:
     return str((facts.stalled or {}).get(run.keyword) or "")
 
 
+def _unstarted(facts: Facts, run: Run) -> str:
+    """Why a door across the sea is refused for the family: it was queued
+    and no run started within UNSTARTED_WAIT_SECONDS, or "". Never applies on
+    the door's own continent, so it clears when the leader crosses."""
+    age = (facts.unstarted or {}).get(run.keyword)
+    if age is None:
+        return ""
+    door = council.continent_of(run.map_id)
+    home = council._home_continent(list(facts.level_rows))
+    if door is None or home is None or door == home:
+        return ""
+    left = UNSTARTED_WAIT_SECONDS + UNSTARTED_COOLDOWN_SECONDS - int(age)
+    if int(age) < UNSTARTED_WAIT_SECONDS or left <= 0:
+        return ""
+    return "queued across the sea and never started; held for %.1f more hour(s)" % (
+        left / 3600
+    )
+
+
 def _refusal_kind(facts: Facts, run: Run, level: int) -> tuple:
     """(kind, why) `run` is not offered, ("", "") when it is."""
     kind, why = council.door_refusal_kind(run.keyword, list(facts.level_rows))
     if why:
         return kind, why
     for kind, why in (
+        (council.REFUSED_CROSSING, _unstarted(facts, run)),
         (REFUSED_OUTGROWN, _outgrown_run(facts, run, level)),
         (REFUSED_LOCKED, _locked(facts, run)),
         (REFUSED_STALLED, _stalled(facts, run)),
@@ -1200,6 +1281,33 @@ def _heuristic_why(pick: Option) -> str:
             "is ready for" if pick.ready else "would be carried through",
             pick.why,
         )
+    )
+
+
+# A FAMILY THAT FORMS NO RUN IS NOT HANDED ANOTHER DOOR (#1261). The stall
+# breaker bars one door at a time (dungeonstall.HELD_SQL), so a family whose
+# runs never form walks the planner down every door it can reach with no run
+# started, while the quest job would have turned in work meanwhile. When the same
+# family leaves a second door with no run formed since its last run, the door
+# is not what holds it: the planner rests for UNFORMED_REST_HOURS from the
+# newest leave and the family works its default job, then tries one door.
+# An operator's order is never touched: the planner does not write those.
+UNFORMED_LEAVES = 2
+UNFORMED_REST_HOURS = 6
+
+
+def unformed_rest(facts: Facts) -> str:
+    """Why the planner queues no door now (see UNFORMED_LEAVES), or ""."""
+    if not facts.unformed:
+        return ""
+    count, age = facts.unformed
+    rest = UNFORMED_REST_HOURS * 3600 - int(age or 0)
+    if int(count or 0) < UNFORMED_LEAVES or age is None or rest <= 0:
+        return ""
+    return (
+        "the family left %d doors with no run formed since its last run, so "
+        "the door is not what holds it; no door is planned for %.1f more "
+        "hour(s) and the family works its default job" % (int(count), rest / 3600)
     )
 
 

@@ -416,18 +416,19 @@ def _clear_requests(runs, roster, views, families=None):
     return out
 
 
-def expired_ids(
+def expired_reasons(
     rows: Iterable[Mapping],
     *,
     now: datetime,
     max_age: timedelta = eventclips.MAX_AGE,
     max_count: int = eventclips.MAX_CLIPS,
-) -> list:
-    """Ids of ready ledger rows that fall outside the retention bounds.
+) -> dict:
+    """{id: reason} for ready ledger rows that fall outside the retention bounds.
 
-    Marks only: the caller sets state to expired. No file is deleted here or
-    there. Rows in any other state hold no saved clip, so they neither count
-    toward the cap nor expire.
+    The reason names the cap that fired: the age cap when the row is older
+    than it, else the count cap. Marks only: the caller sets state to
+    expired. No file is deleted here or there. Rows in any other state hold
+    no saved clip, so they neither count toward the cap nor expire.
     """
     ready = [
         {"id": r["id"], "saved_at": r["created_at"]}
@@ -438,7 +439,16 @@ def expired_ids(
         c["id"]
         for c in eventclips.retain(ready, now=now, max_age=max_age, max_count=max_count)
     }
-    return [c["id"] for c in ready if c["id"] not in kept]
+    cutoff = now - max_age
+    out = {}
+    for c in ready:
+        if c["id"] in kept:
+            continue
+        if c["saved_at"] < cutoff:
+            out[c["id"]] = "expired: age cap (%d days)" % max_age.days
+        else:
+            out[c["id"]] = "expired: count cap (%d)" % max_count
+    return out
 
 
 def plan_requests(
@@ -681,6 +691,7 @@ NO_VIEW_LINE = "No live view was up, so no clip was saved."
 FAILED_LINE = "No clip was saved."
 SHELF_EMPTY = "No clips have been saved yet."
 SHELF_LIMIT = 100
+MISSED_LIMIT = 1000
 
 
 def clip_url(file_name: str) -> str:
@@ -744,8 +755,48 @@ def failed_line(row: Mapping) -> str:
     return "%s: %s." % (FAILED_LINE[:-1], "; ".join(parts).rstrip(". "))
 
 
+MISSED_STATES = ("no_view", "failed")
+
+
+def missed(rows: Iterable[Mapping]) -> list:
+    """The moments that left no clip, counted per event day, newest day first.
+
+    A no_view row had no live view up; a failed row was recorded but not cut.
+    Each is counted, never listed as a card: [{day, no_view, failed}]. A row
+    with no event time has no day and is not counted."""
+    days: dict = {}
+    for r in rows:
+        state, at = r.get("state"), _iso(r.get("event_at"))
+        if state in MISSED_STATES and at:
+            days.setdefault(str(at)[:10], dict.fromkeys(MISSED_STATES, 0))[state] += 1
+    return [{"day": day, **days[day]} for day in sorted(days, reverse=True)]
+
+
+def repeats(rows: Iterable[Mapping]) -> dict:
+    """Where each ready clip stands among repeats of its item: {id: (nth, of)}.
+
+    Two drops of one item by one character are two real moments that read as a
+    duplicate. Clips of the same kind, character and subject are numbered oldest
+    first, so a card can say "2 of 2". A clip with no subject is never counted."""
+    groups: dict = {}
+    for r in rows:
+        if r.get("state") == "ready" and r.get("file_name") and subject(r):
+            key = (r.get("kind"), r.get("character"), subject(r))
+            groups.setdefault(key, []).append(r)
+    out: dict = {}
+    for group in groups.values():
+        group.sort(key=lambda r: (str(_iso(r.get("event_at")) or ""), r["id"]))
+        for n, r in enumerate(group, 1):
+            out[r["id"]] = (n, len(group))
+    return out
+
+
 def shelf(rows: Iterable[Mapping]) -> dict:
-    """The /api/clips payload: ready rows with a file, newest event first."""
+    """The /api/clips payload: ready rows with a file, newest event first, and
+    the moments missed per day (`missed`). A clip of an item its character
+    caught more than once carries `nth` and `of`."""
+    rows = list(rows)
+    again = repeats(rows)
     ready = [r for r in rows if r.get("state") == "ready" and r.get("file_name")]
     ready.sort(
         key=lambda r: (str(_iso(r.get("event_at")) or ""), r["id"]), reverse=True
@@ -760,9 +811,15 @@ def shelf(rows: Iterable[Mapping]) -> dict:
                 "subject": subject(r),
                 "at": _iso(r.get("event_at")),
                 "url": clip_url(r["file_name"]),
+                **(
+                    {"nth": again[r["id"]][0], "of": again[r["id"]][1]}
+                    if r["id"] in again and again[r["id"]][1] > 1
+                    else {}
+                ),
             }
             for r in ready[:SHELF_LIMIT]
         ],
+        "missed": missed(rows),
         "empty": SHELF_EMPTY,
     }
 

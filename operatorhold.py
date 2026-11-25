@@ -39,7 +39,7 @@ off.
 
 SCOPE NAMES WHAT A HOLD FORBIDS (#2560). The `scope` column is a comma list of
 writer names: `queue`, `council`, `activity`, `levelroute`, `gearrouting`, `lending`,
-`farm`.
+`farm`, `craft`.
 `all` names every writer. An empty scope is the default and stands for
 DEFAULT_SCOPE, today's meaning: the drives and lending, never gathering. A
 writer asks `covers`; nothing reads the free-text reason to decide.

@@ -241,6 +241,20 @@ class EveryQuestInReach(unittest.TestCase):
         self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 30))
         self.assertIn("goes on to", p.move.said)
 
+    def test_a_quest_with_no_objective_spawns_is_not_offered(self):
+        # Quest 99 requires killing creature 999, but no spawns for 999 are provided.
+        cat = world(
+            extra_quests=[quest(99, ELWYNN, 2, kill=999, title="Unspawned Hunt")],
+            extra_givers=[
+                giver(99, "start", 1099, 199, 100, 0),
+                giver(99, "end", 1099, 199, 100, 0),
+            ],
+        )
+        # The quest has a giver but no objective spawns - it should not be in reach.
+        self.assertNotIn(99, questers.in_reach(cat, mirra(), ELWYNN))
+        # The quest should also not be open_to the member.
+        self.assertFalse(questers.open_to(cat, mirra(), 99))
+
     def test_a_zone_on_the_other_continent_is_crossed_to(self):
         far = [quest(40, 148, 4, title="Darkshore Fish")]
         cat = world(
@@ -880,6 +894,35 @@ class Broken(unittest.TestCase):
             "requires crafted Crab Cakes (item 2683); questers cannot cook",
         )
 
+    def test_seasoned_wolf_kabobs_ledger_explains_the_unsupported_cooking_step(self):
+        quest = classquest.Quest(
+            90,
+            "Seasoned Wolf Kabobs",
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((1017, 10),),
+        )
+        facts = questers.Facts(zone=DUSKWOOD, level=25, ender_npcs=True)
+
+        reason = questers._broken_reason(
+            quest,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            reason,
+            "requires crafted Seasoned Wolf Kabobs (item 1017); questers cannot cook",
+        )
+
     def test_quest_101_carries_no_hard_coded_reason(self):
         """The Totem of Infliction is a plain three-item collect quest in the
         world rows (items 1129, 1130, 2378, no item use), so it is judged like
@@ -1193,6 +1236,106 @@ class Broken(unittest.TestCase):
             "Ghost Hair Thread (quest 149) requires Spectral Comb (item 1453), "
             "which no spawned creature drops",
         )
+
+    def test_heart_of_mokk_ledger_names_the_summoned_source(self):
+        fever = classquest.Quest(
+            348,
+            "Stranglethorn Fever",
+            0,
+            45,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((2797, 1),),
+            enders=(classquest.Spawn(1449, 33, 0, 0.0, 0.0, name="Unbagwa"),),
+        )
+        facts = questers.Facts(zone=33, level=45, ender_npcs=True)
+
+        early = questers._broken_reason(
+            fever, facts, questers.STATUS_INCOMPLETE, 0, frozenset(), {}
+        )
+        self.assertEqual(early, "")
+
+        reason = questers._broken_reason(
+            fever,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertIn("Heart of Mokk (item 2797)", reason)
+        self.assertIn("quest 349 is turned in", reason)
+
+    def test_green_hills_ledger_names_the_chapter_quests(self):
+        hills = classquest.Quest(
+            338,
+            "The Green Hills of Stranglethorn",
+            0,
+            40,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((2756, 1), (2757, 1), (2758, 1), (2759, 1)),
+            enders=(classquest.Spawn(1449, 33, 0, 0.0, 0.0, name="Unbagwa"),),
+        )
+        facts = questers.Facts(zone=33, level=40, ender_npcs=True)
+
+        early = questers._broken_reason(
+            hills, facts, questers.STATUS_INCOMPLETE, 0, frozenset(), {}
+        )
+        self.assertEqual(early, "")
+
+        reason = questers._broken_reason(
+            hills,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertIn("quests 339 to 342", reason)
+        self.assertNotEqual(reason, questers.STALLED_UNSOURCED)
+
+    def test_flagon_of_mead_ledger_names_the_vendor_source(self):
+        fleet = classquest.Quest(
+            288,
+            "The Third Fleet",
+            0,
+            27,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((2594, 1),),
+            enders=(classquest.Spawn(2000, 11, 0, 0.0, 0.0, name="Ender"),),
+        )
+        facts = questers.Facts(zone=11, level=27, ender_npcs=True)
+
+        early = questers._broken_reason(
+            fleet, facts, questers.STATUS_INCOMPLETE, 0, frozenset(), {}
+        )
+        self.assertEqual(early, "")
+
+        reason = questers._broken_reason(
+            fleet,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertIn("Flagon of Mead (item 2594)", reason)
+        self.assertIn("Malgin Barleybrew", reason)
+        self.assertIn("cannot buy", reason)
 
     def test_an_unsourced_item_quest_names_no_invented_cause(self):
         # Quest 64 once carried a hard-coded reason that no creature drops its

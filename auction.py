@@ -758,6 +758,21 @@ class Need:
     short: int = 0
 
 
+def stocked_needs(needs, listed) -> list:
+    """The needs the house lists at least one buyout of, or all when unread.
+
+    A WALK TO THE COUNTER FOR A REAGENT NOBODY SELLS BUYS NOTHING. The pass
+    used to take the traveller for any shortfall and only say "the house lists
+    none of it" once a leader stood at the counter, so a family could hold its
+    one travel column for a whole lease on a trip with nothing at the end of
+    it, and ask again next cycle. `listed` is entry -> live listings, or None
+    when the house was not read, which says nothing and keeps every need.
+    """
+    if listed is None:
+        return list(needs)
+    return [n for n in needs if listed.get(int(n.entry), 0) > 0]
+
+
 @dataclass(frozen=True)
 class Buy:
     """One `kind='auction'` row, ready to insert.

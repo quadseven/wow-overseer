@@ -13,7 +13,7 @@ from . import dbschema, gamedata
 from .miniyaml import YamlError, loads
 
 TOP_KEYS = {
-    "decree", "id", "family", "proves", "fix", "world", "runs", "duration",
+    "decree", "id", "family", "proves", "box", "fix", "world", "runs", "duration",
     "cast", "arrange", "act", "observe",
 }  # fmt: skip
 REQUIRED_TOP = (
@@ -217,9 +217,26 @@ def _todo_or(lint, path, value, ok, what):
 
 def _header_proves(lint, doc):
     proves = doc.get("proves")
+    if _is_int(proves):
+        lint.ensure(
+            proves > 0,
+            "decree.proves",
+            "schema",
+            "must be a positive issue number",
+        )
+        box = doc.get("box")
+        lint.ensure(
+            isinstance(box, str) and bool(box.strip()),
+            "decree.box",
+            "schema",
+            "is required with numeric proves and must name one checkbox",
+        )
+        return
     if not isinstance(proves, list) or not proves:
         lint.err("decree.proves", "schema", "must be a non-empty list")
         return
+    if "box" in doc:
+        lint.err("decree.box", "schema", "requires numeric proves")
     fields = ("repo", "issue", "criterion")
     for i, p in enumerate(proves):
         path = f"decree.proves[{i}]"
@@ -951,7 +968,10 @@ def _observe(lint, doc, whos, aliases):
     for i, o in enumerate(obs):
         path = f"decree.observe[{i}]"
         if lint.keys(
-            path, o, ("name", "role", "sql", "log", "expect", "when"), ("name", "role")
+            path,
+            o,
+            ("name", "role", "sql", "log", "expect", "when", "online"),
+            ("name", "role"),
         ):
             roles.append(o.get("role"))
             _observe_one(lint, path, o, seen, known_var)
@@ -980,6 +1000,9 @@ def _observe_one(lint, path, o, seen, known_var):
         "schema",
         "must be precondition or check",
     )
+    if "online" in o:
+        _observe_online(lint, path, o)
+        return
     lint.ensure(
         ("sql" in o) != ("log" in o), path, "schema", "needs exactly one of sql or log"
     )
@@ -987,6 +1010,27 @@ def _observe_one(lint, path, o, seen, known_var):
         _observe_sql(lint, path, o, known_var)
     if "log" in o:
         _observe_log(lint, path, o)
+
+
+def _observe_online(lint, path, o):
+    lint.ensure(
+        o.get("online") == "cast",
+        f"{path}.online",
+        "online",
+        "must be cast",
+    )
+    lint.ensure(
+        o.get("role") == "precondition" and o.get("when") == "start",
+        f"{path}.online",
+        "online",
+        "cast online is a start precondition",
+    )
+    lint.ensure(
+        not any(key in o for key in ("sql", "log", "expect")),
+        f"{path}.online",
+        "online",
+        "cannot be combined with sql, log or expect",
+    )
 
 
 def _observe_log(lint, path, o):

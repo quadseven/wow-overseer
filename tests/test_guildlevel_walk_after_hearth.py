@@ -1,38 +1,78 @@
-"""The walk on after a death-loop hearth is asked again, and only so often (#2014).
+"""A death-loop onward walk waits out the landed hearth's remaining hold."""
 
-The hearth step writes the walk on in the same instant as the hearth, and the
-module refuses it while the hearth still holds the member. The resume
-(guildjobs.death_loop_resume) asks again once the refusal's wait has passed;
-this pins that it stops after RESUME_HELD_RETRIES refusals in a row.
-"""
-
+import asyncio
 import unittest
+from unittest import mock
 
-from test_guildjobs_death_loop_resume import (
-    at_home,
-    hearthed,
-    refused_walk,
-    resume,
-)
-
-BOUND = 3
+import guildjobs
+from test_guildsocial_bridge import bridge
 
 
-class TheWalkAfterTheHearth(unittest.TestCase):
-    def test_a_walk_refused_as_held_is_sent_again_once_the_wait_passes(self):
-        self.assertIsNotNone(resume(at_home(), (hearthed(30), refused_walk(29)))[0])
+class _Loop:
+    def __init__(self, answers):
+        self.answers = iter(answers)
+        self.inserted = []
 
-    def test_the_retry_is_bounded_when_the_hold_never_lifts(self):
-        refusals = tuple(refused_walk(40 - 7 * i) for i in range(BOUND))
-        self.assertIsNone(resume(at_home(), (hearthed(45),) + refusals))
+    async def _await_corps_answer(self, row_id, seconds):
+        return next(self.answers)
 
-    def test_one_fewer_refusal_still_retries(self):
-        refusals = tuple(refused_walk(40 - 7 * i) for i in range(BOUND - 1))
-        self.assertIsNotNone(resume(at_home(), (hearthed(45),) + refusals)[0])
+    async def _corps_row_again(self, step, row, row_id, detail, walk):
+        return False
 
-    def test_refusals_from_before_the_landed_hearth_are_not_counted(self):
-        old = tuple(refused_walk(80 + i) for i in range(BOUND))
-        self.assertIsNotNone(resume(at_home(), (hearthed(30),) + old)[0])
+    def _note_job_walk_unsupported(self, step, row, detail):
+        pass
+
+
+_Loop._job_row = bridge.Bridge._job_row
+
+
+def loop_step():
+    hearth = guildjobs.guildcorps.Row("hearth", "use", "", "guildjobs:hearth:Member")
+    walk = guildjobs.guildcorps.Row(
+        "job", "walk-to-spawn creature:123 max:100", "", "guildjobs:level:Member"
+    )
+    return guildjobs.guildcorps.Step(
+        "Member",
+        "hearth",
+        0,
+        "Member hearths home to town for a town errand, then walks on to a hub",
+        rows=(hearth, walk),
+    ), walk
+
+
+class ADeathLoopHearthWalk(unittest.TestCase):
+    def run_walk(self, answers):
+        loop = _Loop(answers)
+        step, row = loop_step()
+        ids = iter(range(1, 10))
+
+        def insert(holder, command_row):
+            loop.inserted.append((holder, command_row))
+            return next(ids)
+
+        async def to_thread(function, *args):
+            return function(*args)
+
+        with (
+            mock.patch.object(bridge, "_insert_corps_row", insert),
+            mock.patch.object(bridge.guildjobs, "LOOP_HEARTH_WALK_RETRY_SECONDS", 0),
+            mock.patch.object(bridge.asyncio, "to_thread", to_thread),
+        ):
+            result = asyncio.run(loop._job_row(step, row, 5000.0))
+        return result, loop
+
+    def held(self):
+        return {"status": "error", "detail": "character is held by another verb"}
+
+    def test_walk_is_resent_after_the_hearth_hold_clears(self):
+        result, loop = self.run_walk([self.held(), {"status": "applied", "detail": ""}])
+        self.assertTrue(result)
+        self.assertEqual(len(loop.inserted), 2)
+
+    def test_walk_retry_stops_after_its_bound(self):
+        result, loop = self.run_walk([self.held(), self.held(), self.held()])
+        self.assertFalse(result)
+        self.assertEqual(len(loop.inserted), guildjobs.LOOP_HEARTH_WALK_RETRIES + 1)
 
 
 if __name__ == "__main__":

@@ -334,6 +334,16 @@ PROGRESS_YARDS = 5.0
 ARRIVED_YARDS = 15.0
 SPENT_SECONDS = 1800.0
 
+# A WALK GIVEN UP ON AGAIN AND AGAIN IS ASKED FOR LESS AND LESS OFTEN. A target
+# the world keeps releasing as unreachable (a mailbox the walking bearings
+# refuse from where the family stands) was refused for SPENT_SECONDS and then
+# issued again, for ever, holding the traveller each time. Each give-up of the
+# same (claimant, aim) that comes after the last refusal ran out doubles the
+# refusal, up to SPENT_CEILING_SECONDS. A give-up long after that ceiling
+# starts the count again, so a target that became reachable is not punished
+# for ever.
+SPENT_CEILING_SECONDS = 8 * SPENT_SECONDS
+
 # A RAW POINT ERRAND IS NOT RE-ISSUED INSIDE ITS ARRIVAL CEILING.
 #
 # The module lets a character go at a ground point it reached or gave up on and
@@ -1610,6 +1620,8 @@ class Slot:
         self._progress: dict = {}
         # {(claimant, aim): when given up} for walks that could not land.
         self._spent: dict = {}
+        # {(claimant, aim): give-ups in a row}, which grow the refusal.
+        self._strikes: dict = {}
         # {character: (aim, when the errand was taken)} for the last raw point errand taken
         # on each character, read by `_gate` (RAW_POINT_CEILING_SECONDS).
         self._ground: dict = {}
@@ -1947,7 +1959,24 @@ class Slot:
     def spent(self, claimant: str, aim: str, now: float) -> bool:
         """Whether `claimant` gave `aim` up as unreachable within SPENT_SECONDS."""
         at = self._spent.get((claimant, aim))
-        return at is not None and now - at < SPENT_SECONDS
+        return at is not None and now - at < self.spent_window(claimant, aim)
+
+    def spent_window(self, claimant: str, aim: str) -> float:
+        """How long a give-up of `aim` by `claimant` is refused for."""
+        strikes = max(1, self._strikes.get((claimant, aim), 1))
+        return min(SPENT_SECONDS * 2 ** (strikes - 1), SPENT_CEILING_SECONDS)
+
+    def _give_up(self, claimant: str, aim: str, now: float) -> None:
+        """Write the give-up ledger, growing the refusal on a repeat."""
+        key = (claimant, aim)
+        at = self._spent.get(key)
+        window = self.spent_window(claimant, aim)
+        if at is None or now - at >= window + SPENT_CEILING_SECONDS:
+            self._strikes[key] = 1
+        elif now - at >= window:
+            # Capped: the window is at its ceiling long before this.
+            self._strikes[key] = min(self._strikes.get(key, 1) + 1, 16)
+        self._spent[key] = now
 
     def gave_up(self, decision: Decision, released: bool, now: float) -> None:
         """Record that a SLOT_GIVE_UP was acted on (#227)."""
@@ -1964,7 +1993,7 @@ class Slot:
         it does after `_measure`, and a pass re-asserting on its own cycle
         cannot put the walk straight back.
         """
-        self._spent[(claimant, aim)] = now
+        self._give_up(claimant, aim, now)
         self._progress.pop((claimant, aim), None)
         if released and self.holder is not None and self.holder.aim == aim:
             self.holder = None
@@ -1988,7 +2017,7 @@ class Slot:
         # young was not one that outlived anything.
         if now - holder.since < self.lease:
             return
-        self._spent[(holder.claimant, holder.aim)] = now
+        self._give_up(holder.claimant, holder.aim, now)
         self._progress.pop((holder.claimant, holder.aim), None)
 
     def urgency_suppressed_until(self, claimant: str) -> float:
@@ -2229,7 +2258,7 @@ class Slot:
                 verdict=SLOT_WAIT,
                 reason="%s gave up %r on %s as a walk that cannot land, and "
                 "does not ask for it again for %ds"
-                % (claimant, aim, character, int(SPENT_SECONDS)),
+                % (claimant, aim, character, int(self.spent_window(claimant, aim))),
                 claimant=claimant,
                 aim=aim,
                 character=character,
@@ -2300,7 +2329,7 @@ class Slot:
         key = (decision.claimant, decision.aim)
         best, best_at = self._progress.get(key, (distance, now))
         if stalled(best, best_at, distance, now):
-            self._spent[key] = now
+            self._give_up(key[0], key[1], now)
             return Decision(
                 verdict=SLOT_GIVE_UP,
                 reason="%s gives up %r on %s: %d yards out and no %d yards "
@@ -2313,7 +2342,7 @@ class Slot:
                     int(distance),
                     int(PROGRESS_YARDS),
                     int(now - best_at),
-                    int(SPENT_SECONDS),
+                    int(self.spent_window(decision.claimant, decision.aim)),
                 ),
                 claimant=decision.claimant,
                 aim=decision.aim,
