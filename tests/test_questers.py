@@ -7,6 +7,7 @@ from unittest import mock
 import classhunt
 import classquest
 import guildjobs
+import questledger
 import questers
 
 ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE, DUSKWOOD = 12, 9, 40, 44, 10
@@ -278,6 +279,134 @@ class EveryQuestInReach(unittest.TestCase):
         tried = [questers.Attempt("Mirra", "take quest:1", "applied", age_minutes=2)]
         p = questers.plan(world(), mirra(x=0.0), questers.Clock(), 0.0, tried=tried)
         self.assertNotEqual((p.move.kind, p.move.quest), (classquest.TAKE, 1))
+
+
+TROGG_QUEST = 432
+TROGG = 1115
+DUN_MOROGH = 1
+
+
+def trogg_world():
+    """The quest and objective rows supplied for Those Blasted Troggs!.
+
+    Quest and spawn helper shapes match questers.QUESTS_SQL and
+    classquest.SPAWNS_SQL. The brief gives the objective count and total
+    spawns, but not spawn guids or positions, so this fixture supplies stable
+    synthetic ones and leaves creature levels unknown.
+    """
+    fixture_start, fixture_end = 99001, 99002
+    fixture_start_guid, fixture_end_guid = 990001, 990002
+    quest_row = quest(
+        TROGG_QUEST,
+        DUN_MOROGH,
+        9,
+        min_level=5,
+        kill=TROGG,
+        count=6,
+        title="Those Blasted Troggs!",
+    )
+    givers = [
+        giver(
+            TROGG_QUEST,
+            "start",
+            fixture_start_guid,
+            fixture_start,
+            0,
+            0,
+            map_id=0,
+            name="Fixture giver",
+        ),
+        giver(
+            TROGG_QUEST,
+            "end",
+            fixture_end_guid,
+            fixture_end,
+            0,
+            0,
+            map_id=0,
+            name="Fixture giver",
+        ),
+    ]
+    spawns = [
+        spawn(991000 + i, TROGG, 0, 0, level=0, map_id=0, name="Objective")
+        for i in range(45)
+    ]
+    return questers.catalogue(
+        [quest_row],
+        givers,
+        spawns,
+        [],
+        [started(TROGG_QUEST, fixture_start)],
+        [ended(TROGG_QUEST, fixture_end)],
+    )
+
+
+class ThoseBlastedTroggs(unittest.TestCase):
+    def test_the_kill_objective_leads_to_a_hunt_and_then_a_handin(self):
+        cat = trogg_world()
+        member = questers.Member(
+            name="QuestTester",
+            level=9,
+            race=HUMAN,
+            class_id=PRIEST,
+            map_id=0,
+            x=0,
+            y=0,
+            zone_id=DUN_MOROGH,
+            online=True,
+            quest_log={TROGG_QUEST: questers.STATUS_INCOMPLETE},
+            quest_progress={TROGG_QUEST: 0},
+            quest_objectives={TROGG_QUEST: {TROGG: 0}},
+        )
+
+        plan = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(cat.facts[TROGG_QUEST].level, 9)
+        self.assertEqual(cat.quest(TROGG_QUEST).min_level, 5)
+        self.assertEqual(
+            (plan.move.kind, plan.move.quest), (classquest.HUNT, TROGG_QUEST)
+        )
+        self.assertEqual(len(cat.quest(TROGG_QUEST).fields), 45)
+        step = questers.step_for(
+            member, plan.move, 100.0, quest=cat.quest(TROGG_QUEST), hunt=True
+        )
+        self.assertEqual(
+            [row.command for row in step.rows],
+            ["hunt-spawn creature:1115 count:6 max:480"],
+        )
+
+        progressed = questers.Member(
+            **{
+                **member.__dict__,
+                "quest_progress": {TROGG_QUEST: 6},
+                "quest_objectives": {TROGG_QUEST: {TROGG: 6}},
+            }
+        )
+        handin = questers.plan(cat, progressed, questers.Clock(), 60.0)
+        self.assertEqual(
+            (handin.move.kind, handin.move.quest),
+            (classquest.TURN_IN, TROGG_QUEST),
+        )
+
+    def test_an_active_quest_clears_a_stalled_ledger_reason(self):
+        old = {
+            "quest": TROGG_QUEST,
+            "guid": 990,
+            "character_name": "QuestTester",
+            "state": questledger.BROKEN,
+            "first_taken": None,
+            "finished": 1,
+            "reason": questers.STALLED,
+        }
+        changes = questledger.changes(
+            {990: "QuestTester"},
+            [old],
+            [{"guid": 990, "quest": TROGG_QUEST, "status": questers.STATUS_INCOMPLETE}],
+            [],
+            now=2,
+        )
+        self.assertEqual(
+            [(row.state, row.reason) for row in changes], [(questledger.TAKEN, "")]
+        )
 
 
 # A zone whose band is lower than Westfall's (2026-10-19 on the dev realm:
