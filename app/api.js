@@ -60,11 +60,15 @@ function stableValue(v) {
   return v;
 }
 
+function stableProjectionData(data) {
+  return JSON.stringify(stableValue(data));
+}
+
 // The canonical text a read is compared by: parsed, clock fields dropped,
 // keys in a fixed order. Text that is not JSON compares as itself.
 export function stableProjection(text) {
   try {
-    return JSON.stringify(stableValue(JSON.parse(text)));
+    return stableProjectionData(JSON.parse(text));
   } catch (err) {
     return text;
   }
@@ -108,7 +112,7 @@ export function load(path) {
       const text = await r.text();
       let data;
       try { data = JSON.parse(text); } catch (err) { throw new Error("not JSON from " + path); }
-      const projection = stableProjection(text);
+      const projection = stableProjectionData(data);
       const changed = projection !== e.projection;
       // The freshest answer is always what views are served, clock fields
       // and all; a clock-only answer just does not count as a change.
