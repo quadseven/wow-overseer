@@ -10,6 +10,7 @@ import guildjobs
 import questers
 
 ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE, DUSKWOOD = 12, 9, 40, 44, 10
+TIRISFAL = 85
 HUMAN, ORC = 1, 2
 PRIEST, WARRIOR = 5, 1
 ALLIANCE_MASK, HORDE_MASK = 1101, 690
@@ -2033,6 +2034,102 @@ class Broken(unittest.TestCase):
             world(), mirra(x=0.0), questers.Clock(), 0.0, broken=frozenset({1})
         )
         self.assertNotEqual(p.move.quest, 1)
+
+    def test_quest_358_graverobbers_stalls_with_no_item_source(self):
+        # Quest 358 "Graverobbers" in Tirisfal Glades (level 8) requires:
+        # - 8x Embalming Ichor (item 2834) from creatures 1674, 1675, 1941
+        # - 8x Rot Hide Graverobber (creature 1941) kills
+        # - 5x Rot Hide Mongrel (creature 1675) kills
+        # World rows: 25 spawns of 1941, 19 spawns of 1675 on the quest's map.
+        # If item 2834 has no creature dropper with a spawn, the quest stalls.
+        graverobbers = quest(
+            358, TIRISFAL, 8, min_level=4, title="Graverobbers"
+        )
+        graverobbers.update(
+            npc1=1941, npc_count1=8,
+            npc2=1675, npc_count2=5,
+            item1=2834, item_count1=8,
+        )
+        cat = world(
+            extra_quests=[graverobbers],
+            extra_givers=[
+                giver(358, "start", 1358, 1358, 0, 0),
+                giver(358, "end", 1358, 1358, 0, 0),
+            ],
+            extra_spawns=[
+                spawn(3581, 1941, 100, 0, level=8),
+                spawn(3582, 1675, 200, 0, level=8),
+            ],
+            # No loot rows for item 2834 -> no source for the required item
+        )
+        member = mirra(
+            level=8,
+            race=2,  # Undead (Horde)
+            zone_id=TIRISFAL,
+            quest_log={358: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset(),
+            quest_progress={358: 0},
+            quest_objectives={358: {1941: 0, 1675: 0}},
+            quest_item_objectives={358: {2834: 0}},
+        )
+        clock = questers.Clock()
+        # First pass - quest is not yet stalled
+        p = questers.plan(cat, member, clock, 0.0, last_quest=358)
+        self.assertEqual(p.broken, ())
+        # Advance clock in PLAY_GAP_SECONDS increments until stall
+        # Each call advances at most PLAY_GAP_SECONDS (10 min = 600 sec)
+        # Need STALL_SECONDS (2 hours = 7200 sec) / 600 = 12 calls
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i, last_quest=358)
+        # After 2 hours of play - quest should be stalled
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 358)
+        # The quest has huntable fields for the kill objectives (1941, 1675),
+        # so the stall reason is generic STALLED (objectives not moving),
+        # not STALLED_UNSOURCED (which requires no fields at all).
+        self.assertEqual(p.broken[0].reason, questers.STALLED)
+
+    def test_quest_358_graverobbers_giver_missing_for_some_races(self):
+        # Quest 358 "Graverobbers" has a giver that is not spawned for some questers.
+        # The quest giver exists in the world data but the spawn is missing.
+        # Need another quest in TIRISFAL with a spawned giver to make the zone a classic zone.
+        graverobbers = quest(
+            358, TIRISFAL, 8, min_level=4, title="Graverobbers"
+        )
+        graverobbers.update(
+            npc1=1941, npc_count1=8,
+            npc2=1675, npc_count2=5,
+            item1=2834, item_count1=8,
+        )
+        # A dummy quest in TIRISFAL with a spawned giver to keep the zone in classic_zones
+        dummy = quest(359, TIRISFAL, 8, title="Dummy Quest")
+        cat = world(
+            extra_quests=[graverobbers, dummy],
+            extra_givers=[
+                giver(358, "start", 1358, 1358, 0, 0),
+                giver(358, "end", 1358, 1358, 0, 0),
+                giver(359, "start", 1359, 1359, 0, 0),  # Not dropped
+                giver(359, "end", 1359, 1359, 0, 0),
+            ],
+            extra_spawns=[
+                spawn(3581, 1941, 100, 0, level=8),
+                spawn(3582, 1675, 200, 0, level=8),
+            ],
+            drop={1358},  # Drop only graverobbers' giver
+        )
+        member = mirra(
+            level=8,
+            race=2,  # Undead
+            zone_id=TIRISFAL,
+            x=10.0, y=0.0,
+        )
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        # Quest should be recorded as broken with GIVER_MISSING, not taken
+        self.assertIn(
+            (358, questers.GIVER_MISSING, False),
+            [(b.quest, b.reason, b.held) for b in p.broken],
+        )
+        self.assertNotEqual(p.move.quest, 358)
 
 
 if __name__ == "__main__":
