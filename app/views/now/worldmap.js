@@ -144,12 +144,16 @@ function svgMarkup(o, vb, ppu) {
   const zones = zoneRows(C, ppu, px);
   const dots = dotRows(o.dots, ppu, px);
   const shown = placeLabels(zones, dots);
-  const coast = (C.coast || []).map((d) => `<path d="${esc(d)}" fill="none" stroke="#9fd0e0" stroke-opacity=".22" stroke-width="18" filter="url(#wmg${id})"></path>`).join("")
+  const useFilters = !o.compact;
+  const coast = (C.coast || []).map((d) => `<path d="${esc(d)}" fill="none" stroke="#9fd0e0" stroke-opacity=".22" stroke-width="18"${useFilters ? ` filter="url(#wmg${id})"` : ""}></path>`).join("")
     + (C.coast || []).map((d) => `<path d="${esc(d)}" fill="#b49c6c" stroke="#3b2c17" stroke-width="2.4"></path>`).join("");
   const zonePaths = zones.map((z) => `<path class="wm-zone" data-zone="${esc(z.z.name)}" d="${esc(z.z.d)}" fill="${z.tint}"${CONTESTED[z.z.label] ? ' stroke-dasharray="5 4"' : ""}></path>`).join("");
+  const defs = useFilters
+    ? `<defs><filter id="wmt${id}" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="n"></feTurbulence><feColorMatrix in="n" type="saturate" values="0" result="g"></feColorMatrix><feComponentTransfer in="g" result="t"><feFuncA type="linear" slope="0.18"></feFuncA></feComponentTransfer><feComposite in="t" in2="SourceGraphic" operator="in" result="tex"></feComposite><feMerge><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="tex"></feMergeNode></feMerge></filter><filter id="wmg${id}"><feGaussianBlur stdDeviation="6"></feGaussianBlur></filter></defs>`
+    : "";
+  const zoneGroup = useFilters ? `<g filter="url(#wmt${id})">${zonePaths}</g>` : `<g>${zonePaths}</g>`;
   return `<svg class="wm-svg" viewBox="${vb.map(f1).join(" ")}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="${esc(C.name + " map with " + o.dots.length + " characters marked")}">`
-    + `<defs><filter id="wmt${id}" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="n"></feTurbulence><feColorMatrix in="n" type="saturate" values="0" result="g"></feColorMatrix><feComponentTransfer in="g" result="t"><feFuncA type="linear" slope="0.18"></feFuncA></feComponentTransfer><feComposite in="t" in2="SourceGraphic" operator="in" result="tex"></feComposite><feMerge><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="tex"></feMergeNode></feMerge></filter><filter id="wmg${id}"><feGaussianBlur stdDeviation="6"></feGaussianBlur></filter></defs>`
-    + coast + `<g filter="url(#wmt${id})">${zonePaths}</g>` + labelSvg(zones, shown, dots, px)
+    + defs + coast + zoneGroup + labelSvg(zones, shown, dots, px)
     + dots.map((d) => dotSvg(d, px, !o.compact)).join("") + `</svg>`;
 }
 
@@ -158,6 +162,11 @@ function chrome(o) {
   if (o.compact) return head;
   return head + `<div class="wm-zoom"><button type="button" class="wm-btn" data-zoom="in" aria-label="Zoom in"><i class="ph ph-plus" aria-hidden="true"></i></button><button type="button" class="wm-btn" data-zoom="out" aria-label="Zoom out"><i class="ph ph-minus" aria-hidden="true"></i></button><button type="button" class="wm-btn" data-zoom="reset" aria-label="Reset view"><i class="ph ph-arrows-in" aria-hidden="true"></i></button></div>`
     + `<div class="wm-legend" aria-hidden="true"><span><span class="wm-key fam"></span>family, by class colour</span><span><span class="wm-key mate"></span>guildmate</span><span><span class="wm-key fall"></span>zone centre, position not read</span><span>dashed border: contested</span></div>`;
+}
+
+function mapSignature(o, vb, ppu) {
+  const dots = (o.dots || []).map((d) => [d.name, f1(d.x), f1(d.y), d.color, d.ghost ? 1 : 0, d.fallback ? 1 : 0]);
+  return JSON.stringify([o.key, o.shape && o.shape.name, !!o.compact, vb.map(f1), f1(ppu), o.summary || "", dots]);
 }
 
 // Draw (or redraw) the map into `boxEl`. `o`: {key, shape, dots, compact,
@@ -169,7 +178,13 @@ export function draw(boxEl, o) {
   const size = () => ({ w: boxEl.clientWidth || 600, h: boxEl.clientHeight || 500 });
   const ppuOf = (v) => Math.min(size().w / v[2], size().h / v[3]);
   const paint = () => {
-    boxEl.innerHTML = svgMarkup(o, vb, ppuOf(vb)) + chrome(o);
+    const ppu = ppuOf(vb);
+    const sig = mapSignature(o, vb, ppu);
+    if (typeof boxEl.getAttribute === "function" && boxEl.getAttribute("data-map-sig") === sig && boxEl.querySelector("svg")) {
+      return;
+    }
+    if (typeof boxEl.setAttribute === "function") boxEl.setAttribute("data-map-sig", sig);
+    boxEl.innerHTML = svgMarkup(o, vb, ppu) + chrome(o);
     bindHover(boxEl, o);
   };
   paint();
