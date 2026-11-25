@@ -78,7 +78,7 @@ SCRIPTED_EVENT_REASON = (
 )
 SCRIPTED_EVENT_NOTE = (
     "The world rows list no required item or creature/object objectives, "
-    "and questers have no action to drive the scripted completion event."
+    "so the stored reason is the only evidence of how it completes: a scripted event."
 )
 # The stored take reason from questers._giver_failure and the module's
 # QuestErrandRefusal. The module uses different reasons for an object

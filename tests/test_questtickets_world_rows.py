@@ -162,7 +162,7 @@ class WorldRows(unittest.TestCase):
         self.assertEqual(text.count("Last objective counts: not in the log now"), 2)
         self.assertIn(
             "The world rows list no required item or creature/object objectives, "
-            "and questers have no action to drive the scripted completion event.",
+            "so the stored reason is the only evidence of how it completes: a scripted event.",
             text,
         )
 
