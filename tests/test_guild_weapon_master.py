@@ -457,13 +457,11 @@ class TheIsland(unittest.TestCase):
         )
 
     def test_the_bridge_reads_the_ground_of_every_walker(self):
-        bridge_reads = (
-            BRIDGE.count('int(at["map_id"]), at)')
-            + BRIDGE.count("int(m.map_id), at)")
+        bridge_reads = BRIDGE.count('int(at["map_id"]), at)') + BRIDGE.count(
+            "int(m.map_id), at)"
         )
-        pass_reads = (
-            WEAPONSKILL.count('int(at["map_id"]), at)')
-            + WEAPONSKILL.count("int(m.map_id), at)")
+        pass_reads = WEAPONSKILL.count('int(at["map_id"]), at)') + WEAPONSKILL.count(
+            "int(m.map_id), at)"
         )
         self.assertEqual(3, bridge_reads + pass_reads)
 

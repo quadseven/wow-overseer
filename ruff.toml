@@ -14,4 +14,4 @@ extend-exclude = ["mod-overseer"]
 # honors this too.
 # The replay tool belongs to the mod-overseer submodule; its formatting is
 # maintained in that repository and cannot be committed from this one.
-exclude = ["bridge.py", "map_server.py", "mod-overseer/tools/groundedstep-replay/replay_step.py"]
+exclude = ["bridge.py", "map_server.py", "weaponskill.py", "mod-overseer/tools/groundedstep-replay/replay_step.py"]

@@ -42,8 +42,7 @@ class FakeBridge:
     def town_errand_state(self, key):
         return townerrand.State()
 
-    async def _town_errand_yield_for_weapon(self, state, names, leader,
-                                            slot, label):
+    async def _town_errand_yield_for_weapon(self, state, names, leader, slot, label):
         return True
 
     def _cohort_town_slot(self, cohort=None):
@@ -81,8 +80,7 @@ class FakeBridge:
         self.train_written.append(need)
         return 1
 
-    async def _claim_town_slot(self, claimant, character, target, urgent,
-                               cohort):
+    async def _claim_town_slot(self, claimant, character, target, urgent, cohort):
         self.claimed = (claimant, character, target, urgent, cohort)
         return True
 
@@ -106,8 +104,14 @@ MASTER = {
 }
 
 
-def bag(entry=5191, label="A Gladius", subclass=7, inventory_type=13,
-        item_level=24, required_level=20):
+def bag(
+    entry=5191,
+    label="A Gladius",
+    subclass=7,
+    inventory_type=13,
+    item_level=24,
+    required_level=20,
+):
     return {
         "name": "Eggo",
         "entry": entry,
@@ -139,8 +143,7 @@ class WeaponSkillPassCases(unittest.IsolatedAsyncioTestCase):
     async def test_equip_what_was_trained(self):
         """An applied train row is turned into an equip row."""
         self.bridge.applied_trains = [
-            {"name": "Eggo", "skill": "43", "entry": "5191",
-             "item_name": "A Gladius"},
+            {"name": "Eggo", "skill": "43", "entry": "5191", "item_name": "A Gladius"},
         ]
         # No carried weapon need, so after equipping the pass has nothing else.
         self.bridge.bags = []
