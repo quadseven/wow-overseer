@@ -7085,6 +7085,7 @@ def _held_since_hearth(m, hearths, recent) -> int:
         and int(r.age_minutes) <= landed
     )
 
+
 # A landed death-loop hearth can keep its verb hold for a short time. Retry its
 # onward walk at most twice, with a bounded pause between asks.
 LOOP_HEARTH_WALK_RETRIES = 2
