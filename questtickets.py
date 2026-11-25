@@ -334,7 +334,9 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
         lines += [
             "",
             "The take command found no quest giver in reach, blocking acceptance. "
-            "The world names a creature giver. The stored rows leave open why the lookup failed.",
+            "The world names a creature giver, but the take lookup needs a living "
+            "creature within 20 yards. The stored rows identify the creature relation, "
+            "but do not show its live distance or state.",
         ]
     lines += [
         "",

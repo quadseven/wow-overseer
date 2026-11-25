@@ -194,10 +194,57 @@ class Filing(unittest.TestCase):
         self.assertEqual(
             text.count("The take command found no quest giver in reach"), 1
         )
-        self.assertIn("The stored rows leave open why the lookup failed.", text)
+        self.assertIn(
+            "but the take lookup needs a living creature within 20 yards.", text
+        )
+        self.assertIn(
+            "The stored rows identify the creature relation, but do not show "
+            "its live distance or state.",
+            text,
+        )
         self.assertNotIn(
             "The take command found no quest giver in reach",
             qt.body(218, None, [row(218)], [], ""),
+        )
+
+    def test_a_take_refusal_explains_what_the_giver_rows_do_not_show(self):
+        # The ticket's item fields follow questcatalogue's QUESTS_SQL and
+        # DROP_SQL result shapes; the reason is persisted by
+        # bridge._record_quest_broken from questers._giver_failure.
+        info = types.SimpleNamespace(
+            title="The Dead Fields",
+            zone_name="Silverpine Forest",
+            level=14,
+            min_level=10,
+            follows=0,
+            items=(
+                {
+                    "id": 3622,
+                    "count": 1,
+                    "name": "Essence of Nightlash",
+                    "droppers": (1983,),
+                    "rewards": (),
+                    "objects": (),
+                    "vendors": (),
+                },
+            ),
+            objectives=(),
+        )
+        refused = dict(
+            row(437, name="QuestBot"), reason=qt.NO_GIVER_IN_REACH
+        )
+
+        text = qt.body(437, info, [refused], [], "")
+
+        self.assertIn("Required item 3622 x1 (Essence of Nightlash)", text)
+        self.assertIn("creature entries 1983", text)
+        self.assertIn(
+            "but the take lookup needs a living creature within 20 yards.", text
+        )
+        self.assertIn(
+            "The stored rows identify the creature relation, but do not show "
+            "its live distance or state.",
+            text,
         )
 
     def test_tickets_default_to_the_open_quest_epic(self):

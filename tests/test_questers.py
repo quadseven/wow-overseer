@@ -789,6 +789,61 @@ class Steps(unittest.TestCase):
             (step.action, step.key, step.spot), (questers.ACTION, 1, p.move.spot)
         )
 
+
+class ItemDropQuest(unittest.TestCase):
+    def test_a_creature_giver_and_item_dropper_support_take_and_hunt(self):
+        # Ticket facts follow questers.QUESTS_SQL and classquest's
+        # GIVERS_SQL, SPAWNS_SQL and LOOT_SQL row shapes. The ticket does not
+        # include the giver's actual entry or location, so this spawn is a
+        # placeholder used only to test the generic planner path.
+        quest_row = quest(437, 130, 14, min_level=10, title="The Dead Fields")
+        quest_row.update(item1=3622, item_count1=1)
+        giver_entry = 9001
+        cat = questers.catalogue(
+            [quest_row],
+            [giver(437, "start", 4370, giver_entry, 0, 0, name="QuestGiver")],
+            [spawn(4372, 1983, 100, 0, level=14, name="ItemDropper")],
+            [{"item": 3622, "entry": 1983}],
+            [started(437, giver_entry)],
+            [],
+        )
+        bot = questers.Member(
+            name="QuestBot",
+            level=14,
+            race=ORC,
+            class_id=PRIEST,
+            map_id=0,
+            x=0.0,
+            y=0.0,
+            zone_id=130,
+            online=True,
+        )
+
+        take = questers.plan(cat, bot, questers.Clock(), 0.0).move
+        self.assertEqual((take.kind, take.quest), (classquest.TAKE, 437))
+        take_step = questers.step_for(bot, take, 0, cat.quest(437))
+        self.assertEqual([row.command for row in take_step.rows], ["take quest:437"])
+
+        held = questers.Member(
+            **{
+                **bot.__dict__,
+                "quest_log": {437: questers.STATUS_INCOMPLETE},
+                "quest_progress": {437: 0},
+                "quest_item_objectives": {437: {3622: 0}},
+            }
+        )
+        # The ticket does not include a turn-in row, so exercise the objective
+        # chooser directly instead of treating an omitted ender as missing.
+        hunt = questers._hunt(cat, held, set(), frozenset())
+        self.assertEqual(
+            (hunt.kind, hunt.quest, hunt.spot.entry), (classquest.HUNT, 437, 1983)
+        )
+        hunt_step = questers.step_for(held, hunt, 0, cat.quest(437))
+        self.assertEqual(
+            [row.command for row in hunt_step.rows],
+            ["hunt-spawn creature:1983 item:3622 count:1 max:480"],
+        )
+
     def test_a_walk_only_hunt_the_quester_stands_at_writes_nothing(self):
         member = mirra(x=150.0, quest_log={1: 3}, quests_done=frozenset({2, 3}))
         cat = world()
