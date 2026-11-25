@@ -189,6 +189,105 @@ def walk(member, cat, rounds=20, clock=None):
 
 
 class EveryQuestInReach(unittest.TestCase):
+    @staticmethod
+    def _pilot_revenge():
+        # The ticket supplies quest and objective rows. The giver positions
+        # and the objective spawn below are fixture plumbing, not live rows.
+        row = quest(417, 1, 11, min_level=8, prev=419, title="A Pilot's Revenge")
+        row.update(
+            item1=3183,
+            item_count1=1,
+            item2=3117,
+            item_count2=1,
+            provided0=3117,
+        )
+        return questers.catalogue(
+            [row],
+            [
+                giver(417, "start", 9417, 19417, 0, 0, name="Quest Giver"),
+                giver(417, "end", 9418, 19418, 0, 0, name="Quest Ender"),
+            ],
+            [spawn(9419, 1961, 0, 0, level=6, name="Objective Creature")],
+            [{"item": 3183, "entry": 1961}],
+            [{"quest": 417, "kind": "creature", "entry": 19417}],
+            [{"quest": 417, "kind": "creature", "entry": 19418}],
+        )
+
+    def test_pilot_revenge_hunts_its_required_item_then_hands_in(self):
+        cat = self._pilot_revenge()
+        member = mirra(
+            name="TestQuester",
+            level=11,
+            zone_id=1,
+            x=0,
+            y=0,
+            quests_done=frozenset({419}),
+        )
+
+        take = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual((take.move.kind, take.move.quest), (classquest.TAKE, 417))
+
+        member = questers.Member(
+            **{
+                **member.__dict__,
+                "quest_log": {417: questers.STATUS_INCOMPLETE},
+                "quest_progress": {417: 1},
+                "quest_item_objectives": {417: {3183: 0, 3117: 1}},
+            }
+        )
+        hunt = questers.plan(cat, member, questers.Clock(), 0.0, last_quest=417)
+        step = questers.step_for(member, hunt.move, 0, cat.quest(417))
+        self.assertEqual(
+            (hunt.move.kind, hunt.move.quest, hunt.move.spot.entry),
+            (classquest.HUNT, 417, 1961),
+        )
+        self.assertEqual(
+            step.rows[0].command,
+            "hunt-spawn creature:1961 item:3183 count:1 max:480",
+        )
+
+        complete = questers.Member(
+            **{
+                **member.__dict__,
+                "quest_progress": {417: 2},
+                "quest_item_objectives": {417: {3183: 1, 3117: 1}},
+            }
+        )
+        hand_in = questers.plan(cat, complete, questers.Clock(), 0.0)
+        self.assertEqual(
+            (hand_in.move.kind, hand_in.move.quest), (classquest.TURN_IN, 417)
+        )
+
+    def test_pilot_revenge_stall_is_not_a_missing_source(self):
+        cat = self._pilot_revenge()
+        member = mirra(
+            name="TestQuester",
+            level=11,
+            zone_id=1,
+            x=0,
+            y=0,
+            quest_log={417: questers.STATUS_INCOMPLETE},
+            quest_progress={417: 1},
+            quest_item_objectives={417: {3183: 0, 3117: 1}},
+        )
+        clock = questers.Clock()
+        for minute in range(0, 121, 10):
+            plan = questers.plan(cat, member, clock, minute * 60, last_quest=417)
+
+        self.assertEqual(
+            [(b.quest, b.reason) for b in plan.broken], [(417, questers.STALLED)]
+        )
+        self.assertEqual(
+            questers.stalled_holds_with_actionable_objectives(
+                cat, member, {417: questers.STALLED}
+            ),
+            frozenset({417}),
+        )
+        ledger = {
+            ("TestQuester", 417): questers.ledger_state("broken", plan.broken[0].reason)
+        }
+        self.assertEqual(questers.known_broken("TestQuester", {}, ledger), frozenset())
+
     def test_a_starting_area_quest_is_of_the_zone_the_quester_stands_in(self):
         cat = world()
         self.assertEqual(cat.facts[1].zone, ELWYNN)
