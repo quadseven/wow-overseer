@@ -6873,6 +6873,25 @@ def _economy_aim_hold(claimant: str, name: str, inside=None) -> str:
     return said
 
 
+_DEAD_SQL = (
+    "SELECT s.health, (SELECT COUNT(*) FROM corpse k JOIN characters c "
+    "ON c.guid = k.guid WHERE c.name = s.name AND k.corpseType <> 0) AS corpses "
+    "FROM overseer_snapshot s WHERE s.name = %s "
+    "AND s.updated_at > NOW() - INTERVAL 60 SECOND")
+
+
+def _traveller_is_dead(name: str) -> bool:
+    """Whether the fresh snapshot shows `name` dead (no health) or a ghost
+    (a resurrectable corpse stands). False when unread: advisory only."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_DEAD_SQL, (name,))
+            row = cur.fetchone()
+    except pymysql.err.MySQLError:
+        return False
+    return errandgate.is_dead_row(row)
+
+
 def _economy_aimable(claimant: str, names, inside=()) -> tuple:
     """`names` less the members the pass `claimant` may not aim now, with
     `inside` the members already read inside an instance (#2323)."""
@@ -11881,6 +11900,17 @@ class Bridge(discord.Client):
         # ERRAND (#2323). Looked up: adapter tests load this door in isolation.
         held = globals().get("_economy_aim_hold", lambda *_a: "")
         if await asyncio.to_thread(held, claimant, character):
+            return False
+        # A DEAD OR GHOST TRAVELLER TAKES NO AIM FROM ANY PASS: the module
+        # refuses the walk and hands it back, the quest drive resumes, and
+        # the next pass writes it again - a loop that never reaches the
+        # corpse. Looked up like the hold above: the check is advisory.
+        dead_read = globals().get("_traveller_is_dead")
+        if dead_read and await asyncio.to_thread(dead_read, leader):
+            said = errandgate.dead_hold(True).said(leader, claimant)
+            if _ERRAND_HOLD_SAID.get((leader, claimant)) != errandgate.DEAD:
+                _ERRAND_HOLD_SAID[(leader, claimant)] = errandgate.DEAD
+                log.info("economy: %s", said)
             return False
         # NO AUCTIONEER IN REACH IS NOT AN ERRAND. The keyword resolves only
         # to a counter of the family's side within a town walk; the module
