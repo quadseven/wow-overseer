@@ -5289,7 +5289,6 @@ def _gzipped(
     is_json = kind == _GZIP_JSON
     cache = _GZIP_JSON_KEPT if is_json else _GZIP_KEPT
     limit = GZIP_JSON_KEPT_MAX if is_json else GZIP_KEPT_MAX
-    level = 5 if is_json else 9
     body_digest = digest if digest is not None else hashlib.sha256(body).digest()
     key = (kind, len(body), body_digest)
     with _GZIP_KEPT_LOCK:
@@ -5297,7 +5296,10 @@ def _gzipped(
         if kept is not None:
             cache.move_to_end(key)
             return kept
-    packed = gzip.compress(body, level, mtime=0)
+    if not is_json:
+        packed = gzip.compress(body, 9, mtime=0)
+    else:
+        packed = gzip.compress(body, 5, mtime=0)
     with _GZIP_KEPT_LOCK:
         cache[key] = packed
         while len(cache) > limit:
