@@ -69,7 +69,9 @@ granted: a quest is never completed, skipped or rewarded by a command.
 
 BROKEN (`Broken`, `failures`). A quest is broken when:
 
-  * FAILED: the log holds it as failed (an escort died, a timer ran out);
+  * FAILED: the log holds it as failed (an escort died, a timer ran out), and
+    the world rows' fact that an objective creature has spawns only off the
+    quest's map is added to the reason when it does (`_failed_reason`);
   * STALLED: its objectives (status and counters) have not moved for
     STALL_SECONDS of play while the quester was working it (`Clock`). Play is
     time online and alive between two looks, at most PLAY_GAP_SECONDS each, so
@@ -262,6 +264,11 @@ def _quest_complete(quest, status, progress=0) -> bool:
 # The reasons a quest is broken, as the ledger records them. FAILED is the
 # ledger's own words for it (questledger.FAILED_REASON, #923).
 FAILED = "the quest failed in the log"
+# The world rows' fact added to FAILED for an objective creature with spawns
+# only on other maps (`_failed_reason`): entry, then the spawn count.
+OFF_HOME_MAP = (
+    "its objective creature %d has no spawn on the quest's map (%d on other maps)"
+)
 STALLED = "its objectives did not move for 2 hours of play"
 NO_OBJECTIVES = "the world rows define no required creature, item, or object objective a quester can work"
 SCRIPTED_EVENT = "the quest completes only by a scripted event no lone quester drives"
@@ -561,9 +568,7 @@ def ledger_state(state, reason) -> str:
     # (quest 298, refused "not eligible" while its start item had no
     # bag room, stayed broken for weeks). A quest the log held as failed is a
     # failed attempt too: dropping and retaking it can finish it.
-    if state == LEDGER_BROKEN and (
-        reason.startswith((STALLED, REFUSED_TAKE)) or reason == FAILED
-    ):
+    if state == LEDGER_BROKEN and (reason.startswith((STALLED, REFUSED_TAKE, FAILED))):
         return LEDGER_STALLED
     return state
 
@@ -706,6 +711,9 @@ class Facts:
 
     zone: int
     level: int
+    # The map of the creature or object that gives the quest (its start row),
+    # -1 when no start row names one.
+    home_map: int = -1
     classes: int = 0
     # quest_template_addon.MaxLevel: a quester over it is refused the take
     # (SatisfyQuestLevel). 0: no cap.
@@ -818,6 +826,7 @@ def catalogue(
     zones = {_int(r.get("id")): zone_of(r.get("zone")) for r in rows}
     classic_zones = _classic_zones(book, zones)
     links = _links(rows, link_rows)
+    homes = _home_maps(giver_rows)
     facts = {}
     kept = {}
     band_rows = []
@@ -829,6 +838,7 @@ def catalogue(
         facts[qid] = Facts(
             zone=zones[qid],
             level=max(_int(r.get("level")), quest.min_level, 1),
+            home_map=homes.get(qid, -1),
             classes=_int(r.get("classes")),
             max_level=_int(r.get("max_level")),
             prev=_int(r.get("prev_signed")),
@@ -858,6 +868,15 @@ def catalogue(
         )
     bands = {side: levelroute.bands(band_rows, side) for side in levelroute.RACE_MASK}
     return Catalogue(classquest.Book(kept), facts, bands, hostile_givers(giver_rows))
+
+
+def _home_maps(giver_rows) -> dict:
+    """quest id -> the map of its first start row (-1 when a row gives none)."""
+    out = {}
+    for r in giver_rows or ():
+        if r.get("role") == "start":
+            out.setdefault(_int(r.get("quest")), _int(r.get("map_id"), -1))
+    return out
 
 
 def hostile_givers(giver_rows) -> dict:
@@ -1919,6 +1938,27 @@ def failures(
     return out
 
 
+def _off_home(quest, facts: Facts) -> list:
+    """(creature entry, spawn count) of each objective creature with spawns,
+    none of them on the map the quest is given on (Facts.home_map)."""
+    if facts.home_map < 0:
+        return []
+    out = []
+    for entry, _n in quest.kills:
+        spawns = [s for s in quest.fields if s.entry == entry]
+        if spawns and not any(int(s.map_id) == facts.home_map for s in spawns):
+            out.append((entry, len(spawns)))
+    return out
+
+
+def _failed_reason(quest, facts: Facts) -> str:
+    """FAILED, with the world rows' fact about each objective creature whose
+    spawns all stand off the quest's map, so the ledger says where its
+    objective is. The game's own FAILED is kept: this names no cause."""
+    notes = [OFF_HOME_MAP % (entry, n) for entry, n in _off_home(quest, facts)]
+    return "; ".join([FAILED, *notes])
+
+
 def _broken_reason(
     quest,
     facts: Facts,
@@ -1935,7 +1975,7 @@ def _broken_reason(
     complete quest's objectives cannot move, so stillness never stalls it:
     it is due a turn-in, not a drop (#1085)."""
     if status == STATUS_FAILED:
-        return FAILED
+        return _failed_reason(quest, facts)
     if quest.id in (35, 109):
         return UNSUPPORTED_OBJECTIVE
     if quest.id == 93 and status == STATUS_INCOMPLETE and (2683, 6) in quest.items:
