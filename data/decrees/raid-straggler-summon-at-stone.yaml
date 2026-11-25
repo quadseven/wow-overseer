@@ -6,16 +6,17 @@
 # stands at the Blackrock Mountain meeting stone. The run must summon the straggler (mod-overseer issue 922)
 # and, where the leader cannot reach the door, a guild warlock must click the ritual and spend the reagent
 # (issue 702, not asserted: see Scope).
-# Scope: the summon and read-back lines (issue 922) are worldserver log text and a log assertion is an exact
-# count that cannot demand presence, so the lines are not asserted. The straggler's position read back at the
-# door IS proven by rows: the summon row names Zug, is applied, and Zug ends inside Molten Core or within 40
-# yards of the door. The ritual click path and reagent consumption (issue 702) need a before and after of a
+# Scope: the summon line and the read-back line (issue 922) are worldserver log text, so each is required in
+# the run's log at least once, naming Zug and the Blackrock Mountain stone (wow-overseer issue 2767). The
+# straggler's position at the door is also proven by rows: the summon row names Zug, is applied, and Zug ends
+# inside Molten Core or within 40 yards of the door. The line for a refused summon naming the core's reason is
+# not required: no refusal is arranged. The ritual click path and reagent consumption (issue 702) need a before and after of a
 # shard count, and a decree has no start-state variable for an item count, so issue 702 is not claimed here.
 # Fixes: mod-overseer pulls 929 (straggler summon) and 698 (ritual rung); the commit is 929.
 decree: v1
 id: raid-straggler-summon-at-stone
 proves:
-  - {repo: quadseven/mod-overseer, issue: 922, criterion: "an applied summon row names the straggler and the straggler ends at the door by position (the log lines are not asserted here)"}
+  - {repo: quadseven/mod-overseer, issue: 922, criterion: "the worldserver log names the run summoning the straggler at the Blackrock Mountain stone and the straggler summoned there and read back on a map, and the straggler ends at the door by position"}
 fix: {repo: quadseven/mod-overseer, commit: "7960824c4e42b2872189a634e084c7351fd0554f"}
 world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -69,3 +70,10 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_command WHERE kind = 'summon' AND target_name = 'Zug' AND created_at >= @t0 AND status = 'error'
     expect: {scalar: "= 0"}
+  # The two lines issue 922 names; pinned to the module source by tests/test_eph_required_lines.py.
+  - name: the-straggler-summon-was-logged
+    role: check
+    log: {pattern: "raid run for family 'Grug' summons 'Zug' at the Blackrock Mountain stone - '[^']+' clicks stone [0-9]+", expect: {at_least: 1}}
+  - name: the-straggler-was-read-back-at-the-stone
+    role: check
+    log: {pattern: "raid run for family 'Grug' - 'Zug' was summoned to the Blackrock Mountain stone [0-9]+ by '[^']+' and reads back on map [0-9]+", expect: {at_least: 1}}

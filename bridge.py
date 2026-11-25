@@ -39119,7 +39119,8 @@ _CORPS_VENDORS_SQL = (
 _CORPS_RECENT_SQL = (
     "SELECT target_name, target_arg, source, "
     "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age, "
-    "IF(source LIKE '%%:collect:%%', result, '') AS result FROM overseer_command "
+    "IF(source LIKE '%%:collect:%%' OR source LIKE '%%:shop:%%', result, '') AS result "
+    "FROM overseer_command "
     "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY"
 )
 # How long one corps row is followed: a trainer walk's own ceiling and margin.

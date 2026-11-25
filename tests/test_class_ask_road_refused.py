@@ -9,6 +9,7 @@ now held back until the member's level or map is not the one that was refused.
 """
 
 import dataclasses
+import time
 import unittest
 
 from _stub_modules import PYMYSQL, stub_modules
@@ -44,7 +45,10 @@ def post_pass(board, helps=None):
         helps_read() if helps is None else helps,
         board,
         None,
-        1_000_000.0,  # long past the give-up cooldown
+        # Long past the give-up cooldown. The board stamps its cooldown on the
+        # host's monotonic clock, which counts from boot, so a fixed number is
+        # only "past" on a host up for less than that many seconds.
+        time.monotonic() + 7 * 86400.0,
     )
     return quest_pass
 
