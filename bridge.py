@@ -5633,6 +5633,17 @@ def _mc_family(family: str, fam: dict, rows: list) -> bool:
     return True
 
 
+async def _mc_requeue(bridge, pending: dict, fams: dict, stood) -> dict:
+    """Run the Molten Core self-order pass; re-read the queue when it moved so
+    the step sees the new order."""
+    mc_pass = getattr(bridge, "_mc_pass", None)
+    if mc_pass is not None and await mc_pass(pending, fams):
+        pending = campaignqueue.pending_by_family(
+            await asyncio.to_thread(_fetch_queue_rows))
+        pending = {k: v for k, v in pending.items() if k not in stood}
+    return pending
+
+
 def _spire_guild(names: list) -> list:
     """Every member of the family's guild, as the raid writer reads them."""
     holes = ", ".join(["%s"] * len(names))
@@ -27212,11 +27223,7 @@ class Bridge(discord.Client):
             pending = campaignqueue.pending_by_family(
                 await asyncio.to_thread(_fetch_queue_rows))
             pending = {k: v for k, v in pending.items() if k not in stood}
-        mc_pass = getattr(self, "_mc_pass", None)
-        if mc_pass is not None and await mc_pass(pending, fams):
-            pending = campaignqueue.pending_by_family(
-                await asyncio.to_thread(_fetch_queue_rows))
-            pending = {k: v for k, v in pending.items() if k not in stood}
+        pending = await _mc_requeue(self, pending, fams, stood)
         # THE TRADE TURN (tradeturn.py, #2262), after the planner and the spire
         # pass so neither sees a queue it must not extend. A family in a turn
         # is an empty queue to everything below: no step, no travel claim.
