@@ -79,6 +79,15 @@ function merge(oldParent, newParent, pairs) {
   });
 }
 
+function mapBoxesOf(root) {
+  const out = new Map();
+  root.querySelectorAll("[data-map-box]").forEach((box) => {
+    const fam = box.getAttribute("data-map-box");
+    if (fam && !out.has(fam)) out.set(fam, box);
+  });
+  return out;
+}
+
 // Draw `body` into `main` without taking a kept slot out of the document.
 // False when there is nothing to keep (no slot on screen, or none of them in
 // the new body): the caller swaps the body the plain way.
@@ -94,6 +103,14 @@ export function swapKeeping(main, body, doc = document) {
     if (neu) pairs.push({ old, neu });
   });
   if (!pairs.length) return false;
+  const oldMaps = mapBoxesOf(main);
+  if (oldMaps.size) {
+    const newMaps = mapBoxesOf(next.content);
+    oldMaps.forEach((old, fam) => {
+      const neu = newMaps.get(fam);
+      if (neu) pairs.push({ old, neu });
+    });
+  }
   merge(main, next.content, pairs);
   return true;
 }
