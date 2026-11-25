@@ -1682,7 +1682,8 @@ def _working(
     a dozen more in one day, each one a quest no quester had yet gone after.
     A quest it could hunt waits its turn; one it cannot hunt has nothing to
     wait for, so its clock still runs and a quest nobody can work still
-    stalls (STALLED_UNSOURCED)."""
+    stalls (STALLED_UNSOURCED). The last move's quest runs its clock too,
+    unless it is only waiting for the quester's levels (`_awaiting_levels`)."""
     out = {
         qid
         for qid in member.quest_log
@@ -1692,7 +1693,11 @@ def _working(
             and _unhuntable(cat, member, qid, left, object_left, idle)
         )
     }
-    if last_quest and int(last_quest) in member.quest_log:
+    if (
+        last_quest
+        and int(last_quest) in member.quest_log
+        and not _awaiting_levels(cat, member, int(last_quest), left, object_left, idle)
+    ):
         out.add(int(last_quest))
     return out
 
@@ -1716,13 +1721,15 @@ def _unhuntable(
     over its level is not unhuntable: it waits for the quester's levels, so
     its clock waits too. A quester may take a quest levelroute.ABOVE levels
     over itself, and quest 25 (Stonetalon Standstill), taken three levels
-    under it, was dropped as stalled by five questers (#1728)."""
+    under it, was dropped as stalled by five questers (#1728). Only the spawns
+    of the objectives still short count (`_short_entries`): the droppers of an
+    ingredient already gathered are never hunted, so they do not hold the clock."""
     quest = cat.quest(qid)
     if quest is None:
         return True
     if _nearest_chest(member, qid, quest, object_left) is not None:
         return False
-    solo = tuple(s for s in classquest.solo_fields(quest) if s.entry not in idle)
+    solo = _solo_targets(member, qid, quest, idle)
     fields = classquest.within_level(member, solo)
     if _nearest(member, fields, left) is not None:
         return False
@@ -1732,6 +1739,31 @@ def _unhuntable(
         routable = tuple(s for s in fields if s.guid not in left)
         return classquest.cross_map(member, routable) < 0
     return True
+
+
+def _solo_targets(member, qid: int, quest: classquest.Quest, idle) -> tuple:
+    """The solo objective spawns that serve a short objective of the quest and
+    whose entry is not left idle, before the quester's level is applied."""
+    targets = _short_entries(member, qid, quest)
+    return tuple(
+        s
+        for s in classquest.solo_fields(quest)
+        if s.entry in targets and s.entry not in idle
+    )
+
+
+def _awaiting_levels(cat, member, qid, left, object_left, idle) -> bool:
+    """True when the quest has no short objective the quester may hunt at its
+    level, but one that stands on its map just over it: the quest waits for
+    the quester's levels, so no clock runs for it (`_unhuntable`)."""
+    quest = cat.quest(qid)
+    if quest is None or _nearest_chest(member, qid, quest, object_left) is not None:
+        return False
+    solo = _solo_targets(member, qid, quest, idle)
+    fields = classquest.within_level(member, solo)
+    if _nearest(member, fields, left) is not None:
+        return False
+    return _nearest(member, _over_level(solo, fields), left) is not None
 
 
 def _over_level(spawns, within) -> tuple:
@@ -2479,8 +2511,12 @@ def judged_stalls(judged, retried, found, held, quest_log) -> frozenset:
     return frozenset(q for q in set(judged) | set(retried) | stalled if q in keep)
 
 
-def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
-    """Eligible kill and item-drop fields for one incomplete held quest."""
+def _short_entries(member, qid: int, quest: classquest.Quest) -> set:
+    """The creature entries an incomplete held quest still needs: its kills
+    the quester has not made, and the droppers of each ingredient still short.
+    Item-only objectives have no creature counter, so an ingredient's own
+    counter decides it; the aggregate quest counter cannot tell which
+    ingredient of a shared collection quest is still needed."""
     progress = member.quest_objectives.get(qid)
     item_progress = member.quest_item_objectives.get(qid, {})
     kills = dict(quest.kills)
@@ -2490,16 +2526,17 @@ def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
             for entry, count in kills.items()
             if int(progress.get(entry, 0)) < count
         }
-    # Item-only objectives have no creature counter. Keep only droppers for
-    # item objectives whose own counters are still short; the aggregate quest
-    # counter cannot distinguish which ingredient a shared collection quest
-    # still needs.
     items = dict(quest.items)
-    targets = set(kills) | {
+    return set(kills) | {
         entry
         for item, entry in quest.drops
         if int(item_progress.get(item, 0)) < items.get(item, 0)
     }
+
+
+def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
+    """Eligible kill and item-drop fields for one incomplete held quest."""
+    targets = _short_entries(member, qid, quest)
     return classquest.within_level(
         member,
         tuple(
