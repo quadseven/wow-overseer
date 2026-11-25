@@ -1724,8 +1724,10 @@ def _over_level(spawns, within) -> tuple:
 
 
 def _chested(quest) -> bool:
-    """True when a chest holds an item the quest asks for (a USE_OBJECT use)."""
-    return any(u.verb == classquest.USE_OBJECT and u.item for u in quest.uses)
+    """True when a spawned chest holds an item the quest asks for."""
+    return any(
+        u.verb == classquest.USE_OBJECT and u.item and u.spots for u in quest.uses
+    )
 
 
 def chest_spots(member, qid: int, quest: classquest.Quest) -> tuple:

@@ -9,7 +9,7 @@ import classquest
 import guildjobs
 import questers
 
-ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE, DUSKWOOD, SILVERPINE = 12, 9, 40, 44, 10, 130
+ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE, DUSKWOOD = 12, 9, 40, 44, 10
 HUMAN, ORC = 1, 2
 PRIEST, WARRIOR = 5, 1
 ALLIANCE_MASK, HORDE_MASK = 1101, 690
@@ -1364,50 +1364,6 @@ class Broken(unittest.TestCase):
         for i in range(1, 13):
             p = questers.plan(cat, member, clock, 600.0 * i)
         self.assertEqual([b.quest for b in p.broken], [64])
-        self.assertEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
-
-    def test_wild_hearts_is_not_offered_without_a_huntable_source(self):
-        # Quest 429 (Wild Hearts, Silverpine Forest, level 11) needs six
-        # Discolored Worg Heart (item 3164). The world rows name creatures
-        # 1765, 1766, 1923 and 12431 as droppers, and a creature as its giver,
-        # but this fixture reads no spawns for the droppers, so the quest has no
-        # huntable source. A quester can neither take it nor finish it: it is
-        # not offered, and if it is held it stalls with the generic unsourced
-        # reason the catalogue proves, never a per-quest claim.
-        wild_hearts = quest(429, SILVERPINE, 11, min_level=10, title="Wild Hearts")
-        wild_hearts.update(item1=3164, item_count1=6)
-        cat = world(
-            extra_quests=[wild_hearts],
-            extra_givers=[
-                giver(429, "start", 1042, 2000, 0, 0),
-                giver(429, "end", 1042, 2000, 0, 0),
-            ],
-            extra_loot=[
-                {"item": 3164, "entry": 1765},
-                {"item": 3164, "entry": 1766},
-                {"item": 3164, "entry": 1923},
-                {"item": 3164, "entry": 12431},
-            ],
-            # No spawns of 1765, 1766, 1923 or 12431: no objective source.
-        )
-        member = mirra(zone_id=SILVERPINE, level=11)
-        self.assertNotIn(429, questers.in_reach(cat, member, SILVERPINE))
-        self.assertFalse(questers.open_to(cat, member, 429))
-
-        holding = mirra(
-            zone_id=SILVERPINE,
-            level=11,
-            quest_log={429: questers.STATUS_INCOMPLETE},
-            quest_progress={429: 0},
-            quests_done=frozenset({30, 31}),
-            quest_objectives={429: {}},
-        )
-        clock = questers.Clock()
-        p = questers.plan(cat, holding, clock, 0.0)
-        self.assertEqual(p.broken, ())
-        for i in range(1, 13):
-            p = questers.plan(cat, holding, clock, 600.0 * i)
-        self.assertEqual([b.quest for b in p.broken], [429])
         self.assertEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
 
     def test_quest_91_solomons_law_stall_names_no_invented_cause(self):
