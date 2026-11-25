@@ -305,6 +305,12 @@ STALLED_UNSOURCED = (
     + ", no huntable source supplies what it asks for, and questers cannot buy items from vendors"
 )
 REFUSED_TAKE = "the quest giver would not give it"
+NO_GIVER_IN_REACH = "no giver of that quest in reach"
+REFUSED_TAKE_NO_LIVE_GIVER = (
+    REFUSED_TAKE
+    + ": the worldserver found no live giver within reach despite the catalogued "
+    "creature starter spawn"
+)
 REFUSED_TURN_IN = "the turn-in NPC would not take it"
 # The module refused the hand-in and marked it never retryable (#19 in
 # quadseven/mod-overseer): the world names nothing that takes the quest in,
@@ -1964,6 +1970,10 @@ def _giver_failure(cat: Catalogue, member, qid, gone, refused):
         return UNSUPPORTED_OBJECTIVE
     count, words = refused.get(("take", qid), (0, ""))
     if count >= FAILS_BEFORE_BROKEN:
+        if words == NO_GIVER_IN_REACH and any(
+            s.guid not in gone for s in quest.starters
+        ):
+            return REFUSED_TAKE_NO_LIVE_GIVER
         return _refused_words(REFUSED_TAKE, words)
     if any(kind != "creature" for kind, _entry in quest.other_starts):
         return ""

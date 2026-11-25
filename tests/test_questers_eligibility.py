@@ -462,6 +462,59 @@ class Quest120MessengerToStormwind(unittest.TestCase):
         )
 
 
+class Quest376TheDamned(unittest.TestCase):
+    def test_the_ledger_explains_a_catalogued_giver_missing_at_runtime(self):
+        # `catalogue()` builds the QUESTS_SQL, GIVERS_SQL, and STARTERS_SQL
+        # fixture shapes. The pinned module's QuestCreatureInReach then refused
+        # the take despite the catalogue having a creature starter spawn.
+        cat = catalogue([row(376, "The Damned", TIRISFAL, 2, 2, HORDE)])
+        quester = member("Quester", ORC, 2, TIRISFAL)
+        tried = [
+            questers.Attempt(
+                "Quester",
+                "take quest:376",
+                "refused",
+                reason="no giver of that quest in reach",
+                age_minutes=age,
+            )
+            for age in (1, 2, 3)
+        ]
+        reason = questers._giver_failure(
+            cat,
+            quester,
+            376,
+            gone=frozenset(),
+            refused=questers.refusals("Quester", tried),
+        )
+        expected = (
+            "the quest giver would not give it: the worldserver found no live "
+            "giver within reach despite the catalogued creature starter spawn"
+        )
+        self.assertEqual(reason, expected)
+
+        broken = questers.Broken("Quester", 376, "The Damned", reason)
+        executed = []
+
+        class Cursor:
+            def execute(self, sql, args=()):
+                executed.append((sql, args))
+
+        class Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def cursor(self):
+                return contextlib.nullcontext(Cursor())
+
+        with mock.patch.object(bridge, "_connect", return_value=Conn()):
+            self.assertTrue(bridge._record_quest_broken(broken))
+        self.assertEqual([questers.BROKEN_SQL], [sql for sql, _args in executed])
+        self.assertEqual(reason, executed[0][1][2])
+
+
 class Quest131DeliveringDaffodils(unittest.TestCase):
     """SatisfyQuestLevel: the world refuses a take over the quest's MaxLevel
     (quest_template_addon.MaxLevel, 0 for no cap) as it refuses one under its
