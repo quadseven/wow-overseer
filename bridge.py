@@ -20291,6 +20291,7 @@ class Bridge(discord.Client):
         A `sale` (questers.sell_step: its bags are full) goes first, in the
         move's place: the move is planned again on the next pass."""
         if m.name not in self._job_steps and sale is not None:
+            self._quester_last.pop(m.name, None)
             log.info("questers: %s", sale.said)
             self._job_steps[m.name] = mono
             try:
@@ -20299,17 +20300,21 @@ class Bridge(discord.Client):
                 self._job_steps.pop(m.name, None)
                 raise
             return False
-        if m.name in self._job_steps or plan.move is None:
-            log.info("questers: %s", plan.line if m.name not in self._job_steps
-                     else "%s is on a step" % m.name)
+        if m.name in self._job_steps:
+            log.info("questers: %s is on a step", m.name)
             return False
-        self._quester_last[m.name] = int(plan.move.quest)
+        if plan.move is None:
+            self._quester_last.pop(m.name, None)
+            log.info("questers: %s", plan.line)
+            return False
         step = plan.boat or questers.step_for(
             m, plan.move, cap, cat.quest(plan.move.quest), hunt=hunt,
             item_form=mono >= getattr(self, "_class_hunt_itemless_until", 0.0))
         if step is None:
+            self._quester_last.pop(m.name, None)
             log.info("questers: %s", plan.line)
             return False
+        self._quester_last[m.name] = int(plan.move.quest)
         # The marker first, as _start_guild_job_steps does. There is no race:
         # nothing between here and create_task awaits, and the task does not
         # run until this pass next awaits, so the step's own finally
@@ -20322,6 +20327,7 @@ class Bridge(discord.Client):
             self._start_quester_step(step, cap)
         except Exception:
             self._job_steps.pop(m.name, None)
+            self._quester_last.pop(m.name, None)
             raise
         return any(classhunt.is_hunt_row(r.command) for r in step.rows)
 
