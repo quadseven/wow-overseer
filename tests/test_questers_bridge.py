@@ -14,6 +14,7 @@ from test_guildsocial_bridge import bridge
 from test_questers import (
     ELWYNN,
     NO_TRANSPORT,
+    ORC,
     REDRIDGE,
     crossing_row,
     giver,
@@ -23,6 +24,8 @@ from test_questers import (
     spawn,
     world,
 )
+
+SILVERPINE = 130
 
 
 def quester(name="Mirra", **kw):
@@ -39,6 +42,28 @@ def quester(name="Mirra", **kw):
     )
     base.update(kw)
     return questers.Member(**base)
+
+
+def erland_world():
+    row = quest(
+        435,
+        SILVERPINE,
+        11,
+        min_level=10,
+        count=0,
+        title="Escorting Erland",
+    )
+    return questers.catalogue(
+        [row],
+        [
+            giver(435, "start", 900435, 900435, 0, 0),
+            giver(435, "end", 900435, 900435, 0, 0),
+        ],
+        [spawn(900435, 900435, 0, 0, level=11)],
+        [],
+        [started(435, 900435)],
+        [ended(435, 900435)],
+    )
 
 
 class Pass:
@@ -345,6 +370,42 @@ class TheQuesterPass(unittest.TestCase):
         )
         (step,) = run.started
         self.assertEqual([r.command for r in step.rows], ["abandon quest:1"])
+
+    def test_erland_world_rows_leave_no_move_and_explain_why_no_quester_can_finish(
+        self,
+    ):
+        cat = erland_world()
+        held = cat.quest(435)
+        self.assertEqual(
+            (held.kills, held.items, held.objects, held.uses), ((), (), (), ())
+        )
+        member = quester(
+            name="Quester",
+            level=11,
+            race=ORC,
+            zone_id=SILVERPINE,
+            quest_log={435: questers.STATUS_INCOMPLETE},
+        )
+        run = Pass([member], cat=cat)
+        for minute in range(0, 121, 5):
+            run.started.clear()
+            run.run(now=minute * 60.0)
+            if minute < 120:
+                self.assertEqual(run.started, [])
+                self.assertEqual(run.recorded, [])
+        self.assertEqual(
+            [(b.quest, b.reason, b.held) for b in run.recorded],
+            [
+                (
+                    435,
+                    "the world rows define no required creature, item, or object "
+                    "objective a quester can work",
+                    True,
+                )
+            ],
+        )
+        (step,) = run.started
+        self.assertEqual([r.command for r in step.rows], ["abandon quest:435"])
 
     def test_a_broken_quest_the_ledger_holds_is_not_written_again(self):
         member = quester(quest_log={3: 1})
