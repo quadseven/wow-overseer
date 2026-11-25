@@ -10,6 +10,7 @@ import guildjobs
 import questers
 
 ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE, DUSKWOOD = 12, 9, 40, 44, 10
+SILVERPINE = 21
 HUMAN, ORC = 1, 2
 PRIEST, WARRIOR = 5, 1
 ALLIANCE_MASK, HORDE_MASK = 1101, 690
@@ -2483,3 +2484,59 @@ class ASummonedObjectEnder(unittest.TestCase):
         p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
         self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+class IvarTheFoul(unittest.TestCase):
+    """Quest 425, Ivar the Foul, Silverpine Forest, level 12, min level 10.
+
+    The world rows: previous quest 430, required item 3621 (Ivar's Head) x1,
+    dropped by creature 1971 (Ivar the Foul). A quester holding it must be able
+    to hunt the dropper's spawn and collect the head.
+    """
+
+    def ivar_world(self):
+        ivar = quest(425, SILVERPINE, 12, min_level=10, prev=430, title="Ivar the Foul")
+        ivar.update(item1=3621, item_count1=1)
+        return world(
+            extra_quests=[ivar],
+            extra_givers=[
+                giver(425, "start", 5425, 1971, 0, 0),
+                giver(425, "end", 5425, 1971, 0, 0),
+            ],
+            extra_spawns=[spawn(6425, 1971, 0, 0, level=12, name="Ivar the Foul")],
+            extra_loot=[{"item": 3621, "entry": 1971}],
+        )
+
+    def ivar_member(self, counts=None, status=questers.STATUS_INCOMPLETE):
+        counts = counts or {}
+        return mirra(
+            level=12,
+            zone_id=SILVERPINE,
+            quest_log={425: status},
+            quests_done=frozenset({430}),
+            quest_progress={425: sum(counts.values())},
+            quest_objectives={425: {}},
+            quest_item_objectives={425: dict(counts)},
+        )
+
+    def test_a_quester_hunts_the_creature_that_drops_i_var_s_head(self):
+        cat = self.ivar_world()
+        member = self.ivar_member()
+        move = questers.plan(cat, member, questers.Clock(), 0.0).move
+        self.assertEqual(
+            (move.kind, move.quest, move.spot.entry), (classquest.HUNT, 425, 1971)
+        )
+        step = questers.step_for(member, move, 0, cat.quest(425))
+        self.assertEqual(
+            [row.command for row in step.rows],
+            [
+                "hunt-spawn creature:1971 item:3621 count:%d max:%d"
+                % (1, classhunt.MAX_SECONDS)
+            ],
+        )
+
+    def test_the_head_collected_quest_is_complete_and_handed_in(self):
+        cat = self.ivar_world()
+        member = self.ivar_member(counts={3621: 1}, status=questers.STATUS_COMPLETE)
+        move = questers.plan(cat, member, questers.Clock(), 0.0).move
+        self.assertEqual((move.kind, move.quest), (classquest.TURN_IN, 425))
