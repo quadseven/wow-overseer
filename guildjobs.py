@@ -3083,6 +3083,75 @@ def riding_step(m, recent):
 FAMILY_RIDING_FLOAT = 10000
 
 
+# WHICH HOLD STOPS THE FAMILY RIDING STEP (ticket 3208). Nine of ten level 60
+# family members still held no Riding after the step shipped and nobody could say
+# which hold decided it. The names are a closed set; `family_riding_hold` returns
+# exactly one and decides nothing: `family_riding_step` keeps its own rules.
+RIDING_HOLDS = (
+    "not_family_or_ineligible",
+    "riding_not_due",
+    "saving_for_fee",
+    "offline",
+    "dead",
+    "in_combat",
+    "following",
+    "unread_ground",
+    "no_trainer_on_map",
+    "cooldown",
+    "fired",
+)
+
+# Holds named by the planner, outside family_riding_step.
+PLANNER_RIDING_HOLDS = ("family_switch_off", "class_step_first", "gap_hold", "refused")
+
+
+def family_riding_hold(m, recent) -> str:
+    """The one name in RIDING_HOLDS that decides `family_riding_step` for m."""
+    if m.role != FAMILY or not m.eligible:
+        return "not_family_or_ineligible"
+    rank = purse.riding_due(m.level, m.skill(purse.RIDING_SKILL)[1])
+    if rank is None:
+        return "riding_not_due"
+    if int(m.money or 0) < rank.cost + FAMILY_RIDING_FLOAT:
+        return "saving_for_fee"
+    if not m.online:
+        return "offline"
+    if not m.alive:
+        return "dead"
+    if m.in_combat:
+        return "in_combat"
+    if getattr(m, "follows", False):
+        return "following"
+    if m.map_id is None or m.x is None or m.y is None:
+        return "unread_ground"
+    if _stranded_by_no_trainer(m.name, purse.RIDING_SKILL, m.map_id, recent):
+        return "no_trainer_on_map"
+    if _cooling(m, RIDING_ACTION, recent):
+        return "cooldown"
+    return "fired"
+
+
+_riding_hold_logged: dict = {}
+
+
+def log_riding_hold(m, hold: str) -> None:
+    """One log line when a level 60 family member with no Riding changes hold;
+    silent while the hold stays the same pass after pass."""
+    try:
+        wants = m.level >= 60 and not m.skill(purse.RIDING_SKILL)[1]
+    except Exception:
+        return
+    if not wants:
+        _riding_hold_logged.pop(m.name, None)
+        return
+    if _riding_hold_logged.get(m.name) == hold:
+        return
+    _riding_hold_logged[m.name] = hold
+    log.info(
+        "family riding: %s level %s has no Riding; hold: %s", m.name, m.level, hold
+    )
+
+
 def family_riding_step(m, recent):
     """(step or None, a note) for a roster family member short of the riding
     rank its level allows: the walk to a riding trainer that guild members make
@@ -5673,6 +5742,8 @@ def _plan_family_class_member(
     classes, recent, cap, now, far, kept, crafters, masters = reads
     counters, busy, per_guild = limits
     if not familyclass.enabled() or m.role != FAMILY:
+        if m.role == FAMILY:
+            log_riding_hold(m, "family_switch_off")
         return
     master = str(masters.get(m.guild) or "")
     step, doing, note = class_step(
@@ -5693,6 +5764,7 @@ def _plan_family_class_member(
         if doing:
             lines[m.name] = doing
             if classquest.MARK in doing:
+                log_riding_hold(m, "class_step_first")
                 return
         if class_owed(m, classes, recent, now=now) is not None and note:
             class_holds[m.name] = _class_hold_reason(m.name, note)
@@ -5712,6 +5784,7 @@ def _plan_family_class_member(
         )
         return
     gap_hold = familyclass.holds(m, step.move, recent)
+    log_riding_hold(m, "gap_hold" if gap_hold else "class_step_first")
     if gap_hold:
         class_holds[m.name] = _class_hold_reason(m.name, gap_hold)
         _release_slots(m.name, far, None)
@@ -5770,10 +5843,13 @@ def _plan_family_riding(
     """Plan an idle family member the riding walk, or the mount step once
     riding is held, when its class step has nothing for it (#2625, #2642)."""
     step, note = family_riding_step(m, recent)
+    hold = family_riding_hold(m, recent)
     if _commit_family_step(
         m, step, note, recent, counters, busy, per_guild, steps, notes
     ):
+        log_riding_hold(m, "fired")
         return
+    log_riding_hold(m, "refused" if step is not None else hold)
     if step is not None and (not m.online or m.in_combat or m.name in busy):
         return
     mount_step_row, mount_note = family_mount_step(
