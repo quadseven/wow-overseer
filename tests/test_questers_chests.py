@@ -10,11 +10,14 @@ hours and was filed broken. The catalogue now reads the chests
 
 import unittest
 
+import classic
 import classquest
 import questers
 from test_questers import WESTFALL, giver, mirra, quest
 
 WATCH, WARDROBE = 841, 290
+ARUGAL_FOLLY, REMEDY, ARUGAL_CHEST = 422, 3155, 1571
+SHADOWFANG_KEEP = 33
 
 
 def chest_spawn(guid, entry, x, y, map_id=0):
@@ -43,6 +46,56 @@ def heirloom_world(chests=True):
         [{"quest": 64, "kind": "creature", "entry": 237}],
         chest_rows=[{"item": WATCH, "entry": WARDROBE}] if chests else (),
         object_rows=[chest_spawn(2290, WARDROBE, 300.0, 0.0)] if chests else (),
+    )
+
+
+def arugals_folly_world():
+    # The ticket supplies the quest, item, and gameobject entry. The spawn row
+    # models an instance-only result from classquest.OBJECT_SPAWNS_SQL; map 33
+    # is Shadowfang Keep in classic.CLASSIC_DUNGEON_MAPS. The quest ender below
+    # is only a fixture so the test isolates the objective stall.
+    row = {
+        "id": ARUGAL_FOLLY,
+        "title": "Arugal's Folly",
+        "sort": 130,
+        "min_level": 9,
+        "item1": REMEDY,
+        "item_count1": 1,
+    }
+    book = classquest.build(
+        [row],
+        [
+            giver(
+                ARUGAL_FOLLY,
+                "end",
+                4222,
+                1,
+                0.0,
+                0.0,
+                name="Quest ender fixture",
+            )
+        ],
+        [],
+        [],
+        chest_rows=[{"item": REMEDY, "entry": ARUGAL_CHEST}],
+        object_rows=[
+            chest_spawn(
+                4221,
+                ARUGAL_CHEST,
+                0.0,
+                0.0,
+                map_id=SHADOWFANG_KEEP,
+            )
+        ],
+        every=True,
+    )
+    return questers.Catalogue(
+        book,
+        {
+            ARUGAL_FOLLY: questers.Facts(
+                zone=130, level=11, prev=421, ender_npcs=True
+            )
+        },
     )
 
 
@@ -162,6 +215,33 @@ class AChestQuestIsWorkedNotUnsourced(unittest.TestCase):
                 heirloom_world(chests=False), holder(), held
             ),
             frozenset(),
+        )
+
+    def test_arugals_folly_explains_its_instance_only_item_source(self):
+        self.assertIn(SHADOWFANG_KEEP, classic.CLASSIC_DUNGEON_MAPS)
+        member = mirra(
+            level=12,
+            zone_id=130,
+            quest_log={ARUGAL_FOLLY: questers.STATUS_INCOMPLETE},
+            quest_progress={ARUGAL_FOLLY: 0},
+            quest_item_objectives={ARUGAL_FOLLY: {REMEDY: 0}},
+        )
+        cat = arugals_folly_world()
+        clock = questers.Clock()
+        plan = questers.plan(cat, member, clock, 0.0, last_quest=ARUGAL_FOLLY)
+        for i in range(1, 14):
+            plan = questers.plan(
+                cat, member, clock, 600.0 * i, last_quest=ARUGAL_FOLLY
+            )
+
+        self.assertEqual(
+            [(broken.quest, broken.reason) for broken in plan.broken],
+            [
+                (
+                    ARUGAL_FOLLY,
+                    questers.STALLED_INSTANCE_CHEST,
+                )
+            ],
         )
 
     def test_the_hard_coded_heirloom_reason_is_gone(self):
