@@ -1404,6 +1404,38 @@ class Broken(unittest.TestCase):
         # The reason is the one the catalogue proves, never a per-quest claim.
         self.assertEqual(questers.STALLED_UNSOURCED, p.broken[0].reason)
 
+    def test_quest_385_crocolisk_hunting_stall_names_no_invented_cause(self):
+        # Crocolisk Hunting (385) asks for Crocolisk Meat (item 2924 x5) and
+        # Crocolisk Skin (item 2925 x6), dropped by creatures 1693, 2089, 2476,
+        # 2635, 3110, 3231 and 5053. With no spawns of those creatures in the
+        # world data, no quester can hunt them: the only reason the catalogue
+        # proves is the generic unsourced stall, which names no quest.
+        crocolisk = quest(385, LOCH_MODAN, 15, min_level=10, title="Crocolisk Hunting")
+        crocolisk.update(item1=2924, item_count1=5, item2=2925, item_count2=6)
+        cat = world(
+            extra_quests=[crocolisk],
+            extra_givers=[
+                giver(385, "start", 1385, 646, 0, 0),
+                giver(385, "end", 1385, 646, 0, 0),
+            ],
+            # No spawns of the droppers -> no fields for this quest
+        )
+        member = mirra(
+            level=15,
+            zone_id=LOCH_MODAN,
+            quest_log={385: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({20, 21}),
+            quest_progress={385: 0},
+        )
+        clock = questers.Clock()
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        self.assertEqual([b.quest for b in p.broken], [385])
+        # The reason is the one the catalogue proves, never a per-quest claim.
+        self.assertEqual(questers.STALLED_UNSOURCED, p.broken[0].reason)
+
     def test_quest_124_a_baying_of_gnolls_stall_names_no_invented_cause(self):
         # Quest 124 (A Baying of Gnolls) once carried a hard-coded reason that
         # the world database contradicts: it needs creatures 426 and 430, which
