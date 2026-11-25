@@ -184,6 +184,7 @@ import lootcouncil
 # imported with its own directory first on sys.path. See mailrun.py's docstring.
 import mailrun
 import materials
+import mcorder
 import mountbuy
 import tidy
 import overhear
@@ -5563,6 +5564,84 @@ def _spire_family(family: str, fam: dict, rows: list) -> bool:
                 spirerun.FLOOR, slot.position,
                 " behind " + ahead if ahead else "")
     return True
+
+
+# --- the Molten Core first-kill self-order (mcorder.py) ------------------------
+
+_MC_SAID: dict = {}
+
+
+def _mc_say(family: str, line: str) -> None:
+    """Log what a family's Molten Core pass decided, once per change."""
+    if _MC_SAID.get(family) != line:
+        _MC_SAID[family] = line
+        log.info("moltencore: %s: %s", campaignqueue._family(family), line)
+
+
+def _mc_roster(family: str, names: list):
+    """The first-kill roster the family's guild would form now, as a typed
+    first-kill order forms it (_plan_raid_seats), without writing anything."""
+    with _connect() as conn, conn.cursor() as cur:
+        holes = ", ".join(["%s"] * len(names))
+        cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes), tuple(names))  # noqa: S608
+        members = _with_readiness(cur, [dict(row) for row in cur.fetchall()])
+        lineup, _ = raidrun.lineup_for_order(mcorder.KEYWORD, members, names)
+        seats = raidrun.seat_rows(family, mcorder.KEYWORD, lineup)
+        if not seats:
+            return None
+        return raidrun.first_kill_roster(
+            mcorder.KEYWORD, lineup, _seat_current_rows(cur, seats),
+            raidrun.first_kill_quorum())
+
+
+def _mc_family(family: str, fam: dict, rows: list) -> bool:
+    """One pass of the Molten Core self-order for one family. True when the
+    queue moved. Writes only the queue row; the queue seats and starts it."""
+    if not mcorder.enabled():
+        return False
+    now = time.time()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(mcorder.LAST_SQL, (family, mcorder.KEYWORD, mcorder.SOURCE))
+        done = cur.fetchone()
+    last = None
+    if done:
+        last = spirerun.Last(float(done["finished_at"] or 0), bool(done["cleared"]),
+                             done["status"] == "cancelled")
+    why = mcorder.waiting(rows, last, now)
+    if why:
+        _mc_say(family, why)
+        return False
+    roster = _mc_roster(family, list(fam["names"]))
+    if roster is None:
+        _mc_say(family, "short: nobody could be placed in the raid")
+        return False
+    decision = mcorder.decide(rows, last, now, roster, raidrun.first_kill_quorum())
+    if decision.action != mcorder.ORDER:
+        _mc_say(family, decision.line)
+        return False
+    slot = decision.slot
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(mcorder.ORDER_SQL,
+                    (family, slot.position, mcorder.KEYWORD, raidrun.RUNS_PER_ORDER,
+                     mcorder.SOURCE, family, mcorder.KEYWORD))
+        if not cur.rowcount:
+            return False
+        for queue_id in slot.shift:
+            cur.execute(spirerun.SHIFT_SQL, (queue_id,))
+    log.warning("moltencore: %s first kill ordered at position %d: %s",
+                campaignqueue._family(family), slot.position, decision.line)
+    return True
+
+
+async def _mc_requeue(bridge, pending: dict, fams: dict, stood) -> dict:
+    """Run the Molten Core self-order pass; re-read the queue when it moved so
+    the step sees the new order."""
+    mc_pass = getattr(bridge, "_mc_pass", None)
+    if mc_pass is not None and await mc_pass(pending, fams):
+        pending = campaignqueue.pending_by_family(
+            await asyncio.to_thread(_fetch_queue_rows))
+        pending = {k: v for k, v in pending.items() if k not in stood}
+    return pending
 
 
 def _spire_guild(names: list) -> list:
@@ -27144,6 +27223,7 @@ class Bridge(discord.Client):
             pending = campaignqueue.pending_by_family(
                 await asyncio.to_thread(_fetch_queue_rows))
             pending = {k: v for k, v in pending.items() if k not in stood}
+        pending = await _mc_requeue(self, pending, fams, stood)
         # THE TRADE TURN (tradeturn.py, #2262), after the planner and the spire
         # pass so neither sees a queue it must not extend. A family in a turn
         # is an empty queue to everything below: no step, no travel claim.
@@ -27332,6 +27412,20 @@ class Bridge(discord.Client):
                     _spire_family, key, fam, pending.get(key, [])) or moved
             except pymysql.err.MySQLError:
                 log.exception("spire: the pass for %s failed; retrying next cycle",
+                              campaignqueue._family(key))
+        return moved
+
+    async def _mc_pass(self, pending: dict, fams: dict) -> bool:
+        """Each family's Molten Core self-order pass; True when any queue moved."""
+        if not mcorder.enabled():
+            return False
+        moved = False
+        for key, fam in fams.items():
+            try:
+                moved = await asyncio.to_thread(
+                    _mc_family, key, fam, pending.get(key, [])) or moved
+            except pymysql.err.MySQLError:
+                log.exception("moltencore: the pass for %s failed; retrying next cycle",
                               campaignqueue._family(key))
         return moved
 
