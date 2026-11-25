@@ -160,6 +160,34 @@ class BankBagUpgrades(unittest.TestCase):
             ["withdraw guid:300", "place-bag guid:400"],
         )
 
+    def test_a_specialised_bank_bag_is_never_the_upgrade_target(self):
+        f = facts(
+            money=0,
+            bought=1,
+            placed=1,
+            bank_bags=(bb.Bag(300, 22250, 10, general=False),),
+            spare=(bb.Bag(400, 4499, 12),),
+            bag_free=1,
+        )
+        self.assertEqual(bb.visit_steps(f), [])
+        self.assertEqual(bb.supply_needs([f]), [])
+
+    def test_a_general_bank_bag_is_the_target_past_a_smaller_specialised_one(self):
+        f = facts(
+            bought=2,
+            placed=2,
+            bank_bags=(
+                bb.Bag(300, 22250, 6, general=False),
+                bb.Bag(301, 4496, 8),
+            ),
+            spare=(bb.Bag(400, 4499, 12),),
+            bag_free=1,
+        )
+        self.assertEqual(
+            [s.command for s in bb.visit_steps(f)],
+            ["withdraw guid:301", "place-bag guid:400"],
+        )
+
     def test_a_small_bank_bag_requests_an_exact_twelve_slot_replacement(self):
         f = facts(
             bought=1,

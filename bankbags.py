@@ -304,9 +304,13 @@ def reserved_guids(family) -> frozenset[int]:
 
 
 def _upgrade_target(facts: Facts) -> Bag | None:
-    """The smallest bank bag under twelve slots, for the next safe swap."""
+    """The smallest general bank bag under twelve slots, for the next safe swap.
+
+    A specialised bag (herb, mining, soul, quiver) is never swapped for a
+    plain sack, the same rule `_replacement_bag` applies to the sack.
+    """
     return min(
-        (b for b in facts.bank_bags if 0 < b.slots < 12),
+        (b for b in facts.bank_bags if 0 < b.slots < 12 and b.general),
         key=lambda b: (b.slots, b.guid),
         default=None,
     )
