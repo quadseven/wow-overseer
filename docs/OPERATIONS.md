@@ -58,6 +58,20 @@ an observed item completion in the overseer channel and advances the queue.
 Pending notices survive restarts and retry failed sends. Delivery is at least
 once: a crash after sending but before acknowledgement may repeat a notice.
 
+## Molten Core first-kill self-order
+
+When the guild's eligible approved seats (online, level 50 or more) meet the
+first-kill quorum, no campaign or Molten Core order is ahead, and no order for
+the family ended inside its wait, each bridge queue pass writes the same
+first-kill queue row a typed order writes. It never rewrites the lineup.
+
+| Variable | Meaning |
+|---|---|
+| `RAID_MC_SELF_ORDER` | Set to `1` to turn the pass on. Off when unset. |
+
+The log has one `moltencore:` line per family per change: ordered, short (by
+how many seats, tanks or healers), or waiting behind a named queue row.
+
 ## Trade turn between dungeon runs
 
 A family with a campaign queue used to do no trade work, because the queue
