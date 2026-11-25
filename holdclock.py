@@ -53,7 +53,8 @@ def state_to_wall(state, mono_now: float, wall_now: float) -> dict:
     out["fruitless"] = list(state.fruitless)
     out["fruitless_stamps"] = [
         [name, to_wall(float(at), mono_now, wall_now)]
-        for name, at in state.fruitless_stamps]
+        for name, at in state.fruitless_stamps
+    ]
     out["yielded"] = bool(state.yielded)
     return out
 
@@ -61,14 +62,17 @@ def state_to_wall(state, mono_now: float, wall_now: float) -> dict:
 def state_from_wall(cls, data: dict, mono_now: float, wall_now: float):
     """A State of class `cls` from state_to_wall's dict; None when unreadable."""
     try:
-        kw = {"phase": str(data["phase"]),
-              "town_seen": bool(data["town_seen"]),
-              "yielded": bool(data["yielded"]),
-              "entered": tuple((str(n), v) for n, v in data["entered"]),
-              "fruitless": tuple(str(n) for n in data["fruitless"]),
-              "fruitless_stamps": tuple(
-                  (str(n), to_mono(float(w), mono_now, wall_now))
-                  for n, w in data["fruitless_stamps"])}
+        kw = {
+            "phase": str(data["phase"]),
+            "town_seen": bool(data["town_seen"]),
+            "yielded": bool(data["yielded"]),
+            "entered": tuple((str(n), v) for n, v in data["entered"]),
+            "fruitless": tuple(str(n) for n in data["fruitless"]),
+            "fruitless_stamps": tuple(
+                (str(n), to_mono(float(w), mono_now, wall_now))
+                for n, w in data["fruitless_stamps"]
+            ),
+        }
         for field in _STATE_TIMES:
             w = float(data[field])
             kw[field] = to_mono(w, mono_now, wall_now) if w else 0.0
@@ -85,11 +89,14 @@ class Clocks(dict):
     use, so a restart finds the clocks the last process left.
     """
 
-    def __init__(self, kind, read, upsert, delete,
-                 mono=time.monotonic, wall=time.time):
+    def __init__(self, kind, read, upsert, delete, mono=time.monotonic, wall=time.time):
         super().__init__()
         self._kind, self._read, self._upsert, self._delete = (
-            kind, read, upsert, delete)
+            kind,
+            read,
+            upsert,
+            delete,
+        )
         self._mono, self._wall = mono, wall
         self._loaded = False
         self._keys = {}
@@ -115,8 +122,9 @@ class Clocks(dict):
         wall_now = self._wall()
         wall = to_wall(mono, self._mono(), wall_now)
         try:
-            self._upsert(self._kind, subject(key), wall, wall_now,
-                         wall_now + KEEP_SECONDS)
+            self._upsert(
+                self._kind, subject(key), wall, wall_now, wall_now + KEEP_SECONDS
+            )
         except Exception:
             pass
 

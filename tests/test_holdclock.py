@@ -27,8 +27,14 @@ class Store:
 def process(store, mono, wall, kind="gear"):
     """A fresh process: its monotonic clock starts at `mono`."""
     box = {"mono": mono, "wall": wall}
-    clocks = holdclock.Clocks(kind, store.read, store.upsert, store.delete,
-                              mono=lambda: box["mono"], wall=lambda: box["wall"])
+    clocks = holdclock.Clocks(
+        kind,
+        store.read,
+        store.upsert,
+        store.delete,
+        mono=lambda: box["mono"],
+        wall=lambda: box["wall"],
+    )
     return clocks, box
 
 
@@ -51,8 +57,9 @@ class ClocksRestart(unittest.TestCase):
         first, box = process(store, 1000.0, 5_000_000.0)
         first.setdefault(("Grug",), box["mono"])
         second, box2 = process(store, 2.0, 5_000_100.0)
-        self.assertAlmostEqual(second.setdefault(("Grug",), box2["mono"]),
-                               box2["mono"] - 100.0)
+        self.assertAlmostEqual(
+            second.setdefault(("Grug",), box2["mono"]), box2["mono"] - 100.0
+        )
 
     def test_pop_clears_the_store(self):
         store = Store()
@@ -66,6 +73,7 @@ class ClocksRestart(unittest.TestCase):
     def test_unreadable_store_is_an_empty_clock(self):
         def broken(kind):
             raise RuntimeError("down")
+
         clocks = holdclock.Clocks("gear", broken, lambda *a: None, lambda *a: None)
         self.assertIsNone(clocks.get(("Grug",)))
 
@@ -77,9 +85,16 @@ class ClocksRestart(unittest.TestCase):
 class LoopState(unittest.TestCase):
     def test_state_round_trips_across_a_restart(self):
         state = profloop.State(
-            phase=profloop.TOWN, since=900.0, asserted=950.0, town_seen=True,
-            entered=(("Bork", 2),), fruitless=("Og",),
-            fruitless_stamps=(("Og", 800.0),), queued_since=700.0, yielded=True)
+            phase=profloop.TOWN,
+            since=900.0,
+            asserted=950.0,
+            town_seen=True,
+            entered=(("Bork", 2),),
+            fruitless=("Og",),
+            fruitless_stamps=(("Og", 800.0),),
+            queued_since=700.0,
+            yielded=True,
+        )
         data = holdclock.state_to_wall(state, 1000.0, 5_000_000.0)
         back = holdclock.state_from_wall(profloop.State, data, 10.0, 5_000_100.0)
         self.assertEqual(back.phase, profloop.TOWN)
@@ -93,7 +108,9 @@ class LoopState(unittest.TestCase):
     def test_unset_times_stay_unset(self):
         data = holdclock.state_to_wall(profloop.State(), 1000.0, 5_000_000.0)
         back = holdclock.state_from_wall(profloop.State, data, 3.0, 5_000_010.0)
-        self.assertEqual((back.since, back.asserted, back.queued_since), (0.0, 0.0, 0.0))
+        self.assertEqual(
+            (back.since, back.asserted, back.queued_since), (0.0, 0.0, 0.0)
+        )
 
     def test_garbage_is_none(self):
         self.assertIsNone(holdclock.state_from_wall(profloop.State, {}, 1.0, 2.0))
