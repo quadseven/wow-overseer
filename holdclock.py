@@ -8,11 +8,18 @@ readings when the next process reads them.
 
 PURE MODULE: no MySQL, no clock of its own. The caller passes the store
 functions and the two clocks.
+
+A store that fails never stops a bridge pass: the clock keeps working in
+memory for this process. Each failure is logged with its traceback, because
+a clock that was not stored starts again at the next restart.
 """
 
 from __future__ import annotations
 
+import logging
 import time
+
+LOG = logging.getLogger(__name__)
 
 # How long a stored clock is kept. Longer than any hold's own ceiling, so an
 # entry only lapses once nothing has touched it for days.
@@ -109,6 +116,11 @@ class Clocks(dict):
         try:
             rows = self._read(self._kind)
         except Exception:
+            LOG.warning(
+                "hold clock %s: stored clocks could not be read, starting empty",
+                self._kind,
+                exc_info=True,
+            )
             return
         for sub, (value, _since) in rows.items():
             try:
@@ -126,7 +138,12 @@ class Clocks(dict):
                 self._kind, subject(key), wall, wall_now, wall_now + KEEP_SECONDS
             )
         except Exception:
-            pass
+            LOG.warning(
+                "hold clock %s: %s was not stored and will restart with the bridge",
+                self._kind,
+                subject(key),
+                exc_info=True,
+            )
 
     def __getitem__(self, key):
         self.load()
@@ -160,5 +177,10 @@ class Clocks(dict):
             try:
                 self._delete(self._kind, subject(key))
             except Exception:
-                pass
+                LOG.warning(
+                    "hold clock %s: %s was not cleared from the store",
+                    self._kind,
+                    subject(key),
+                    exc_info=True,
+                )
         return value

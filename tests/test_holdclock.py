@@ -77,6 +77,38 @@ class ClocksRestart(unittest.TestCase):
         clocks = holdclock.Clocks("gear", broken, lambda *a: None, lambda *a: None)
         self.assertIsNone(clocks.get(("Grug",)))
 
+    def test_an_unreadable_store_is_logged(self):
+        def broken(kind):
+            raise RuntimeError("down")
+
+        clocks = holdclock.Clocks("gear", broken, lambda *a: None, lambda *a: None)
+        with self.assertLogs("holdclock", level="WARNING") as logs:
+            clocks.load()
+        self.assertIn("could not be read", logs.output[0])
+        self.assertIn("RuntimeError: down", logs.output[0])
+
+    def test_a_failed_write_is_logged_and_the_clock_still_runs(self):
+        def refuse(*a):
+            raise RuntimeError("write refused")
+
+        clocks = holdclock.Clocks(
+            "gear",
+            lambda kind: {},
+            refuse,
+            refuse,
+            mono=lambda: 50.0,
+            wall=lambda: 100.0,
+        )
+        with self.assertLogs("holdclock", level="WARNING") as logs:
+            clocks[("Grug",)] = 40.0
+        self.assertEqual(clocks[("Grug",)], 40.0)
+        self.assertIn("Grug was not stored", logs.output[0])
+        self.assertIn("RuntimeError: write refused", logs.output[0])
+        with self.assertLogs("holdclock", level="WARNING") as logs:
+            self.assertEqual(clocks.pop(("Grug",)), 40.0)
+        self.assertIn("Grug was not cleared", logs.output[0])
+        self.assertNotIn(("Grug",), clocks)
+
     def test_never_later_than_now(self):
         # wall clock stepped back: the reading is clamped to now
         self.assertEqual(holdclock.to_mono(200.0, 50.0, 100.0), 50.0)
