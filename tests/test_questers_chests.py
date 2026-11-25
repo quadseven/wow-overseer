@@ -15,6 +15,9 @@ import questers
 from test_questers import WESTFALL, giver, mirra, quest
 
 WATCH, WARDROBE = 841, 290
+PUMPKIN_ITEM, PUMPKIN_OBJECT = 2846, 291
+PUMPKIN_OBJECT_GUID = 2291
+TIRISFAL = 85
 
 
 def chest_spawn(guid, entry, x, y, map_id=0):
@@ -44,6 +47,93 @@ def heirloom_world(chests=True):
         chest_rows=[{"item": WATCH, "entry": WARDROBE}] if chests else (),
         object_rows=[chest_spawn(2290, WARDROBE, 300.0, 0.0)] if chests else (),
     )
+
+
+def fields_of_grief_world():
+    """Quest 365 with the item and loot-table facts in the ticket.
+
+    The brief supplies item 2846 x10 and gameobject loot-table entry 375, but
+    not the gameobject template entry or spawn guid. Those identifiers below
+    are synthetic query-result rows, not claims about live object identities.
+    """
+    fields = quest(365, TIRISFAL, 7, min_level=4, title="Fields of Grief")
+    fields.update(item1=PUMPKIN_ITEM, item_count1=10)
+    return questers.catalogue(
+        [fields],
+        [
+            giver(365, "start", 1001, 100, 0, 0, name="Quest giver"),
+            giver(365, "end", 1002, 101, 100, 0, name="Quest ender"),
+        ],
+        [],
+        [],
+        [{"quest": 365, "kind": "creature", "entry": 100}],
+        [{"quest": 365, "kind": "creature", "entry": 101}],
+        chest_rows=[{"item": PUMPKIN_ITEM, "entry": PUMPKIN_OBJECT}],
+        object_rows=[
+            chest_spawn(PUMPKIN_OBJECT_GUID, PUMPKIN_OBJECT, 40.0, 0.0)
+        ],
+    )
+
+
+def fields_holder(**kw):
+    base = dict(
+        level=7,
+        race=5,
+        map_id=0,
+        zone_id=TIRISFAL,
+        x=10.0,
+        y=0.0,
+        quest_log={365: questers.STATUS_INCOMPLETE},
+        quest_progress={365: 0},
+        quest_item_objectives={365: {PUMPKIN_ITEM: 0}},
+    )
+    base.update(kw)
+    return mirra(**base)
+
+
+class FieldsOfGrief(unittest.TestCase):
+    def test_the_pumpkin_gameobject_is_worked_then_the_quest_can_be_turned_in(
+        self,
+    ):
+        cat = fields_of_grief_world()
+        member = fields_holder()
+
+        use = questers.plan(cat, member, questers.Clock(), 0.0).move
+
+        self.assertIn("g.Data1 = l.Entry", classquest.CHEST_SQL)
+        self.assertEqual(
+            (use.kind, use.quest, use.use.item),
+            (classquest.USE, 365, PUMPKIN_ITEM),
+        )
+        step = questers.step_for(member, use, 0, cat.quest(365))
+        self.assertEqual(
+            step.rows[0].command, "use-gameobject %d" % PUMPKIN_OBJECT
+        )
+        self.assertTrue(step.walk.command.startswith("walk-to-spawn gameobject:"))
+
+        complete = fields_holder(
+            quest_log={365: questers.STATUS_COMPLETE},
+            quest_progress={365: 10},
+            quest_item_objectives={365: {PUMPKIN_ITEM: 10}},
+        )
+        hand_in = questers.plan(cat, complete, questers.Clock(), 0.0).move
+        self.assertEqual((hand_in.kind, hand_in.quest), (classquest.TURN_IN, 365))
+
+    def test_the_gameobject_source_removes_the_unsourced_ledger_reason(self):
+        cat = fields_of_grief_world()
+        member = fields_holder()
+        clock = questers.Clock()
+        reason = ""
+
+        for minute in range(0, 121, 10):
+            broken = questers.failures(
+                cat, member, clock, minute * 60.0, last_quest=365
+            )
+            if broken:
+                reason = broken[0].reason
+
+        self.assertEqual(reason, questers.STALLED)
+        self.assertNotIn("no huntable source", reason)
 
 
 def holder(**kw):
