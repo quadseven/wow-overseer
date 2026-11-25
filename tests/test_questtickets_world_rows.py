@@ -166,6 +166,69 @@ class WorldRows(unittest.TestCase):
         self.assertIn("QuestLevel: 10; MinLevel: 8", text)
         self.assertIn("Previous quest: 117", text)
 
+    def test_quest_356_rows_explain_what_the_ledger_does_not_establish(self):
+        # World rows come from questcatalogue's quest, giver, creature-name,
+        # and spawn-count reads; objective counters come from OBJECTIVES_SQL.
+        row = quest_row(
+            356,
+            title="Rear Guard Patrol",
+            level=11,
+            min_level=6,
+            sort=85,
+            objective1=1529,
+            objective_count1=8,
+            objective2=1532,
+            objective_count2=8,
+        )
+        ids = "1529, 1532"
+        info = self.catalogue(
+            row,
+            {
+                qc.CREATURE_NAMES_SQL.format(ids=ids): [
+                    {"entry": 1529, "name": "Bleeding Horror"},
+                    {"entry": 1532, "name": "Wandering Spirit"},
+                ],
+                qc.SPAWN_COUNTS_SQL.format(ids=ids): [
+                    {"entry": 1529, "map": 0, "n": 12},
+                    {"entry": 1532, "map": 0, "n": 12},
+                ],
+            },
+        )[0]
+        refusal = "the quest giver would not give it: no giver of that quest in reach"
+        rows = [
+            {"quest": 356, "guid": 7, "character_name": "Quester A", "reason": refusal},
+            {"quest": 356, "guid": 8, "character_name": "Quester B", "reason": refusal},
+            {
+                "quest": 356,
+                "guid": 9,
+                "character_name": "Quester C",
+                "reason": "its objectives did not move for 2 hours of play",
+            },
+        ]
+        objective_counts = [
+            {
+                "guid": 9,
+                "mobcount1": 0,
+                "mobcount2": 0,
+                "mobcount3": 0,
+                "mobcount4": 0,
+                "itemcount1": 0,
+                "itemcount2": 0,
+                "itemcount3": 0,
+                "itemcount4": 0,
+                "itemcount5": 0,
+                "itemcount6": 0,
+            }
+        ]
+
+        text = qt.body(356, info, rows, objective_counts, "")
+
+        self.assertIn("12 spawn(s) on the quest's map, 12 total", text)
+        self.assertIn("retryable interaction result", text)
+        self.assertIn("not proof that the giver is absent", text)
+        self.assertIn("saved objective counters are zero", text)
+        self.assertIn("do not identify why the hunt made no progress", text)
+
 
 if __name__ == "__main__":
     unittest.main()

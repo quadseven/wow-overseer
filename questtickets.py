@@ -114,6 +114,7 @@ OBJECTIVE_COLUMNS = (
     "itemcount5",
     "itemcount6",
 )
+STALL_REASON_PREFIX = "its objectives did not move for"
 
 
 def ensure_column(cur) -> None:
@@ -232,6 +233,29 @@ def _objectives(row) -> str:
     )
 
 
+def _zero_objective_counts(row) -> bool:
+    """Whether the saved creature and item counters are all zero."""
+    return not any(int(row.get(column) or 0) for column in OBJECTIVE_COLUMNS)
+
+
+def _stalled_with_spawned_objectives(info, rows, objectives) -> bool:
+    """Whether a stalled ledger row has zero counters despite map spawns."""
+    stalled = {
+        int(row["guid"])
+        for row in rows or ()
+        if str(row.get("reason") or "").startswith(STALL_REASON_PREFIX)
+    }
+    if not stalled or not any(
+        int(objective.get("map_count") or 0) > 0
+        for objective in getattr(info, "objectives", ())
+    ):
+        return False
+    return any(
+        int(objective.get("guid") or 0) in stalled and _zero_objective_counts(objective)
+        for objective in objectives or ()
+    )
+
+
 def title(quest: int, info) -> str:
     return "Quest %d is broken: %s" % (
         quest,
@@ -334,7 +358,16 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
         lines += [
             "",
             "The take command found no quest giver in reach, blocking acceptance. "
-            "The world names a creature giver. The stored rows leave open why the lookup failed.",
+            "The world names a creature giver. The stored rows leave open why the "
+            "lookup failed. This is a retryable interaction result, not proof that "
+            "the giver is absent.",
+        ]
+    if _stalled_with_spawned_objectives(info, rows, objectives):
+        lines += [
+            "",
+            "The world rows show objective spawns on the quest's map, but the "
+            "saved objective counters are zero. The stored rows do not identify "
+            "why the hunt made no progress.",
         ]
     lines += [
         "",
