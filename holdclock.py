@@ -28,6 +28,7 @@ KEEP_SECONDS = 3 * 86400.0
 PROF_LOOP_KIND = "prof_loop_state"
 GEAR_HOLD_KIND = "gear_hold_clock"
 TOWN_FIRST_KIND = "town_first_clock"
+TOWN_ERRAND_KIND = "town_errand_end"
 
 # profloop.State fields that hold a monotonic reading (0.0 means unset).
 _STATE_TIMES = ("since", "asserted", "queued_since")
@@ -184,3 +185,125 @@ class Clocks(dict):
                     exc_info=True,
                 )
         return value
+
+
+class ErrandEnds(dict):
+    """key -> town errand state, with each errand's end mirrored to the store.
+
+    The town errand's cooldown runs from `State.ended`, a monotonic reading,
+    so a restart forgot it and a family that had just been to town went
+    again at once. Only what the cooldown reads is stored: the end, whether
+    a run was seen since, and whether the walk never landed. A restored
+    family starts idle with that end; an errand under way is not resumed.
+    `make` builds the state from those three fields.
+    """
+
+    def __init__(
+        self, kind, read, upsert, delete, make, mono=time.monotonic, wall=time.time
+    ):
+        super().__init__()
+        self._kind, self._read, self._upsert, self._delete = (
+            kind,
+            read,
+            upsert,
+            delete,
+        )
+        self._make = make
+        self._mono, self._wall = mono, wall
+        self._loaded = False
+        self._saved = {}
+
+    @staticmethod
+    def _mark(state):
+        return (
+            float(getattr(state, "ended", 0.0) or 0.0),
+            bool(getattr(state, "ran_since", False)),
+            bool(getattr(state, "unlanded", False)),
+        )
+
+    def load(self) -> None:
+        if self._loaded:
+            return
+        self._loaded = True
+        mono_now, wall_now = self._mono(), self._wall()
+        try:
+            rows = self._read(self._kind)
+        except Exception:
+            LOG.warning(
+                "hold clock %s: stored errand ends could not be read, starting empty",
+                self._kind,
+                exc_info=True,
+            )
+            return
+        for sub, (value, _since) in rows.items():
+            try:
+                key = tuple(sub.split("|"))
+                wall = float(value["ended"])
+                if wall <= 0 or dict.__contains__(self, key):
+                    continue
+                state = self._make(
+                    ended=to_mono(wall, mono_now, wall_now),
+                    ran_since=bool(value.get("ran_since")),
+                    unlanded=bool(value.get("unlanded")),
+                )
+            except (KeyError, TypeError, ValueError, AttributeError):
+                continue
+            dict.__setitem__(self, key, state)
+            self._saved[key] = self._mark(state)
+
+    def _save(self, key, state) -> None:
+        mark = self._mark(state)
+        if not mark[0] or self._saved.get(key) == mark:
+            return
+        self._saved[key] = mark
+        wall_now = self._wall()
+        value = {
+            "ended": to_wall(mark[0], self._mono(), wall_now),
+            "ran_since": mark[1],
+            "unlanded": mark[2],
+        }
+        try:
+            self._upsert(
+                self._kind, subject(key), value, wall_now, wall_now + KEEP_SECONDS
+            )
+        except Exception:
+            self._saved.pop(key, None)
+            LOG.warning(
+                "hold clock %s: %s was not stored and will restart with the bridge",
+                self._kind,
+                subject(key),
+                exc_info=True,
+            )
+
+    def __getitem__(self, key):
+        self.load()
+        return dict.__getitem__(self, key)
+
+    def get(self, key, default=None):
+        self.load()
+        return dict.get(self, key, default)
+
+    def __contains__(self, key):
+        self.load()
+        return dict.__contains__(self, key)
+
+    def __iter__(self):
+        self.load()
+        return dict.__iter__(self)
+
+    def keys(self):
+        self.load()
+        return dict.keys(self)
+
+    def values(self):
+        self.load()
+        return dict.values(self)
+
+    def items(self):
+        self.load()
+        return dict.items(self)
+
+    def __setitem__(self, key, value):
+        self.load()
+        dict.__setitem__(self, key, value)
+        self._save(key, value)
