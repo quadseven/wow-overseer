@@ -247,6 +247,15 @@ class ErrandEnds(dict):
                     unlanded=bool(value.get("unlanded")),
                 )
             except (KeyError, TypeError, ValueError, AttributeError):
+                # The family keeps working in memory; its cooldown starts
+                # again, so say which row was lost.
+                LOG.warning(
+                    "hold clock %s: stored errand end for %s is unreadable, "
+                    "its cooldown starts again",
+                    self._kind,
+                    sub,
+                    exc_info=True,
+                )
                 continue
             dict.__setitem__(self, key, state)
             self._saved[key] = self._mark(state)

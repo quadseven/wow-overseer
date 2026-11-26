@@ -251,14 +251,25 @@ class ErrandCooldownRestart(unittest.TestCase):
         self.assertEqual(list(table.items()), [])
 
     def test_the_bridge_keeps_its_errands_in_the_store(self):
-        import pathlib
+        from test_guildsocial_bridge import bridge
 
-        src = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
-        self.assertIn(
-            "_TOWN_ERRANDS: dict = holdclock.ErrandEnds(\n"
-            "    holdclock.TOWN_ERRAND_KIND,",
-            src,
-        )
+        table = bridge._TOWN_ERRANDS
+        self.assertIsInstance(table, holdclock.ErrandEnds)
+        self.assertEqual(table._kind, holdclock.TOWN_ERRAND_KIND)
+        self.assertIs(table._make, townerrand.State)
+
+    def test_an_unreadable_row_is_logged_and_the_rest_restored(self):
+        store = Store()
+        store.rows[(holdclock.TOWN_ERRAND_KIND, "Og")] = ("junk", 1.0)
+        store.rows[(holdclock.TOWN_ERRAND_KIND, "Ugga")] = ({"ended": "x"}, 1.0)
+        first, _ = errands(store, 1000.0, 5_000_000.0)
+        first[self.KEY] = townerrand.State(ended=990.0)
+        second, _ = errands(store, 4.0, 5_000_010.0)
+        with self.assertLogs("holdclock", level="WARNING") as logs:
+            self.assertIn(self.KEY, second)
+        self.assertEqual(len(logs.output), 2)
+        self.assertIn("Og", logs.output[0] + logs.output[1])
+        self.assertNotIn(("Og",), second)
 
     def test_the_kind_fits_the_memo_column(self):
         self.assertLessEqual(len(holdclock.TOWN_ERRAND_KIND), 32)
