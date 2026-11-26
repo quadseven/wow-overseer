@@ -52,6 +52,7 @@ class Config:
     head_wait_seconds: int = 30 * 60
     settle_seconds: int = 180
     result_keep_days: int = 14
+    template_pull_secret: str = ""
 
 
 def load(path=None, env=None):
