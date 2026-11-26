@@ -431,7 +431,11 @@ The runner config names each class template in `template_images`. A dated tag
 repository, take the newest `<class>-<stamp>` tag, and run the template by its digest
 (`host/path@sha256:...`); the digest is recorded as `template_image` in the submission,
 so a run stays reproducible after the forge prunes old tags. The forge keeps only the newest
-few stamps, so a pinned dated tag goes stale; prefer `newest`.
+few stamps, so a pinned dated tag goes stale; prefer `newest`. For a private
+template registry, set `template_pull_secret` to its pull Secret in the
+ephemeral namespace. It defaults to the existing bridge pull Secret when
+empty. Template discovery supports Basic and Bearer registry challenges and
+verifies that the manifest is available by digest before creating Jobs.
 
 The template is forged from the live realm: its characters and auth databases and its
 world database are at the live schema, and its `updates` table holds each module SQL file
