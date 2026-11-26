@@ -545,11 +545,10 @@ def facts_line(state: dict) -> str:
 
 @dataclass(frozen=True)
 class KeepJudgment(Judgment):
-    """A jev_items.Judgment that also carries the facts it was asked with,
-    the routes Jev may carry out for this stack (`actable_routes`) and the
-    stack's size, which an order needs."""
+    """A jev_items.Judgment (whose `facts` it fills from facts_line) that also
+    carries the routes Jev may carry out for this stack (`actable_routes`) and
+    the stack's size, which an order needs."""
 
-    facts: str = ""
     actable: tuple = ()
     count: int = 1
 
