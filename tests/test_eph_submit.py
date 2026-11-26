@@ -184,6 +184,50 @@ class SubmitTest(Base):
         self.assertIn("client-data-a", text)
         self.assertNotIn("{{", text)
 
+    def test_newest_template_is_resolved_and_the_job_names_it_by_digest(self):
+        import base64
+        from unittest import mock
+
+        from test_eph_imagecommit import (
+            CREDS,
+            TPL,
+            TPL_MANIFEST,
+            NewestTemplateTest,
+            TemplateRegistry,
+        )
+
+        self.cfg.template_images["lean"] = f"{TPL}:newest"
+        self.cfg.template_pull_secret = "template-reader"
+        auth = base64.b64encode(":".join(CREDS).encode()).decode()
+        docker_config = json.dumps({"auths": {TPL.split("/")[0]: {"auth": auth}}})
+        self.cluster.put(
+            "secrets",
+            "wow-ephemeral",
+            "template-reader",
+            {
+                "data": {
+                    ".dockerconfigjson": base64.b64encode(
+                        docker_config.encode()
+                    ).decode()
+                }
+            },
+        )
+        reg = TemplateRegistry(NewestTemplateTest.TAGS, basic=True)
+        with mock.patch("ephemeral.imagecommit.urlfetch", reg):
+            rec = self.submit(**CONTROL)
+        self.assertFalse(any("/token?" in url for url in reg.calls))
+        import hashlib
+
+        want = f"{TPL}@sha256:" + hashlib.sha256(TPL_MANIFEST).hexdigest()
+        self.assertEqual(rec["template_image"], want)
+        for job in self.cluster.of("jobs"):
+            self.assertIn(want, json.dumps(job))
+            self.assertNotIn(":newest", json.dumps(job))
+
+    def test_an_explicit_template_tag_still_works_without_the_registry(self):
+        rec = self.submit(**CONTROL)
+        self.assertEqual(rec["template_image"], "registry.example.com/t:lean-1")
+
     def test_realm_ids_are_unique_and_in_range(self):
         rec = self.submit(**CONTROL)
         ids = [r["realm_id"] for r in rec["runs"]]
