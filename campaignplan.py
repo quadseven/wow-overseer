@@ -898,8 +898,8 @@ def _outgrown_run(run: Run, level: int) -> str:
     A run is outgrown once the weakest member passes its ceiling, at the
     level cap too (#3282). The cap used to keep a lower door open while its
     loot held any upgrade (#2207), and an empty or two-tier-down slot counts
-    any drop as one, so a family of 60s was queued for 13 runs of Maraudon
-    (ceiling 55) on wow-dev, 2026-11-26. The guard that ranks such a door
+    any drop as one, so a family of 60s was queued for a door whose band
+    stops at 55 (Maraudon). The guard that ranks such a door
     behind the band (`Option.below_band`, #2715) reads bosses per map and
     is blind on a shared map such as Maraudon's. A capped family gears in
     the doors whose band reaches the cap, as players at 60 do.

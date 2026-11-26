@@ -1,8 +1,8 @@
 """A family whose members are all at the level cap runs the level 60 dungeons.
 
-What the realm showed (#3282): on wow-dev, 2026-11-26, Grug's family, all five
-at level 60, sat on a 13-run planner entry for Maraudon (the purple wing),
-whose band stops at 55. The planner kept every lower door open at the cap
+The defect (#3282): a family whose members were all at the level cap was
+queued for Maraudon (the purple wing), whose band stops at 55. The planner
+kept every lower door open at the cap
 while its loot held any upgrade for anyone (#2207), and an empty slot counts
 any drop as one. The guard that ranks such a door behind the family's band
 (#2715) reads bosses per map, and Maraudon's two wings share a map, so it was
@@ -194,9 +194,9 @@ class AGuildGroupOf60sIsOfferedNoLowerDoor(unittest.TestCase):
             for door in fit:
                 self.assertEqual(door.ceiling, campaignplan.LEVEL_CAP, door.keyword)
 
-    def test_maraudon_still_fits_the_members_who_asked_for_it(self):
-        """The guild asks for Maraudon in the same log came from members at
-        51 and 54."""
+    def test_maraudon_still_fits_a_member_inside_its_band(self):
+        """A guild member at 54 asking for Maraudon is asking for the right
+        door."""
         fit = guildrun.fitting_doors([54], guildrun.doors(), "Alliance")
         self.assertIn("maraudon-purple", [d.keyword for d in fit])
 
