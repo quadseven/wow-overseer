@@ -27,7 +27,9 @@ class GamingModel(unittest.TestCase):
             "{family:'Zug',members:[{name:'Zug',level:60,class:'Druid',zone:'',online:false}]}])"
             ".map(f=>[f.family,f.members[0].name,f.members[0].level,f.members[0].activity])"
         )
-        self.assertEqual(got, [["Grug", "Grug", 42, "Elwynn"], ["Zug", "Zug", 60, "offline"]])
+        self.assertEqual(
+            got, [["Grug", "Grug", 42, "Elwynn"], ["Zug", "Zug", 60, "offline"]]
+        )
 
     def test_guild_readiness_is_level60_count_vs_40(self):
         got = run(
