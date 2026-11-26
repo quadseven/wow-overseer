@@ -1,11 +1,10 @@
-"""A roster family member with Riding and no mount buys one between runs (#2642).
+"""A roster family member learns a carried mount between runs (#2642).
 
 `mountbuy.py` and `guildjobs.mount_step` serve guild members off the roster
-whose purses carry purchase orders. A roster family member has no purchase
-order and plans only in the gap between dungeon runs (familyclass.py). After
-Riding is held (family_riding_step, #2625), `family_mount_step` plans the
-member's mount step in that same gap, keeping `FAMILY_RIDING_FLOAT` over the
-price, with the same idle, ground, follower and cooldown holds.
+whose purses carry purchase orders. The roster path uses the same mount
+decision in the gap between dungeon runs (familyclass.py), but can only use a
+carried mount. It keeps `FAMILY_RIDING_FLOAT` over the price when reporting why
+a purchase waits.
 """
 
 from __future__ import annotations
@@ -118,8 +117,11 @@ class WhenFamilyMountIsHeld(unittest.TestCase):
         for over in (dict(online=False), dict(alive=False), dict(in_combat=True)):
             self.assertIsNone(self.step(mount_seat(**over)), over)
 
-    def test_not_walking_while_following_its_leader(self):
-        self.assertIsNone(self.step(mount_seat(follows=True)))
+    def test_a_follower_without_a_carried_mount_says_nothing(self):
+        for money in (PINTO.price, 20 * GOLD):
+            with self.subTest(money=money):
+                m = mount_seat(follows=True, money=money)
+                self.assertEqual(guildjobs.family_mount_step(m, FACTS, []), (None, ""))
 
     def test_a_follower_carrying_a_mount_still_uses_it_where_it_stands(self):
         held = guildjobs.Carried(9001, 2414, 1, 15, 5, name="Reins of the Pinto")
@@ -264,7 +266,7 @@ class BridgeFamilyMountWiring(unittest.IsolatedAsyncioTestCase):
         guild_member = seat(
             name="Mace", role=guildjobs.RAIDER, skills={}, level=60, money=0
         )
-        fam = mount_seat()
+        fam = mount_seat(carried=(CARRIED,))
         facts = dict(
             masters={"Cave": "Mace"},
             crafters={},
@@ -275,25 +277,34 @@ class BridgeFamilyMountWiring(unittest.IsolatedAsyncioTestCase):
             family_members=[fam],
         )
         this = _bridge_stub(facts)
+        conn = mock.MagicMock()
+        cur = conn.__enter__.return_value.cursor.return_value.__enter__.return_value
         with mock.patch.multiple(
             bridge,
+            _connect=lambda: conn,
             _kept_with_bank_policy=lambda *args: {},
             _with_purses_and_reserves=lambda members, *args: members,
             _guild_campaign_door=lambda *args: "",
-            _family_class_state=lambda _facts: (
-                [],
-                {fam.name: "its family has an active dungeon run"},
-            ),
+            _fetch_queue_roster=lambda: [{"name": fam.name, "family": fam.name}],
             _family_danger=lambda *args: {},
-            _fetch_mount_facts=lambda *args: {},
+            _fetch_mount_facts=lambda *args: {fam.name: FACTS},
             _job_mail_commands=lambda *args: {},
             _job_leveling=lambda *args: None,
             _keep_class_plan=lambda *args: None,
         ):
-            plan = await bridge.Bridge._plan_guild_jobs(
-                this, [guild_member], facts, set(), 100.0, False
-            )
-        self.assertEqual(plan.steps, ())
+            for hold in ("dungeon", "errand"):
+                with self.subTest(hold=hold):
+                    cur.fetchall.return_value = (
+                        [{"leader_name": fam.name}] if hold == "dungeon" else []
+                    )
+                    errands = {fam.name} if hold == "errand" else set()
+                    with mock.patch.object(
+                        bridge, "_errand_names", return_value=errands
+                    ):
+                        plan = await bridge.Bridge._plan_guild_jobs(
+                            this, [guild_member], facts, set(), 100.0, False
+                        )
+                    self.assertEqual(plan.steps, ())
 
 
 if __name__ == "__main__":

@@ -3223,13 +3223,11 @@ def family_riding_step(m, recent):
 
 
 def family_mount_step(m, facts, recent, kept=None, book=None, crafters=None, master=""):
-    """(step or None, a note) for a roster family member with Riding and no
-    mount (#2642), planned only in the gap between runs after Riding is held.
+    """Plan in-place use of a carried mount for an idle roster member (#2642).
 
-    Keeps `FAMILY_RIDING_FLOAT` over the price in place of a guild member's
-    purchase order, bounds every walk to `familyclass.WALK_YARDS`, and holds a
-    follower's walk or any unread ground the same way `family_riding_step`
-    does."""
+    The purchase decision keeps `FAMILY_RIDING_FLOAT` over the price. A vendor
+    walk and its bag-clearing step both wait for a roster-valid route. A
+    follower without a planned step stays silent."""
     if m.role != FAMILY or not m.eligible:
         return None, ""
     if not m.online or not m.alive or m.in_combat:
@@ -3254,6 +3252,8 @@ def family_mount_step(m, facts, recent, kept=None, book=None, crafters=None, mas
         crafters=crafters,
         master=master,
     )
+    if getattr(m, "follows", False) and (step is None or step.walk is not None):
+        return None, ""
     if step is not None and (step.action != mountbuy.ACTION or step.walk is not None):
         # The module refuses every walk-to-vendor for a roster character ("aim
         # it through travel_npc"), as it does walk-to-trainer, and a make-room
