@@ -13,6 +13,7 @@ Pure unit tests against weaponskill and guildjobs.plan, and a read of bridge.py
 for the wiring.
 """
 
+import inspect
 import json
 import pathlib
 import unittest
@@ -455,10 +456,13 @@ class TheIsland(unittest.TestCase):
             weaponskill.ISLANDS[1],
         )
 
-    def test_the_bridge_reads_the_ground_of_every_walker(self):
+    def test_the_pass_and_bridge_read_the_ground_of_every_walker(self):
+        family_pass = inspect.getsource(weaponskill.WeaponSkillPass._run_locked)
         self.assertEqual(
             3,
-            BRIDGE.count('int(at["map_id"]), at)') + BRIDGE.count("int(m.map_id), at)"),
+            BRIDGE.count('int(at["map_id"]), at)')
+            + BRIDGE.count("int(m.map_id), at)")
+            + family_pass.count('int(at["map_id"]), at'),
         )
 
 
@@ -509,15 +513,13 @@ class TheBridgeReadsTheFarMaster(unittest.TestCase):
         self.assertIn("weaponskill.far_maps(", body)
 
     def test_the_family_crosses_when_no_local_master_teaches_the_skill(self):
-        body = BRIDGE.split("async def _weapon_skill_once", 1)[1].split(
-            "\n    async def _weapon_skill_train", 1
-        )[0]
+        body = inspect.getsource(weaponskill.WeaponSkillPass._run_locked)
         expected = (
-            "weaponskill.far_maps(",
-            "weaponskill.choose_far_master(",
+            "far_maps(",
+            "choose_far_master(",
             "guildjobs.weapon_cross_step(",
-            "_fetch_weapon_crossings, names",
-            "self._class_cross_row(",
+            "io.crossings, names",
+            "self._bridge._class_cross_row(",
         )
         self.assertTrue(all(part in body for part in expected))
 
