@@ -38,7 +38,7 @@ class FactsLine(unittest.TestCase):
 
     def test_a_long_state_is_cut_to_the_column(self):
         line = jev_items.facts_line({"x": "y" * 5000}, {"a": "b"})
-        self.assertEqual(len(line), 1000)
+        self.assertEqual(len(line), jev_items.FACTS_LIMIT)
         self.assertTrue(line.endswith("..."))
         self.assertTrue(line.startswith('{"options":{"a":"b"}'))
 

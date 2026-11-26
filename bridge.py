@@ -7480,7 +7480,8 @@ def _situation_reads(names: list, leader: str) -> dict:
 
 # --- the movement choice's reads and writer (jev_movement.py) -----------------
 _MOVEMENT_BINDS = (
-    "SELECT c.name, h.mapId AS map_id, h.posX AS x, h.posY AS y, h.posZ AS z "
+    "SELECT c.name, h.mapId AS map_id, h.zoneId AS zone_id, h.posX AS x, "
+    "h.posY AS y, h.posZ AS z "
     "FROM character_homebind h JOIN characters c ON c.guid = h.guid "
     "WHERE c.name IN (%s)")
 # A hearth that did not happen starts no cooldown: an error row, or an
@@ -7495,7 +7496,7 @@ _MOVEMENT_HEARTHED = (
 
 def _movement_reads(names: list) -> dict:
     """Hearthstone points and who hearthed in the last hour. Reads only."""
-    out = {"binds": {}, "hearthed": frozenset()}
+    out = {"binds": {}, "hearthed": frozenset(), "bind_zones": {}}
     if not names:
         return out
     marks = ", ".join(["%s"] * len(names))
@@ -7506,6 +7507,10 @@ def _movement_reads(names: list) -> dict:
                                             float(r["y"]), float(r["z"]))
             for r in rows or ()
         }
+        # The zone the stone lands in, so the movement question can name it
+        # (#3303).
+        out["bind_zones"] = {str(r["name"]): int(r.get("zone_id") or 0)
+                             for r in rows or ()}
         rows = _situation_try(cur, "hearths", _MOVEMENT_HEARTHED % marks,
                               tuple(names))
         out["hearthed"] = frozenset(str(r["target_name"]) for r in rows or ())
@@ -7547,6 +7552,24 @@ def _fetch_family_intents() -> dict:
     with _connect() as conn, conn.cursor() as cur:
         rows = _situation_try(cur, "family intent", _FAMILY_INTENT_SQL, ())
     return {str(r["leader_name"]): r for r in rows or ()}
+
+
+def _family_upkeep(names: list) -> dict:
+    """Each member's bags, worst durability and quest, for the family intent
+    question (#3303). Three reads the bridge already makes for the bag hold,
+    the town trip and the council; one that fails reads "unknown" for every
+    member (jev_family_intent.upkeep_from) and the question is still asked."""
+    reads = {}
+    for key, read in (("bags", _fetch_bag_room), ("worn", _fetch_town_worn),
+                      ("quests", _fetch_quest_progress)):
+        try:
+            reads[key] = read(names)
+        except pymysql.err.MySQLError:
+            log.warning("family intent: the %s read failed; Jev is told it "
+                        "is unknown", key)
+            reads[key] = None
+    return jev_family_intent.upkeep_from(
+        names, reads["bags"], reads["worn"], reads["quests"])
 
 
 def _fetch_vendor_wait_seconds(names: list) -> int:
@@ -17518,7 +17541,7 @@ class Bridge(discord.Client):
             try:
                 judgments = await self._jev_keep_once(
                     names, leader, pending, routes, free_slots, auction_open,
-                    rule)
+                    rule, carried=rows)
                 log.info("%s", jev_keep.summary(judgments, len(kept), limit,
                                                 interval))
                 await self._jev_record(judgments, ",".join(names))
@@ -17543,7 +17566,7 @@ class Bridge(discord.Client):
 
     async def _jev_keep_once(self, names: list, leader: str, pending: list,
                              routes: dict, free_slots: dict, auction_open: bool,
-                             rule) -> list:
+                             rule, carried=None) -> list:
         """The reads jev_keep's facts need, then the questions."""
         entries = sorted({int(r.get("entry") or 0) for r in pending} - {0})
         templates = await asyncio.to_thread(_fetch_jev_keep_templates, entries)
@@ -17558,10 +17581,13 @@ class Bridge(discord.Client):
                 skills=dict(skills.get(name) or {}))
             for name in names
         }
-        market: dict = {}
+        # None says the house was not read; {} that it held no listing.
+        market: dict | None = None
         if auction_open and leader:
             teams = await asyncio.to_thread(_fetch_teams, [leader])
             house = auction.TEAM_HOUSE.get(teams.get(leader, ""), 0)
+            if house > 0:
+                market = {}
             for listing in await asyncio.to_thread(
                     _fetch_auction_listings, entries, house):
                 market[listing.entry] = min(
@@ -17569,11 +17595,17 @@ class Bridge(discord.Client):
         # THE DESIGNATED CRAFTERS (#248): a recipe's `give:` options follow
         # the register's ranking, and its facts name the trade's crafters.
         crafting = await asyncio.to_thread(_crafter_plan, names)
+        # WHAT THE FAMILY AS A WHOLE HOLDS AND USES (#3303): changes the
+        # facts only, never an option or an act.
+        family = await asyncio.to_thread(_jev_keep_family_reads, names, pending)
         asks = jev_keep.asks(
             pending, templates=templates, holders=holders,
             people=_clearance_people(names, skills, roster), routes=routes,
             market=market, reagent_trades=REAGENT_TRADES, mode=rule.mode,
-            takers=crafting.takers, register=crafting.register)
+            takers=crafting.takers, register=crafting.register,
+            carried=carried, family_free=dict(free_slots),
+            guild_free=family["guild_free"],
+            spell_users=family["spell_users"], ranged=family["ranged"])
         return await jev_keep.shadow_pass(self._jev, asks, rule)
 
     def _jev_keep_live(self, names: list, rows=None) -> list:
@@ -28709,7 +28741,8 @@ class Bridge(discord.Client):
         return jev_movement.Facts(
             family=key or leader, where=where, binds=reads["binds"],
             hearthed=reads["hearthed"], errand=holder.aim if mine else "",
-            claimant=holder.claimant if mine else "")
+            claimant=holder.claimant if mine else "",
+            bind_zones=reads.get("bind_zones") or {})
 
     async def _movement_record(self, key: str, judgment) -> None:
         log.info("%s", judgment.line())
@@ -28907,6 +28940,13 @@ class Bridge(discord.Client):
         if not jev_family_intent.due(facts, seen.get("signature", ""),
                                      seen.get("asked", -1e9), now):
             return
+        # WHAT A PLAYER CHECKS BEFORE A TOWN WALK (#3303): bags, durability
+        # and quest, read only once a question is due. Looked up: the adapter
+        # tests load this method in isolation.
+        upkeep = globals().get("_family_upkeep")
+        if upkeep is not None:
+            facts = dataclasses.replace(
+                facts, upkeep=await asyncio.to_thread(upkeep, names))
         # WHAT FOLLOWED EARLIER PICKS (#584): this family's are scored once
         # their window has passed, and the kind's recent ones go into the
         # question.
@@ -32912,6 +32952,48 @@ def _fetch_jev_keep_classes(names: list) -> dict:
                 for row in cur.fetchall()}
 
 
+def _jev_keep_family_reads(names: list, pending: list) -> dict:
+    """The family-wide item_keep facts (#3303), each from a reader the bridge
+    already has: the guild bank's free slots (the deposit pass's setup), who
+    casts with a reagent (the class-reagent pass's spellbook and reagent
+    map), and each member's ranged weapon (the gear-up read). The last two
+    are read only when a pending stack is a reagent or ammunition. A read
+    that fails reads "unknown" in the question and is logged here.
+    """
+    out = {"guild_free": None, "spell_users": None, "ranged": jev_keep.NOT_READ}
+    classes = {int(r.get("item_class") or 0) for r in pending}
+    try:
+        setup = _fetch_guild_bank_setup(names)
+        if setup is not None:
+            out["guild_free"] = bank.storage_from({}, guild=setup).guild_free
+    except pymysql.err.MySQLError:
+        log.warning("jev-keep: the guild bank read failed; its room is unknown")
+    if jev_keep.REAGENT in classes or any(r.get("reagent") for r in pending):
+        try:
+            spells = _fetch_town_spells(names)
+            with _connect() as conn, conn.cursor() as cur:
+                reagents = _fetch_spell_reagents(cur)
+            entries = [int(r.get("entry") or 0) for r in pending]
+            out["spell_users"] = jev_keep.spell_users_from(
+                spells, reagents, entries, guildjobs.CRAFT_SPELLS)
+        except pymysql.err.MySQLError:
+            log.warning("jev-keep: the spellbook read failed; who casts with "
+                        "a reagent is left out")
+    if jev_keep.PROJECTILE in classes:
+        try:
+            gear = _fetch_gearup_facts(names)
+            out["ranged"] = {
+                name: jev_keep.ranged_word(
+                    (gear.get(name) or {}).get("equipped", {}).get("ranged"))
+                for name in names
+            }
+        except pymysql.err.MySQLError:
+            log.warning("jev-keep: the worn gear read failed; ranged weapons "
+                        "are unknown")
+            out["ranged"] = None
+    return out
+
+
 def _fetch_jev_worn(names: list) -> list:
     """(name, slot, entry) for everything the family wears."""
     if not names:
@@ -33058,7 +33140,7 @@ def _create_jev_store() -> None:
             " latency_ms INT UNSIGNED NOT NULL DEFAULT 0,"
             " model VARCHAR(40) NOT NULL DEFAULT '',"
             " mode VARCHAR(8) NOT NULL,"
-            " facts VARCHAR(1000) NOT NULL DEFAULT '',"
+            " facts VARCHAR(4000) NOT NULL DEFAULT '',"
             " acted VARCHAR(10) NOT NULL DEFAULT '',"
             " backend VARCHAR(12) NOT NULL DEFAULT '',"
             " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
@@ -33095,6 +33177,21 @@ def _create_jev_store() -> None:
                 "ADD COLUMN facts VARCHAR(1000) NOT NULL DEFAULT '' AFTER mode"
             )
             log.info("overseer_jev_judgment: added facts")
+        # Widened from 1000 (#3303): the state a movement or family question
+        # was asked with was cut, so a judge saw less than Jev did. Looked up
+        # like the columns above, then altered once; growing a VARCHAR keeps
+        # every row.
+        cur.execute(
+            "SELECT CHARACTER_MAXIMUM_LENGTH AS n FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() "
+            "  AND TABLE_NAME = 'overseer_jev_judgment' AND COLUMN_NAME = 'facts'"
+        )
+        if int((cur.fetchone() or {}).get("n") or 0) < 4000:
+            cur.execute(
+                "ALTER TABLE overseer_jev_judgment "
+                "MODIFY COLUMN facts VARCHAR(4000) NOT NULL DEFAULT ''"
+            )
+            log.info("overseer_jev_judgment: widened facts")
         # `backend` arrived with the decision backends (#820): which model
         # family gave the answer ('compare' rows carry the comparison
         # backend's). A row written before it reads '' (Jev, the only one).
@@ -33259,7 +33356,8 @@ def _insert_jev_judgment(judgment) -> None:
                 judgment.confidence, judgment.probabilities_json() or None,
                 None if agree is None else int(agree), judgment.status[:16],
                 max(0, judgment.latency_ms), judgment.model[:40],
-                judgment.mode[:8], facts[:1000], acted[:10], backend[:12],
+                judgment.mode[:8], facts[:4000], acted[:10],
+                backend[:12],
             ),
         )
 
