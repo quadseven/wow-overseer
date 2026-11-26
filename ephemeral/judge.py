@@ -796,11 +796,23 @@ class ConfigMapStore:
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
         sa_dir = pathlib.Path(sa_dir)
-        token = (sa_dir / "token").read_text(encoding="utf-8").strip()
+        token_path = sa_dir / "token"
+
+        def read_token():
+            try:
+                token = token_path.read_text(encoding="utf-8").strip()
+            except (OSError, UnicodeError):
+                raise JudgeError("result service-account token unreadable") from None
+            if not token:
+                raise JudgeError("result service-account token is empty")
+            return token
+
+        # Fail early if the token is missing. Kubelet can rotate it while the judge runs.
+        read_token()
         ns = namespace or (sa_dir / "namespace").read_text(encoding="utf-8").strip()
         ca = sa_dir / "ca.crt"
         http = urllib_http(ca if ca.exists() else None)
-        return cls(f"https://{host}:{port}", token, ns, http)
+        return cls(f"https://{host}:{port}", read_token, ns, http)
 
     def write(self, cm):
         meta = cm.get("metadata", {})
@@ -811,15 +823,16 @@ class ConfigMapStore:
         if meta.get("namespace") != self.namespace:
             raise JudgeError("the judge writes into its own namespace only")
         url = f"{self.base_url}/api/v1/namespaces/{self.namespace}/configmaps"
-        headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json",
-        }
         payload = json.dumps(cm).encode("utf-8")
         spent, delay, attempt = 0.0, WRITE_BACKOFF_START, 0
         while True:
             attempt += 1
             began = time.monotonic()
+            token = self.token() if callable(self.token) else self.token
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
             try:
                 status = self.http("POST", url, headers, payload)[0]
                 problem = None if status not in RETRYABLE_STATUS else f"HTTP {status}"
