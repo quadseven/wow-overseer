@@ -74,7 +74,7 @@ import re
 from dataclasses import dataclass, replace
 
 import jev
-from jev_items import Judgment
+from jev_items import Judgment, facts_line
 from statweights import CASTER, HEALER, TANK, UNKNOWN, stat_weights
 
 KIND = "loot_council"
@@ -596,6 +596,7 @@ def decide(
     heuristic = council.heuristic or NOBODY
     members, piece, shut = _fit_gate(council, item)
     criteria = _criteria(council, members, piece, shut)
+    asked = question(council, item)
     base = Judgment(
         kind=KIND,
         subject=council.heuristic or council.family or "-",
@@ -608,6 +609,8 @@ def decide(
         mode=rule.mode,
         status=outcome.status,
         latency_ms=outcome.latency_ms,
+        # The question as asked, rebuilt from the same council and card.
+        facts=facts_line(asked[0], criteria) if asked else "",
     )
     answer = (outcome.answers or {}).get("to")
     if answer is not None:

@@ -33232,7 +33232,7 @@ def _insert_jev_judgment(judgment) -> None:
     """
     agree = judgment.agree
     acted = str(getattr(judgment, "acted", "") or "")
-    # Only the activity choice carries its facts (#216); every other kind ''.
+    # What the question was asked with; a kind that records none writes ''.
     facts = str(getattr(judgment, "facts", "") or "")
     # Under JEV_ROUTE the answer may come from any routed backend: its model
     # id says which (jev.answered_by), and a row with no answer names the first.
