@@ -73,6 +73,13 @@ class WhoGetsAMountWalk(unittest.TestCase):
         self.assertIsNone(step)
         self.assertIn("saves for a mount", note)
 
+    def test_enough_for_mount_and_float_waits_for_a_roster_route(self):
+        exact = mount_seat(money=PINTO.price + guildjobs.FAMILY_RIDING_FLOAT)
+        step, note = self.step(exact)
+        self.assertIsNone(step)
+        self.assertIn("waits to buy a mount", note)
+        self.assertNotIn("saves for a mount", note)
+
     def test_a_carried_mount_is_used_without_gold_or_walking(self):
         held = guildjobs.Carried(9001, 2414, 1, 15, 5, name="Reins of the Pinto")
         step, note = self.step(mount_seat(money=0, carried=(held,)))
