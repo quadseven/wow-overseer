@@ -300,8 +300,16 @@ def default_template_image(cfg, kube):
             return imagecommit.newest_template(
                 ref, klass, imagecommit.credentials(secret, host)
             )
-        except (imagecommit.RegistryError, KubeError, KeyError, TypeError, ValueError) as exc:
-            raise SubmitError(f"could not resolve the newest {klass} template: {exc}") from exc
+        except (
+            imagecommit.RegistryError,
+            KubeError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise SubmitError(
+                f"could not resolve the newest {klass} template: {exc}"
+            ) from exc
 
     return template
 

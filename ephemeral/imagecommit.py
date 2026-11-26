@@ -167,7 +167,9 @@ def image_env(ref, creds, fetch=None):
     return env
 
 
-_NEWEST = re.compile(r"^(?P<host>[a-z0-9][a-z0-9.-]*(?::\d+)?)/(?P<path>[a-z0-9][a-z0-9._/-]*):newest$")
+_NEWEST = re.compile(
+    r"^(?P<host>[a-z0-9][a-z0-9.-]*(?::\d+)?)/(?P<path>[a-z0-9][a-z0-9._/-]*):newest$"
+)
 NEWEST = ":newest"
 
 

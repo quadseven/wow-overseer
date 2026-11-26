@@ -181,7 +181,9 @@ class NewestTemplateTest(unittest.TestCase):
         self.assertTrue(imagecommit.is_newest(f"{TPL}:newest"))
         self.assertFalse(imagecommit.is_newest(f"{TPL}:lean-20261120T020000Z"))
         with self.assertRaises(imagecommit.RegistryError):
-            imagecommit.newest_template(f"{TPL}:lean-1", "lean", None, TemplateRegistry([]))
+            imagecommit.newest_template(
+                f"{TPL}:lean-1", "lean", None, TemplateRegistry([])
+            )
 
 
 if __name__ == "__main__":

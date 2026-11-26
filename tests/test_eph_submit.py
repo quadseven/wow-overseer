@@ -182,7 +182,12 @@ class SubmitTest(Base):
     def test_newest_template_is_resolved_and_the_job_names_it_by_digest(self):
         from unittest import mock
 
-        from test_eph_imagecommit import TPL, TPL_MANIFEST, NewestTemplateTest, TemplateRegistry
+        from test_eph_imagecommit import (
+            TPL,
+            TPL_MANIFEST,
+            NewestTemplateTest,
+            TemplateRegistry,
+        )
 
         self.cfg.template_images["lean"] = f"{TPL}:newest"
         reg = TemplateRegistry(NewestTemplateTest.TAGS)
