@@ -348,7 +348,10 @@ class FactsTest(unittest.TestCase):
             state["item"]["teaches"],
             {"trade": "tailoring", "skill_needed": 200, "holder_skill": 0},
         )
-        self.assertEqual(state["item"]["auction_price_each"], "not known")
+        self.assertEqual(
+            state["item"]["auction_price_each"],
+            "not known: no live listing on the family's auction house",
+        )
 
     def test_a_lockbox_names_the_rogue_who_can_pick_it(self):
         _j, state, _q = by_name(asks())["Strong Iron Lockbox"]
