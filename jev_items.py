@@ -570,8 +570,10 @@ def weapon_heuristic(holding, character, pipeline: Pipeline) -> tuple:
 # ---------------------------------------------------------------------------
 # THE RECORD
 
-# overseer_jev_judgment.facts holds at most this many characters.
-FACTS_LIMIT = 1000
+# overseer_jev_judgment.facts holds at most this many characters. 1000 cut
+# the state a movement or family question was asked with, so a later judge
+# saw less than Jev did (#3303); the bridge widens the column to match.
+FACTS_LIMIT = 4000
 
 
 def facts_line(state: dict, criteria: dict | None = None) -> str:
