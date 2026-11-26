@@ -9,7 +9,12 @@ SHA = lambda c: c * 40  # noqa: E731
 
 
 def entry(pin, name, **kw):
-    return {"worldserver": f"ws-{name}{D}", "dbimport": f"db-{name}{D}", "pin": SHA(pin), **kw}
+    return {
+        "worldserver": f"ws-{name}{D}",
+        "dbimport": f"db-{name}{D}",
+        "pin": SHA(pin),
+        **kw,
+    }
 
 
 class Pick(unittest.TestCase):
@@ -38,7 +43,9 @@ class Pick(unittest.TestCase):
 
     def test_unchecked_is_not_absent(self):
         with self.assertRaises(controlauto.AutoError):
-            controlauto.pick_control([entry("1", "a")], lambda s: "unchecked", lambda r: True)
+            controlauto.pick_control(
+                [entry("1", "a")], lambda s: "unchecked", lambda r: True
+            )
 
     def test_empty_history_refuses(self):
         with self.assertRaisesRegex(controlauto.AutoError, "empty"):
@@ -57,7 +64,9 @@ class Pick(unittest.TestCase):
 
 
 class Dropped(unittest.TestCase):
-    DIST = "Overseer.Old = 1\n# Overseer.Commented = 0\n#    Overseer.DocOnly\nOther = 2\n"
+    DIST = (
+        "Overseer.Old = 1\n# Overseer.Commented = 0\n#    Overseer.DocOnly\nOther = 2\n"
+    )
     OVERRIDE = (
         "Overseer.Old = 5\nOverseer.Commented = 1\nOverseer.New = 3\n"
         "Overseer.DocOnly = 4\n# Overseer.Skipped = 9\n"
@@ -70,7 +79,9 @@ class Dropped(unittest.TestCase):
         )
 
     def test_nothing_dropped_when_the_dist_knows_all(self):
-        self.assertEqual(controlauto.dropped_keys("A = 1\nB = 2\n", "A = 3\nB = 4\n"), [])
+        self.assertEqual(
+            controlauto.dropped_keys("A = 1\nB = 2\n", "A = 3\nB = 4\n"), []
+        )
 
 
 if __name__ == "__main__":
