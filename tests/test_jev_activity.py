@@ -868,7 +868,7 @@ class TheRecordAndTheCard(unittest.TestCase):
     def test_the_record_gains_facts_the_bridge_owned_way(self):
         store = BRIDGE[BRIDGE.index("def _create_jev_store(") :]
         store = store[: store.index("\n\n\n")]
-        self.assertIn(" facts VARCHAR(1000) NOT NULL DEFAULT '',", store)
+        self.assertIn(" facts VARCHAR(4000) NOT NULL DEFAULT '',", store)
         self.assertIn(
             "ADD COLUMN facts VARCHAR(1000) NOT NULL DEFAULT '' AFTER mode", store
         )
