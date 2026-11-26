@@ -191,7 +191,13 @@ class HeldRemoteItemObjectives(unittest.TestCase):
             plan = questers.plan(cat, durga, clock, 600.0 * i)
         self.assertEqual(
             [(b.quest, b.reason) for b in plan.broken],
-            [(173, questers.STALLED)],
+            [
+                (
+                    173,
+                    questers.STALLED
+                    + "; its objective creature 533 has no spawn on the quest's map (27 on other maps)",
+                )
+            ],
         )
 
 
@@ -301,5 +307,11 @@ class HeldQuestOnTheIslesRoute(unittest.TestCase):
             plan = questers.plan(cat, holder, clock, 600.0 * i)
         self.assertEqual(
             [(b.quest, b.reason) for b in plan.broken],
-            [(182, questers.STALLED)],
+            [
+                (
+                    182,
+                    questers.STALLED
+                    + "; its objective creature 706 has no spawn on the quest's map (62 on other maps)",
+                )
+            ],
         )

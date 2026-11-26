@@ -129,7 +129,16 @@ class HeldCoastQuestOnTheIslesRoute(unittest.TestCase):
             plan = questers.plan(cat, holder, clock, 600.0 * i)
         self.assertEqual(
             [(b.quest, b.reason) for b in plan.broken],
-            [(152, questers.STALLED)],
+            [
+                (
+                    152,
+                    questers.STALLED
+                    + "; its objective creature 126 has no spawn on the quest's map (25 on other maps)"
+                    + "; its objective creature 171 has no spawn on the quest's map (33 on other maps)"
+                    + "; its objective creature 127 has no spawn on the quest's map (22 on other maps)"
+                    + "; its objective creature 517 has no spawn on the quest's map (28 on other maps)",
+                )
+            ],
         )
 
 
