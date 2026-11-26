@@ -780,7 +780,7 @@ def _fetch_enabled_names() -> list[str]:
     """Every character the roster currently drives. A job order is family-wide
     (jobs.py's own docstring explains why), so this is what it fans out over.
     Chosen over overseer_snapshot's online-right-now view so the report names
-    the whole family the order was meant for - mod_overseer.cpp's DoJob still
+    the whole family the order was meant for - mod-overseer.cpp's DoJob still
     requires the target to be in the world to act on the row (same rule every
     other command kind follows), so an offline member's row comes back
     'target not online' rather than silently landing later; the muster-style
@@ -814,6 +814,133 @@ def _fetch_enabled_names() -> list[str]:
             scope_args,
         )
         return [row["name"] for row in cur.fetchall()]
+
+
+def _fetch_dungeon_run_events(family: str, kind: str, limit: int = 10) -> list[dict]:
+    """Read recent dungeon run events for a family.
+
+    Only events of the given kind, recent and per-family. Used by the new
+    party and guild chat generation passes.
+
+    Returns a list of event rows, ordered newest first.
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, family, leader_name, character_name, run_id, kind, detail, created_at "
+                "FROM overseer_dungeon_run_event "
+                "WHERE family = %s AND kind = %s "
+                "ORDER BY id DESC LIMIT %s",
+                (family, kind, limit),
+            )
+            return list(reversed(cur.fetchall()))
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            log.info("dungeon run events table missing - skipping chat generation")
+            return []
+        raise
+
+
+def _generate_party_chat_from_events(names: list, events: list) -> list[str]:
+    """Generate party chat lines from dungeon run events.
+
+    Only generates for events the family members can hear: boss kills,
+    member deaths, run completion. Each line is checked to ensure it's not
+    a duplicate in the same run.
+
+    Returns a list of chat lines, each already formatted as a mod-overseer
+    command string.
+    """
+    chat_lines = []
+    
+    for event in events:
+        event_id = event["id"]
+        event_kind = event["kind"]
+        detail = event["detail"]
+        character = event.get("character_name", "")
+        
+        # Skip if this event was already responded to in this pass
+        if event_id in getattr(_fetch_dungeon_run_events, "_seen", set()):
+            continue
+        
+        if event_kind == "boss" and detail:
+            # Boss kill reaction: short, in-character, varied
+            boss_lines = [
+                f"{character}: Boss down! {detail.split(',')[0]}",
+                f"{character}: That's one for the guildbook!",
+                f"{character}: Another one down, only a few more to go.",
+                f"{character}: Let's push through.",
+            ]
+            import random
+            line = random.choice(boss_lines)
+            chat_lines.append(f"{character}: {line}")
+            _fetch_dungeon_run_events._seen.add(event_id)
+        
+        elif event_kind == "dc_off" or event_kind == "dc_on_refused":
+            # Member death: brief acknowledgment
+            if character:
+                chat_lines.append(f"{character}: Dead, need a res.")
+                _fetch_dungeon_run_events._seen.add(event_id)
+        
+        elif event_kind == "complete" and detail:
+            # Run completed: wrap-up line
+            chat_lines.append(f"{character}: Run done, clearing out.")
+            _fetch_dungeon_run_events._seen.add(event_id)
+    
+    return chat_lines
+
+
+def _generate_guild_chat_from_events(family: str) -> list[str]:
+    """Generate guild chat lines from notable dungeon run events.
+
+    Echoes first boss kills, completed runs, and notable milestones in
+    guild chat. Rates are human: only echoes one line per event kind per
+    pass, and skips repeats in the same run.
+
+    Returns a list of chat lines, each already formatted as a mod-overseer
+    command string.
+    """
+    guild_lines = []
+    
+    try:
+        # Fetch recent events of various kinds
+        boss_events = _fetch_dungeon_run_events(family, "boss", limit=5)
+        complete_events = _fetch_dungeon_run_events(family, "complete", limit=5)
+        
+        # Track events we've echoed this pass
+        seen_event_ids = getattr(_generate_guild_chat_from_events, "_seen", set())
+        
+        for event in boss_events:
+            event_id = event["id"]
+            if event_id in seen_event_ids:
+                continue
+            
+            detail = event["detail"]
+            if "1 encounter credited" in detail and "5 in all" not in detail:
+                # First boss kill in the run
+                portal = event.get("portal", "the dungeon")
+                guild_lines.append(f"First boss down in {portal}!")
+                seen_event_ids.add(event_id)
+                _generate_guild_chat_from_events._seen = seen_event_ids
+                break
+        
+        for event in complete_events:
+            event_id = event["id"]
+            if event_id in seen_event_ids:
+                continue
+            
+            detail = event.get("detail", "")
+            if "every encounter" in detail:
+                portal = event.get("portal", "the dungeon")
+                guild_lines.append(f"Family cleared {portal}!")
+                seen_event_ids.add(event_id)
+                _generate_guild_chat_from_events._seen = seen_event_ids
+                break
+        
+    except Exception as exc:
+        log.exception("guild chat generation: error fetching events")
+    
+    return guild_lines
 
 
 def _fetch_unrelayed_chat() -> list[dict]:
@@ -9491,6 +9618,7 @@ PASSES = (
     _Pass("_supervise_goals"),
     _Pass("_relay_chat", headless=False),
     _Pass("_run_report_loop", headless=False),
+    _Pass("_dungeon_chat_generation", headless=False),
     _Pass("_hold_council"),
     _Pass("_design_tabard"),
     _Pass("_assign_trades"),
@@ -10922,6 +11050,93 @@ class Bridge(discord.Client):
             log.info("run reports: posted run %s (%s)", run_id, report["outcome"])
             posted += 1
         return posted
+
+    async def _dungeon_chat_generation(self) -> None:
+        """Generate party and guild chat reactions to dungeon run events.
+
+        Party chat reacts to boss kills, member deaths, and run completion.
+        Guild chat echoes first boss kills and completed runs. Each line is
+        checked to ensure no verbatim repeats in the same pass.
+
+        Discord-only: no commands are sent to the world, only to Discord.
+        Headless is not supported - there is no channel to speak to.
+        """
+        await self.wait_until_ready()
+        if not CHAT_CHANNEL_ID:
+            log.info("dungeon chat generation: CHAT_CHANNEL_ID is unset, skipping")
+            return
+        
+        try:
+            # Fetch enabled characters (the family members)
+            names = await asyncio.to_thread(_fetch_enabled_names)
+            if not names:
+                return
+            
+            # Get family information
+            family = None
+            try:
+                family = bonds.head_of_family()
+            except Exception:
+                log.exception("dungeon chat generation: error fetching family")
+                return
+            
+            if not family:
+                log.info("dungeon chat generation: no family found")
+                return
+            
+            # Generate party chat from events
+            try:
+                boss_events = await asyncio.to_thread(
+                    _fetch_dungeon_run_events, family, "boss", limit=20
+                )
+                death_events = await asyncio.to_thread(
+                    _fetch_dungeon_run_events, family, "dc_off", limit=10
+                )
+                complete_events = await asyncio.to_thread(
+                    _fetch_dungeon_run_events, family, "complete", limit=10
+                )
+                
+                # Combine all events
+                all_events = boss_events + death_events + complete_events
+                all_events.sort(key=lambda e: e["id"], reverse=True)
+                
+                # Generate party chat lines
+                party_lines = await asyncio.to_thread(
+                    _generate_party_chat_from_events, names, all_events
+                )
+                
+                # Generate guild chat lines
+                guild_lines = await asyncio.to_thread(
+                    _generate_guild_chat_from_events, family
+                )
+                
+                # Send party chat lines
+                channel = self.get_channel(int(CHAT_CHANNEL_ID))
+                if channel is None:
+                    log.warning("dungeon chat generation: chat channel %s is not visible", CHAT_CHANNEL_ID)
+                    return
+                
+                for line in party_lines[:3]:  # Limit to 3 lines per pass
+                    try:
+                        await channel.send(line)
+                    except Exception as exc:
+                        log.exception("dungeon chat generation: failed to send party line")
+                
+                # Send guild chat lines
+                for line in guild_lines[:2]:  # Limit to 2 lines per pass
+                    try:
+                        await channel.send(line)
+                    except Exception as exc:
+                        log.exception("dungeon chat generation: failed to send guild line")
+                
+                log.info("dungeon chat generation: sent %d party lines and %d guild lines",
+                        len(party_lines), len(guild_lines))
+            
+            except Exception as exc:
+                log.exception("dungeon chat generation: error generating chat")
+        
+        except Exception as exc:
+            log.exception("dungeon chat generation: error in main loop")
 
     async def _in_character(self, speaker: str, plain: str, context: str) -> str:
         """The line as this character would say it, or the plain line.
