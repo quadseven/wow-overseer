@@ -124,6 +124,8 @@ LOG_QUEST_NEEDED_SQL = (
 # threshold to cards; the ordinary sale and destroy passes still protect every
 # Darkmoon item unless itemplan explicitly routes a failed listing to vendor.
 _DARKMOON_RANKS = ("Ace", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight")
+# A deck's ranks in order, for a reader that lists what is held or missing.
+DARKMOON_RANKS = _DARKMOON_RANKS
 _DARKMOON_SUITS = ("Beasts", "Elementals", "Portals", "Warlords")
 _DARKMOON_CARDS = {
     "%s of %s" % (rank, suit): (rank, suit)

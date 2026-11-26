@@ -49,6 +49,7 @@ import jev
 import levelroute
 import priorities
 import situation
+import jev_items
 from jev_items import Judgment
 
 KIND_DUNGEON = "dungeon_choice"
@@ -618,5 +619,7 @@ async def quest_shadow(
     state, questions = with_priorities(
         *quest_question(candidates, beneficiary, held, levels), ranked
     )
+    criteria = questions["quest"]["criteria"]
+    base = replace(base, facts=jev_items.facts_line(state, criteria))
     outcome = await client.ask(KIND_QUEST, state, questions)
     return _judged(base, outcome, "quest")

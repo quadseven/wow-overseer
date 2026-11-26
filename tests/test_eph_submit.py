@@ -33,6 +33,11 @@ class Base(unittest.TestCase):
         self.cluster = FakeCluster()
         self.kube = kube.Kubectl("wow-ephemeral", runner=self.cluster)
         self.fake_gh = FakeGh()
+        for repo in ("quadseven/mod-dungeon-clear", "quadseven/wow-overseer"):
+            self.fake_gh.answers[("GET", f"repos/{repo}")] = {"default_branch": "main"}
+            self.fake_gh.answers[("GET", f"repos/{repo}/compare/{FIX}...main")] = {
+                "status": "ahead"
+            }
         self.gh = ghx.Gh(self.fake_gh)
         self.decree = pathlib.Path(self.tmp.name) / "d.yaml"
 
@@ -592,6 +597,98 @@ BRIDGE_FIX = (
     .replace("commit: TODO", f"commit: {FIX}")
     .replace("quadseven/mod-dungeon-clear", "quadseven/wow-overseer")
 )
+
+
+class OffBranchFixTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.compare(SHA, "diverged")
+        self.repo_path = "repos/quadseven/mod-dungeon-clear"
+        self.branch_path = f"{self.repo_path}/compare/{FIX}...main"
+        self.pulls_path = f"{self.repo_path}/commits/{FIX}/pulls?per_page=100"
+        self.fake_gh.answers[("GET", self.branch_path)] = {"status": "diverged"}
+        self.fake_gh.answers[("GET", self.pulls_path)] = [[]]
+        self.refusal = (
+            f"fix.commit {FIX} is not on quadseven/mod-dungeon-clear's default branch main; "
+            "replace the branch commit with a commit on the default branch"
+        )
+
+    def test_off_branch_fix_names_the_commit_and_creates_nothing(self):
+        with self.assertRaises(submit.SubmitError) as caught:
+            self.submit(CHECKED, arm="treatment")
+        self.assertEqual(str(caught.exception), self.refusal)
+        self.assertEqual(self.cluster.of("jobs"), [])
+        self.assertFalse(any("apply" in argv for argv, _ in self.cluster.calls))
+
+    def test_off_branch_refusal_includes_reported_merge_commit(self):
+        self.fake_gh.answers[("GET", self.pulls_path)] = [
+            [],
+            [{"merged_at": "2026-01-01T00:00:00Z", "merge_commit_sha": "e" * 40}],
+        ]
+        with self.assertRaises(submit.SubmitError) as caught:
+            self.submit(CHECKED, arm="treatment")
+        self.assertEqual(
+            str(caught.exception), self.refusal + "; pull merge commit: " + "e" * 40
+        )
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_unmerged_or_missing_merge_commits_are_not_suggested(self):
+        for pull in (
+            {"merged_at": None, "merge_commit_sha": "e" * 40},
+            {"merged_at": "2026-01-01T00:00:00Z", "merge_commit_sha": None},
+            {"merged_at": "2026-01-01T00:00:00Z", "merge_commit_sha": ""},
+        ):
+            with self.subTest(pull=pull):
+                self.fake_gh.answers[("GET", self.pulls_path)] = [[pull]]
+                with self.assertRaises(submit.SubmitError) as caught:
+                    self.submit(CHECKED, arm="treatment")
+                self.assertEqual(str(caught.exception), self.refusal)
+
+    def test_missing_pull_lookup_still_refuses_the_branch_commit(self):
+        del self.fake_gh.answers[("GET", self.pulls_path)]
+        with self.assertRaises(submit.SubmitError) as caught:
+            self.submit(CHECKED, arm="treatment")
+        self.assertEqual(str(caught.exception), self.refusal)
+
+    def test_reachable_diverged_control_is_absent_on_a_slash_named_default_branch(self):
+        self.fake_gh.answers[("GET", self.repo_path)] = {
+            "default_branch": "release/stable"
+        }
+        path = f"{self.repo_path}/compare/{FIX}...release%2Fstable"
+        self.compare(OLD, "diverged")
+        for status in ("ahead", "identical"):
+            with self.subTest(status=status):
+                self.fake_gh.answers[("GET", path)] = {"status": status}
+                rec = self.submit(CHECKED, arm="control", **CONTROL)
+                self.assertEqual(rec["presence"]["control"]["state"], "absent")
+
+    def test_reachable_diverged_treatment_keeps_the_image_refusal(self):
+        self.fake_gh.answers[("GET", self.branch_path)] = {"status": "ahead"}
+        with self.assertRaises(submit.SubmitError) as caught:
+            self.submit(CHECKED, arm="treatment")
+        self.assertEqual(
+            str(caught.exception),
+            "fix presence is wrong for the treatment image: expected present, found absent",
+        )
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_default_branch_behind_the_fix_also_refuses_it(self):
+        self.fake_gh.answers[("GET", self.branch_path)] = {"status": "behind"}
+        self.compare(OLD, "diverged")
+        with self.assertRaises(submit.SubmitError) as caught:
+            self.submit(CHECKED, arm="control", **CONTROL)
+        self.assertEqual(str(caught.exception), self.refusal)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_unknown_default_branch_reachability_is_not_reported_as_off_branch(self):
+        for response in ({}, {"status": "unknown"}):
+            with self.subTest(response=response):
+                self.fake_gh.answers[("GET", self.branch_path)] = response
+                with self.assertRaisesRegex(
+                    submit.SubmitError, "cannot verify fix.commit"
+                ):
+                    self.submit(CHECKED, arm="treatment")
+        self.assertEqual(self.cluster.of("jobs"), [])
 
 
 class BridgePinTest(Base):

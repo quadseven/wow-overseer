@@ -2555,6 +2555,73 @@ class ASummonedObjectEnder(unittest.TestCase):
             (classquest.HUNT, 167, 626),
         )
 
+    def test_digging_through_the_ooze_hunts_the_bag_drop_and_turns_in(self):
+        ooze = quest(470, 11, 24, min_level=19, title="Digging Through the Ooze")
+        ooze.update(
+            npc1=1031,
+            npc_count1=0,
+            npc2=1032,
+            npc_count2=0,
+            npc3=1033,
+            npc_count3=0,
+            item1=3349,
+            item_count1=1,
+        )
+        cat = world(
+            extra_quests=[ooze],
+            extra_givers=[
+                giver(470, "start", 5470, 1347, 400, 0),
+                giver(470, "end", 5470, 1347, 400, 0),
+            ],
+            extra_spawns=[
+                spawn(5471, 1031, 10, 0, level=24),
+                spawn(5472, 1032, 20, 0, level=24),
+                spawn(5473, 1033, 30, 0, level=24),
+            ],
+            extra_loot=[
+                {"item": 3349, "entry": 1031},
+                {"item": 3349, "entry": 1032},
+                {"item": 3349, "entry": 1033},
+            ],
+        )
+        member = mirra(
+            level=24,
+            zone_id=11,
+            quest_log={470: questers.STATUS_INCOMPLETE},
+            quest_progress={470: 0},
+            quest_objectives={470: {1031: 0, 1032: 0, 1033: 0}},
+            quest_item_objectives={470: {3349: 0}},
+        )
+
+        plan = questers.plan(cat, member, questers.Clock(), 0.0)
+
+        self.assertEqual(cat.quest(470).kills, ())
+        self.assertEqual(cat.quest(470).items, ((3349, 1),))
+        self.assertEqual(
+            cat.quest(470).drops,
+            ((3349, 1031), (3349, 1032), (3349, 1033)),
+        )
+        self.assertEqual(
+            (plan.move.kind, plan.move.quest, plan.move.spot.entry),
+            (classquest.HUNT, 470, 1031),
+        )
+        step = questers.step_for(member, plan.move, 0, cat.quest(470))
+        self.assertEqual(
+            [row.command for row in step.rows],
+            ["hunt-spawn creature:1031 item:3349 count:1 max:480"],
+        )
+        member = mirra(
+            level=24,
+            zone_id=11,
+            quest_log={470: questers.STATUS_INCOMPLETE},
+            quest_progress={470: 1},
+            quest_item_objectives={470: {3349: 1}},
+        )
+
+        plan = questers.plan(cat, member, questers.Clock(), 0.0)
+
+        self.assertEqual((plan.move.kind, plan.move.quest), (classquest.TURN_IN, 470))
+
     def test_an_incomplete_quest_whose_object_spawns_are_gone_is_still_broken(self):
         member = mirra(quest_log={40: 3})
         cat = object_world(object_ended(40, 270, guid=5001, x=300.0))

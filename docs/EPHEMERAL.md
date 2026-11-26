@@ -343,6 +343,13 @@ each image was built from; a `TODO` commit is recorded as unchecked, and an
 unchecked decree can never close or disprove anything). It saves a submission
 record under the results directory.
 
+If the fix commit diverges from an image pin, `submit` also checks the fix
+repository's default branch. An off-branch commit is refused by name, with
+the associated pull's merge commit when GitHub reports one for a merged pull.
+Use the squash merge or default-branch port in `fix.commit`, then resubmit;
+an open pull's test merge is not a shipped fix. An unknown reachability result
+refuses verification rather than declaring the commit off branch.
+
 `dispatch` is the only thing that starts worlds. One instance runs at a time,
 enforced by a Kubernetes Lease. Each pass it unsuspends the oldest queued Job
 that fits: the node is allowed and under its world cap, the namespace quota has
