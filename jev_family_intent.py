@@ -56,6 +56,7 @@ import json
 from dataclasses import dataclass, field, replace
 
 import jev
+import jev_items
 import situation
 
 KIND = "family_intent"
@@ -236,9 +237,70 @@ class Facts:
     # rank it above an active, lower-value campaign spell-training stop.
     critical_weapon_option: str = ""
     extra: dict = field(default_factory=dict)
+    # upkeep_from: each member's free bag slots, worst worn durability and
+    # nearest quest (#3303). Empty leaves the members' rows as they were.
+    upkeep: dict = field(default_factory=dict)
     # jev_outcomes.history: Jev's recent picks of this kind, every family, and
     # what followed each (#584). Empty leaves the question as it was.
     history: tuple = ()
+
+
+def upkeep_from(names, bag_room, worn, quests) -> dict:
+    """member -> its upkeep row, from three bridge reads (#3303). Pure.
+
+    A judge could not weigh a vendor or repair walk against questing without
+    knowing whose bags are full, whose gear is near breaking, or what quest
+    is left. `bag_room` is name -> (free, all) general bag slots, `worn` one
+    row per worn item (holder, durability, max_durability), `quests` name ->
+    (sentence, objectives left, quest id). A read passed as None failed, and
+    every member reads "unknown" for it rather than a default that looks
+    like a finding.
+    """
+    worst: dict = {}
+    for r in worn or ():
+        top = int(r.get("max_durability") or 0)
+        if top <= 0:
+            continue
+        pct = int(100 * int(r.get("durability") or 0) / top)
+        name = str(r.get("holder") or "")
+        worst[name] = min(worst.get(name, 100), pct)
+    out = {}
+    for name in names:
+        row = {}
+        room = (bag_room or {}).get(name)
+        row["free_bag_slots"] = (
+            "%d of %d" % (int(room[0]), int(room[1]))
+            if room is not None
+            else situation.UNKNOWN
+        )
+        if worn is None:
+            row["worst_durability_pct"] = situation.UNKNOWN
+        else:
+            row["worst_durability_pct"] = worst.get(name, "nothing that wears")
+        if quests is None:
+            row["quest"] = situation.UNKNOWN
+        elif name in quests:
+            sentence, _left, quest_id = quests[name]
+            row["quest"] = "%s (q%d)" % (sentence, int(quest_id))
+        else:
+            row["quest"] = "none in the log with objectives left"
+        out[name] = row
+    return out
+
+
+def _member_rows(f: Facts) -> list:
+    """The leader (when upkeep names him) and each member the module lists,
+    one row each, with the member's upkeep merged in."""
+    rows = []
+    if f.row.leader in f.upkeep:
+        rows.append({"name": f.row.leader, "state": "leading"})
+    rows.extend(
+        {"name": m.name, "state": m.state, "yards_from_leader": m.yards}
+        for m in f.row.members
+    )
+    for r in rows:
+        r.update(f.upkeep.get(r["name"], {}))
+    return rows
 
 
 def choosable(f: Facts) -> list:
@@ -368,10 +430,7 @@ def question(f: Facts, offered: dict):
         "family": f.family,
         "leader": f.row.leader,
         "doing_now": doing,
-        "members": [
-            {"name": m.name, "state": m.state, "yards_from_leader": m.yards}
-            for m in f.row.members
-        ],
+        "members": _member_rows(f),
     }
     if f.where is not None:
         state["situation"] = f.where.state()
@@ -387,7 +446,9 @@ def question(f: Facts, offered: dict):
         "member who is walking back and not far; go back for one who cannot "
         "come back alone; run town errands when bags or gear need them; "
         "otherwise carry on with the quests. `doing_now` is what the leader is "
-        "doing, and each member's `state` is what is being done with them."
+        "doing, and each member's `state` is what is being done with them. "
+        "A member row's free bag slots, worst worn durability and quest say "
+        "whether a town errand is needed and what questing has left."
         + situation.INSTRUCTION
     )
     if _critical_weapon_ask(f) is not None:
@@ -735,9 +796,10 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
         mode=rule.mode,
         status="",
         item_name=("%s %s" % (f.row.current_kind, f.row.current_target)).strip()[:120],
-        facts=facts_line(f),
     )
     state, questions = question(f, offered)
+    # The record holds what Jev was asked with, options first (#3303).
+    base = replace(base, facts=jev_items.facts_line(state, offered))
     # The heuristic's answer and the outcome snapshot go to a comparison
     # backend only (#820): its disagreement with the heuristic is recorded
     # and scored as the heuristic arm, snapshotted the way the bridge

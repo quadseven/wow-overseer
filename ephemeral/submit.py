@@ -16,6 +16,7 @@ import json
 import pathlib
 import re
 import time
+from urllib.parse import quote
 
 from . import anchors as anchors_mod
 from . import confmerge, dbschema, imagecommit, lint, podpaths, runids
@@ -166,6 +167,38 @@ def fix_presence(gh, fix, pin):
     status = gh.compare(fix["repo"], commit, pin)
     if status in ("ahead", "identical"):
         return "present"
+    if status == "diverged":
+        repo = fix["repo"]
+        branch = (gh.api(f"repos/{repo}") or {}).get("default_branch")
+        reachable = gh.compare(repo, commit, quote(branch, safe="")) if branch else ""
+        if reachable in ("behind", "diverged"):
+            message = (
+                f"fix.commit {commit} is not on {repo}'s default branch {branch}; "
+                "replace the branch commit with a commit on the default branch"
+            )
+            pulls = (
+                gh.api(
+                    f"repos/{repo}/commits/{commit}/pulls?per_page=100",
+                    missing_ok=True,
+                    paginate=True,
+                )
+                or []
+            )
+            merges = sorted(
+                {
+                    pull["merge_commit_sha"]
+                    for pull in pulls
+                    if pull.get("merged_at")
+                    and _SHA.fullmatch(str(pull.get("merge_commit_sha", "")))
+                }
+            )
+            if merges:
+                message += "; pull merge commit: " + ", ".join(merges)
+            raise SubmitError(message)
+        if reachable not in ("ahead", "identical"):
+            raise SubmitError(
+                f"cannot verify fix.commit {commit} on {repo}'s default branch"
+            )
     if status in ("behind", "diverged"):
         return "absent"
     return "unchecked"
@@ -287,8 +320,36 @@ def default_image_env(cfg, kube):
     return image_env
 
 
+def default_template_image(cfg, kube):
+    """template(klass): the template image to run, a `:newest` ref resolved to a digest."""
+
+    def template(klass):
+        ref = cfg.template_images[klass]
+        if not imagecommit.is_newest(ref):
+            return ref
+        try:
+            host = ref.split("/", 1)[0]
+            secret = kube.get("secrets", BRIDGE_PULL_NAME, missing_ok=True)
+            return imagecommit.newest_template(
+                ref, klass, imagecommit.credentials(secret, host)
+            )
+        except (
+            imagecommit.RegistryError,
+            KubeError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise SubmitError(
+                f"could not resolve the newest {klass} template: {exc}"
+            ) from exc
+
+    return template
+
+
 def submit(
     cfg, kube, gh, decree_path, args=None, clock=time.time, out=print, image_env=None,
+    template_image=None,
 ):  # fmt: skip
     """Create the suspended Jobs. Returns the submission record (also saved)."""
     args = dict(args or {})
@@ -350,6 +411,7 @@ def submit(
         for arm in arms
     }
     image_env = image_env or default_image_env(cfg, kube)
+    template_ref = (template_image or default_template_image(cfg, kube))(klass)
     presence = _presence(cfg, gh, decree, arms, args, pins, arm_bridge, image_env)
 
     batch = hashlib.sha256(f"{sha}:{clock()}".encode()).hexdigest()[:6]
@@ -378,7 +440,7 @@ def submit(
             # database (characters and auth keep the live schema); see docs/EPHEMERAL.md.
             "RESET_WORLD": "1" if arm == "control" else "0",
             "UPDATES_MASK": "4" if arm == "control" else "7",
-            "TOOLS_IMAGE": cfg.tools_image, "TEMPLATE_IMAGE": cfg.template_images[klass],
+            "TOOLS_IMAGE": cfg.tools_image, "TEMPLATE_IMAGE": template_ref,
             "CLIENT_DATA_CLAIM": nodecfg.claim, **classes[klass],
             "BRIDGE_IMAGE": img.get("bridge", BRIDGE_OFF_IMAGE),
         }  # fmt: skip
@@ -401,6 +463,7 @@ def submit(
         "decree_path": str(decree_path), "decree_pr": args.get("decree_pr"),
         "submitted_at": int(clock()), "class": klass, "proves": decree["proves"],
         "box": decree.get("box"),
+        "template_image": template_ref,
         "fix": decree["fix"], "runs_wanted": {a: decree["runs"][a] for a in arms},
         "presence": presence, "fidelity_deltas": deltas, "runs": runs,
     }  # fmt: skip

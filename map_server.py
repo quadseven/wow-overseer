@@ -2352,7 +2352,8 @@ def _fetch_jev_openai(cur) -> list:
     """The OpenAI backend's per-kind report as lines, or none where it has never
     run (no spend table yet); the card is one card and never fails for it."""
     try:
-        report = jev_openai.fetch_report(cur, os.environ)
+        report = jev_openai.fetch_report(
+            cur, os.environ, db_errors=(pymysql.err.MySQLError,))
     except Exception:
         return []
     return [jev_openai.summary_line(k, v) for k, v in report.items()]
@@ -3700,8 +3701,8 @@ def _fetch_ladder_records(rd, families: dict, chars: list) -> dict:
 def _fetch_ladder_record(rd, head: str, members: list, capped: bool) -> dict:
     """One family's rows for the ladder and Jev's reasons. Reads only.
 
-    `capped` reads the pre-raid plan too, because at the level cap a lower
-    dungeon stays on the ladder only while its loot upgrades somebody.
+    `capped` reads the pre-raid plan too, because at the level cap the
+    doors are ranked by what their loot is worth to the family.
     """
     holes = campaignplan.holes(len(members))
     args = tuple(members)

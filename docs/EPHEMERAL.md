@@ -343,6 +343,13 @@ each image was built from; a `TODO` commit is recorded as unchecked, and an
 unchecked decree can never close or disprove anything). It saves a submission
 record under the results directory.
 
+If the fix commit diverges from an image pin, `submit` also checks the fix
+repository's default branch. An off-branch commit is refused by name, with
+the associated pull's merge commit when GitHub reports one for a merged pull.
+Use the squash merge or default-branch port in `fix.commit`, then resubmit;
+an open pull's test merge is not a shipped fix. An unknown reachability result
+refuses verification rather than declaring the commit off branch.
+
 `dispatch` is the only thing that starts worlds. One instance runs at a time,
 enforced by a Kubernetes Lease. Each pass it unsuspends the oldest queued Job
 that fits: the node is allowed and under its world cap, the namespace quota has
@@ -399,6 +406,16 @@ nothing to the issue. A decree not yet merged posts to its own pull request when
 configured App, and `collect` refuses to write unless `GH_TOKEN` and
 `GH_CONFIG_DIR` are set.
 
+After archiving, `collect` deletes a batch's result ConfigMaps once its evidence
+is posted. Results from an unposted, decided batch are deleted only when older
+than `result_keep_days` (14 days by default). Results from undecided or pending
+batches are retained regardless of age. Results whose decree and run id appear
+in no batch record are deleted only when archived and older than the keep
+window. Decisions record whether evidence was posted; for older decision files,
+collect checks for its existing evidence comment before recording that flag.
+Deletion runs in `collect`, with no additional dispatcher permissions.
+`--dry-run` archives results but deletes nothing.
+
 `report` is the non-closing evidence path for decrees using numeric `proves`
 and `box` fields. It accepts one or more batches from the same decree and posts
 the decree id, batch ids, per-run verdicts, UTC start times and judge reason
@@ -408,6 +425,13 @@ checkbox uniquely matches its exact text or prefix and every completed run has
 a UTC start time. Missing or ambiguous boxes are reported without a body edit.
 `--dry-run` prints the exact comment and makes no issue changes. This command
 never closes an issue.
+
+The runner config names each class template in `template_images`. A dated tag
+(`host/path:lean-<stamp>`) is used as written. `host/path:newest` makes `submit` list the
+repository, take the newest `<class>-<stamp>` tag, and run the template by its digest
+(`host/path@sha256:...`); the digest is recorded as `template_image` in the submission,
+so a run stays reproducible after the forge prunes old tags. The forge keeps only the newest
+few stamps, so a pinned dated tag goes stale; prefer `newest`.
 
 The template is forged from the live realm: its characters and auth databases and its
 world database are at the live schema, and its `updates` table holds each module SQL file

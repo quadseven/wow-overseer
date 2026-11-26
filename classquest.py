@@ -1148,8 +1148,9 @@ def _pairs(row, key, count, span, positive=True) -> tuple:
     out = []
     for i in range(1, span + 1):
         entry = _int(row.get("%s%d" % (key, i)))
-        if entry and (entry > 0) == positive:
-            out.append((abs(entry), max(1, _int(row.get("%s%d" % (count, i))))))
+        need = _int(row.get("%s%d" % (count, i)))
+        if entry and (entry > 0) == positive and need > 0:
+            out.append((abs(entry), need))
     return tuple(out)
 
 
