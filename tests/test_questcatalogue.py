@@ -135,6 +135,18 @@ class WhatAQuestCarries(unittest.TestCase):
         self.assertEqual(qc.faction_of(1 | 2), "both")
 
 
+class TheDropRead(unittest.TestCase):
+    def test_drop_read_resolves_quest_only_creature_items(self):
+        # Ghoulish Effigy (133) needs Ghoul Rib (884), a quest-only drop:
+        # its sources are creature_questitem rows, with no ordinary
+        # loot-template row, the same class the quester loot read fixed
+        # for quest 167. The catalogue read must pass those rows through
+        # too, or the quests page lists the item with no source.
+        self.assertIn("acore_world.creature_questitem qi", qc.DROP_SQL)
+        self.assertIn("qi.ItemId AS item, c.entry AS entry", qc.DROP_SQL)
+        self.assertIn("c.entry = qi.CreatureEntry", qc.DROP_SQL)
+
+
 class TheFilters(unittest.TestCase):
     def setUp(self):
         rows = [

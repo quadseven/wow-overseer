@@ -2555,6 +2555,42 @@ class ASummonedObjectEnder(unittest.TestCase):
             (classquest.HUNT, 167, 626),
         )
 
+    def test_ghoulish_effigy_hunts_a_ghoul_that_drops_its_rib(self):
+        # Ghoulish Effigy (133) has no kill counter: its required item
+        # 884 (Ghoul Rib, x7) is a quest-only drop from the ghouls the
+        # ticket lists (entries 3, 210, 570, 604, 948). The world read
+        # must pass the creature_questitem rows through LOOT_SQL for
+        # this hunt, as it does for Oh Brother (167).
+        ghoulish = quest(133, DUSKWOOD, 27, min_level=20, title="Ghoulish Effigy")
+        ghoulish.update(item1=884, item_count1=7)
+        cat = world(
+            extra_quests=[ghoulish],
+            extra_givers=[
+                giver(133, "start", 6133, 186, 0, 0),
+                giver(133, "end", 6134, 187, 400, 0),
+            ],
+            extra_spawns=[
+                spawn(6135, 604, 30, 0, level=25),
+            ],
+            extra_loot=[
+                {"item": 884, "entry": entry} for entry in (3, 210, 570, 604, 948)
+            ],
+        )
+        member = mirra(
+            level=27,
+            zone_id=999,
+            quest_log={133: questers.STATUS_INCOMPLETE},
+            quest_progress={133: 0},
+            quest_objectives={133: {}},
+        )
+
+        move = questers.plan(cat, member, questers.Clock(), 0.0).move
+
+        self.assertEqual(
+            (move.kind, move.quest, move.spot.entry),
+            (classquest.HUNT, 133, 604),
+        )
+
     def test_digging_through_the_ooze_hunts_the_bag_drop_and_turns_in(self):
         ooze = quest(470, 11, 24, min_level=19, title="Digging Through the Ooze")
         ooze.update(

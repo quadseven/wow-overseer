@@ -91,7 +91,14 @@ DROP_SQL = (
     "UNION SELECT r.Item, c.entry FROM acore_world.creature_loot_template l "
     "JOIN acore_world.reference_loot_template r ON r.Entry = l.Reference "
     "JOIN acore_world.creature_template c ON c.lootid = l.Entry "
-    "WHERE l.Reference <> 0 AND r.Item IN ({ids})"
+    "WHERE l.Reference <> 0 AND r.Item IN ({ids}) "
+    # A quest-only drop can be listed in creature_questitem without an
+    # ordinary loot-template row (Ghoul Rib for Ghoulish Effigy, #1931;
+    # the same class the quester loot read fixed for quest 167).
+    "UNION SELECT qi.ItemId AS item, c.entry AS entry "
+    "FROM acore_world.creature_questitem qi "
+    "JOIN acore_world.creature_template c ON c.entry = qi.CreatureEntry "
+    "WHERE qi.ItemId IN ({ids})"
 )
 # Chests and other lootable gameobjects that hold an item: a required item with one
 # of these is not "without a source" (#2735, #2736).
