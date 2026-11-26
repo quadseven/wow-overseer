@@ -14,8 +14,8 @@ council.door_refusal_kind for the faction, the level, withheld doors and the
 crossing, and campaignplan's rule for outgrown runs and key doors. So the
 Horde's ladder has Ragefire Chasm and the Alliance's does not, a door across
 the sea opens the moment crossing.py says the crossing can be made, and a
-level 60 family keeps a lower dungeon on its ladder while its loot still
-upgrades somebody. The bosses' levels are the world's own
+family all at level 60 sees every door whose band stops under the cap as
+outgrown, whatever its loot reads (#3282). The bosses' levels are the world's own
 (campaignplan.BOSSES_SQL), said beside the band so a reader can check the fit.
 
 PURE MODULE: facts in, a dict of sentences out. The page sets textContent.

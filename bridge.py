@@ -112,6 +112,7 @@ import guildwork
 import workorders
 import workorderstore
 import gearup
+import holdclock
 import weaponskill
 import natural
 import nowstatus
@@ -355,6 +356,8 @@ _JEV_GATE = jev_openai.ActGate()
 _JEV_REPORTER = jev_openai.Reporter(_JEV_GATE)
 if JEV_ACTIVE_BACKEND == "openai":
     jev.set_act_gate(_JEV_GATE)
+    for _line in jev_openai.act_plan_lines(os.environ):
+        log.info("%s", _line)
 # How long a pass with a kind in act mode waits for Jev before the heuristic
 # acts without it: the client's own deadline, so a slow Jev costs a pass at
 # most that and never more. The answers still arrive and are recorded.
@@ -2983,11 +2986,15 @@ def _withheld(reasons, reason: str) -> tuple:
 TOWN_FIRST_SOURCE = "overseer:town-first"
 
 # When each family's campaign was last handed to town, keyed by its sorted
-# names, for bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS. In-process on
-# purpose: a restart starts the clock again, which costs a longer stay in town
-# and never a run into full bags.
-_TOWN_FIRST_SINCE: dict = {}
-_GEAR_HOLD_SINCE: dict = {}
+# names, for bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS.
+# Both clocks are kept in the bridge memo store (holdclock.py, #3226), so a
+# restart resumes them instead of handing the family back to town.
+_TOWN_FIRST_SINCE: dict = holdclock.Clocks(
+    holdclock.TOWN_FIRST_KIND, lambda k: _memo_read(k),
+    lambda *a: _memo_upsert(*a), lambda *a: _memo_delete(*a))
+_GEAR_HOLD_SINCE: dict = holdclock.Clocks(
+    holdclock.GEAR_HOLD_KIND, lambda k: _memo_read(k),
+    lambda *a: _memo_upsert(*a), lambda *a: _memo_delete(*a))
 
 # HOW LONG A FAMILY'S QUEUE HAS GONE WITHOUT A RUN, READ FROM THE STORE. The
 # two clocks above live in this process, so a restart began every hold's 45
@@ -5915,28 +5922,6 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
         unformed=dungeonstall.unformed(unformed))
 
 
-async def _planner_due(read: dict, key: str, fam: dict, rows: list,
-                       level_rows: list, dry, now: float):
-    """campaignplan.Due for one family's pending rows.
-
-    A CAPPED FAMILY ON A DOOR PAST ITS CEILING IS THERE FOR ITS LOOT (#2207),
-    so its entry is read against that loot: `_planner_facts` is built only
-    once something is due, and without this read the entry ran to its count
-    on a door the plan itself refuses as outgrown. `read` is family -> when
-    the loot was last read: one read an idle stretch, not one a cycle.
-    """
-    due = campaignplan.due(rows, fam["leader"], level_rows, dry)
-    if due.reason or not campaignplan.needs_loot(rows, level_rows):
-        return due
-    last = read.get(key)
-    if last is not None and now - last < campaignplan.IDLE_SECONDS:
-        return due
-    read[key] = now
-    upgrades, _progress = await asyncio.to_thread(
-        _planner_preraid, list(fam["names"]), level_rows)
-    return campaignplan.due(rows, fam["leader"], level_rows, dry, upgrades)
-
-
 def _planner_catalog(cur) -> dict | None:
     """preraid's catalog, read once per process; None when unreadable."""
     global _PLANNER_CATALOG
@@ -7495,7 +7480,8 @@ def _situation_reads(names: list, leader: str) -> dict:
 
 # --- the movement choice's reads and writer (jev_movement.py) -----------------
 _MOVEMENT_BINDS = (
-    "SELECT c.name, h.mapId AS map_id, h.posX AS x, h.posY AS y, h.posZ AS z "
+    "SELECT c.name, h.mapId AS map_id, h.zoneId AS zone_id, h.posX AS x, "
+    "h.posY AS y, h.posZ AS z "
     "FROM character_homebind h JOIN characters c ON c.guid = h.guid "
     "WHERE c.name IN (%s)")
 # A hearth that did not happen starts no cooldown: an error row, or an
@@ -7510,7 +7496,7 @@ _MOVEMENT_HEARTHED = (
 
 def _movement_reads(names: list) -> dict:
     """Hearthstone points and who hearthed in the last hour. Reads only."""
-    out = {"binds": {}, "hearthed": frozenset()}
+    out = {"binds": {}, "hearthed": frozenset(), "bind_zones": {}}
     if not names:
         return out
     marks = ", ".join(["%s"] * len(names))
@@ -7521,6 +7507,10 @@ def _movement_reads(names: list) -> dict:
                                             float(r["y"]), float(r["z"]))
             for r in rows or ()
         }
+        # The zone the stone lands in, so the movement question can name it
+        # (#3303).
+        out["bind_zones"] = {str(r["name"]): int(r.get("zone_id") or 0)
+                             for r in rows or ()}
         rows = _situation_try(cur, "hearths", _MOVEMENT_HEARTHED % marks,
                               tuple(names))
         out["hearthed"] = frozenset(str(r["target_name"]) for r in rows or ())
@@ -7562,6 +7552,24 @@ def _fetch_family_intents() -> dict:
     with _connect() as conn, conn.cursor() as cur:
         rows = _situation_try(cur, "family intent", _FAMILY_INTENT_SQL, ())
     return {str(r["leader_name"]): r for r in rows or ()}
+
+
+def _family_upkeep(names: list) -> dict:
+    """Each member's bags, worst durability and quest, for the family intent
+    question (#3303). Three reads the bridge already makes for the bag hold,
+    the town trip and the council; one that fails reads "unknown" for every
+    member (jev_family_intent.upkeep_from) and the question is still asked."""
+    reads = {}
+    for key, read in (("bags", _fetch_bag_room), ("worn", _fetch_town_worn),
+                      ("quests", _fetch_quest_progress)):
+        try:
+            reads[key] = read(names)
+        except pymysql.err.MySQLError:
+            log.warning("family intent: the %s read failed; Jev is told it "
+                        "is unknown", key)
+            reads[key] = None
+    return jev_family_intent.upkeep_from(
+        names, reads["bags"], reads["worn"], reads["quests"])
 
 
 def _fetch_vendor_wait_seconds(names: list) -> int:
@@ -9892,9 +9900,6 @@ class Bridge(discord.Client):
         # family -> (the last "nothing to plan" line, when), so it is said
         # once and the facts are not re-read every cycle.
         self._planner_said: dict = {}
-        # family -> when the loot was last read for an entry a capped family
-        # holds past its door's ceiling (#2207).
-        self._planner_loot_read: dict = {}
         # The family's ranked priorities (priorities.py, #1559), as last read.
         # Refreshed by `_priority_order` before every Jev Choice ask and on
         # every goal pass; the default until the first read lands.
@@ -13027,8 +13032,11 @@ class Bridge(discord.Client):
         door_known, door = await asyncio.to_thread(_queued_run_door, key)
         facts = dataclasses.replace(facts, jobs=on_job, run_queued=door_known)
         gather_why = facts.gather_why
+        if key not in _PROF_LOOPS:
+            await asyncio.to_thread(_prof_loop_restore, key)
         step = profloop.decide(_PROF_LOOPS.get(key, profloop.State()), facts)
         _PROF_LOOPS[key] = step.state
+        await asyncio.to_thread(_prof_loop_keep, key, step.state)
         if step.state.yielded:
             _PROF_LOOP_YIELD.add(key)
         else:
@@ -17533,7 +17541,7 @@ class Bridge(discord.Client):
             try:
                 judgments = await self._jev_keep_once(
                     names, leader, pending, routes, free_slots, auction_open,
-                    rule)
+                    rule, carried=rows)
                 log.info("%s", jev_keep.summary(judgments, len(kept), limit,
                                                 interval))
                 await self._jev_record(judgments, ",".join(names))
@@ -17558,7 +17566,7 @@ class Bridge(discord.Client):
 
     async def _jev_keep_once(self, names: list, leader: str, pending: list,
                              routes: dict, free_slots: dict, auction_open: bool,
-                             rule) -> list:
+                             rule, carried=None) -> list:
         """The reads jev_keep's facts need, then the questions."""
         entries = sorted({int(r.get("entry") or 0) for r in pending} - {0})
         templates = await asyncio.to_thread(_fetch_jev_keep_templates, entries)
@@ -17573,10 +17581,13 @@ class Bridge(discord.Client):
                 skills=dict(skills.get(name) or {}))
             for name in names
         }
-        market: dict = {}
+        # None says the house was not read; {} that it held no listing.
+        market: dict | None = None
         if auction_open and leader:
             teams = await asyncio.to_thread(_fetch_teams, [leader])
             house = auction.TEAM_HOUSE.get(teams.get(leader, ""), 0)
+            if house > 0:
+                market = {}
             for listing in await asyncio.to_thread(
                     _fetch_auction_listings, entries, house):
                 market[listing.entry] = min(
@@ -17584,11 +17595,17 @@ class Bridge(discord.Client):
         # THE DESIGNATED CRAFTERS (#248): a recipe's `give:` options follow
         # the register's ranking, and its facts name the trade's crafters.
         crafting = await asyncio.to_thread(_crafter_plan, names)
+        # WHAT THE FAMILY AS A WHOLE HOLDS AND USES (#3303): changes the
+        # facts only, never an option or an act.
+        family = await asyncio.to_thread(_jev_keep_family_reads, names, pending)
         asks = jev_keep.asks(
             pending, templates=templates, holders=holders,
             people=_clearance_people(names, skills, roster), routes=routes,
             market=market, reagent_trades=REAGENT_TRADES, mode=rule.mode,
-            takers=crafting.takers, register=crafting.register)
+            takers=crafting.takers, register=crafting.register,
+            carried=carried, family_free=dict(free_slots),
+            guild_free=family["guild_free"],
+            spell_users=family["spell_users"], ranged=family["ranged"])
         return await jev_keep.shadow_pass(self._jev, asks, rule)
 
     def _jev_keep_live(self, names: list, rows=None) -> list:
@@ -18509,8 +18526,14 @@ class Bridge(discord.Client):
         members = bag_upgrade.members_from_rows(
             await asyncio.to_thread(_fetch_bag_state, names), names)
         open_positions = bag_pressure.open_bag_positions(members)
-        bank_needs = {n.name: n for n in bankbags.supply_needs(
-            await asyncio.to_thread(_fetch_bank_bag_facts, names))
+        bank_facts = await asyncio.to_thread(_fetch_bank_bag_facts, names)
+        bank_rows = await asyncio.to_thread(_fetch_bank_items, names)
+        bank_members = bank.members_from_rows(bank_rows, names)
+        bank_facts = bankbags.with_bank_state(bank_facts, bank_members)
+        bank_facts = bankbags.with_displaced(
+            bank_facts, await asyncio.to_thread(
+                _recent_bank_keys, GIVE_RETRY_MINUTES))
+        bank_needs = {n.name: n for n in bankbags.supply_needs(bank_facts)
             if open_positions.get(n.name, 0) == 0}
         try:
             # One purchase per member: fill bought bank space before another
@@ -18529,6 +18552,8 @@ class Bridge(discord.Client):
             _bag_buyers, wanting, open_positions)
         everyone = [dataclasses.replace(
             b, bank=True, max_slots=bank_needs[b.name].max_slots,
+            min_slots=bank_needs[b.name].min_slots,
+            min_free_slots=bank_needs[b.name].min_free_slots,
             excluded_entries=bank_needs[b.name].excluded_entries)
             if b.name in bank_needs else b for b in everyone]
         buyers = [b for b in everyone if b.name in at_vendor]
@@ -19111,16 +19136,22 @@ class Bridge(discord.Client):
         # snapshot rows fresher than a minute, so this also ends the 17
         # all-time `target not online` rows.
         watched = await asyncio.to_thread(_fetch_positions, names)
-        planned = [(move, bank.command(move)) for move in bank_plan.moves]
-        unasked = [move for move, command in planned
-                   if (move.character, command) not in seen
-                   and move.character in watched]
         # A BANK BAG STEP IS A REASON TO WALK TOO (#625). Only a banker buys a
         # slot or takes a bag, and the quick look never claims the column, so
         # a member that could afford a slot logged "it waits for a banker"
         # every pass and was never walked to one.
         bag_facts, bag_steps = await self._bank_bag_pending(
-            names, seen, watched, kept_full=bank_plan.kept_full)
+            names, seen, watched, kept_full=bank_plan.kept_full,
+            bank_members=getattr(bank_plan, "measured", ()),
+            bank_busy={move.character for move in bank_plan.moves})
+        evacuating = {s.name for s in bag_steps if s.transfer}
+        planned = [
+            (move, bank.command(move)) for move in bank_plan.moves
+            if move.character not in evacuating
+        ]
+        unasked = [move for move, command in planned
+                   if (move.character, command) not in seen
+                   and move.character in watched]
         # THE SPLIT RULE GOVERNS THE FAMILY'S WALK, NOT A MEMBER'S OWN MOVES:
         # the reach read is per mover, so a deferral counts only the moves
         # whose holder has no banker within reach. The move loop reuses it.
@@ -19289,7 +19320,8 @@ class Bridge(discord.Client):
         return fresh, walking
 
     async def _bank_bag_pending(self, names: list, seen: set,
-                                watched, kept_full=frozenset()) -> tuple:
+                                watched, kept_full=frozenset(),
+                                bank_members=(), bank_busy=()) -> tuple:
         """(facts, steps): the bank bag read, and the steps a banker trip is for.
 
         A step already asked inside the retry window is not, and neither is
@@ -19298,6 +19330,8 @@ class Bridge(discord.Client):
         """
         facts = bankbags.with_kept_full(
             await asyncio.to_thread(_fetch_bank_bag_facts, names), kept_full)
+        facts = bankbags.with_bank_state(facts, bank_members, bank_busy)
+        facts = bankbags.with_displaced(facts, seen)
         steps = [
             s for s in bankbags.pending_steps(facts, bankbags.family_floor(facts))
             if (s.name, s.command) not in seen and s.name in watched
@@ -19305,37 +19339,46 @@ class Bridge(discord.Client):
         return facts, steps
 
     async def _bank_bag_slots(self, names: list, seen: set, cohort=None,
-                              facts=None) -> None:
-        """Buy a bank bag slot, or put a spare bag in one, at a banker (#625).
+                              facts=None, bank_busy=()) -> set:
+        """Buy, place or safely replace a bank bag at a banker (#625, #2608).
 
-        bankbags.step decides one step per character; the row is written only
-        for a character standing at a banker now, the same gate the item moves
-        use, and never twice inside the retry window. `facts` is the bank
+        bankbags chooses the ordered commands. Rows are written only for a
+        character standing at a banker now, through the same gate the item
+        moves use, and never twice inside the retry window. `facts` is the bank
         pass's own read when it has one, so the pass reads the bags once.
         """
         if facts is None:
             facts = await asyncio.to_thread(_fetch_bank_bag_facts, names)
+            rows = await asyncio.to_thread(_fetch_bank_items, names)
+            facts = bankbags.with_bank_state(
+                facts, bank.members_from_rows(rows, names), bank_busy)
+        facts = bankbags.with_displaced(facts, seen)
         floor = bankbags.family_floor(facts)
         notes = []
+        evacuating = set()
         for f in facts:
             steps = bankbags.visit_steps(f, floor)
             if not steps:
                 notes.append(bankbags.step(f, floor)[1])
                 continue
-            # BUY, THEN PLACE: the room exists before a deposit is judged.
+            if steps[0].transfer:
+                evacuating.add(f.name)
+            # Keep each transition in command order. A replacement withdraws
+            # the old empty bag before placing the new sack into that position.
             for step in steps:
                 if (step.name, step.command) in seen:
-                    continue
+                    break
                 town = await asyncio.to_thread(_fetch_town, step.name)
                 if not town.banker:
                     notes.append(_bank_bag_wait_note(step))
                     break
-                move = bank.Move(step.name, step.command.split(" ")[0], 0,
-                                 "bank bag slot", 1, step.why)
+                move = bank.Move(step.name, step.command.split(" ")[0], step.guid,
+                                 "bank bag", 1, step.why)
                 if await asyncio.to_thread(_insert_bank, move, step.command):
                     log.info("bank bags: %s (%s)%s", step.why, step.command,
                              _family_label(cohort))
         _log_changed("bank bags", notes, tuple(sorted(names)))
+        return evacuating
 
     async def _bank_passing_once(self, cohort=None) -> int:
         """The quick look: bank for whoever is at a banker, nothing else.
@@ -19350,11 +19393,15 @@ class Bridge(discord.Client):
         if not names:
             return 0
         seen = await asyncio.to_thread(_recent_bank_keys, GIVE_RETRY_MINUTES)
-        await self._bank_bag_slots(names, seen, cohort)
         bank_plan = await asyncio.to_thread(_plan_bank, names)
-        if not bank_plan.moves:
+        evacuating = await self._bank_bag_slots(
+            names, seen, cohort,
+            bank_busy={move.character for move in bank_plan.moves})
+        evacuating = evacuating or set()
+        moves = [m for m in bank_plan.moves if m.character not in evacuating]
+        if not moves:
             return 0
-        planned = [(move, bank.command(move)) for move in bank_plan.moves]
+        planned = [(move, bank.command(move)) for move in moves]
         fresh, _walking = await self._bank_at_the_counter(planned, seen)
         if fresh:
             for line in bank.lines(fresh):
@@ -27955,8 +28002,9 @@ class Bridge(discord.Client):
         level_rows = await asyncio.to_thread(_queue_level_rows, fam)
         dry = await asyncio.to_thread(_planner_dry, list(fam["names"]))
         now = time.monotonic()
-        due = await _planner_due(self._planner_loot_read, key, fam, rows,
-                                 level_rows, dry, now)
+        # A capped family's entry for a door under the cap ends between runs
+        # by its levels alone (campaignplan._outgrown, #3282): no loot read.
+        due = campaignplan.due(rows, fam["leader"], level_rows, dry)
         if not due.reason:
             self._planner_said.pop(key, None)
             return False
@@ -28693,7 +28741,8 @@ class Bridge(discord.Client):
         return jev_movement.Facts(
             family=key or leader, where=where, binds=reads["binds"],
             hearthed=reads["hearthed"], errand=holder.aim if mine else "",
-            claimant=holder.claimant if mine else "")
+            claimant=holder.claimant if mine else "",
+            bind_zones=reads.get("bind_zones") or {})
 
     async def _movement_record(self, key: str, judgment) -> None:
         log.info("%s", judgment.line())
@@ -28891,6 +28940,13 @@ class Bridge(discord.Client):
         if not jev_family_intent.due(facts, seen.get("signature", ""),
                                      seen.get("asked", -1e9), now):
             return
+        # WHAT A PLAYER CHECKS BEFORE A TOWN WALK (#3303): bags, durability
+        # and quest, read only once a question is due. Looked up: the adapter
+        # tests load this method in isolation.
+        upkeep = globals().get("_family_upkeep")
+        if upkeep is not None:
+            facts = dataclasses.replace(
+                facts, upkeep=await asyncio.to_thread(upkeep, names))
         # WHAT FOLLOWED EARLIER PICKS (#584): this family's are scored once
         # their window has passed, and the kind's recent ones go into the
         # question.
@@ -32896,6 +32952,48 @@ def _fetch_jev_keep_classes(names: list) -> dict:
                 for row in cur.fetchall()}
 
 
+def _jev_keep_family_reads(names: list, pending: list) -> dict:
+    """The family-wide item_keep facts (#3303), each from a reader the bridge
+    already has: the guild bank's free slots (the deposit pass's setup), who
+    casts with a reagent (the class-reagent pass's spellbook and reagent
+    map), and each member's ranged weapon (the gear-up read). The last two
+    are read only when a pending stack is a reagent or ammunition. A read
+    that fails reads "unknown" in the question and is logged here.
+    """
+    out = {"guild_free": None, "spell_users": None, "ranged": jev_keep.NOT_READ}
+    classes = {int(r.get("item_class") or 0) for r in pending}
+    try:
+        setup = _fetch_guild_bank_setup(names)
+        if setup is not None:
+            out["guild_free"] = bank.storage_from({}, guild=setup).guild_free
+    except pymysql.err.MySQLError:
+        log.warning("jev-keep: the guild bank read failed; its room is unknown")
+    if jev_keep.REAGENT in classes or any(r.get("reagent") for r in pending):
+        try:
+            spells = _fetch_town_spells(names)
+            with _connect() as conn, conn.cursor() as cur:
+                reagents = _fetch_spell_reagents(cur)
+            entries = [int(r.get("entry") or 0) for r in pending]
+            out["spell_users"] = jev_keep.spell_users_from(
+                spells, reagents, entries, guildjobs.CRAFT_SPELLS)
+        except pymysql.err.MySQLError:
+            log.warning("jev-keep: the spellbook read failed; who casts with "
+                        "a reagent is left out")
+    if jev_keep.PROJECTILE in classes:
+        try:
+            gear = _fetch_gearup_facts(names)
+            out["ranged"] = {
+                name: jev_keep.ranged_word(
+                    (gear.get(name) or {}).get("equipped", {}).get("ranged"))
+                for name in names
+            }
+        except pymysql.err.MySQLError:
+            log.warning("jev-keep: the worn gear read failed; ranged weapons "
+                        "are unknown")
+            out["ranged"] = None
+    return out
+
+
 def _fetch_jev_worn(names: list) -> list:
     """(name, slot, entry) for everything the family wears."""
     if not names:
@@ -33042,7 +33140,7 @@ def _create_jev_store() -> None:
             " latency_ms INT UNSIGNED NOT NULL DEFAULT 0,"
             " model VARCHAR(40) NOT NULL DEFAULT '',"
             " mode VARCHAR(8) NOT NULL,"
-            " facts VARCHAR(1000) NOT NULL DEFAULT '',"
+            " facts VARCHAR(4000) NOT NULL DEFAULT '',"
             " acted VARCHAR(10) NOT NULL DEFAULT '',"
             " backend VARCHAR(12) NOT NULL DEFAULT '',"
             " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
@@ -33079,6 +33177,21 @@ def _create_jev_store() -> None:
                 "ADD COLUMN facts VARCHAR(1000) NOT NULL DEFAULT '' AFTER mode"
             )
             log.info("overseer_jev_judgment: added facts")
+        # Widened from 1000 (#3303): the state a movement or family question
+        # was asked with was cut, so a judge saw less than Jev did. Looked up
+        # like the columns above, then altered once; growing a VARCHAR keeps
+        # every row.
+        cur.execute(
+            "SELECT CHARACTER_MAXIMUM_LENGTH AS n FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() "
+            "  AND TABLE_NAME = 'overseer_jev_judgment' AND COLUMN_NAME = 'facts'"
+        )
+        if int((cur.fetchone() or {}).get("n") or 0) < 4000:
+            cur.execute(
+                "ALTER TABLE overseer_jev_judgment "
+                "MODIFY COLUMN facts VARCHAR(4000) NOT NULL DEFAULT ''"
+            )
+            log.info("overseer_jev_judgment: widened facts")
         # `backend` arrived with the decision backends (#820): which model
         # family gave the answer ('compare' rows carry the comparison
         # backend's). A row written before it reads '' (Jev, the only one).
@@ -33216,7 +33329,7 @@ def _insert_jev_judgment(judgment) -> None:
     """
     agree = judgment.agree
     acted = str(getattr(judgment, "acted", "") or "")
-    # Only the activity choice carries its facts (#216); every other kind ''.
+    # What the question was asked with; a kind that records none writes ''.
     facts = str(getattr(judgment, "facts", "") or "")
     # Under JEV_ROUTE the answer may come from any routed backend: its model
     # id says which (jev.answered_by), and a row with no answer names the first.
@@ -33243,7 +33356,8 @@ def _insert_jev_judgment(judgment) -> None:
                 judgment.confidence, judgment.probabilities_json() or None,
                 None if agree is None else int(agree), judgment.status[:16],
                 max(0, judgment.latency_ms), judgment.model[:40],
-                judgment.mode[:8], facts[:1000], acted[:10], backend[:12],
+                judgment.mode[:8], facts[:4000], acted[:10],
+                backend[:12],
             ),
         )
 
@@ -33262,7 +33376,8 @@ def _jev_report_tick() -> None:
         return
     try:
         with _connect() as conn, conn.cursor() as cur:
-            report = jev_openai.fetch_report(cur, os.environ)
+            report = jev_openai.fetch_report(
+                cur, os.environ, db_errors=(pymysql.err.MySQLError,))
     except pymysql.err.MySQLError:
         log.exception("jev: the OpenAI report could not be read")
         return
@@ -36301,7 +36416,11 @@ def _fetch_surplus_bags(names: list) -> list:
                 return []
             raise
         rows = [dict(row) for row in cur.fetchall()]
-    bank_keeps = bankbags.reserved_guids(_fetch_bank_bag_facts(names))
+    bank_facts = bankbags.with_displaced(
+        _fetch_bank_bag_facts(names),
+        _recent_bank_keys(GIVE_RETRY_MINUTES),
+    )
+    bank_keeps = bankbags.reserved_guids(bank_facts)
     # Both the sale and the sellable-stack count use these same rows.
     for row in rows:
         row["bank_reserved"] = int(row["item_guid"]) in bank_keeps
@@ -42404,11 +42523,14 @@ def _plan_bank(names: list) -> "bank.Plan":
     # THE ITEM PLAN'S DEPOSITS ARE PLANNED FIRST (#2502): a crafter's fetch of
     # its own reagent counts the room they make, and merge sends them ahead.
     routed = _itemplan_bank_routes(names)
+    members = bank.members_from_rows(rows, names)
+    bag_facts = bankbags.with_bank_state(
+        _fetch_bank_bag_facts(names), members)
     plan = bank.plan(
-        bank.members_from_rows(rows, names), bank.family_from_skills(held),
+        members, bank.family_from_skills(held),
         storage=storage, room_floor=room_floor,
         # A bag placed on this visit is sent before the deposits (#2263).
-        room_gain=bankbags.room_gain(_fetch_bank_bag_facts(names)),
+        room_gain=bankbags.room_gain(bag_facts),
         planned_deposits=itemplan_route.personal_room(routed.moves),
     )
     # WHAT THE ITEM PLAN BANKS IS BANKED (#2136): its GUILD_BANK and
@@ -43172,9 +43294,30 @@ def _record_production(names: list, skills: dict) -> None:
 
 
 # --- the profession loop (profloop.py, #2419) ---------------------------------
-# Family key -> profloop.State. In memory: a restart joins each family at the
-# phase its jobs say it is in.
+# Family key -> profloop.State. Kept in the memo store too (holdclock.py), so a
+# restart resumes each family's clocks.
 _PROF_LOOPS: dict = {}
+
+
+def _prof_loop_restore(key: str) -> None:
+    """Resume a family's loop state a restart left in the memo store."""
+    held = _memo_read(holdclock.PROF_LOOP_KIND).get(str(key))
+    if not held:
+        return
+    state = holdclock.state_from_wall(
+        profloop.State, held[0], time.monotonic(), time.time())
+    if state is not None:
+        _PROF_LOOPS[key] = state
+
+
+def _prof_loop_keep(key: str, state) -> None:
+    """Store a family's loop state so a restart resumes its clocks."""
+    now = time.time()
+    _memo_upsert(holdclock.PROF_LOOP_KIND, str(key),
+                 holdclock.state_to_wall(state, time.monotonic(), now),
+                 now, now + holdclock.KEEP_SECONDS)
+
+
 # The town errand's family key (sorted names) -> the loop's reason to go, read
 # by _town_errand_start.
 _PROF_LOOP_TOWN: dict = {}
@@ -45283,11 +45426,14 @@ _BANK_BAG_PEOPLE_SQL = (
 )
 _BANK_BAG_ROWS_SQL = (
     "SELECT c.name AS holder, ci.item AS item_guid, ii.itemEntry AS entry, "
-    "it.ContainerSlots AS slots, ci.bag, ci.slot, "
+    "it.ContainerSlots AS slots, it.subclass AS subclass, "
+    "COALESCE(fill.n, 0) AS used, ci.bag, ci.slot, "
     "ii.flags AS instance_flags, it.bonding AS bonding FROM characters c "
     "JOIN character_inventory ci ON ci.guid = c.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "LEFT JOIN (SELECT bag, COUNT(*) AS n FROM character_inventory "
+    "           WHERE bag <> 0 GROUP BY bag) fill ON fill.bag = ii.guid "
     "WHERE c.name IN (%s) AND it.class = 1 AND it.ContainerSlots > 0"
 )
 _BANK_BAG_CRAFTERS_SQL = (

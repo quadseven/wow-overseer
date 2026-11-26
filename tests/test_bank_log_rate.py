@@ -23,6 +23,7 @@ import unittest
 from test_family_economy_parity import FAKE_ASYNCIO, _load  # noqa: F401
 
 import bankforecast  # noqa: E402
+import bank  # noqa: E402
 
 BRIDGE = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text(
     encoding="utf-8"
@@ -217,7 +218,11 @@ class TwoHoursOfTheMeasuredTrafficStayUnderTheBar(unittest.TestCase):
             family_floor=lambda facts: 0,
             step=lambda f, floor: (None, "%s has 1 empty bank bag slot(s)" % f.name),
             visit_steps=lambda f, floor: [],
+            with_bank_state=lambda facts, members, blocked=(): facts,
+            with_displaced=lambda facts, seen: facts,
         )
+        ns["bank"] = bank
+        ns["_fetch_bank_items"] = lambda names: []
         self.ns = _load(
             LOGGERS + ["_say_bank_forecast", "_bank_policy_read", "_bank_bag_slots"], ns
         )

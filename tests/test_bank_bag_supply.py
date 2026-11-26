@@ -10,11 +10,17 @@ from types import SimpleNamespace
 
 import bag_pressure
 import bag_upgrade
+import bank
 import bankbags
 import towntrip
 from _stub_modules import PYMYSQL
 from test_guildsocial_bridge import bridge
 from unittest import mock
+
+
+async def _inline_to_thread(function, *args, **kwargs):
+    """Run the mocked blocking readers inline in this pure bridge test."""
+    return function(*args, **kwargs)
 
 
 class BankBagsReachThePurchasePath(unittest.TestCase):
@@ -57,6 +63,8 @@ class BankBagsReachThePurchasePath(unittest.TestCase):
             bankbags=bankbags,
             bag_pressure=bag_pressure,
             _fetch_bank_bag_facts=lambda names: facts,
+            _recent_bank_keys=lambda minutes: set(),
+            GIVE_RETRY_MINUTES=60,
             log=SimpleNamespace(info=lambda *a: None, warning=lambda *a: None),
         )
         source = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
@@ -137,6 +145,9 @@ class BankBagsReachThePurchasePath(unittest.TestCase):
             GIVE_RETRY_MINUTES=60,
             _fetch_bag_state=lambda names: rows,
             _fetch_bank_bag_facts=lambda names: facts,
+            _fetch_bank_items=lambda names: [],
+            _recent_bank_keys=lambda minutes: set(),
+            bank=bank,
             _bag_buyers=buyers,
             _fetch_bag_offers=lambda entries: [offer],
             _campaign_waiting=lambda names: False,
@@ -155,11 +166,12 @@ class BankBagsReachThePurchasePath(unittest.TestCase):
             compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"),
             env,
         )
-        needy = asyncio.run(
-            env["_buy_bags_once"](
-                SimpleNamespace(_vendor_bag_upgrades=upgrades), ["Og"]
+        with mock.patch.object(asyncio, "to_thread", _inline_to_thread):
+            needy = asyncio.run(
+                env["_buy_bags_once"](
+                    SimpleNamespace(_vendor_bag_upgrades=upgrades), ["Og"]
+                )
             )
-        )
         return purchases, equips, needy, upgrading
 
     def test_a_vendor_purchase_fills_a_bank_position_without_equipping_it(self):
@@ -260,6 +272,69 @@ class BankBagsReachThePurchasePath(unittest.TestCase):
             [buyer], [small, replace(larger, price=300001)]
         )
         self.assertEqual([p.entry for p in purchases], [1])
+
+    def test_a_bank_bag_upgrade_buys_an_exact_twelve_slot_sack(self):
+        small = bankbags.Bag(300, 4496, 6)
+        facts = [
+            bankbags.Facts(
+                "Og",
+                money=300000,
+                bought=1,
+                placed=1,
+                worn=(12,) * 4,
+                bank_bags=(small,),
+            )
+        ]
+        offer = bag_pressure.BagOffer(4499, "Twelve Slot Sack", 12, 100000)
+        purchases, equips, needy, upgrading = self.buy(facts=facts, offer=offer, free=2)
+        self.assertEqual(
+            [p.command for p in purchases], ["entry:4499 count:1 max:100000"]
+        )
+        self.assertEqual(equips, [])
+        self.assertEqual(needy, ())
+        self.assertEqual(upgrading, [])
+
+    def test_a_bank_upgrade_keeps_a_slot_for_the_displaced_bag(self):
+        facts = [
+            bankbags.Facts(
+                "Og",
+                money=300000,
+                bought=1,
+                placed=1,
+                worn=(12,) * 4,
+                bank_bags=(bankbags.Bag(300, 4496, 6),),
+            )
+        ]
+        offer = bag_pressure.BagOffer(4499, "Twelve Slot Sack", 12, 100000)
+        self.assertEqual(self.buy(facts=facts, offer=offer, free=1)[0], [])
+
+    def test_a_bank_bag_upgrade_is_not_bought_without_the_ten_gold(self):
+        facts = [
+            bankbags.Facts(
+                "Og",
+                money=99999,
+                bought=1,
+                placed=1,
+                worn=(12,) * 4,
+                bank_bags=(bankbags.Bag(300, 4496, 6),),
+            )
+        ]
+        offer = bag_pressure.BagOffer(4499, "Twelve Slot Sack", 12, 100000)
+        self.assertEqual(self.buy(facts=facts, offer=offer, free=2)[0], [])
+
+    def test_a_shorter_sack_does_not_stand_in_for_the_twelve_slot_upgrade(self):
+        facts = [
+            bankbags.Facts(
+                "Og",
+                money=300000,
+                bought=1,
+                placed=1,
+                worn=(12,) * 4,
+                bank_bags=(bankbags.Bag(300, 4496, 6),),
+            )
+        ]
+        offer = bag_pressure.BagOffer(4498, "Ten Slot Bag", 10, 50000)
+        self.assertEqual(self.buy(facts=facts, offer=offer, free=2)[0], [])
 
 
 class BankReservationsAreBounded(unittest.TestCase):
@@ -363,8 +438,11 @@ class FullBankSlotsBridgeRuntime(unittest.TestCase):
             )
         ]
         bridge_stub = SimpleNamespace()
-        with mock.patch.object(
-            bridge, "_fetch_bank_bag_facts", return_value=list(base_facts)
+        with (
+            mock.patch.object(
+                bridge, "_fetch_bank_bag_facts", return_value=list(base_facts)
+            ),
+            mock.patch.object(asyncio, "to_thread", _inline_to_thread),
         ):
             facts_without, steps_without = asyncio.run(
                 bridge.Bridge._bank_bag_pending(bridge_stub, ["Zug"], set(), {"Zug"})
