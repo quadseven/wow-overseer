@@ -514,14 +514,18 @@ class TheBridgeReadsTheFarMaster(unittest.TestCase):
 
     def test_the_family_crosses_when_no_local_master_teaches_the_skill(self):
         body = inspect.getsource(weaponskill.WeaponSkillPass._run_locked)
+        self.assertIn("far_maps(", body)
+        self.assertIn("choose_far_master(", body)
+        self.assertIn("self._cross_or_report_no_master(", body)
+        crossing = inspect.getsource(
+            weaponskill.WeaponSkillPass._cross_or_report_no_master
+        )
         expected = (
-            "far_maps(",
-            "choose_far_master(",
             "guildjobs.weapon_cross_step(",
             "io.crossings, names",
             "self._bridge._class_cross_row(",
         )
-        self.assertTrue(all(part in body for part in expected))
+        self.assertTrue(all(part in crossing for part in expected))
 
     def test_the_master_read_takes_a_list_of_maps(self):
         sql = BRIDGE.split("_WEAPON_MASTERS_SQL = (", 1)[1].split("\n)", 1)[0]

@@ -623,19 +623,10 @@ class WeaponSkillPass:
         wanted = needs(facts, await asyncio.to_thread(io.bag_weapons, names))
         if not wanted:
             return
-        critical = any(
-            need.slot == "mainhand" and need.why == "its mainhand is empty"
-            for need in wanted
-        )
-        state = io.errand_state(names)
-        if state is not None and state.active:
-            if not critical:
-                return
-            slot = self._bridge._cohort_town_slot(io.cohort_key(cohort))
-            if not await self._bridge._town_errand_yield_for_weapon(
-                state, names, leader, slot, label
-            ):
-                return
+        if not await self._town_errand_allows_training(
+            io, cohort, names, leader, wanted, label
+        ):
+            return
         positions = await asyncio.to_thread(io.positions, list(names))
         at = positions.get(leader)
         if not at:
@@ -657,21 +648,49 @@ class WeaponSkillPass:
             far = choose_far_master(
                 masters, spells, teams.get(leader, ""), int(at["map_id"])
             )
-            if far:
-                # The guild planner also imports weaponskill for its decisions.
-                import guildjobs
+            await self._cross_or_report_no_master(
+                io, names, leader, at, wanted, far, said, label
+            )
+            return
+        if await self._weapon_skill_train(io, wanted, master, positions, label):
+            return
+        await self._walk_to_weapon_master(io, cohort, leader, master, said, label)
 
-                need = next(n for n in wanted if n.spell in far["spells"])
-                step, note = guildjobs.weapon_cross_step(
-                    SimpleNamespace(name=leader, map_id=int(at["map_id"])),
-                    offer(need, far),
-                    await asyncio.to_thread(io.crossings, names),
-                )
-                if note:
-                    log.info("weapon skill: %s%s", note, label)
-                if step:
-                    await self._bridge._class_cross_row(step, step.rows[0])
-                return
+    async def _town_errand_allows_training(
+        self,
+        io: WeaponSkillIO,
+        cohort: Cohort | None,
+        names: list[str],
+        leader: str,
+        wanted: list[Need],
+        label: str,
+    ) -> bool:
+        critical = any(
+            need.slot == "mainhand" and need.why == "its mainhand is empty"
+            for need in wanted
+        )
+        state = io.errand_state(names)
+        if state is None or not state.active:
+            return True
+        if not critical:
+            return False
+        slot = self._bridge._cohort_town_slot(io.cohort_key(cohort))
+        return await self._bridge._town_errand_yield_for_weapon(
+            state, names, leader, slot, label
+        )
+
+    async def _cross_or_report_no_master(
+        self,
+        io: WeaponSkillIO,
+        names: list[str],
+        leader: str,
+        at: dict,
+        wanted: list[Need],
+        far: dict,
+        said: str,
+        label: str,
+    ) -> None:
+        if not far:
             log.info(
                 "weapon skill: %s; no weapon master of the family's side "
                 "on this map teaches it, so nobody walks%s",
@@ -679,8 +698,29 @@ class WeaponSkillPass:
                 label,
             )
             return
-        if await self._weapon_skill_train(io, wanted, master, positions, label):
-            return
+        # The guild planner also imports weaponskill for its decisions.
+        import guildjobs
+
+        need = next(n for n in wanted if n.spell in far["spells"])
+        step, note = guildjobs.weapon_cross_step(
+            SimpleNamespace(name=leader, map_id=int(at["map_id"])),
+            offer(need, far),
+            await asyncio.to_thread(io.crossings, names),
+        )
+        if note:
+            log.info("weapon skill: %s%s", note, label)
+        if step:
+            await self._bridge._class_cross_row(step, step.rows[0])
+
+    async def _walk_to_weapon_master(
+        self,
+        io: WeaponSkillIO,
+        cohort: Cohort | None,
+        leader: str,
+        master: dict,
+        said: str,
+        label: str,
+    ) -> None:
         target = travel.resolve(str(int(master["entry"])))
         if not target:
             return
