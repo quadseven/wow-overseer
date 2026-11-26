@@ -6,6 +6,7 @@ import json
 import pathlib
 import tempfile
 import unittest
+from datetime import datetime, timezone
 
 from eph_fakes import FakeCluster, FakeGh, make_cfg
 from ephemeral import collect, ghx, kube
@@ -323,18 +324,153 @@ class FetchTest(Base):
             json.loads(p.read_text(encoding="utf-8"))["result"]["verdict"], "FAIL"
         )
 
-    def test_old_copied_results_are_pruned_and_uncopied_are_kept(self):
+    def test_posted_results_are_archived_before_deletion_and_orphans_expire(
+        self,
+    ):
         self.results(["FAIL"] * 3, ["PASS"] * 3)
-        for rid in ("abc123-c1", "abc123-t1"):
-            self.c.objs[("configmaps", "wow-ephemeral", f"eph-result-{rid}")][
-                "metadata"
-            ]["creationTimestamp"] = "2026-10-01T00:00:00Z"
-        self.collect()
+        undecided = record()
+        undecided["batch"] = "undecided"
+        for run in undecided["runs"]:
+            run["run_id"] = run["run_id"].replace("abc123", "undecided")
+        self.save(undecided)
+        old_orphan = "eph-result-orphan-c1"
+        recent_orphan = "eph-result-orphan-c2"
+        old_undecided = "eph-result-undecided-c1"
+        recent_undecided = "eph-result-undecided-c2"
+        for name, created in (
+            (old_orphan, "2026-10-01T00:00:00Z"),
+            (recent_orphan, "2026-11-15T00:00:00Z"),
+            (old_undecided, "2026-10-01T00:00:00Z"),
+            (recent_undecided, "2026-11-15T00:00:00Z"),
+        ):
+            self.c.put(
+                "configmaps",
+                "wow-ephemeral",
+                name,
+                {
+                    "metadata": {
+                        "creationTimestamp": created,
+                        "labels": {"eph/verdict": "FAIL", "eph/decree": "demo-decree"},
+                    },
+                    "data": {
+                        "result.json": json.dumps(
+                            {"verdict": "FAIL", "decree_sha256": SHA}
+                        )
+                    },
+                },
+            )
+        deleted = []
+
+        def runner(argv, text=None):
+            if "delete" in argv:
+                name = argv[argv.index("delete") + 2]
+                cm = self.c.objs[("configmaps", "wow-ephemeral", name)]
+                rid = name.removeprefix("eph-result-")
+                archive = (
+                    pathlib.Path(self.cfg.results_dir) / "demo-decree" / f"{rid}.json"
+                )
+                self.assertEqual(
+                    json.loads(archive.read_text(encoding="utf-8")),
+                    {
+                        "configmap": name,
+                        "created": cm["metadata"]["creationTimestamp"],
+                        "result": json.loads(cm["data"]["result.json"]),
+                    },
+                )
+                deleted.append(name)
+            return self.c(argv, text)
+
+        self.k.runner = runner
+        self.assertEqual(self.collect()["undecided"], "pending")
+        self.assertCountEqual(
+            deleted,
+            [f"eph-result-{r['run_id']}" for r in self.rec["runs"]] + [old_orphan],
+        )
         names = {
-            o["metadata"]["name"] for o in self.c.of("configmaps", "wow-ephemeral")
+            o["metadata"]["name"]
+            for o in self.c.of("configmaps", "wow-ephemeral")
+            if o["metadata"]["name"].startswith("eph-result-")
         }
-        self.assertNotIn("eph-result-abc123-c1", names)
-        self.assertIn("eph-result-abc123-c2", names)
+        self.assertEqual(names, {recent_orphan, old_undecided, recent_undecided})
+
+    def test_unposted_results_expire_strictly_after_fourteen_days_only_if_decided(self):
+        for decided in (False, True):
+            with self.subTest(decided=decided):
+                self.results(["PASS" if decided else "FAIL"] * 3, [None] * 3)
+                for n, age in enumerate(
+                    (14 * 86400 + 1, 14 * 86400, 14 * 86400 - 1), 1
+                ):
+                    cm = self.c.objs[
+                        ("configmaps", "wow-ephemeral", f"eph-result-abc123-c{n}")
+                    ]
+                    cm["metadata"]["creationTimestamp"] = datetime.fromtimestamp(
+                        1794787200.0 - age, timezone.utc
+                    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                self.assertEqual(
+                    self.collect(),
+                    {"abc123": "non-discriminating" if decided else "pending"},
+                )
+                self.assertEqual(self.writes(), [])
+                remaining = {
+                    o["metadata"]["name"]
+                    for o in self.c.of("configmaps", "wow-ephemeral")
+                    if o["metadata"]["name"].startswith("eph-result-")
+                }
+                expected = {"eph-result-abc123-c2", "eph-result-abc123-c3"}
+                if not decided:
+                    expected.add("eph-result-abc123-c1")
+                self.assertEqual(remaining, expected)
+
+    def test_posted_batch_pruning_retries_on_next_collect_without_reposting(self):
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        self.c.fail["delete"] = 1
+        self.collect()
+        self.assertTrue(any("prune skipped" in line for line in self.logs))
+        calls = len(self.fg.calls)
+        del self.c.fail["delete"]
+        self.collect()
+        self.assertEqual(len(self.fg.calls), calls)
+        self.assertFalse(
+            any(
+                o["metadata"]["name"].startswith("eph-result-")
+                for o in self.c.of("configmaps", "wow-ephemeral")
+            )
+        )
+
+    def test_dry_run_keeps_old_results(self):
+        self.c.now = "2026-10-01T00:00:00Z"
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        self.collect(post=False)
+        self.assertFalse(any("delete" in argv for argv, _ in self.c.calls))
+
+    def test_legacy_posted_decision_is_pruned_without_posting_again(self):
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        self.c.fail["delete"] = 1
+        self.collect()
+        done = (
+            pathlib.Path(self.cfg.results_dir) / "demo-decree" / "decision-abc123.json"
+        )
+        decision = json.loads(done.read_text(encoding="utf-8"))
+        del decision["posted"]
+        done.write_text(json.dumps(decision), encoding="utf-8")
+        del self.c.fail["delete"]
+        writes = self.writes()
+        self.collect()
+        self.assertEqual(self.writes(), writes)
+        self.assertFalse(
+            any(
+                o["metadata"]["name"].startswith("eph-result-")
+                for o in self.c.of("configmaps", "wow-ephemeral")
+            )
+        )
+
+    def test_archive_failure_prevents_deletion(self):
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        archive = pathlib.Path(self.cfg.results_dir) / "demo-decree" / "abc123-c1.json"
+        archive.mkdir()
+        with self.assertRaises(OSError):
+            self.collect()
+        self.assertFalse(any("delete" in argv for argv, _ in self.c.calls))
 
 
 class ReviewFixesTest(Base):

@@ -137,5 +137,54 @@ class CommitTest(unittest.TestCase):
             self.assertIsNone(imagecommit.valid_sha(bad))
 
 
+TPL = "registry.example.com/eph-template"
+TPL_MANIFEST = b'{"schemaVersion": 2, "marker": "newest lean"}'
+
+
+class TemplateRegistry:
+    """A fake registry listing template tags and serving a manifest per tag."""
+
+    def __init__(self, tags):
+        self.tags = tags
+        self.calls = []
+
+    def __call__(self, url, headers):
+        self.calls.append(url)
+        if "/token?" in url:
+            return 200, {}, json.dumps({"token": "tok"}).encode()
+        if url.endswith("/tags/list"):
+            return 200, {}, json.dumps({"name": "x", "tags": self.tags}).encode()
+        if url.endswith("/manifests/lean-20261120T020000Z"):
+            return 200, {}, TPL_MANIFEST
+        return 200, {}, b"other " + url.encode()
+
+
+class NewestTemplateTest(unittest.TestCase):
+    TAGS = [
+        "lean-20261118T020000Z", "full-20261125T020000Z",
+        "lean-20261120T020000Z", "lean-20261119T020000Z", "latest", "lean-bad",
+    ]  # fmt: skip
+
+    def test_newest_resolves_to_the_newest_stamp_of_the_class_as_a_digest(self):
+        reg = TemplateRegistry(self.TAGS)
+        got = imagecommit.newest_template(f"{TPL}:newest", "lean", CREDS, reg)
+        want = "sha256:" + hashlib.sha256(TPL_MANIFEST).hexdigest()
+        self.assertEqual(got, f"{TPL}@{want}")
+        self.assertTrue(reg.calls[-1].endswith("/manifests/lean-20261120T020000Z"))
+
+    def test_a_class_with_no_tag_is_an_error(self):
+        reg = TemplateRegistry(["full-20261125T020000Z"])
+        with self.assertRaises(imagecommit.RegistryError):
+            imagecommit.newest_template(f"{TPL}:newest", "lean", None, reg)
+
+    def test_only_a_newest_ref_is_resolved(self):
+        self.assertTrue(imagecommit.is_newest(f"{TPL}:newest"))
+        self.assertFalse(imagecommit.is_newest(f"{TPL}:lean-20261120T020000Z"))
+        with self.assertRaises(imagecommit.RegistryError):
+            imagecommit.newest_template(
+                f"{TPL}:lean-1", "lean", None, TemplateRegistry([])
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
