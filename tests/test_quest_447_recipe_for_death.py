@@ -137,6 +137,19 @@ class ARecipeForDeathWithSpawnedSourcesWorks(unittest.TestCase):
             [questers.STALLED_UNSOURCED],
         )
 
+    def test_a_holder_with_all_required_items_hands_it_in(self):
+        cat = recipe_world()
+        complete = mirra(
+            level=12,
+            zone_id=SILVERPINE,
+            quest_log={RECIPE_FOR_DEATH: questers.STATUS_COMPLETE},
+            quest_progress={RECIPE_FOR_DEATH: 12},
+        )
+        plan = questers.plan(cat, complete, questers.Clock(), 0.0)
+        self.assertEqual(
+            (plan.move.kind, plan.move.quest), (classquest.TURN_IN, RECIPE_FOR_DEATH)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
