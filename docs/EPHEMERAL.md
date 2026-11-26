@@ -399,6 +399,16 @@ nothing to the issue. A decree not yet merged posts to its own pull request when
 configured App, and `collect` refuses to write unless `GH_TOKEN` and
 `GH_CONFIG_DIR` are set.
 
+After archiving, `collect` deletes a batch's result ConfigMaps once its evidence
+is posted. Results from an unposted, decided batch are deleted only when older
+than `result_keep_days` (14 days by default). Results from undecided or pending
+batches are retained regardless of age. Results whose decree and run id appear
+in no batch record are deleted only when archived and older than the keep
+window. Decisions record whether evidence was posted; for older decision files,
+collect checks for its existing evidence comment before recording that flag.
+Deletion runs in `collect`, with no additional dispatcher permissions.
+`--dry-run` archives results but deletes nothing.
+
 `report` is the non-closing evidence path for decrees using numeric `proves`
 and `box` fields. It accepts one or more batches from the same decree and posts
 the decree id, batch ids, per-run verdicts, UTC start times and judge reason
