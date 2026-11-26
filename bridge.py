@@ -181,6 +181,7 @@ import llmmode
 import llmpool
 import lockbox
 import lootcouncil
+import runvoice
 # NOT `mailbox` - that is a Python standard library module, and this package is
 # imported with its own directory first on sys.path. See mailrun.py's docstring.
 import mailrun
@@ -9454,6 +9455,140 @@ def _fetch_event_snapshot() -> list[dict]:
         return list(cur.fetchall())
 
 
+# --- run voice helpers ------------------------------------------------------
+
+_RUN_EVENTS_SQL = (
+    "SELECT re.run_id, re.kind, re.detail "
+    "FROM overseer_dungeon_run_event re "
+    "JOIN overseer_dungeon_run r ON r.id = re.run_id "
+    "WHERE r.leader_name IN ({holes}) "
+    "AND re.created_at > NOW() - INTERVAL 10 MINUTE "
+    "ORDER BY re.id DESC LIMIT 100"
+)
+
+_OVERSEER_EVENTS_SQL = (
+    "SELECT character_name, kind, subject_id, subject_name, detail "
+    "FROM overseer_event "
+    "WHERE character_name IN ({holes}) "
+    "AND created_at > NOW() - INTERVAL 10 MINUTE "
+    "AND kind IN ('boss_kill', 'death', 'level_up', 'item_loot') "
+    "ORDER BY id DESC LIMIT 100"
+)
+
+_CHARACTER_LEVELS_SQL = (
+    "SELECT name, level FROM characters WHERE name IN ({holes})"
+)
+
+_GUILD_MEMBERS_SQL = (
+    "SELECT c.name FROM guild_member gm "
+    "JOIN characters c ON c.guid = gm.guid "
+    "WHERE gm.guildid IN (SELECT guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes}))"
+)
+
+
+def _fetch_recent_dungeon_run_events(family_names: list[str]) -> list[dict]:
+    """Fetch recent dungeon run events for the family's runs."""
+    if not family_names:
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        sql = _RUN_EVENTS_SQL.format(holes=",".join(["%s"] * len(family_names)))
+        cur.execute(sql, family_names)
+        return list(cur.fetchall())
+
+
+def _fetch_recent_overseer_events(family_names: list[str]) -> list[dict]:
+    """Fetch recent overseer events (boss_kill, death, level_up, item_loot) for the family."""
+    if not family_names:
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        sql = _OVERSEER_EVENTS_SQL.format(holes=",".join(["%s"] * len(family_names)))
+        cur.execute(sql, family_names)
+        return list(cur.fetchall())
+
+
+def _fetch_character_levels(family_names: list[str]) -> dict[str, int]:
+    """Fetch current levels for family members."""
+    if not family_names:
+        return {}
+    with _connect() as conn, conn.cursor() as cur:
+        sql = _CHARACTER_LEVELS_SQL.format(holes=",".join(["%s"] * len(family_names)))
+        cur.execute(sql, family_names)
+        return {row["name"]: int(row["level"] or 0) for row in cur.fetchall()}
+
+
+def _get_guild_members(family_names: list[str]) -> frozenset[str]:
+    """Fetch all members of the family's guild."""
+    if not family_names:
+        return frozenset()
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            sql = _GUILD_MEMBERS_SQL.format(holes=",".join(["%s"] * len(family_names)))
+            cur.execute(sql, family_names)
+            return frozenset(row["name"] for row in cur.fetchall())
+    except Exception:
+        log.exception("run voice: could not fetch guild members")
+        return frozenset()
+
+
+def _get_party_members_for_events(events: list, family_names: list[str]) -> frozenset[str]:
+    """Determine party members from events and family roster.
+    
+    For dungeon run events, the party is the run's members.
+    For overseer events, fall back to the family roster.
+    """
+    # Try to get members from run events first
+    run_ids = {e.run_id for e in events if e.run_id}
+    if run_ids:
+        marks = ",".join(["%s"] * len(run_ids))
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"SELECT members FROM overseer_dungeon_run WHERE id IN ({marks})",
+                tuple(run_ids),
+            )
+            members = set()
+            for row in cur.fetchall():
+                if row.get("members"):
+                    for m in str(row["members"]).replace(";", ",").split(","):
+                        m = m.strip()
+                        if m:
+                            members.add(m)
+            if members:
+                return frozenset(members)
+    
+    # Fall back to family roster
+    return frozenset(family_names)
+
+
+def _is_guild_first_event(event) -> bool:
+    """Check if this event represents a guild-first achievement."""
+    # For now, use a simple heuristic: epic drops in raid zones
+    if event.kind == "item_loot" and event.item_quality and event.item_quality >= 4:
+        # Could check against a guild-first tracking table in the future
+        return False
+    return False
+
+
+def _is_family_first_event(event) -> bool:
+    """Check if this event represents a family-first achievement."""
+    # Epic drops are family-first by default for the guild echo
+    if event.kind == "item_loot" and event.item_quality and event.item_quality >= 4:
+        return True
+    # First boss kill in a new dungeon
+    if event.kind == "boss_kill" and event.detail and "first" in event.detail.lower():
+        return True
+    return False
+
+
+def _get_place_for_event(event) -> str:
+    """Get a human-readable place name for the event."""
+    if event.kind == "boss_kill" and event.boss_name:
+        return event.boss_name
+    if event.kind == "item_loot":
+        return "a dungeon"
+    return "the run"
+
+
 # How long a break's restore waits before it is written again while the
 # leader still reads the break's job (a row refused `target not online`).
 ACTIVITY_RESTORE_RETRY_SECONDS = 120.0
@@ -9488,6 +9623,7 @@ PASSES = (
     _Pass("_poll_outcomes"),
     _Pass("_protect_characters"),
     _Pass("_narrate_events"),
+    _Pass("_run_voice_loop"),
     _Pass("_supervise_goals"),
     _Pass("_relay_chat", headless=False),
     _Pass("_run_report_loop", headless=False),
@@ -25985,6 +26121,110 @@ class Bridge(discord.Client):
                 )
             except Exception:
                 log.exception("event cycle failed; retrying next cycle")
+
+    async def _run_voice_loop(self) -> None:
+        """Party and guild chat during runs: real talk tied to real events.
+        
+        Reads dungeon run events and overseer events, generates party/guild chat
+        lines, and speaks them through the chat system.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("RUN_VOICE_CYCLE_SECONDS", "30"))
+        # Per-run say state, keyed by run_id
+        run_states: dict[int, runvoice.RunVoiceState] = {}
+        # Global guild say ledger (persists across runs)
+        guild_said: dict = {}
+        while not self.is_closed():
+            await asyncio.sleep(cycle)
+            try:
+                await self._run_voice_once(run_states, guild_said)
+            except Exception:
+                log.exception("run voice cycle failed; retrying next cycle")
+
+    async def _run_voice_once(self, run_states: dict, guild_said: dict) -> None:
+        """One cycle of run voice: fetch events, generate lines, speak them."""
+        now = time.monotonic()
+        
+        # Fetch active dungeon runs for this family
+        family_names = sorted(_protected_guids().values())
+        if not family_names:
+            return
+        
+        # Fetch dungeon run events from the last few minutes
+        run_events_rows = await asyncio.to_thread(_fetch_recent_dungeon_run_events, family_names)
+        if not run_events_rows:
+            return
+        
+        # Parse events
+        run_events = runvoice.parse_dungeon_run_events(run_events_rows)
+        
+        # Also fetch overseer events (boss_kill, death, level_up, item_loot) for the family
+        overseer_events_rows = await asyncio.to_thread(_fetch_recent_overseer_events, family_names)
+        overseer_events = runvoice.parse_overseer_events(overseer_events_rows)
+        
+        all_events = run_events + overseer_events
+        if not all_events:
+            return
+        
+        # Get party members (those in the active run)
+        party_members = await asyncio.to_thread(_get_party_members_for_events, all_events, family_names)
+        if not party_members:
+            return
+        
+        # Get guild members
+        guild_members = await asyncio.to_thread(_get_guild_members, family_names)
+        
+        # Get character levels for upgrade detection
+        character_levels = await asyncio.to_thread(_fetch_character_levels, family_names)
+        
+        # Process each event
+        written = 0
+        for event in all_events:
+            run_id = event.run_id or 0
+            if run_id not in run_states:
+                run_states[run_id] = runvoice.RunVoiceState(run_id=run_id, started_at=now)
+            state = run_states[run_id]
+            
+            # Generate party chat lines
+            party_lines = runvoice.generate_party_lines(
+                event, party_members, state, now=now, character_levels=character_levels
+            )
+            for speaker, line in party_lines:
+                cmd = relay.SpeakCommand(
+                    target_name=speaker, channel="party", text=line,
+                    whisper_to="", source="overseer:run_voice"
+                )
+                _insert_speak(cmd)
+                written += 1
+            
+            # Generate guild chat lines
+            # Check if this is a guild-first or family-first event
+            is_guild_first = _is_guild_first_event(event)
+            is_family_first = _is_family_first_event(event)
+            place = _get_place_for_event(event)
+            
+            guild_lines = runvoice.generate_guild_lines(
+                event, guild_members, guild_said, now=now,
+                is_guild_first=is_guild_first, is_family_first=is_family_first, place=place
+            )
+            for speaker, line in guild_lines:
+                cmd = relay.SpeakCommand(
+                    target_name=speaker, channel="guild", text=line,
+                    whisper_to="", source="overseer:run_voice"
+                )
+                _insert_speak(cmd)
+                written += 1
+        
+        # Clean up old run states (older than 2 hours)
+        cutoff = now - 7200
+        for run_id, state in list(run_states.items()):
+            if state.started_at < cutoff:
+                del run_states[run_id]
+        
+        if written:
+            log.info("run voice cycle: events=%d written=%d",
+                     len(all_events), written)
+
     # --- goal supervision (infra#2601): thin adapters over goals.py -------
 
     async def _maybe_handle_goal(self, d: core.NLDirective, channel) -> bool:
