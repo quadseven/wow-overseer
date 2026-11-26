@@ -7,7 +7,7 @@
 
 import { isFamily, isGuild, firstFamily, firstGuild } from "./families.js";
 
-export const SECTIONS = ["now", "guilds", "members", "quests", "raid", "economy"];
+export const SECTIONS = ["now", "guilds", "members", "quests", "raid", "economy", "gaming"];
 
 // The default family's or guild's page under `prefix`, or the Now page while
 // the realm has not said which families and guilds there are.
@@ -140,6 +140,7 @@ export function resolve(route) {
     const tab = ["auction", "trades", "professions", "bank"].includes(p[1]) ? p[1] : "gold";
     return { view: "economy", section: "economy", params: { tab } };
   }
+  if (top === "gaming") return { view: "gaming", section: "gaming", params: {} };
   if (top === "operator") return { view: "operator", section: "", params: {} };
   return { view: "notfound", section: "", params: {} };
 }

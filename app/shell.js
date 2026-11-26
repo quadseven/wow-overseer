@@ -14,6 +14,7 @@ const NAV = [
   { key: "quests", label: "Quests", icon: "scroll", href: "#/quests" },
   { key: "raid", label: "Raid", icon: "sword", href: "#/raid/mc" },
   { key: "economy", label: "Economy", icon: "coins", href: "#/economy" },
+  { key: "gaming", label: "Gaming", icon: "game-controller", href: "#/gaming" },
 ];
 
 // The guilds' links (the Guilds and Raid sub-items) and the families' ones are
