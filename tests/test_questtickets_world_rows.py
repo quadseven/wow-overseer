@@ -166,15 +166,15 @@ class WorldRows(unittest.TestCase):
             text,
         )
 
-    def test_investigate_the_camp_ticket_explains_the_event_reason(self):
-        # The ticket's read-only world snapshot gives quest 201's level and
-        # zero required item/NPC/object objectives: it completes only by a
-        # scripted event no lone quester drives.
+    def test_investigate_the_camp_ticket_explains_the_stall_from_world_rows(self):
+        # The fixture mirrors the ticket's read-only world snapshot: quest 201
+        # is level 32 with no required item, creature, or object objectives.
         world_row = quest_row(
             201,
             title="Investigate the Camp",
             level=32,
             min_level=28,
+            sort=33,
         )
         world_row.update(
             {key: 0 for i in range(1, 7) for key in ("item%d" % i, "item_count%d" % i)}
@@ -195,29 +195,32 @@ class WorldRows(unittest.TestCase):
             {
                 "quest": 201,
                 "guid": 7,
-                "character_name": "Durga",
+                "character_name": "Quester A",
                 "state": "broken",
-                "reason": questers.SCRIPTED_EVENT,
+                "reason": questers.STALLED,
             },
             {
                 "quest": 201,
                 "guid": 8,
-                "character_name": "Bromli",
+                "character_name": "Quester B",
                 "state": "broken",
-                "reason": questers.SCRIPTED_EVENT,
+                "reason": questers.STALLED,
             },
         ]
         text = qt.body(201, info, rows, [], "")
         self.assertIn("- Quest: 201, Investigate the Camp", text)
+        self.assertIn("- Zone: Stranglethorn Vale", text)
         self.assertIn("- Level: 32", text)
         self.assertIn("- No required item or creature/object rows.", text)
-        self.assertEqual(text.count("Reason: " + questers.SCRIPTED_EVENT), 2)
+        self.assertEqual(text.count("Reason: " + questers.STALLED), 2)
         self.assertEqual(text.count("Last objective counts: not in the log now"), 2)
         self.assertIn(
-            "The world rows list no required item or creature/object objectives, "
-            "so the stored reason is the only evidence of how it completes: a scripted event.",
+            "The world rows list no required item or creature/object objectives. "
+            "No quester can finish this quest through the objective actions available here, "
+            "and the stored reason does not identify another completion mechanism.",
             text,
         )
+        self.assertNotIn("scripted event", text)
 
     def test_quest_start_item_is_a_source_for_its_required_item(self):
         row = quest_row(item1=1353, item_count1=1, provided_item=1353)

@@ -1976,12 +1976,6 @@ def _broken_reason(
     it is due a turn-in, not a drop (#1085)."""
     if status == STATUS_FAILED:
         return _failed_reason(quest, facts)
-    # A scripted event quest completes only by an event the world drives, so a
-    # lone quester can never finish it. This is the same reason _giver_failure
-    # writes for a scripted event quest the quester cannot take; it also names
-    # one already in the log, whose objectives can never move.
-    if facts.scripted_event:
-        return SCRIPTED_EVENT
     if quest.id in (35, 109):
         return UNSUPPORTED_OBJECTIVE
     if quest.id == 93 and status == STATUS_INCOMPLETE and (2683, 6) in quest.items:

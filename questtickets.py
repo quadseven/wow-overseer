@@ -73,12 +73,19 @@ QUESTER_REFUSALS = (
 )
 # The quester ledger keeps a broken reason once written. Explain this stored
 # reason from the quest's world rows when it has no objective rows.
+STALLED_REASON = "its objectives did not move for 2 hours of play"
+NO_OBJECTIVES_REASON = "the world rows define no required creature, item, or object objective a quester can work"
 SCRIPTED_EVENT_REASON = (
     "the quest completes only by a scripted event no lone quester drives"
 )
 SCRIPTED_EVENT_NOTE = (
     "The world rows list no required item or creature/object objectives, "
     "so the stored reason is the only evidence of how it completes: a scripted event."
+)
+NO_OBJECTIVES_NOTE = (
+    "The world rows list no required item or creature/object objectives. "
+    "No quester can finish this quest through the objective actions available here, "
+    "and the stored reason does not identify another completion mechanism."
 )
 # The stored take reason from questers._giver_failure and the module's
 # QuestErrandRefusal. The module uses different reasons for an object
@@ -307,6 +314,19 @@ def _world_rows(info) -> list[str]:
     return lines + [""]
 
 
+def _no_objectives_note(info, rows) -> str:
+    if info is None or getattr(info, "items", ()) or getattr(info, "objectives", ()):
+        return ""
+    reasons = [str(row.get("reason") or "") for row in rows or ()]
+    if SCRIPTED_EVENT_REASON in reasons:
+        return SCRIPTED_EVENT_NOTE
+    if any(
+        reason.startswith((STALLED_REASON, NO_OBJECTIVES_REASON)) for reason in reasons
+    ):
+        return NO_OBJECTIVES_NOTE
+    return ""
+
+
 def body(quest: int, info, rows, objectives, site: str) -> str:
     """The issue body. `site` is the site's public base; without one the
     Quests page is named by its route, since no host may be guessed."""
@@ -330,24 +350,18 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
     ]
     lines.extend(_world_rows(info))
     no_giver_in_reach = False
-    scripted_event = False
     for row in rows:
         name = str(row.get("character_name") or "")
         reason = row.get("reason") or "no reason recorded"
         no_giver_in_reach |= reason == NO_GIVER_IN_REACH
-        scripted_event |= reason == SCRIPTED_EVENT_REASON
         lines += [
             "- Quester: %s (%s)" % (name, party_of(name)),
             "  - Reason: %s" % reason,
             "  - Last objective counts: %s" % _objectives(counts.get(int(row["guid"]))),
         ]
-    if (
-        scripted_event
-        and info is not None
-        and not getattr(info, "items", ())
-        and not getattr(info, "objectives", ())
-    ):
-        lines += ["", SCRIPTED_EVENT_NOTE]
+    note = _no_objectives_note(info, rows)
+    if note:
+        lines += ["", note]
     if no_giver_in_reach:
         lines += [
             "",
