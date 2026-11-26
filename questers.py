@@ -71,9 +71,10 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
 
   * FAILED: the log holds it as failed (an escort died, a timer ran out), and
     the world rows' fact that an objective creature has spawns only off the
-    quest's map is added to the reason when it does (`_failed_reason`);
+    quest's map is added to the reason when it does (`_with_off_home`);
   * STALLED: its objectives (status and counters) have not moved for
-    STALL_SECONDS of play while the quester was working it (`Clock`). Play is
+    STALL_SECONDS of play while the quester was working it (`Clock`), with the
+    same world rows' fact added as for FAILED (#2452). Play is
     time online and alive between two looks, at most PLAY_GAP_SECONDS each, so
     a bridge restart or a night offline is not play. A quest is being worked
     while it is the quest the quester's last move was for, or while it is in
@@ -265,7 +266,8 @@ def _quest_complete(quest, status, progress=0) -> bool:
 # ledger's own words for it (questledger.FAILED_REASON, #923).
 FAILED = "the quest failed in the log"
 # The world rows' fact added to FAILED for an objective creature with spawns
-# only on other maps (`_failed_reason`): entry, then the spawn count.
+# only on other maps, and to a stall (`_with_off_home`): entry, then the spawn
+# count.
 OFF_HOME_MAP = (
     "its objective creature %d has no spawn on the quest's map (%d on other maps)"
 )
@@ -309,10 +311,6 @@ FLAGON_OF_MEAD = (
     "The Third Fleet (quest 288) requires Flagon of Mead (item 2594), which "
     "only Malgin Barleybrew drops: one vendor spawn on another continent than "
     "the quest's zone, and questers cannot buy the item from a vendor"
-)
-CLAWS_FROM_THE_DEEP = (
-    "Claws from the Deep (quest 279) requires killing 12 Bluegill Murloc "
-    "(entry 1024), which has no spawns in the Wetlands zone"
 )
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
@@ -1955,12 +1953,12 @@ def _off_home(quest, facts: Facts) -> list:
     return out
 
 
-def _failed_reason(quest, facts: Facts) -> str:
-    """FAILED, with the world rows' fact about each objective creature whose
+def _with_off_home(reason, quest, facts: Facts) -> str:
+    """`reason`, with the world rows' fact about each objective creature whose
     spawns all stand off the quest's map, so the ledger says where its
-    objective is. The game's own FAILED is kept: this names no cause."""
+    objective is. The reason itself is kept: the fact names no cause."""
     notes = [OFF_HOME_MAP % (entry, n) for entry, n in _off_home(quest, facts)]
-    return "; ".join([FAILED, *notes])
+    return "; ".join([reason, *notes])
 
 
 def _broken_reason(
@@ -1979,7 +1977,7 @@ def _broken_reason(
     complete quest's objectives cannot move, so stillness never stalls it:
     it is due a turn-in, not a drop (#1085)."""
     if status == STATUS_FAILED:
-        return _failed_reason(quest, facts)
+        return _with_off_home(FAILED, quest, facts)
     if quest.id in (35, 109):
         return UNSUPPORTED_OBJECTIVE
     if quest.id == 93 and status == STATUS_INCOMPLETE and (2683, 6) in quest.items:
@@ -2027,12 +2025,6 @@ def _broken_reason(
         and played >= STALL_SECONDS
     ):
         return FLAGON_OF_MEAD
-    if (
-        quest.id == 279
-        and status == STATUS_INCOMPLETE
-        and played >= STALL_SECONDS
-    ):
-        return CLAWS_FROM_THE_DEEP
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that
@@ -2060,7 +2052,7 @@ def _broken_reason(
     unsourced = bool(vendor_item) or (
         (quest.kills or quest.items) and not quest.fields and not _chested(quest)
     )
-    return STALLED_UNSOURCED if unsourced else STALLED
+    return _with_off_home(STALLED_UNSOURCED if unsourced else STALLED, quest, facts)
 
 
 def _refused_words(reason, words) -> str:

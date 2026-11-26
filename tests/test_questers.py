@@ -958,6 +958,77 @@ class Broken(unittest.TestCase):
         )
         self.assertEqual(self._failed_reason(cat, 258), questers.FAILED)
 
+    def _claws_world(self, murloc_map):
+        """Quest 279 (Claws from the Deep) as #2452's world rows give it:
+        Wetlands (11), level 22, minimum 20, kill 12 Bluegill Murloc (1024)
+        and bring Gobbler's Head (3618), which creature 1259 drops. The rows
+        count 25 spawns of 1024 and none on the quest's map; the giver's map
+        and the murlocs' other map here are this fixture's own."""
+        claws = quest(
+            279,
+            11,
+            22,
+            min_level=20,
+            kill=1024,
+            count=12,
+            title="Claws from the Deep",
+        )
+        claws.update(item1=3618, item_count1=1)
+        murlocs = [
+            spawn(5000 + i, 1024, 1000 + 10 * i, 0, level=21, map_id=murloc_map)
+            for i in range(25)
+        ]
+        return world(
+            extra_quests=[claws],
+            extra_givers=[
+                giver(279, "start", 1279, 999, 0, 0),
+                giver(279, "end", 1279, 999, 0, 0),
+            ],
+            extra_spawns=[*murlocs, spawn(6000, 1259, 1300, 0, level=24)],
+            extra_loot=[{"item": 3618, "entry": 1259}],
+        )
+
+    def _claws_stall(self, cat):
+        """The Broken rows of a level 22 quester in Wetlands holding quest 279
+        with Gobbler's Head and no murloc killed, its last move for the quest,
+        after 2 hours of play."""
+        member = mirra(
+            level=22,
+            zone_id=11,
+            x=0.0,
+            y=0.0,
+            quest_log={279: questers.STATUS_INCOMPLETE},
+            quest_progress={279: 1},
+            quest_objectives={279: {1024: 0}},
+            quest_item_objectives={279: {3618: 1}},
+        )
+        clock = questers.Clock()
+        steps = questers.STALL_SECONDS // 600 + 1
+        plans = [
+            questers.plan(cat, member, clock, 600.0 * i, last_quest=279)
+            for i in range(steps)
+        ]
+        return plans[-1].broken
+
+    def test_a_stall_names_its_objective_off_the_quests_map(self):
+        broken = self._claws_stall(self._claws_world(murloc_map=1))
+        self.assertEqual([b.quest for b in broken], [279])
+        self.assertEqual(
+            broken[0].reason,
+            questers.STALLED
+            + "; its objective creature 1024 has no spawn on the quest's map "
+            "(25 on other maps)",
+        )
+        self.assertEqual(
+            questers.LEDGER_STALLED, questers.ledger_state("broken", broken[0].reason)
+        )
+
+    def test_a_stall_with_its_objective_on_its_map_keeps_the_plain_reason(self):
+        broken = self._claws_stall(self._claws_world(murloc_map=0))
+        self.assertEqual(
+            [(b.quest, b.reason) for b in broken], [(279, questers.STALLED)]
+        )
+
     def test_quest_101_carries_no_hard_coded_reason(self):
         """The Totem of Infliction is a plain three-item collect quest in the
         world rows (items 1129, 1130, 2378, no item use), so it is judged like
@@ -1602,50 +1673,6 @@ class Broken(unittest.TestCase):
         # Should have a specific reason, not just STALLED_UNSOURCED
         self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
         self.assertIn("Underbelly Scales", p.broken[0].reason)
-
-    def test_claws_from_the_deep_names_the_missing_bluegill_spawns(self):
-        # Quest 279 "Claws from the Deep" in Wetlands (level 22, min 20)
-        # requires killing 12 Bluegill Murloc (entry 1024). The world rows
-        # show 0 spawns of creature 1024 in the Wetlands zone, so the kill
-        # objective can never move.
-        claws = quest(
-            279, 11, 22, kill=1024, count=12, title="Claws from the Deep"
-        )
-        claws["item1"] = 3618
-        claws["item_count1"] = 1
-        cat = world(
-            extra_quests=[claws],
-            # A starter on a classic continent makes Wetlands (11) a classic
-            # zone so the catalogue keeps facts for quest 279.
-            extra_givers=[
-                giver(279, "start", 1279, 999, 0, 0),
-                giver(279, "end", 1279, 999, 0, 0),
-            ],
-        )
-        # No spawns of creature 1024 -> no fields for this quest
-        member = mirra(
-            level=22,
-            zone_id=11,
-            quest_log={279: questers.STATUS_INCOMPLETE},
-            quest_progress={279: 0},
-            quest_objectives={279: {1024: 0}},
-        )
-        clock = questers.Clock()
-        # First pass - quest is not yet stalled
-        p = questers.plan(cat, member, clock, 0.0)
-        self.assertEqual(p.broken, ())
-        # Advance the clock in PLAY_GAP_SECONDS increments until the stall
-        # (STALL_SECONDS = 2 hours = 7200 sec, 600 sec per call -> 12 calls)
-        for i in range(1, 13):
-            p = questers.plan(cat, member, clock, 600.0 * i)
-        # After 2 hours of play - quest is broken with the specific reason
-        self.assertEqual(len(p.broken), 1)
-        self.assertEqual(p.broken[0].quest, 279)
-        self.assertNotEqual(p.broken[0].reason, questers.STALLED)
-        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
-        self.assertIn("Bluegill Murloc", p.broken[0].reason)
-        self.assertIn("Wetlands", p.broken[0].reason)
-        self.assertIn("entry 1024", p.broken[0].reason)
 
     def test_a_quest_of_another_zone_it_is_not_working_does_not_stall(self):
         p, _ = self._play(mirra(quest_log={20: 3}), 240)
