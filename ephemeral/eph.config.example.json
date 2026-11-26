@@ -6,6 +6,7 @@
   "results_dir": "/path/to/ephemeral-results",
   "ledger_path": "/path/to/livecheck-results.jsonl",
   "tools_image": "registry.example.com/eph-tools@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "template_pull_secret": "<template-registry-pull-secret>",
   "template_images": {
     "lean": "registry.example.com/eph-template:newest",
     "full": "registry.example.com/eph-template:newest"
