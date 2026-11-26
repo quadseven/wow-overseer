@@ -3700,8 +3700,8 @@ def _fetch_ladder_records(rd, families: dict, chars: list) -> dict:
 def _fetch_ladder_record(rd, head: str, members: list, capped: bool) -> dict:
     """One family's rows for the ladder and Jev's reasons. Reads only.
 
-    `capped` reads the pre-raid plan too, because at the level cap a lower
-    dungeon stays on the ladder only while its loot upgrades somebody.
+    `capped` reads the pre-raid plan too, because at the level cap the
+    doors are ranked by what their loot is worth to the family.
     """
     holes = campaignplan.holes(len(members))
     args = tuple(members)

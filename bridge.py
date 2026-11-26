@@ -5920,28 +5920,6 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
         unformed=dungeonstall.unformed(unformed))
 
 
-async def _planner_due(read: dict, key: str, fam: dict, rows: list,
-                       level_rows: list, dry, now: float):
-    """campaignplan.Due for one family's pending rows.
-
-    A CAPPED FAMILY ON A DOOR PAST ITS CEILING IS THERE FOR ITS LOOT (#2207),
-    so its entry is read against that loot: `_planner_facts` is built only
-    once something is due, and without this read the entry ran to its count
-    on a door the plan itself refuses as outgrown. `read` is family -> when
-    the loot was last read: one read an idle stretch, not one a cycle.
-    """
-    due = campaignplan.due(rows, fam["leader"], level_rows, dry)
-    if due.reason or not campaignplan.needs_loot(rows, level_rows):
-        return due
-    last = read.get(key)
-    if last is not None and now - last < campaignplan.IDLE_SECONDS:
-        return due
-    read[key] = now
-    upgrades, _progress = await asyncio.to_thread(
-        _planner_preraid, list(fam["names"]), level_rows)
-    return campaignplan.due(rows, fam["leader"], level_rows, dry, upgrades)
-
-
 def _planner_catalog(cur) -> dict | None:
     """preraid's catalog, read once per process; None when unreadable."""
     global _PLANNER_CATALOG
@@ -9897,9 +9875,6 @@ class Bridge(discord.Client):
         # family -> (the last "nothing to plan" line, when), so it is said
         # once and the facts are not re-read every cycle.
         self._planner_said: dict = {}
-        # family -> when the loot was last read for an entry a capped family
-        # holds past its door's ceiling (#2207).
-        self._planner_loot_read: dict = {}
         # The family's ranked priorities (priorities.py, #1559), as last read.
         # Refreshed by `_priority_order` before every Jev Choice ask and on
         # every goal pass; the default until the first read lands.
@@ -27993,8 +27968,9 @@ class Bridge(discord.Client):
         level_rows = await asyncio.to_thread(_queue_level_rows, fam)
         dry = await asyncio.to_thread(_planner_dry, list(fam["names"]))
         now = time.monotonic()
-        due = await _planner_due(self._planner_loot_read, key, fam, rows,
-                                 level_rows, dry, now)
+        # A capped family's entry for a door under the cap ends between runs
+        # by its levels alone (campaignplan._outgrown, #3282): no loot read.
+        due = campaignplan.due(rows, fam["leader"], level_rows, dry)
         if not due.reason:
             self._planner_said.pop(key, None)
             return False
