@@ -185,9 +185,11 @@ class SubmitTest(Base):
         self.assertNotIn("{{", text)
 
     def test_newest_template_is_resolved_and_the_job_names_it_by_digest(self):
+        import base64
         from unittest import mock
 
         from test_eph_imagecommit import (
+            CREDS,
             TPL,
             TPL_MANIFEST,
             NewestTemplateTest,
@@ -195,9 +197,25 @@ class SubmitTest(Base):
         )
 
         self.cfg.template_images["lean"] = f"{TPL}:newest"
-        reg = TemplateRegistry(NewestTemplateTest.TAGS)
+        self.cfg.template_pull_secret = "template-reader"
+        auth = base64.b64encode(":".join(CREDS).encode()).decode()
+        docker_config = json.dumps({"auths": {TPL.split("/")[0]: {"auth": auth}}})
+        self.cluster.put(
+            "secrets",
+            "wow-ephemeral",
+            "template-reader",
+            {
+                "data": {
+                    ".dockerconfigjson": base64.b64encode(
+                        docker_config.encode()
+                    ).decode()
+                }
+            },
+        )
+        reg = TemplateRegistry(NewestTemplateTest.TAGS, basic=True)
         with mock.patch("ephemeral.imagecommit.urlfetch", reg):
             rec = self.submit(**CONTROL)
+        self.assertFalse(any("/token?" in url for url in reg.calls))
         import hashlib
 
         want = f"{TPL}@sha256:" + hashlib.sha256(TPL_MANIFEST).hexdigest()
