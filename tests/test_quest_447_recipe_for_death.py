@@ -7,8 +7,7 @@ dropped by creature entries 1778, 1797 and 12432, and Skittering Blood
 entries are the ticket's world rows; their levels and the giver entry are
 fixture-only, because the ticket lists no giver or spawn rows.
 
-Six questers held the quest for two hours of play and its objectives did
-not move at all. Loot rows alone do not say a dropper is spawned, so this
+Loot rows alone do not say a dropper is spawned, so this
 file pins the quester's behaviour for each sourcing the world rows can
 hide, in the shape of the Wild Hearts rows (#3250):
 
