@@ -416,6 +416,13 @@ a UTC start time. Missing or ambiguous boxes are reported without a body edit.
 `--dry-run` prints the exact comment and makes no issue changes. This command
 never closes an issue.
 
+The runner config names each class template in `template_images`. A dated tag
+(`host/path:lean-<stamp>`) is used as written. `host/path:newest` makes `submit` list the
+repository, take the newest `<class>-<stamp>` tag, and run the template by its digest
+(`host/path@sha256:...`); the digest is recorded as `template_image` in the submission,
+so a run stays reproducible after the forge prunes old tags. The forge keeps only the newest
+few stamps, so a pinned dated tag goes stale; prefer `newest`.
+
 The template is forged from the live realm: its characters and auth databases and its
 world database are at the live schema, and its `updates` table holds each module SQL file
 at its current hash. A control image is older, which breaks two ways, so the arms differ in

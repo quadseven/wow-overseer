@@ -165,3 +165,51 @@ def image_env(ref, creds, fetch=None):
         k, _, v = str(item).partition("=")
         env[k] = v
     return env
+
+
+_NEWEST = re.compile(
+    r"^(?P<host>[a-z0-9][a-z0-9.-]*(?::\d+)?)/(?P<path>[a-z0-9][a-z0-9._/-]*):newest$"
+)
+NEWEST = ":newest"
+
+
+def is_newest(ref):
+    """True when a template image names the newest tag of its class (`host/path:newest`)."""
+    return isinstance(ref, str) and ref.endswith(NEWEST)
+
+
+def newest_template(ref, klass, creds, fetch=None):
+    """Resolve `host/path:newest` to `host/path@sha256:...` for the newest `<klass>-<stamp>` tag.
+
+    The stamp is a fixed-width UTC time, so the greatest tag sorts newest. The
+    digest is the hash of the manifest body the registry served for that tag.
+    """
+    fetch = fetch or urlfetch
+    m = _NEWEST.match(str(ref))
+    if not m or klass not in ("lean", "full"):
+        raise RegistryError("template image must be host/path:newest")
+    host, path = m["host"], m["path"]
+    q = urllib.parse.urlencode(
+        {"service": host, "scope": f"repository:{path}:pull"}, safe=":/"
+    )
+    auth = {}
+    if creds:
+        auth["Authorization"] = (
+            "Basic " + base64.b64encode(f"{creds[0]}:{creds[1]}".encode()).decode()
+        )
+    try:
+        token = json.loads(_get(fetch, f"https://{host}/token?{q}", auth))["token"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise RegistryError("registry gave no token") from exc
+    headers = {"Authorization": f"Bearer {token}", "Accept": ACCEPT}
+    base = f"https://{host}/v2/{path}"
+    try:
+        tags = json.loads(_get(fetch, f"{base}/tags/list", headers))["tags"] or []
+    except (ValueError, KeyError, TypeError) as exc:
+        raise RegistryError("registry gave no tag list") from exc
+    stamp = re.compile(rf"^{klass}-\d{{8}}T\d{{6}}Z$")
+    mine = sorted(t for t in tags if isinstance(t, str) and stamp.match(t))
+    if not mine:
+        raise RegistryError(f"no {klass} template tag in the registry")
+    body = _get(fetch, f"{base}/manifests/{mine[-1]}", headers)
+    return f"{host}/{path}@sha256:" + hashlib.sha256(body).hexdigest()
