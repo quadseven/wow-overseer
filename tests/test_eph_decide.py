@@ -128,20 +128,33 @@ class FisherTest(unittest.TestCase):
 
 
 class TickTest(unittest.TestCase):
-    BODY = "- [ ] unit tests\n- [ ] Live: the family leaves the bar without a patron dying\n- [x] done\n"
-
-    def test_ticks_the_criterion_and_live_boxes_only(self):
-        body, n = decide.tick_boxes(
-            self.BODY, "the family leaves the bar without a patron dying"
+    def test_preserves_format_and_accepts_an_already_ticked_match(self):
+        body = (
+            "  1. [ ] LIVE:  The family leaves.\n  2) [ ] Review.\n  + [ ] Rollout.\n"
         )
-        self.assertEqual(n, 1)
-        self.assertIn("- [ ] unit tests", body)
-        self.assertIn("- [x] Live: the family leaves", body)
-        self.assertEqual(decide.unticked(body), 1)
+        expected = body.replace("[ ] LIVE", "[x] LIVE")
+        for original in (body, expected):
+            with self.subTest(original=original):
+                self.assertEqual(
+                    decide.tick_criterion(original, "the family leaves."),
+                    (expected, ""),
+                )
+        self.assertEqual(decide.unticked(expected), 2)
 
-    def test_a_body_without_matching_boxes_is_unchanged(self):
-        body, n = decide.tick_boxes("- [ ] other\n", "nothing like it")
-        self.assertEqual((body, n), ("- [ ] other\n", 0))
+    def test_a_duplicate_including_a_checked_box_is_ambiguous(self):
+        body = "- [x] The family leaves.\n- [ ] Live: The family leaves.\n"
+        self.assertEqual(
+            decide.tick_criterion(body, "The family leaves."),
+            (body, "multiple checkboxes match the decree criterion"),
+        )
+
+    def test_ignores_example_checkboxes_in_fenced_code(self):
+        body = "````markdown\n```\n- [ ] The family leaves.\n````\n- [ ] Rollout.\n"
+        self.assertEqual(
+            decide.tick_criterion(body, "The family leaves."),
+            (body, "no checkbox matches the decree criterion"),
+        )
+        self.assertEqual(decide.unticked(body), 1)
 
 
 class StatisticsDisplayTest(unittest.TestCase):

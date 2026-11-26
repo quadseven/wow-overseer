@@ -137,30 +137,48 @@ def decide(rec, res):
 
 # -- boxes -------------------------------------------------------------------------
 
-_BOX = re.compile(r"^(\s*[-*]\s+)\[ \](.*)$")
+_BOX = re.compile(r"^(\s*(?:[-*+]|\d+[.)])[ \t]+\[)([ xX])(\](?:[ \t].*)?)$")
+_FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 
 
-def _norm(text):
-    return re.sub(r"[^a-z0-9 ]+", "", re.sub(r"\s+", " ", text.lower())).strip()
+def _boxes(lines):
+    fence = ""
+    for i, line in enumerate(lines):
+        marker = _FENCE.match(line)
+        if marker and not fence:
+            fence = marker[1]
+        elif fence:
+            if marker and marker[1].startswith(fence) and not marker[2].strip():
+                fence = ""
+        elif box := _BOX.match(line):
+            yield i, box
 
 
-def tick_boxes(body, criterion):
-    """Tick the unticked boxes that quote the criterion or are marked live."""
-    want = _norm(criterion)
-    lines, n = [], 0
-    for line in body.split("\n"):
-        m = _BOX.match(line)
-        if m and (
-            (want and want in _norm(m.group(2)))
-            or re.search(r"\blive\b", m.group(2), re.I)
-        ):
-            line, n = f"{m.group(1)}[x]{m.group(2)}", n + 1
-        lines.append(line)
-    return "\n".join(lines), n
+def _criterion_key(text):
+    return " ".join(text.casefold().split()).removeprefix("live:").lstrip()
+
+
+def tick_criterion(body, criterion):
+    """Tick the unique exact criterion, returning the body and a refusal reason."""
+    want = _criterion_key(criterion)
+    lines = body.split("\n")
+    matches = [
+        (i, box)
+        for i, box in _boxes(lines)
+        if want and _criterion_key(box[3][1:]) == want
+    ]
+    if not matches:
+        return body, "no checkbox matches the decree criterion"
+    if len(matches) != 1:
+        return body, "multiple checkboxes match the decree criterion"
+    i, box = matches[0]
+    if box[2] == " ":
+        lines[i] = f"{box[1]}x{box[3]}"
+    return "\n".join(lines), ""
 
 
 def unticked(body):
-    return sum(1 for line in body.split("\n") if _BOX.match(line))
+    return sum(box[2] == " " for _, box in _boxes(body.split("\n")))
 
 
 # -- the comment -------------------------------------------------------------------
