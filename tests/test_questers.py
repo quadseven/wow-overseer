@@ -2586,13 +2586,14 @@ class ASummonedObjectEnder(unittest.TestCase):
 
 
 class OperationRecombobulation(unittest.TestCase):
-    """Quest 412's item objectives use the world rows carried by the ticket."""
+    """Quest 412's item objectives, with a fixture shaped like the world rows."""
 
     def test_operation_recombobulation_hunts_to_the_full_item_totals(self):
         # The ticket's quest requirements follow questers.QUESTS_SQL; drop and
-        # spawn rows follow classquest.LOOT_SQL and SPAWNS_SQL. The fixture uses
-        # the ticket's source entries; neutral positions and a giver drive the
-        # plan. Objective counters follow questers.LOG_SQL.
+        # spawn rows follow classquest.LOOT_SQL and SPAWNS_SQL. The entries,
+        # item ids and counts below are synthetic stand-ins shaped like those
+        # rows, not values read from the world data; neutral positions and a
+        # giver drive the plan. Objective counters follow questers.LOG_SQL.
         recombobulation = quest(
             412, 1, 10, min_level=7, title="Operation Recombobulation"
         )
