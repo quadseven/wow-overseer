@@ -1603,6 +1603,50 @@ class Broken(unittest.TestCase):
         self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
         self.assertIn("Underbelly Scales", p.broken[0].reason)
 
+    def test_claws_from_the_deep_names_the_missing_bluegill_spawns(self):
+        # Quest 279 "Claws from the Deep" in Wetlands (level 22, min 20)
+        # requires killing 12 Bluegill Murloc (entry 1024). The world rows
+        # show 0 spawns of creature 1024 in the Wetlands zone, so the kill
+        # objective can never move.
+        claws = quest(
+            279, 11, 22, kill=1024, count=12, title="Claws from the Deep"
+        )
+        claws["item1"] = 3618
+        claws["item_count1"] = 1
+        cat = world(
+            extra_quests=[claws],
+            # A starter on a classic continent makes Wetlands (11) a classic
+            # zone so the catalogue keeps facts for quest 279.
+            extra_givers=[
+                giver(279, "start", 1279, 999, 0, 0),
+                giver(279, "end", 1279, 999, 0, 0),
+            ],
+        )
+        # No spawns of creature 1024 -> no fields for this quest
+        member = mirra(
+            level=22,
+            zone_id=11,
+            quest_log={279: questers.STATUS_INCOMPLETE},
+            quest_progress={279: 0},
+            quest_objectives={279: {1024: 0}},
+        )
+        clock = questers.Clock()
+        # First pass - quest is not yet stalled
+        p = questers.plan(cat, member, clock, 0.0)
+        self.assertEqual(p.broken, ())
+        # Advance the clock in PLAY_GAP_SECONDS increments until the stall
+        # (STALL_SECONDS = 2 hours = 7200 sec, 600 sec per call -> 12 calls)
+        for i in range(1, 13):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        # After 2 hours of play - quest is broken with the specific reason
+        self.assertEqual(len(p.broken), 1)
+        self.assertEqual(p.broken[0].quest, 279)
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED)
+        self.assertNotEqual(p.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("Bluegill Murloc", p.broken[0].reason)
+        self.assertIn("Wetlands", p.broken[0].reason)
+        self.assertIn("entry 1024", p.broken[0].reason)
+
     def test_a_quest_of_another_zone_it_is_not_working_does_not_stall(self):
         p, _ = self._play(mirra(quest_log={20: 3}), 240)
         self.assertEqual(p.broken, ())

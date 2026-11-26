@@ -310,6 +310,10 @@ FLAGON_OF_MEAD = (
     "only Malgin Barleybrew drops: one vendor spawn on another continent than "
     "the quest's zone, and questers cannot buy the item from a vendor"
 )
+CLAWS_FROM_THE_DEEP = (
+    "Claws from the Deep (quest 279) requires killing 12 Bluegill Murloc "
+    "(entry 1024), which has no spawns in the Wetlands zone"
+)
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
@@ -2023,6 +2027,12 @@ def _broken_reason(
         and played >= STALL_SECONDS
     ):
         return FLAGON_OF_MEAD
+    if (
+        quest.id == 279
+        and status == STATUS_INCOMPLETE
+        and played >= STALL_SECONDS
+    ):
+        return CLAWS_FROM_THE_DEEP
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that
