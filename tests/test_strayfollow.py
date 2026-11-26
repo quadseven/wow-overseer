@@ -203,6 +203,9 @@ class TheBridgePass(unittest.TestCase):
         self.assertIn("strayfollow.plan(", body)
         self.assertIn("strayfollow.gave_up(", body)
         self.assertIn("tries", body)
+        self.assertIn("refusals", body)
+        self.assertIn("_STRAY_REFUSAL_SQL", BRIDGE)
+        self.assertIn("strayfollow.refusals_from_rows(", BRIDGE)
         self.assertIn("_insert_guild, r.name, r.command, r.source", body)
         self.assertIn('log.info("stray followers: %s (row %d)"', body)
         sql = BRIDGE.split("_STRAY_FOLLOWERS_SQL = (", 1)[1][:1500]
@@ -212,3 +215,51 @@ class TheBridgePass(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheRefusal(unittest.TestCase):
+    GUILDS = frozenset({"Cave", "Bonkers"})
+    REASON = "the group is a dungeon finder group"
+
+    def test_a_member_the_module_refused_is_not_asked_again(self):
+        rows, lines = sf.plan(
+            [follower()],
+            {"Chop": 0.0},
+            10**6,
+            {},
+            self.GUILDS,
+            {},
+            {"Chop": self.REASON},
+        )
+        self.assertEqual(rows, ())
+        self.assertEqual(lines, ())
+
+    def test_gave_up_names_the_modules_refusal_as_the_reason(self):
+        lines = sf.gave_up(
+            [follower()],
+            {"Chop": 0.0},
+            10**6,
+            {"Chop": 1},
+            self.GUILDS,
+            {"Chop": self.REASON},
+        )
+        self.assertEqual(len(lines), 1)
+        self.assertIn("Chop", lines[0])
+        self.assertIn("Stranger", lines[0])
+        self.assertIn("refused", lines[0])
+        self.assertIn(self.REASON, lines[0])
+
+    def test_refusals_come_from_the_newest_rows_answer(self):
+        rows = [
+            {"target_name": "Chop", "status": "refused", "detail": self.REASON},
+            {"target_name": "Egg", "status": "done", "detail": "left the group"},
+            {
+                "target_name": "Fizz",
+                "status": "error",
+                "detail": "refused: in a battleground",
+            },
+        ]
+        out = sf.refusals_from_rows(rows)
+        self.assertEqual(out.get("Chop"), self.REASON)
+        self.assertNotIn("Egg", out)
+        self.assertIn("battleground", out.get("Fizz", ""))

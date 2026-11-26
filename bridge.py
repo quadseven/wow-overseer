@@ -4821,23 +4821,41 @@ _STRAY_RECENT_SQL = (
     "FROM overseer_command WHERE source LIKE %s "
     "AND created_at > NOW() - INTERVAL 1 DAY GROUP BY target_name"
 )
+# The module's answer to each member's newest leave row: a refusal there
+# (a battleground or finder group this verb may not break up) means no
+# further row can take, so strayfollow backs off on the named reason
+# instead of counting blind rows (wow-overseer#2589).
+_STRAY_REFUSAL_SQL = (
+    "SELECT target_name, status, detail FROM overseer_command "
+    "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY "
+    "AND id IN (SELECT MAX(id) FROM overseer_command WHERE source LIKE %s "
+    "AND created_at > NOW() - INTERVAL 1 DAY GROUP BY target_name) "
+    "ORDER BY id DESC"
+)
 
 
 def _fetch_stray_followers() -> tuple:
     """(followers, name -> minutes since its last leave row, name -> leave rows
-    in the last day) for strayfollow."""
+    in the last day, name -> the module's refusal of its newest leave row)
+    for strayfollow."""
     guilds = sorted(raidteams.GROUPS)
     if not guilds:
-        return (), {}, {}
+        return (), {}, {}, {}
     sql = _STRAY_FOLLOWERS_SQL.format(guilds=",".join(["%s"] * len(guilds)))
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, guilds)
         followers = strayfollow.followers_from_rows(cur.fetchall())
         cur.execute(_STRAY_RECENT_SQL, (strayfollow.SOURCE + ":%",))
         asked = cur.fetchall()
+        cur.execute(
+            _STRAY_REFUSAL_SQL,
+            (strayfollow.SOURCE + ":%", strayfollow.SOURCE + ":%"),
+        )
+        newest = cur.fetchall()
     recent = {str(r["target_name"]): int(r["age"]) for r in asked}
     tries = {str(r["target_name"]): int(r["tries"]) for r in asked}
-    return followers, recent, tries
+    refusals = strayfollow.refusals_from_rows(newest)
+    return followers, recent, tries, refusals
 
 
 # THE RARE NODES AND THE RIDERS' READS (memberloop.py). The world does not
@@ -30451,15 +30469,16 @@ class Bridge(discord.Client):
         told: set = set()
         while not self.is_closed():
             try:
-                followers, recent, tries = await asyncio.to_thread(
+                followers, recent, tries, refusals = await asyncio.to_thread(
                     _fetch_stray_followers)
                 now = time.monotonic()
                 since = strayfollow.track(since, followers, now)
                 guilds = frozenset(raidteams.GROUPS)
                 rows, lines = strayfollow.plan(
-                    followers, since, now, recent, guilds, tries)
+                    followers, since, now, recent, guilds, tries, refusals)
                 # One line a member, not one a cycle, for a member given up.
-                for line in strayfollow.gave_up(followers, since, now, tries, guilds):
+                for line in strayfollow.gave_up(
+                        followers, since, now, tries, guilds, refusals):
                     if line not in told:
                         told.add(line)
                         log.info("stray followers: %s", line)
