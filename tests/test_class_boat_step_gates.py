@@ -85,6 +85,35 @@ class EachGate(unittest.TestCase):
         self.assertEqual([s.rows[0].command for s in steps], [boat_command()])
 
 
+class QuesterCrossingDoesNotHoldClassBoat(unittest.TestCase):
+    # Class quests come first: a quester's ride in flight does not hold back a
+    # class quest's boat (#2202).
+    def test_a_quester_crossing_in_flight_does_not_hold_the_class_boat(self):
+        young = row(
+            "Isle",
+            boat_command(),
+            guildjobs.QUESTER_CROSS_ACTION,
+            "",
+            1,
+            retry=False,
+            status="verifying",
+        )
+        young["result"] = ""
+        step, said, note = step_for(island(), rows=(young,))
+        self.assertIsNotNone(step)
+        self.assertEqual(step.rows[0].command, boat_command())
+        self.assertEqual(said, MOVE.said)
+        self.assertEqual(note, "")
+
+    def test_a_class_crossing_in_flight_still_holds_the_class_boat(self):
+        # A class quest's own crossing still holds the boat.
+        young = boat_row("Isle", 1, status="verifying")
+        step, said, note = step_for(island(), rows=(young,))
+        self.assertIsNone(step)
+        self.assertEqual(said, MOVE.said)
+        self.assertEqual(note, "")
+
+
 class GatesAbovetheStep(unittest.TestCase):
     def rides(self, member):
         return [

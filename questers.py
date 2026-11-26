@@ -2961,6 +2961,7 @@ def plan(
         if held:
             move, why = None, held
     boat = None
+    boat_quest = None
     if move is not None and move.spot is not None:
         # A spot across the island's shore is reached by the boat, or held with
         # a named reason (#2194), as a class quest's is (#2182).
@@ -2976,7 +2977,12 @@ def plan(
         if island is not None:
             boat, _said, note = island
             if boat is None:
+                # A named boat hold: time in the hold does not count toward
+                # the quest's stall clock (#2202).
+                boat_quest = move.quest
                 move, why = None, note or "%s waits on its last crossing" % member.name
+    if boat_quest is not None:
+        clock.reset(member.name, boat_quest)
     if boat is None and move is not None and move.spot is not None:
         # A drop does not walk. Only a far walk waits out the far walk
         # ceiling and budget, but another verb's hold is on the character, so

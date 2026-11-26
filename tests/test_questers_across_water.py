@@ -16,7 +16,7 @@ import unittest
 import classquest
 import guildjobs
 import questers
-from test_questers import giver, mirra, quest, world
+from test_questers import giver, mirra, quest, spawn, world
 
 DARKSHORE = 148
 WALL = "no transport the module knows sails from this map to that map for this faction"
@@ -155,5 +155,36 @@ class TheHold(unittest.TestCase):
         self.assertIsNone(p.move)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TheBoatHoldStallClock(unittest.TestCase):
+    # A quester held on the boat must not have the stall clock run for the quest
+    # it is working on. Time in a named boat hold does not count toward
+    # STALL_SECONDS (#2202).
+    def test_a_boat_hold_longer_than_stall_seconds_does_not_break_the_quest(self):
+        clock = questers.Clock()
+        young = boat_refused(1)
+        young["status"] = "verifying"
+        young["result"] = ""
+        crossings = guildjobs.recent_from_rows([young])
+        cat = world(
+            extra_quests=[
+                quest(40, DARKSHORE, 4, kill=201, count=8, title="Darkshore Fish")
+            ],
+            extra_givers=[
+                giver(40, "start", 1040, 140, *MAINLAND_GIVER, map_id=1),
+                giver(40, "end", 1040, 140, *MAINLAND_GIVER, map_id=1),
+            ],
+            extra_spawns=[spawn(1001, 201, -282.0, -4164.0, level=4, map_id=1)],
+        )
+        for i in range(13):
+            now = 600.0 * i
+            p = questers.plan(
+                cat,
+                isle(quest_log={40: questers.STATUS_INCOMPLETE}),
+                clock,
+                now,
+                tried=(),
+                last_quest=40,
+                crossings=crossings,
+            )
+            broken = [b for b in p.broken if b.quest == 40]
+            self.assertEqual(broken, [], "quest broke at now=%s" % now)

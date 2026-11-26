@@ -167,12 +167,42 @@ class Fillers(unittest.TestCase):
         self.assertEqual(10, len(queuing(moves)))
         self.assertEqual(["F00", "F01"], sorted(n for n, a in aims.items() if a.filler))
 
-    def test_a_queued_filler_under_level_60_is_released(self):
+    def test_a_queued_filler_under_level_60_is_held_until_the_queue_ends(self):
+        # The floor stops picking new fillers under the level, but does not drop
+        # one already in its queue (#2202).
         seekers = rows("A", 8, level=35) + rows("F", 2, filler, level=35)
         recent = [recent_row(s.name, "bg-queue wsg", 20) for s in seekers]
         _, moves, _ = run(seekers, recent=recent)
+        held = [n for n in ("F00", "F01") if n in moves]
+        self.assertEqual(held, ["F00", "F01"])
+        self.assertEqual({moves[n].kind for n in held}, {pvpgear.WAITING})
+
+    def test_a_filler_under_level_60_inside_a_battleground_stays_held(self):
+        # Already inside a battleground: held until the game ends, not planned
+        # by other passes and not requeued as a filler afterward.
+        seekers = rows("A", 8, level=60) + rows("F", 1, filler, level=35)
+        maps = {"F00": 30}  # AV's map
+        recent = [recent_row("A%02d" % i, "bg-queue av", 20) for i in range(8)]
+        aims, moves, _ = run(seekers, recent=recent, maps=maps)
+        self.assertIn("F00", aims)
+        self.assertEqual(moves["F00"].kind, pvpgear.INSIDE)
+        self.assertTrue(aims["F00"].filler)
+
+    def test_a_filler_under_level_60_not_in_queue_or_bg_is_not_held(self):
+        seekers = rows("A", 8, level=60) + rows("F", 2, filler, level=35)
+        _, moves, _ = run(seekers)
         self.assertNotIn("F00", moves)
         self.assertNotIn("F01", moves)
+
+    def test_a_filler_under_level_60_is_not_requeued_after_the_queue_ends(self):
+        # Once the queue row is past WAITING_MINUTES the member is no longer
+        # held and is not drafted as a filler.
+        seekers = rows("A", 9, level=60) + rows("F", 1, filler, level=35)
+        recent = [recent_row("F00", "bg-queue wsg", pvpgear.WAITING_MINUTES + 1)]
+        aims, moves, _ = run(seekers, recent=recent)
+        self.assertNotIn("F00", aims)
+        self.assertNotIn("F00", moves)
+        self.assertFalse(any(a.filler for a in aims.values()))
 
     def test_a_filler_never_buys_or_queues_alone(self):
         _, moves, _ = run(rows("F", 12, filler))

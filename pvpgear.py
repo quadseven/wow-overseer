@@ -172,6 +172,7 @@ WSG = Battleground("wsg", "Warsong Gulch", "WSG", 489, 10, 2)
 AB = Battleground("ab", "Arathi Basin", "AB", 529, 20, 3)
 BATTLEGROUNDS = {bg.key: bg for bg in (AV, WSG, AB)}
 BATTLEGROUND_MAPS = frozenset(bg.map_id for bg in BATTLEGROUNDS.values())
+BG_BY_MAP = {bg.map_id: bg for bg in BATTLEGROUNDS.values()}
 # Where honor comes from when any battleground pays it: Alterac Valley first,
 # forty a side with the most bonus honor a win, then Arathi Basin, then
 # Warsong Gulch, whose flag games run longest.
@@ -964,14 +965,33 @@ def _filler(s, bg: Battleground, cohort: str = "") -> Aim:
 
 
 def _hold_fillers(by_name: dict, aims: dict, moves: dict, recent, maps) -> None:
-    """A filler already in a queue is held there like any member (in place)."""
+    """A filler already in a queue is held there like any member (in place).
+
+    The floor stops picking new fillers under the level; it does not drop one
+    already inside a battleground or in its queue (#2202). Such a member stays
+    held until the game or queue ends.
+    """
     for name, s in by_name.items():
-        if int(s.level) < FILLER_MIN_LEVEL:
+        if name in aims:
             continue
-        queued = _queued_key(name, recent) if name not in aims else None
-        if queued is not None:
-            aims[name] = _filler(s, BATTLEGROUNDS[queued[0]])
-            moves[name] = next_move(aims[name], maps.get(name), False, recent)
+        if int(s.level) < FILLER_MIN_LEVEL:
+            map_id = maps.get(name)
+            if map_id is not None and int(map_id) in BATTLEGROUND_MAPS:
+                bg = BG_BY_MAP[int(map_id)]
+            else:
+                queued = _queued_key(name, recent)
+                if queued is None or int(queued[1]) >= WAITING_MINUTES:
+                    # The queue has ended: do not hold a member past the
+                    # bounded wait, and do not draft them as a filler.
+                    continue
+                bg = BATTLEGROUNDS[queued[0]]
+        else:
+            queued = _queued_key(name, recent) if name not in aims else None
+            if queued is None:
+                continue
+            bg = BATTLEGROUNDS[queued[0]]
+        aims[name] = _filler(s, bg)
+        moves[name] = next_move(aims[name], maps.get(name), False, recent)
 
 
 def _group_members(aims: dict, moves: dict, by_name: dict, cooling: set) -> dict:
