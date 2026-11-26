@@ -4,7 +4,7 @@
 decree: v1
 id: ghost-healer-walk-hold-is-timed
 proves:
-  - {repo: quadseven/mod-overseer, issue: 1284, criterion: "a ghost held by a hostile after a failed healer walk emits a timed status line and remains a ghost"}
+  - {repo: quadseven/mod-overseer, issue: 1284, criterion: "The long hold is visible in the log."}
 fix: {repo: quadseven/mod-overseer, commit: "40b1d97a14af4f994c8dc734c51883515c38334e"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -41,5 +41,5 @@ observe:
   - name: hostile-held-ghost-writes-timed-status
     role: check
     log:
-      pattern: "has waited [0-9]+s with [1-9][0-9]* hostile\\(s\\) at its corpse (after the healer walk failed; it stays a ghost and retries the walk to|; it remains a ghost and is still walking to the spirit healer at)"
+      pattern: "overseer: 'Og' has waited [0-9]+s with [1-9][0-9]* hostile\\(s\\) at its corpse( after the healer walk failed; it stays a ghost and retries the walk to|; it remains a ghost and is still walking to the spirit healer at)"
       expect: {at_least: 1}
