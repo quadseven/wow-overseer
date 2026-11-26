@@ -287,8 +287,28 @@ def default_image_env(cfg, kube):
     return image_env
 
 
+def default_template_image(cfg, kube):
+    """template(klass): the template image to run, a `:newest` ref resolved to a digest."""
+
+    def template(klass):
+        ref = cfg.template_images[klass]
+        if not imagecommit.is_newest(ref):
+            return ref
+        try:
+            host = ref.split("/", 1)[0]
+            secret = kube.get("secrets", BRIDGE_PULL_NAME, missing_ok=True)
+            return imagecommit.newest_template(
+                ref, klass, imagecommit.credentials(secret, host)
+            )
+        except (imagecommit.RegistryError, KubeError, KeyError, TypeError, ValueError) as exc:
+            raise SubmitError(f"could not resolve the newest {klass} template: {exc}") from exc
+
+    return template
+
+
 def submit(
     cfg, kube, gh, decree_path, args=None, clock=time.time, out=print, image_env=None,
+    template_image=None,
 ):  # fmt: skip
     """Create the suspended Jobs. Returns the submission record (also saved)."""
     args = dict(args or {})
@@ -350,6 +370,7 @@ def submit(
         for arm in arms
     }
     image_env = image_env or default_image_env(cfg, kube)
+    template_ref = (template_image or default_template_image(cfg, kube))(klass)
     presence = _presence(cfg, gh, decree, arms, args, pins, arm_bridge, image_env)
 
     batch = hashlib.sha256(f"{sha}:{clock()}".encode()).hexdigest()[:6]
@@ -378,7 +399,7 @@ def submit(
             # database (characters and auth keep the live schema); see docs/EPHEMERAL.md.
             "RESET_WORLD": "1" if arm == "control" else "0",
             "UPDATES_MASK": "4" if arm == "control" else "7",
-            "TOOLS_IMAGE": cfg.tools_image, "TEMPLATE_IMAGE": cfg.template_images[klass],
+            "TOOLS_IMAGE": cfg.tools_image, "TEMPLATE_IMAGE": template_ref,
             "CLIENT_DATA_CLAIM": nodecfg.claim, **classes[klass],
             "BRIDGE_IMAGE": img.get("bridge", BRIDGE_OFF_IMAGE),
         }  # fmt: skip
@@ -401,6 +422,7 @@ def submit(
         "decree_path": str(decree_path), "decree_pr": args.get("decree_pr"),
         "submitted_at": int(clock()), "class": klass, "proves": decree["proves"],
         "box": decree.get("box"),
+        "template_image": template_ref,
         "fix": decree["fix"], "runs_wanted": {a: decree["runs"][a] for a in arms},
         "presence": presence, "fidelity_deltas": deltas, "runs": runs,
     }  # fmt: skip
