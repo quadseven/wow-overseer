@@ -2352,7 +2352,8 @@ def _fetch_jev_openai(cur) -> list:
     """The OpenAI backend's per-kind report as lines, or none where it has never
     run (no spend table yet); the card is one card and never fails for it."""
     try:
-        report = jev_openai.fetch_report(cur, os.environ)
+        report = jev_openai.fetch_report(
+            cur, os.environ, db_errors=(pymysql.err.MySQLError,))
     except Exception:
         return []
     return [jev_openai.summary_line(k, v) for k, v in report.items()]
