@@ -232,6 +232,15 @@ class ProvenTest(Base):
         self.collect()
         self.assertEqual(self.closes(), [])
 
+    def test_unticked_other_boxes_block_the_close(self):
+        self.issue(
+            body="- [ ] something else entirely\n- [ ] Live: the family leaves without a patron dying\n"
+        )
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        self.collect()
+        self.assertEqual(self.closes(), [])
+        self.assertIn("unticked", self.ledger()[0]["evidence"])
+
     def test_proof_records_its_box_before_unrelated_live_boxes_block_close(self):
         body = (
             "## Departure\n"

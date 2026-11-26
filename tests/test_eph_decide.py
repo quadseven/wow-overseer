@@ -128,6 +128,24 @@ class FisherTest(unittest.TestCase):
 
 
 class TickTest(unittest.TestCase):
+    BODY = "- [ ] unit tests\n- [ ] Live: the family leaves the bar without a patron dying\n- [x] done\n"
+
+    def test_ticks_the_criterion_and_live_boxes_only(self):
+        body, refusal = decide.tick_criterion(
+            self.BODY, "the family leaves the bar without a patron dying"
+        )
+        self.assertEqual(refusal, "")
+        self.assertIn("- [ ] unit tests", body)
+        self.assertIn("- [x] Live: the family leaves", body)
+        self.assertEqual(decide.unticked(body), 1)
+
+    def test_a_body_without_matching_boxes_is_unchanged(self):
+        original = "- [ ] other\n"
+        body, refusal = decide.tick_criterion(original, "nothing like it")
+        self.assertEqual(
+            (body, refusal), (original, "no checkbox matches the decree criterion")
+        )
+
     def test_preserves_format_and_accepts_an_already_ticked_match(self):
         body = (
             "  1. [ ] LIVE:  The family leaves.\n  2) [ ] Review.\n  + [ ] Rollout.\n"
