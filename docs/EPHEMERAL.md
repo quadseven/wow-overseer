@@ -155,6 +155,13 @@ SQL are checked against a snapshot of the game databases
 
 `TODO` is allowed for an issue number or commit and is a warning, never an error.
 The numeric `proves` form names an issue in this repository and requires `box`.
+
+A ticket names its decree with one body line, `Proof: decree <id>`, on a line of
+its own. `python3 -m ephemeral due` lists the open `awaiting-live-check` issues
+whose Proof line names a decree that is on the default branch, proves that issue
+(either `proves` form), and has no files yet under `<results_dir>/<id>/` (no
+submission record and no result). It prints `owner/name#N <id>` oldest first and
+writes nothing. `submit --due N` is not built yet.
 `eph report` posts the named decree's batch result, including each run's UTC
 start time and judge reason lines. It ticks one uniquely matching checkbox only
 when every declared control run is `FAIL` and every declared treatment run is

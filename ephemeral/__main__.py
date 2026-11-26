@@ -1,4 +1,4 @@
-"""`python3 -m ephemeral <lint|acts|seed|judge|submit|dispatch|collect> ...`: the `eph` command line."""
+"""`python3 -m ephemeral <lint|acts|seed|judge|submit|dispatch|collect|due> ...`: the `eph` command line."""
 
 import argparse
 import json
@@ -167,6 +167,15 @@ def _report(args):
     return 0
 
 
+def _due(args):
+    from . import due
+
+    cfg, _k, gh = _runner(args)
+    for repo, n, did in due.due(gh, cfg):
+        print(f"{repo}#{n} {did}")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="eph")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -324,6 +333,12 @@ def main(argv=None):
         "--dry-run", action="store_true", help="print the comment and proposed box edit"
     )
     rp.set_defaults(func=_guarded(_report))
+    du = sub.add_parser(
+        "due",
+        help="list open awaiting-live-check issues whose Proof line names a runnable decree",
+    )
+    du.add_argument("--config", help=cfg_help)
+    du.set_defaults(func=_guarded(_due))
     args = parser.parse_args(argv)
     return args.func(args)
 
