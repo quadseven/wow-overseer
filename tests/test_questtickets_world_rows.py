@@ -166,6 +166,59 @@ class WorldRows(unittest.TestCase):
             text,
         )
 
+    def test_investigate_the_camp_ticket_explains_the_event_reason(self):
+        # The ticket's read-only world snapshot gives quest 201's level and
+        # zero required item/NPC/object objectives: it completes only by a
+        # scripted event no lone quester drives.
+        world_row = quest_row(
+            201,
+            title="Investigate the Camp",
+            level=32,
+            min_level=28,
+        )
+        world_row.update(
+            {key: 0 for i in range(1, 7) for key in ("item%d" % i, "item_count%d" % i)}
+        )
+        world_row.update(
+            {
+                key: 0
+                for i in range(1, 5)
+                for key in ("objective%d" % i, "objective_count%d" % i)
+            }
+        )
+        info = self.catalogue(world_row, {})[0]
+        self.assertEqual(info.level, 32)
+        self.assertEqual(info.min_level, 28)
+        self.assertEqual(info.items, ())
+        self.assertEqual(info.objectives, ())
+        rows = [
+            {
+                "quest": 201,
+                "guid": 7,
+                "character_name": "Durga",
+                "state": "broken",
+                "reason": questers.SCRIPTED_EVENT,
+            },
+            {
+                "quest": 201,
+                "guid": 8,
+                "character_name": "Bromli",
+                "state": "broken",
+                "reason": questers.SCRIPTED_EVENT,
+            },
+        ]
+        text = qt.body(201, info, rows, [], "")
+        self.assertIn("- Quest: 201, Investigate the Camp", text)
+        self.assertIn("- Level: 32", text)
+        self.assertIn("- No required item or creature/object rows.", text)
+        self.assertEqual(text.count("Reason: " + questers.SCRIPTED_EVENT), 2)
+        self.assertEqual(text.count("Last objective counts: not in the log now"), 2)
+        self.assertIn(
+            "The world rows list no required item or creature/object objectives, "
+            "so the stored reason is the only evidence of how it completes: a scripted event.",
+            text,
+        )
+
     def test_quest_start_item_is_a_source_for_its_required_item(self):
         row = quest_row(item1=1353, item_count1=1, provided_item=1353)
         catalogue = self.catalogue(
