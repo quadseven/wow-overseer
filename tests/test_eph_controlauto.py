@@ -83,6 +83,10 @@ class Dropped(unittest.TestCase):
             controlauto.dropped_keys("A = 1\nB = 2\n", "A = 3\nB = 4\n"), []
         )
 
+    def test_a_missing_dist_or_override_is_empty(self):
+        self.assertEqual(controlauto.dropped_keys(None, "A = 1\n"), ["A"])
+        self.assertEqual(controlauto.dropped_keys("A = 1\n", None), [])
+
 
 if __name__ == "__main__":
     unittest.main()

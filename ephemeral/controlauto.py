@@ -59,9 +59,9 @@ def dropped_keys(control_dist, override_text):
     A key counts as known when the dist has it as a live line or as a
     commented `Key = value` default.
     """
-    known = set(confmerge.parse(control_dist))
+    known = set(confmerge.parse(control_dist or ""))
     for line in (control_dist or "").splitlines():
         m = _COMMENTED_KEY.match(line)
         if m:
             known.add(m.group(1))
-    return sorted(set(confmerge.parse(override_text)) - known)
+    return sorted(set(confmerge.parse(override_text or "")) - known)
