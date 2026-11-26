@@ -11,8 +11,8 @@ Loot rows alone do not say a dropper is spawned, so this
 file pins the quester's behaviour for each sourcing the world rows can
 hide, in the shape of the Wild Hearts rows (#3250):
 
-  * both items' droppers spawned: the quest is open, is taken, is hunted
-    at a dropper of an item still short, and is handed in when complete;
+  * both items' droppers spawned: the quest is open, is taken, and is hunted
+    at a dropper of an item still short;
   * one item's droppers unspawned: that item can never be gathered, so
     the quest is not taken, and the ledger row the plan records names the
     unsourced item (questers.UNSOURCED_ITEM) instead of a plain stall;
