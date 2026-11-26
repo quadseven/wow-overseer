@@ -7,7 +7,7 @@ import pathlib
 import signal
 import sys
 
-from . import acts, anchors as anchors_mod, dbschema, lint
+from . import acts, anchors as anchors_mod, dbschema, due as due_mod, lint
 from .miniyaml import YamlError, loads
 
 
@@ -168,10 +168,8 @@ def _report(args):
 
 
 def _due(args):
-    from . import due
-
     cfg, _k, gh = _runner(args)
-    for repo, n, did in due.due(gh, cfg):
+    for repo, n, did in due_mod.due(gh, cfg):
         print(f"{repo}#{n} {did}")
     return 0
 

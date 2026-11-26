@@ -98,6 +98,23 @@ class DueTest(unittest.TestCase):
         self.assertTrue(due.proves_issue({"proves": 5}, REPO, 5))
         self.assertFalse(due.proves_issue({"proves": 5}, REPO, 6))
 
+    def test_the_due_command_prints_each_due_issue(self):
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        from ephemeral import __main__ as cli
+
+        gh = FakeGh([issue(7, "Proof: decree a")], {"a": decree("a", 7)})
+        buf = io.StringIO()
+        with (
+            mock.patch.object(cli, "_runner", lambda a: (self.cfg, None, gh)),
+            redirect_stdout(buf),
+        ):
+            code = cli.main(["due"])
+        self.assertEqual(code, 0)
+        self.assertEqual(buf.getvalue(), f"{REPO}#7 a\n")
+
 
 if __name__ == "__main__":
     unittest.main()
