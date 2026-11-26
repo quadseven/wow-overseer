@@ -80,6 +80,13 @@ RUN_SQL = (
     "FROM overseer_dungeon_run WHERE id = %s"
 )
 
+RUNS_SQL = (
+    "SELECT id, leader_name, members, map_id, run_number, state, outcome, "
+    "ended_reason, started_at, ended_at, "
+    "TIMESTAMPDIFF(SECOND, started_at, COALESCE(ended_at, NOW())) AS duration_seconds "
+    "FROM overseer_dungeon_run WHERE id IN ({holes})"
+)
+
 # The summary view, with each looted item's quality. Ordered so a report reads
 # in the order things happened.
 EVENTS_SQL = (
@@ -91,9 +98,24 @@ EVENTS_SQL = (
     "WHERE s.run_id = %s ORDER BY s.first_seen, s.character_name, s.subject_id"
 )
 
+EVENTS_MANY_SQL = (
+    "SELECT s.run_id, s.character_name, s.kind, s.subject_id, s.subject_name, "
+    "s.detail, s.occurrences, it.Quality AS quality "
+    "FROM overseer_dungeon_run_summary s "
+    "LEFT JOIN acore_world.item_template it "
+    "ON s.kind = 'loot_won' AND it.entry = s.subject_id "
+    "WHERE s.run_id IN ({holes}) ORDER BY s.first_seen, s.character_name, s.subject_id"
+)
+
 # Deaths of the run's members inside its window; {holes} is one %s per name.
 DEATHS_SQL = (
     "SELECT character_name, killer_name FROM overseer_death "
+    "WHERE character_name IN ({holes}) AND created_at >= %s AND created_at <= %s "
+    "ORDER BY id"
+)
+
+DEATHS_MANY_SQL = (
+    "SELECT character_name, killer_name, created_at FROM overseer_death "
     "WHERE character_name IN ({holes}) AND created_at >= %s AND created_at <= %s "
     "ORDER BY id"
 )
@@ -212,13 +234,15 @@ def _deaths(deaths: list[dict]) -> list[dict]:
 
 
 def _identity(run: dict, map_name: str) -> dict:
-    """The run row's own facts, as the report heading reads them."""
+    """The run row's own facts, including its named party-lead supervisor."""
     seconds = run.get("duration_seconds")
     word = outcome(run)
+    leader = run.get("leader_name") or ""
     return {
         "run_id": int(run.get("id") or 0),
         "run_number": int(run.get("run_number") or 0),
-        "leader": run.get("leader_name") or "",
+        "leader": leader,
+        "supervisor": leader or "not recorded",
         "map_id": int(run.get("map_id") or 0),
         "map_name": map_name or "map %s" % (run.get("map_id") or 0),
         "ended": run.get("state") == "ended",
@@ -263,6 +287,72 @@ def read(fetch, run_id: int) -> dict | None:
     return build(
         run, events, deaths, achievements.dungeon_name(int(run.get("map_id") or 0))
     )
+
+
+def _deaths_by_run(fetch, runs_by_id: dict[int, dict]) -> dict[int, list[dict]]:
+    """Fetch deaths for a batch of runs in one query and filter per run window."""
+    windows: list[tuple[int, set[str], object, object]] = []
+    all_names: list[str] = []
+    seen_names: set[str] = set()
+    for run_id, run in runs_by_id.items():
+        names = members(run)
+        start = run.get("started_at")
+        if not names or start is None:
+            continue
+        end = run.get("ended_at") or start
+        windows.append((run_id, set(names), start, end))
+        for name in names:
+            if name not in seen_names:
+                seen_names.add(name)
+                all_names.append(name)
+    if not windows:
+        return {}
+    min_start = min(w[2] for w in windows)
+    max_end = max(w[3] for w in windows)
+    holes = ", ".join(["%s"] * len(all_names))
+    death_rows = fetch(
+        DEATHS_MANY_SQL.format(holes=holes), (*all_names, min_start, max_end)
+    )
+    out: dict[int, list[dict]] = {}
+    for run_id, name_set, start, end in windows:
+        out[run_id] = [
+            d
+            for d in death_rows
+            if d.get("character_name") in name_set
+            and d.get("created_at") is not None
+            and start <= d["created_at"] <= end
+        ]
+    return out
+
+
+def read_many(fetch, run_ids) -> dict[int, dict]:
+    """Read reports for many run ids in at most three batched SQL queries."""
+    ids = list(dict.fromkeys(int(r) for r in run_ids))
+    if not ids:
+        return {}
+    holes = ", ".join(["%s"] * len(ids))
+    run_rows = fetch(RUNS_SQL.format(holes=holes), tuple(ids))
+    if not run_rows:
+        return {}
+    runs_by_id = {int(r["id"]): r for r in run_rows}
+    found_ids = [run_id for run_id in ids if run_id in runs_by_id]
+    event_holes = ", ".join(["%s"] * len(found_ids))
+    event_rows = fetch(EVENTS_MANY_SQL.format(holes=event_holes), tuple(found_ids))
+    events_by_run: dict[int, list[dict]] = {run_id: [] for run_id in found_ids}
+    for row in event_rows:
+        rid = int(row["run_id"])
+        if rid in events_by_run:
+            events_by_run[rid].append(row)
+    deaths_by_run = _deaths_by_run(fetch, {i: runs_by_id[i] for i in found_ids})
+    return {
+        run_id: build(
+            runs_by_id[run_id],
+            events_by_run[run_id],
+            deaths_by_run.get(run_id, []),
+            achievements.dungeon_name(int(runs_by_id[run_id].get("map_id") or 0)),
+        )
+        for run_id in found_ids
+    }
 
 
 def card(report: dict) -> dict:
@@ -334,6 +424,7 @@ def lines(report: dict) -> list[str]:
     out = [_head(report)]
     if report["reason"]:
         out.append("Why it ended: %s" % report["reason"])
+    out.append("Run supervisor: %s" % report["supervisor"])
     out.append("Group: %s" % (", ".join(report["members"]) or "nobody recorded"))
     out.append(
         "Bosses killed (%d): %s"

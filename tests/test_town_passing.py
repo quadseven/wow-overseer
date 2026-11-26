@@ -145,7 +145,7 @@ class TheBankLookWritesOnlyForWhoeverIsAtABanker(unittest.TestCase):
         class Me:
             _bank_at_the_counter = ns["_bank_at_the_counter"]
 
-            async def _bank_bag_slots(self, names, seen, cohort=None):
+            async def _bank_bag_slots(self, names, seen, cohort=None, **kwargs):
                 return None
 
         asyncio.run(ns["_bank_passing_once"](Me(), None))
@@ -171,6 +171,7 @@ class TheBankBagSlotIsBoughtOnlyAtABanker(unittest.TestCase):
                 "log": log,
                 "bank": bank,
                 "bankbags": bankbags,
+                "_fetch_bank_items": lambda names: [],
                 "_fetch_bank_bag_facts": lambda names: [
                     bankbags.Facts("Bork", money=10**6, worn=(10, 10, 10, 10)),
                     bankbags.Facts("Grog", money=10**6, worn=(10, 10, 10, 10)),

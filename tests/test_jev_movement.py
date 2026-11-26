@@ -16,6 +16,7 @@ from test_campaign_queue import _load
 from test_jev_items import FakeJev
 
 import jev  # noqa: E402
+import jev_items  # noqa: E402
 import jev_movement as jm  # noqa: E402
 import jevview  # noqa: E402
 import situation as sit  # noqa: E402
@@ -108,9 +109,10 @@ class WhatIsOffered(unittest.TestCase):
         f = facts(errand="at:1:-7203.1,-3821.1,8.6", claimant="guild bank")
         jm.heuristic(f)
         judgment = ask(f, FakeJev())
-        # Today's movement heuristic is constant; the current situation is
-        # the only decision context it receives, and the question records it.
-        self.assertEqual(judgment.facts, f.where.line(1000))
+        # The record holds the whole state the question was asked with,
+        # options first (#3303), not a one-line summary of the situation.
+        state, _q = jm.question(f, jm.options(f))
+        self.assertEqual(judgment.facts, jev_items.facts_line(state, jm.options(f)))
 
     def test_a_member_stranded_in_the_crater_may_hearth(self):
         f = facts()

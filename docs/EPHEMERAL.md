@@ -102,6 +102,7 @@ SQL are checked against a snapshot of the game databases
     decree: v1
     id: <kebab-case>
     proves: [{repo: owner/name, issue: <n or TODO>, criterion: "<live-check box text>"}]
+    # Or, for `eph report`: proves: <issue number> and box: "<checkbox text or stable prefix>"
     fix: {repo: owner/name, commit: <sha or TODO>}
     world: {class: lean|full, image: follow-dev, bridge: "off"|"on", random_bots: 0, config: {}}
     runs: {control: 3, treatment: 3}
@@ -153,6 +154,13 @@ SQL are checked against a snapshot of the game databases
   yet, so today this only fixes the names a decree may use.
 
 `TODO` is allowed for an issue number or commit and is a warning, never an error.
+The numeric `proves` form names an issue in this repository and requires `box`.
+`eph report` posts the named decree's batch result, including each run's UTC
+start time and judge reason lines. It ticks one uniquely matching checkbox only
+when every declared control run is `FAIL` and every declared treatment run is
+`PASS`; a missing or ambiguous match leaves the body unchanged. The command
+never closes an issue. This records the decree's checks and does not claim that
+the behavior is proven end to end.
 
 ## Anchors
 
@@ -244,8 +252,20 @@ for up to ten minutes, `EPH_START_WAIT_SECONDS`; no order is given meanwhile, an
 the act clock and `@t0` start when the wait ends. Then they are sampled once,
 before any order; a precondition that still fails ends the run INVALID, naming
 it), `continuous` (every ten seconds) or `end` (after the
-window). Log assertions count regex matches in the worldserver log and are
-checked at the end. A log assertion's `expect` is a bound on that count:
+window). A start precondition may use `online: cast` instead of SQL or a log
+assertion. The judge polls the seeded cast's character rows and holds every act
+until all resolved members have `online = 1`. If the bounded wait expires, the
+run is INVALID and names the members still offline. For example:
+
+    - name: cast-online
+      role: precondition
+      when: start
+      online: cast
+
+This observation cannot be combined with `sql`, `log` or `expect`, and it is
+only valid as a start precondition. Log assertions count regex matches in the
+worldserver log and are checked at the end. A log assertion's `expect` is a
+bound on that count:
 
 - `{count: N}` or `{exactly: N}`: exactly N matching lines. `{count: 0}` forbids
   a line. Either key stands alone.
@@ -253,6 +273,16 @@ checked at the end. A log assertion's `expect` is a bound on that count:
   line: no match in the run's log is a violated check.
 - `{at_most: N}`: N or fewer matching lines.
 - `{at_least: N, at_most: M}`: a range, with N no greater than M.
+
+A check that requires or caps a line (`at_least` or `at_most`) is only as good as
+its pattern: a line no code writes fails every run when required and passes every
+run when capped. `tests/test_eph_required_lines.py` therefore lists each such
+check beside the format string of the call that writes its line, and fails when
+the pinned source no longer logs that wording, when the logger does not reach the
+log the judge reads, or when the pattern does not match the line as formatted. A
+new bounded check needs an entry there. The judge reads one file, so only a line
+of the module or of the bots can be required: the bridge's own log, and a core
+logger the world does not send to that file, are out of its reach.
 
 Every bound is a whole number, zero or more; lint rejects a negative, missing or
 unknown bound, and a judge handed one anyway reports the check as an error
@@ -286,9 +316,9 @@ judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`; without them it prints an INVALID verdict and exits 2,
 because there is nowhere to write the result.
 
-## Runner: submit, dispatch, collect
+## Runner: submit, dispatch, collect, report
 
-All three read one settings file, never the repository: copy
+Runner commands read one settings file, never the repository: copy
 `ephemeral/eph.config.example.json`, fill it in, and pass `--config` or set
 `EPH_CONFIG`. It names the namespace, the nodes a world may use (each with its
 client-data claim and a world cap), the nodes that are never used, and the
@@ -299,6 +329,7 @@ digest-pinned tools image. A missing or malformed file is an error.
     python3 -m ephemeral dispatch [--once] [--owner NAME]
     python3 -m ephemeral dispatch --stop --owner NAME
     python3 -m ephemeral collect [--dry-run]
+    python3 -m ephemeral report <batch-id> [batch-id ...] [--dry-run]
 
 `submit` lints the decree, reads the Job skeleton ConfigMap and the base realm's
 running image digests and override files, merges the decree's config onto them
@@ -311,6 +342,13 @@ a control worldserver image (with `bridge: on`, also without `--control-bridge`)
 each image was built from; a `TODO` commit is recorded as unchecked, and an
 unchecked decree can never close or disprove anything). It saves a submission
 record under the results directory.
+
+If the fix commit diverges from an image pin, `submit` also checks the fix
+repository's default branch. An off-branch commit is refused by name, with
+the associated pull's merge commit when GitHub reports one for a merged pull.
+Use the squash merge or default-branch port in `fix.commit`, then resubmit;
+an open pull's test merge is not a shipped fix. An unknown reachability result
+refuses verification rather than declaring the commit off branch.
 
 `dispatch` is the only thing that starts worlds. One instance runs at a time,
 enforced by a Kubernetes Lease. Each pass it unsuspends the oldest queued Job
@@ -367,6 +405,16 @@ nothing to the issue. A decree not yet merged posts to its own pull request when
 `--decree-pr` was given. The comment author is read back and must be the
 configured App, and `collect` refuses to write unless `GH_TOKEN` and
 `GH_CONFIG_DIR` are set.
+
+`report` is the non-closing evidence path for decrees using numeric `proves`
+and `box` fields. It accepts one or more batches from the same decree and posts
+the decree id, batch ids, per-run verdicts, UTC start times and judge reason
+lines. The box is ticked only when every
+declared pair meets the decree rule (control `FAIL`, treatment `PASS`) and one
+checkbox uniquely matches its exact text or prefix and every completed run has
+a UTC start time. Missing or ambiguous boxes are reported without a body edit.
+`--dry-run` prints the exact comment and makes no issue changes. This command
+never closes an issue.
 
 The template is forged from the live realm: its characters and auth databases and its
 world database are at the live schema, and its `updates` table holds each module SQL file

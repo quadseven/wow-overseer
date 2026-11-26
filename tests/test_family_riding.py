@@ -154,3 +154,55 @@ class TheGuildStepIsUnchanged(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WhichHoldDecides(unittest.TestCase):
+    def hold(self, member, recent=()):
+        return guildjobs.family_riding_hold(member, list(recent))
+
+    def test_each_hold_name(self):
+        refused = ago(
+            600,
+            refusal=guildjobs.NO_TRAINER_ON_MAP_REFUSAL,
+            skill_id=RIDING,
+            map_id=1,
+        )
+        cases = [
+            ("not_family_or_ineligible", seat(eligible=False), ()),
+            ("not_family_or_ineligible", seat(role="member"), ()),
+            ("riding_not_due", seat(skills={RIDING: (150, 150)}), ()),
+            ("saving_for_fee", seat(money=purse.APPRENTICE.cost), ()),
+            ("offline", seat(online=False), ()),
+            ("dead", seat(alive=False), ()),
+            ("in_combat", seat(in_combat=True), ()),
+            ("following", seat(follows=True), ()),
+            ("unread_ground", seat(x=None), ()),
+            ("no_trainer_on_map", seat(map_id=1), (refused,)),
+            ("cooldown", seat(), (ago(30),)),
+            ("fired", seat(), ()),
+        ]
+        for name, member, recent in cases:
+            self.assertEqual(self.hold(member, recent), name)
+        self.assertEqual({c[0] for c in cases}, set(guildjobs.RIDING_HOLDS))
+
+    def test_fired_exactly_when_the_step_is_offered(self):
+        for over in (dict(), dict(online=False), dict(follows=True), dict(x=None)):
+            member = seat(**over)
+            step, _ = guildjobs.family_riding_step(member, [])
+            self.assertEqual(step is not None, self.hold(member) == "fired", over)
+
+    def test_one_log_line_per_change_of_hold(self):
+        guildjobs._riding_hold_logged.clear()
+        member = seat()
+        with self.assertLogs(guildjobs.log, level="INFO") as got:
+            guildjobs.log_riding_hold(member, "cooldown")
+            guildjobs.log_riding_hold(member, "cooldown")
+            guildjobs.log_riding_hold(member, "fired")
+        self.assertEqual(len(got.records), 2)
+        self.assertIn("hold: cooldown", got.output[0])
+
+    def test_a_member_with_riding_is_not_logged(self):
+        guildjobs._riding_hold_logged.clear()
+        member = seat(skills={RIDING: (75, 75)})
+        with self.assertNoLogs(guildjobs.log, level="INFO"):
+            guildjobs.log_riding_hold(member, "cooldown")

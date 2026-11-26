@@ -93,6 +93,10 @@ class EveryItemWonIsListed(unittest.TestCase):
             text.startswith("Run report #412: The Deadmines, run 3, 41m 05s")
         )
 
+    def test_the_run_log_names_its_supervisor(self):
+        report = runreport.build(RUN, EVENTS, [], "The Deadmines")
+        self.assertIn("Run supervisor: Ugga", runreport.render(report))
+
     def test_a_boss_seen_by_two_members_is_one_kill(self):
         report = runreport.build(RUN, EVENTS, [])
         self.assertEqual(["Edwin VanCleef"], report["bosses"])
@@ -209,6 +213,7 @@ class ThePageShowsWhatDiscordWasSent(unittest.TestCase):
         card = payload["families"][0]["runs"][0]["report"]
         self.assertEqual(412, card["run_id"])
         self.assertEqual(discord_text, "\n".join(card["lines"]))
+        self.assertIn("Run supervisor: Ugga", card["lines"])
         self.assertEqual(
             {"bosses": 1, "deaths": 0, "loot": 4, "upgrades": 1, "quests": 1},
             card["counts"],
@@ -218,7 +223,7 @@ class ThePageShowsWhatDiscordWasSent(unittest.TestCase):
         bridge = BRIDGE.read_text(encoding="utf-8")
         server = (BRIDGE.parent / "map_server.py").read_text(encoding="utf-8")
         self.assertIn("runreport.read(rd.must, run_id)", bridge)
-        self.assertIn("runreport.read(rd.must, run_id)", server)
+        self.assertIn("runreport.read_many(rd.must, ids)", server)
 
     def test_a_run_still_under_way_has_no_report_card(self):
         fetch, _ = _fetcher()

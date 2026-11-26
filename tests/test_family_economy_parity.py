@@ -307,7 +307,10 @@ def _mail_ns(world, log):
             "_mail_range_refusals": lambda names, minutes: set(),
             "_fetch_free_slots": lambda names: {n: 10 for n in names},
             "_fetch_positions": lambda names: {n: {"map_id": 1} for n in names},
-            "_nearest_mailbox": lambda leader: world.setdefault("mailbox_for", leader),
+            "_nearest_mailbox": lambda leader, skip=None: world.setdefault(
+                "mailbox_for", leader
+            ),
+            "time": types.SimpleNamespace(monotonic=lambda: 0.0),
             "_spawn_yards": lambda spawn: None,
             "_mail_takes_in_reach": lambda takes, spawn, positions, yards, aim: takes,
             "_insert_mail": lambda take, command: (
@@ -704,6 +707,54 @@ class ThePlanAsksOnlyAPurseThatPays(unittest.TestCase):
         self.assertEqual(
             (guildbank.SetupAction("Zug", "bank grant-deposit rank:1"),), got
         )
+
+
+class TheMailPassDoesNotReWalkALeaderAlreadyAtTheBox(unittest.TestCase):
+    """The loop: gear waits for members far from the mailbox, the leader
+    already stands at it, and every cycle re-aimed it ('took over' / 'ended')
+    for 0 takes."""
+
+    def setUp(self):
+        """Claims made so far, counted after each mail cycle."""
+        self.claims_by_cycle = []
+
+    def run_mail(self, standing, arrivals=()):
+        """`arrivals` are the members who walk into reach after each cycle."""
+        standing = set(standing)
+        world, log = {}, _Log()
+        me = TheSelf(world)
+        ns = _mail_ns(world, log)
+        ns["_fetch_positions"] = lambda names: {n: {"n": n} for n in names}
+        # The letters are the far members' (the leader holds none).
+        ns["mailrun"].plan = lambda letters, slots, asked: types.SimpleNamespace(
+            notes=(), takes=[_Take(n) for _, n in letters if n != "Zug"]
+        )
+        ns["travel"].spawn_in_reach = lambda spawn, where, yards: bool(
+            where and where["n"] in standing
+        )
+        me._mail_urgent = lambda *a: ns["_mail_urgent"](me, *a)
+        for cycle in range(3):
+            asyncio.run(ns["_mail_once"](me, HORDE))
+            self.claims_by_cycle.append(len(me.claims))
+            standing.update(a for a in arrivals[cycle : cycle + 1] if a)
+        return world, me, log
+
+    def test_no_holder_in_reach_means_the_column_is_not_claimed_again(self):
+        _, me, log = self.run_mail({"Zug"})
+        self.assertEqual([], me.claims)
+        self.assertEqual(
+            3, sum("already stands at the mailbox" in ln for ln in log.lines)
+        )
+
+    def test_a_holder_in_reach_still_gets_the_pass(self):
+        world, me, _ = self.run_mail({"Zug", "Uzza"})
+        self.assertEqual(3, len(me.claims))
+
+    def test_the_pass_goes_ahead_the_cycle_a_holder_comes_into_reach(self):
+        # Cycles one and two leave the column free for the town errand; the
+        # holder arrives after cycle two and cycle three claims.
+        _, me, _ = self.run_mail({"Zug"}, arrivals=(None, "Uzza"))
+        self.assertEqual([0, 0, 1], self.claims_by_cycle)
 
 
 if __name__ == "__main__":

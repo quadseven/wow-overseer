@@ -12,12 +12,13 @@
 # Scope: what is asserted is the end position against the commanded point, not the height of the line
 # on the way (the ground under a moving character is not in any table); the airborne guard's own line is
 # not asserted, because the control image has no guard and a check must fail there for the same reason.
-# Fix: mod-overseer pull 1630.
+# Fix: mod-overseer pull 1630, named by its squash merge on main: fix presence asks whether the commit is an
+# ancestor of each image's pin, and the branch commit of the pull is an ancestor of neither.
 decree: v1
 id: ground-move-is-not-flown-in-a-straight-line
 proves:
   - {repo: quadseven/wow-overseer, issue: 2937, criterion: "a ground move past the navmesh point limit is refused rather than launched as a straight spline, so the character is not carried onto the commanded point"}
-fix: {repo: quadseven/mod-overseer, commit: "741933967b2d2ddebec7c23891745d357029644b"}
+fix: {repo: quadseven/mod-overseer, commit: "b4f28d4f4fb1b7e55f335f3586d11684e22e7d90"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
 duration: 6m

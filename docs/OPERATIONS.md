@@ -58,6 +58,20 @@ an observed item completion in the overseer channel and advances the queue.
 Pending notices survive restarts and retry failed sends. Delivery is at least
 once: a crash after sending but before acknowledgement may repeat a notice.
 
+## Molten Core first-kill self-order
+
+When the guild's eligible approved seats (online, level 50 or more) meet the
+first-kill quorum, no campaign or Molten Core order is ahead, and no order for
+the family ended inside its wait, each bridge queue pass writes the same
+first-kill queue row a typed order writes. It never rewrites the lineup.
+
+| Variable | Meaning |
+|---|---|
+| `RAID_MC_SELF_ORDER` | Set to `1` to turn the pass on. Off when unset. |
+
+The log has one `moltencore:` line per family per change: ordered, short (by
+how many seats, tanks or healers), or waiting behind a named queue row.
+
 ## Trade turn between dungeon runs
 
 A family with a campaign queue used to do no trade work, because the queue
@@ -115,3 +129,16 @@ sudo systemctl enable --now metric-watcher.timer
 
 `--api-root` and `--output`, or `METRIC_WATCHER_API_ROOT` and
 `METRIC_WATCHER_OUTPUT`, set the API root and output path.
+
+## Clip retention
+
+The clip scan expires saved clips beyond two caps, oldest first. Both come
+from the environment of the map server:
+
+- `CLIP_MAX_COUNT`: most saved clips kept (default 200).
+- `CLIP_MAX_AGE_DAYS`: days a clip is kept (default 30).
+
+A missing value uses the default. A value that is not a whole number of 1 or
+more uses the default and logs one line. An expired row records the cap that
+removed it in its detail: `expired: count cap (N)` or `expired: age cap (N
+days)`. Only the retention pass removes a saved clip.

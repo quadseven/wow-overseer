@@ -31,18 +31,41 @@ function people(ctx) {
   return out;
 }
 
+let cachedModel = null;
+
 function model(ctx) {
-  const shapes = ctx.get("/shapes.json"), map = ctx.get("/api/map"), wall = wallModel(ctx.get("/api/wall"));
+  const pick = pickOf(ctx);
+  const shapes = ctx.get("/shapes.json"), map = ctx.get("/api/map"), wallRead = ctx.get("/api/wall");
   if (!D.ok(shapes) || !D.ok(map)) return null;
-  const cont = wm.CONTINENT[pickOf(ctx)];
+  const gear = ctx.get("/api/guildgear"), roster = ctx.get("/api/v2/roster");
+  if (
+    cachedModel &&
+    cachedModel.pick === pick &&
+    cachedModel.shapesData === shapes.data &&
+    cachedModel.mapData === map.data &&
+    cachedModel.wallData === wallRead.data &&
+    cachedModel.gearData === gear.data &&
+    cachedModel.rosterData === roster.data
+  ) {
+    return cachedModel.value;
+  }
+  const wall = wallModel(wallRead);
+  const cont = wm.CONTINENT[pick];
   const shape = shapes.data[cont];
   // A shapes file without this continent cannot be drawn on; say so.
-  if (!shape) return { missing: true };
-  const who = people(ctx);
-  const dots = wm.dotsFor(shape, cont, map.data.dots, who);
-  const placed = new Set((map.data.dots || []).map((d) => d.name));
-  const fallback = wm.fallbackDots(shape, placed, wall.members);
-  return { shape, shapes: shapes.data, cont, who, dots: dots.concat(fallback), map: map.data, wall };
+  const value = !shape ? { missing: true } : (() => {
+    const who = people(ctx);
+    const dots = wm.dotsFor(shape, cont, map.data.dots, who);
+    const placed = new Set((map.data.dots || []).map((d) => d.name));
+    const fallback = wm.fallbackDots(shape, placed, wall.members);
+    return { shape, shapes: shapes.data, cont, who, dots: dots.concat(fallback), map: map.data, wall };
+  })();
+  cachedModel = {
+    pick, shapesData: shapes.data, mapData: map.data,
+    wallData: wallRead.data, gearData: gear.data, rosterData: roster.data,
+    value,
+  };
+  return value;
 }
 
 function familyLine(m) {
@@ -101,7 +124,14 @@ ${watchNotice()}${whereList(m, { sp: ctx.get(WATCH_READ), op: ctx.get(WATCH_OPER
     const m = model(ctx);
     if (!box || !m || m.missing) return;
     const counts = new Map();
-    m.dots.forEach((d) => counts.set(d.zone, (counts.get(d.zone) || []).concat(d.name)));
+    m.dots.forEach((d) => {
+      let list = counts.get(d.zone);
+      if (!list) {
+        list = [];
+        counts.set(d.zone, list);
+      }
+      list.push(d.name);
+    });
     const summary = plural(m.dots.length, "of ours", "of ours") + " on this continent";
     wm.draw(box, {
       key: "full-" + m.cont, shape: m.shape, dots: m.dots, compact: false, focus: null, summary,

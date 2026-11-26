@@ -181,6 +181,33 @@ class Filing(unittest.TestCase):
         out_of_scope = text.split("## Out of scope", 1)[1]
         self.assertIn("A reason string keyed on this quest's id", out_of_scope)
 
+    def test_stolen_journal_ticket_explains_the_recorded_take_refusal(self):
+        # bridge._record_quest_broken persists the reason from questers._giver_failure.
+        reason = "the quest giver would not give it: no giver of that quest in reach"
+        rows = [
+            dict(row(218, guid=7, name="Fizzik"), reason=reason),
+            dict(row(218, guid=8, name="Pindle"), reason=reason),
+        ]
+        text = qt.body(218, None, rows, [], "")
+        self.assertEqual(text.count("Reason: " + reason), 2)
+        self.assertEqual(text.count("Last objective counts: not in the log now"), 2)
+        self.assertEqual(
+            text.count(
+                "The take step asks the world for a living creature linked to the quest "
+                "within the 20-yard arrival radius."
+            ),
+            1,
+        )
+        self.assertIn(
+            "The refusal means none matched then; the stored rows do not distinguish "
+            "a missing, distant, dead, or otherwise unavailable creature.",
+            text,
+        )
+        self.assertNotIn(
+            "The take step asks the world for a living creature",
+            qt.body(218, None, [row(218)], [], ""),
+        )
+
     def test_tickets_default_to_the_open_quest_epic(self):
         with mock.patch.dict("os.environ", {}, clear=False) as env:
             env.pop("QUEST_TICKET_EPIC", None)

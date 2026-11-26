@@ -225,6 +225,54 @@ class AWalkToARefusedSpawnMovesOn(unittest.TestCase):
         self.assertEqual(step.spawn, near)
 
 
+class AFieldTheColumnRefusedWhollyYieldsToAnother(unittest.TestCase):
+    """A refusal that rests on where the leader stands refuses every spawn of
+    the field, so rotating inside it never moves the farm; another field must
+    be asked once every spawn of the nearest one was tried."""
+
+    def spawns(self):
+        near = (spawn(900, 0, zone=490), spawn(950, 0, zone=490))
+        far = (spawn(3000, 0, zone=361),)
+        return near, far
+
+    def test_a_field_with_every_spawn_tried_ranks_after_a_fresh_field(self):
+        near, far = self.spawns()
+        tried = {farmjob.spawn_key(s): 50.0 for s in near}
+        ranked = farmjob.fields(near + far, leader_at(), tried, 60.0)
+        self.assertEqual([row[1] for row in ranked], [361, 490])
+
+    def test_the_walk_goes_to_the_fresh_field(self):
+        near, far = self.spawns()
+        tried = {farmjob.spawn_key(s): 50.0 for s in near}
+        step = farmjob.decide(
+            order(),
+            reads(spawns=near + far, visited=tried, zone_levels={490: 55, 361: 55}),
+        )
+        self.assertEqual(step.action, farmjob.WALK)
+        self.assertEqual(step.spawn, far[0])
+
+    def test_a_field_with_a_spawn_left_keeps_its_place(self):
+        near, far = self.spawns()
+        tried = {farmjob.spawn_key(near[0]): 50.0}
+        ranked = farmjob.fields(near + far, leader_at(), tried, 60.0)
+        self.assertEqual([row[1] for row in ranked], [490, 361])
+        self.assertEqual(ranked[0][3], near[1])
+
+    def test_every_field_tried_keeps_the_nearest_first(self):
+        near, far = self.spawns()
+        tried = {farmjob.spawn_key(s): 50.0 for s in near + far}
+        ranked = farmjob.fields(near + far, leader_at(), tried, 60.0)
+        self.assertEqual([row[1] for row in ranked], [490, 361])
+
+    def test_the_danger_read_ranks_fields_by_the_same_visited_map(self):
+        source = (ROOT / "bridge.py").read_text(encoding="utf-8")
+        body = source.split("def _farm_reads(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn(
+            "farmjob.fields(open_, leader_at, visited or {}, time.time())", body
+        )
+        self.assertIn('state.get("visited"),\n        )', source)
+
+
 class InTheFieldItHops(unittest.TestCase):
     def standing(self, x=1000.0, y=0.0):
         return leader_at(x, y, zone=490)
@@ -687,6 +735,51 @@ class FamilyWideFarmIgnoresOperatorHold(unittest.IsolatedAsyncioTestCase):
         fake._farm_act.assert_awaited_once()
 
 
+class CraftPassHonoursScopedOperatorHold(unittest.IsolatedAsyncioTestCase):
+    """A hold whose scope names `craft` stands the craft pass down (#2560).
+
+    A default hold leaves crafting running, as the operatorhold docstring says.
+    """
+
+    async def _run(self, scope):
+        import asyncio
+        import time
+        import types
+        from unittest import mock
+        import campaignqueue
+        import operatorhold
+
+        rows = [{"family": "family_a", "reason": "x", "scope": scope, "live": 1}]
+        reads = mock.MagicMock(side_effect=RuntimeError("past the hold"))
+        ns = {
+            "asyncio": asyncio,
+            "time": time,
+            "campaignqueue": campaignqueue,
+            "operatorhold": operatorhold,
+            "log": mock.MagicMock(),
+            "_fetch_operator_holds": mock.MagicMock(return_value=rows),
+            "_crafting_roster": mock.MagicMock(return_value=["Mizu"]),
+            "_fetch_trade_skills": reads,
+        }
+        _load_bridge_farm_methods(ns, extra_methods=("_craft_once",))
+        fake = types.SimpleNamespace(_operator_hold_notice=operatorhold.Notice())
+        fake._operator_held = types.MethodType(ns["_operator_held"], fake)
+        cohort = types.SimpleNamespace(key="family_a", solo=False)
+        try:
+            await ns["_craft_once"](fake, cohort)
+        except RuntimeError:
+            pass
+        return reads
+
+    async def test_a_craft_scoped_hold_stops_the_craft_pass(self):
+        reads = await self._run("craft")
+        reads.assert_not_called()
+
+    async def test_a_default_hold_leaves_the_craft_pass_running(self):
+        reads = await self._run("")
+        reads.assert_called_once()
+
+
 class RenewedOrderKeepsDeathStrikes(unittest.IsolatedAsyncioTestCase):
     """Renewing a farm order resets its time box and baseline, not its zone strikes."""
 
@@ -745,6 +838,7 @@ class RenewedOrderKeepsDeathStrikes(unittest.IsolatedAsyncioTestCase):
                 "_gather_danger": lambda map_id, x, y: 55,
                 "_farm_deaths": fake_farm_deaths,
                 "_fetch_free_slots": lambda names: {name: 20 for name in FAMILY},
+                "_released_for_gathering": lambda names, free: frozenset(),
                 "_current_travel_npc": lambda leader: "",
             },
             extra_methods=("_farm_job_now", "_farm_state_for"),

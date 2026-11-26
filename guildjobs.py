@@ -127,6 +127,7 @@ import craft_rhythm
 import craft_supply
 import dungeonpath
 import gearup
+import corpstickets
 import guildcorps
 import guildlevel
 import guildroute
@@ -694,6 +695,10 @@ class Member:
     # Bag slots free in the backpack and the worn bags; None when unread, which
     # keeps no quest waiting on room (class_room_needed).
     free_slots: int | None = None
+    # True when the last reading is away from where the pass before it read this
+    # member (standstill.walking): its own AI is walking it, and the module
+    # refuses a cast then, so no craft step is written (#2401).
+    moving: bool = False
     # Maps the module has refused to cross this member to for good, with its
     # reason (class_walls): classquest then names a MAP blocker, not a CROSS.
     no_crossing: dict = field(default_factory=dict)
@@ -741,6 +746,9 @@ class Member:
     # holds only what a vendor buys, so the plan reads the whole bags), and the
     # banker nearest it. Empty for any member that is not a seat short of room.
     plan_sales: tuple = ()  # Carried
+    # Guids of the pieces a set swap (setswap.py, #540) took off and left in the
+    # bags to be put back or banked after the run: no sale rule lets them go.
+    swapped_out: frozenset = frozenset()
     plan_bank: tuple = ()  # Carried
     banker: object = None  # a Spot
     # What the item plan routes to the auction house (auction.Sale) and the
@@ -1054,6 +1062,12 @@ def passing_hearth_row(r) -> bool:
     )
 
 
+def _refused_for_room(r) -> bool:
+    """Whether the module refused this row for bag room."""
+    said = "%s %s %s" % (r.result, r.reason, r.refusal)
+    return any(w in said for w in corpstickets.BAG_REASONS)
+
+
 def _step_row_wait(r, minutes: int, passing_wait: int | None = None) -> int:
     """Keep long waits for completed walks and persistent failures.
 
@@ -1070,6 +1084,10 @@ def _step_row_wait(r, minutes: int, passing_wait: int | None = None) -> int:
         and (r.refusal or r.reason) in PASSING_TRAIN_REASONS
     ):
         return min(minutes, LEVEL_TRANSIENT_RETRY_MINUTES)
+    if r.action == "collect" and not r.walk and _refused_for_room(r):
+        # Bags do not empty by themselves: a collect the module refused for
+        # bag room waits as long as a corps collect does (#2633).
+        return max(minutes, guildcorps.FULL_BAGS_COLLECT_MINUTES)
     if r.action == "train" and passing_train_row(r):
         # A profession errand asks again on the next pass (passing_wait); any
         # other trainer walk waits the base hour.
@@ -2597,6 +2615,8 @@ def _craft_or_room(m, kept, recent, cap, crafters, master):
     ladder a class quest uses, and the craft comes the pass after. Bags not
     read (free_slots None) keep the old behaviour.
     """
+    if m.moving:
+        return None, ""
     step = _craft_step(m)
     if step is None or m.free_slots is None or int(m.free_slots) >= 1:
         return step, ""
@@ -2848,13 +2868,16 @@ def vendor_stacks(member, kept, protected=frozenset()) -> list:
         for c in (member.carried or ())
         if (vendorsale.sells(c, judge) or int(c.guid) in second_best)
         and not _kept(member.name, c, kept)
+        and int(c.guid) not in member.swapped_out
     ]
     # A raid seat's item plan sales (#2609) go over the same counter, once.
     have = {int(c.guid) for c in own}
     own += [
         c
         for c in (member.plan_sales or ())
-        if int(c.guid) not in have and not _kept(member.name, c, kept)
+        if int(c.guid) not in have
+        and not _kept(member.name, c, kept)
+        and int(c.guid) not in member.swapped_out
     ]
     return sorted(
         own,
@@ -3058,6 +3081,77 @@ def riding_step(m, recent):
 # rows, checked against the dev world on that day), and leaves the member this
 # much over the fee for repairs and food.
 FAMILY_RIDING_FLOAT = 10000
+
+
+# WHICH HOLD STOPS THE FAMILY RIDING STEP (ticket 3208). Nine of ten level 60
+# family members still held no Riding after the step shipped and nobody could say
+# which hold decided it. The names are a closed set; `family_riding_hold` returns
+# exactly one and decides nothing: `family_riding_step` keeps its own rules.
+RIDING_HOLDS = (
+    "not_family_or_ineligible",
+    "riding_not_due",
+    "saving_for_fee",
+    "offline",
+    "dead",
+    "in_combat",
+    "following",
+    "unread_ground",
+    "no_trainer_on_map",
+    "cooldown",
+    "fired",
+)
+
+# Holds named by the planner, outside family_riding_step.
+PLANNER_RIDING_HOLDS = ("family_switch_off", "class_step_first", "gap_hold", "refused")
+
+
+def family_riding_hold(m, recent) -> str:
+    """The one name in RIDING_HOLDS that decides `family_riding_step` for m."""
+    if m.role != FAMILY or not m.eligible:
+        return "not_family_or_ineligible"
+    rank = purse.riding_due(m.level, m.skill(purse.RIDING_SKILL)[1])
+    if rank is None:
+        return "riding_not_due"
+    if int(m.money or 0) < rank.cost + FAMILY_RIDING_FLOAT:
+        return "saving_for_fee"
+    if not m.online:
+        return "offline"
+    if not m.alive:
+        return "dead"
+    if m.in_combat:
+        return "in_combat"
+    if getattr(m, "follows", False):
+        return "following"
+    if m.map_id is None or m.x is None or m.y is None:
+        return "unread_ground"
+    if _stranded_by_no_trainer(m.name, purse.RIDING_SKILL, m.map_id, recent):
+        return "no_trainer_on_map"
+    if _cooling(m, RIDING_ACTION, recent):
+        return "cooldown"
+    return "fired"
+
+
+_riding_hold_logged: dict = {}
+
+
+def log_riding_hold(m, hold: str) -> None:
+    """One log line when a level 60 family member with no Riding changes hold;
+    silent while the hold stays the same pass after pass."""
+    if m.role != FAMILY:
+        return
+    try:
+        wants = m.level >= 60 and not m.skill(purse.RIDING_SKILL)[1]
+    except Exception:
+        return
+    if not wants:
+        _riding_hold_logged.pop(m.name, None)
+        return
+    if _riding_hold_logged.get(m.name) == hold:
+        return
+    _riding_hold_logged[m.name] = hold
+    log.info(
+        "family riding: %s level %s has no Riding; hold: %s", m.name, m.level, hold
+    )
 
 
 def family_riding_step(m, recent):
@@ -5658,6 +5752,7 @@ def _plan_family_class_member(
     classes, recent, cap, now, far, kept, crafters, masters = reads
     counters, busy, per_guild = limits
     if not familyclass.enabled() or m.role != FAMILY:
+        log_riding_hold(m, "family_switch_off")
         return
     master = str(masters.get(m.guild) or "")
     step, doing, note = class_step(
@@ -5678,6 +5773,7 @@ def _plan_family_class_member(
         if doing:
             lines[m.name] = doing
             if classquest.MARK in doing:
+                log_riding_hold(m, "class_step_first")
                 return
         if class_owed(m, classes, recent, now=now) is not None and note:
             class_holds[m.name] = _class_hold_reason(m.name, note)
@@ -5697,6 +5793,7 @@ def _plan_family_class_member(
         )
         return
     gap_hold = familyclass.holds(m, step.move, recent)
+    log_riding_hold(m, ("class_step_first", "gap_hold")[bool(gap_hold)])
     if gap_hold:
         class_holds[m.name] = _class_hold_reason(m.name, gap_hold)
         _release_slots(m.name, far, None)
@@ -5755,10 +5852,13 @@ def _plan_family_riding(
     """Plan an idle family member the riding walk, or the mount step once
     riding is held, when its class step has nothing for it (#2625, #2642)."""
     step, note = family_riding_step(m, recent)
+    hold = family_riding_hold(m, recent)
     if _commit_family_step(
         m, step, note, recent, counters, busy, per_guild, steps, notes
     ):
+        log_riding_hold(m, "fired")
         return
+    log_riding_hold(m, "refused" if step is not None else hold)
     if step is not None and (not m.online or m.in_combat or m.name in busy):
         return
     mount_step_row, mount_note = family_mount_step(
@@ -7049,6 +7149,50 @@ def death_loop_onward(m, loop, world, recent, cap):
 # loop lately, stands out of its zone, and has no walk on running, is walked to
 # the hub of another zone now.
 RESUME_MINUTES = 90
+# The walk on is asked again at most this many times after a landed hearth
+# while the module keeps answering that the member is held by another verb
+# (#2014): a member whose hold never lifts is not walked at every pass for the
+# whole of RESUME_MINUTES; the loop's other rungs take it from there.
+RESUME_HELD_RETRIES = 3
+
+
+def _held_since_hearth(m, hearths, recent) -> int:
+    """How many level walks of `m` the module refused as held by another verb
+    since its newest landed hearth (`hearths`, the applied hearth rows)."""
+    landed = min(int(r.age_minutes) for r in hearths)
+    return sum(
+        1
+        for r in recent or ()
+        if r.name == m.name
+        and r.action == guildlevel.ACTION
+        and r.status == "error"
+        and guildrun.HEARTH_HELD_WORDS in (r.refusal or r.reason or "")
+        and int(r.age_minutes) <= landed
+    )
+
+
+# A landed death-loop hearth can keep its verb hold for a short time. Retry its
+# onward walk at most twice, with a bounded pause between asks.
+LOOP_HEARTH_WALK_RETRIES = 2
+LOOP_HEARTH_WALK_RETRY_SECONDS = 30
+LOOP_HEARTH_WALK_HELD = "character is held by another verb"
+
+
+def is_loop_hearth_walk(step, row) -> bool:
+    """Whether row is the onward level walk in a death-loop hearth step."""
+    return (
+        getattr(step, "action", "") == "hearth"
+        and LOOP_HEARTH_ERRAND in str(getattr(step, "said", ""))
+        and str(getattr(row, "source", "")).startswith("guildjobs:level:")
+        and str(getattr(row, "command", "")).startswith("walk-to-spawn ")
+    )
+
+
+def loop_hearth_walk_held(status, detail) -> bool:
+    """Whether this walk was refused only because the hearth still holds it."""
+    return str(status or "") == "error" and str(detail or "").startswith(
+        LOOP_HEARTH_WALK_HELD
+    )
 
 
 def death_loop_resume(m, loop, recent, world, cap):
@@ -7072,6 +7216,8 @@ def death_loop_resume(m, loop, recent, world, cap):
     if not hearths or min(int(r.age_minutes) for r in hearths) > RESUME_MINUTES:
         return None
     if _cooling(m, guildlevel.ACTION, recent):
+        return None
+    if _held_since_hearth(m, hearths, recent) >= RESUME_HELD_RETRIES:
         return None
     onward = death_loop_onward(m, loop, world, recent, cap)
     if onward is None:
@@ -10138,6 +10284,15 @@ def hearth_step(m):
 # reached them: no job was left, no zone was outgrown and the pass read no
 # position history (standstill.py). A player whose character will not move uses
 # the hearthstone, and its own AI starts again at the inn.
+def _still_minutes_for(m) -> int:
+    """How long a member stands before its hearth. A seat levelling first is
+    left to its dungeon asks with no step, so it stands waiting for a party by
+    design: it waits longer, and a stuck one is still got moving."""
+    if levelling_first(m):
+        return standstill.SEAT_STILL_MINUTES
+    return standstill.STILL_MINUTES
+
+
 def stood_still_step(m, still_for, recent, leveling=None):
     """The hearth of a member that has stood on one spot (standstill.track)
     for standstill.STILL_MINUTES with nothing asked of it, or None.
@@ -10148,7 +10303,7 @@ def stood_still_step(m, still_for, recent, leveling=None):
     its own hearth written for it while it stood, and no hearth inside the
     hearth cooldown."""
     minutes = int(still_for or 0)
-    if minutes < standstill.STILL_MINUTES:
+    if minutes < _still_minutes_for(m):
         return None
     if not (m.online and m.alive and not m.in_combat):
         return None

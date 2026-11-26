@@ -16,6 +16,7 @@ import json
 import pathlib
 import re
 import time
+from urllib.parse import quote
 
 from . import anchors as anchors_mod
 from . import confmerge, dbschema, imagecommit, lint, podpaths, runids
@@ -166,6 +167,38 @@ def fix_presence(gh, fix, pin):
     status = gh.compare(fix["repo"], commit, pin)
     if status in ("ahead", "identical"):
         return "present"
+    if status == "diverged":
+        repo = fix["repo"]
+        branch = (gh.api(f"repos/{repo}") or {}).get("default_branch")
+        reachable = gh.compare(repo, commit, quote(branch, safe="")) if branch else ""
+        if reachable in ("behind", "diverged"):
+            message = (
+                f"fix.commit {commit} is not on {repo}'s default branch {branch}; "
+                "replace the branch commit with a commit on the default branch"
+            )
+            pulls = (
+                gh.api(
+                    f"repos/{repo}/commits/{commit}/pulls?per_page=100",
+                    missing_ok=True,
+                    paginate=True,
+                )
+                or []
+            )
+            merges = sorted(
+                {
+                    pull["merge_commit_sha"]
+                    for pull in pulls
+                    if pull.get("merged_at")
+                    and _SHA.fullmatch(str(pull.get("merge_commit_sha", "")))
+                }
+            )
+            if merges:
+                message += "; pull merge commit: " + ", ".join(merges)
+            raise SubmitError(message)
+        if reachable not in ("ahead", "identical"):
+            raise SubmitError(
+                f"cannot verify fix.commit {commit} on {repo}'s default branch"
+            )
     if status in ("behind", "diverged"):
         return "absent"
     return "unchecked"
@@ -400,6 +433,7 @@ def submit(
         "batch": batch, "decree_id": decree_id, "decree_sha256": sha,
         "decree_path": str(decree_path), "decree_pr": args.get("decree_pr"),
         "submitted_at": int(clock()), "class": klass, "proves": decree["proves"],
+        "box": decree.get("box"),
         "fix": decree["fix"], "runs_wanted": {a: decree["runs"][a] for a in arms},
         "presence": presence, "fidelity_deltas": deltas, "runs": runs,
     }  # fmt: skip

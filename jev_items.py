@@ -570,6 +570,21 @@ def weapon_heuristic(holding, character, pipeline: Pipeline) -> tuple:
 # ---------------------------------------------------------------------------
 # THE RECORD
 
+# overseer_jev_judgment.facts holds at most this many characters. 1000 cut
+# the state a movement or family question was asked with, so a later judge
+# saw less than Jev did (#3303); the bridge widens the column to match.
+FACTS_LIMIT = 4000
+
+
+def facts_line(state: dict, criteria: dict | None = None) -> str:
+    """The facts column for one question: the options it offered, then the
+    state it was asked with, as compact JSON. Options lead so a state too
+    long for the column is what gets cut, never the choice itself."""
+    body = {"options": dict(criteria)} if criteria else {}
+    body.update(state)
+    text = json.dumps(body, separators=(",", ":"), default=str)
+    return text if len(text) <= FACTS_LIMIT else text[: FACTS_LIMIT - 3] + "..."
+
 
 @dataclass(frozen=True)
 class Judgment:
@@ -595,6 +610,9 @@ class Judgment:
     # jev.JEV, jev.BOTH or jev.HEURISTIC once the act plan has run; "" until
     # then. Recorded, so the record says which answer the world got.
     acted: str = ""
+    # What the question was asked with (facts_line): the options offered and
+    # the state, so a disagreement can be judged later from the record alone.
+    facts: str = ""
 
     @property
     def agree(self) -> bool | None:
@@ -752,6 +770,7 @@ def _disposition_ask(family: _Family, holding, row: dict, item: dict, base: dict
         heuristic_why=why,
         mode=mode,
         status="",
+        facts=facts_line(state, offered),
         **base,
     )
     return judgment, state, questions, "route"
@@ -780,6 +799,7 @@ def _weapon_asks(family: _Family, holding, item: dict, base: dict) -> list:
             heuristic_why=why,
             mode=mode,
             status="",
+            facts=facts_line(state, questions["better"]["criteria"]),
             **base,
         )
         asks.append((judgment, state, questions, "better"))
@@ -1157,7 +1177,9 @@ def recipient_question(ask: RecipientAsk, item: dict, closet: dict):
     return state, {"to": jev.choice(RECIPIENT_INSTRUCTIONS, criteria)}
 
 
-def recipient_judgment(ask: RecipientAsk, outcome: jev.Outcome, mode: str) -> Judgment:
+def recipient_judgment(
+    ask: RecipientAsk, outcome: jev.Outcome, mode: str, facts: str = ""
+) -> Judgment:
     """The comparison for one item: the ranking's pick beside Jev's.
 
     `confidence` and `probabilities` are the Choice's own.
@@ -1175,6 +1197,7 @@ def recipient_judgment(ask: RecipientAsk, outcome: jev.Outcome, mode: str) -> Ju
         mode=mode,
         status=outcome.status,
         latency_ms=outcome.latency_ms,
+        facts=facts,
     )
     if outcome.answers is None:
         return base
@@ -1265,9 +1288,14 @@ async def recipient_pass(client, asks, describe, closet, mode, limit=16) -> list
                 subject=h.holder,
                 before=lambda chose: recipient_snapshot(ask, chose),
             )
-        return recipient_judgment(ask, outcome, mode)
+        facts = facts_line(state, questions["to"]["criteria"])
+        return recipient_judgment(ask, outcome, mode, facts)
 
-    return list(await asyncio.gather(*(one(a) for a in asks[: max(0, int(limit))])))
+    # One candidate is no choice, and the decisions endpoint refuses a Choice
+    # with fewer than two options (HTTP 400): such an item is not asked, and
+    # with no judgment `reroute` leaves its route as the ranking made it.
+    askable = [a for a in asks if len(a.offered) >= 2]
+    return list(await asyncio.gather(*(one(a) for a in askable[: max(0, int(limit))])))
 
 
 def reroute(plan, judgments, policy: jev.Policy) -> tuple:
