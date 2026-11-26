@@ -9,12 +9,12 @@
 # message per line, so it is dropped rather than left as a check that cannot fail. What the rows prove: the two
 # stranded members started on the entrance map, Gelihast fell (the core credited him), no run ended on the party
 # wait, and no run sat active with no progress for twenty minutes at the end.
-# Fix: mod-dungeon-clear pull 67 (the pin port is no. 87).
+# Fix: the default-branch port in mod-dungeon-clear pull 87 (original pull 67).
 decree: v1
 id: blackfathom-gelihast-stranded-rescue
 proves:
   - {repo: quadseven/mod-dungeon-clear, issue: 66, criterion: "over two hours the stranded members are rescued: Gelihast is credited and no run ends on the party wait (the same-boss same-members grouping is log text, not asserted here)"}
-fix: {repo: quadseven/mod-dungeon-clear, commit: "449b0628f9f1710b08fca9daac9db97cc4ddef25"}
+fix: {repo: quadseven/mod-dungeon-clear, commit: "90d744e1145b951ddb0e9b48cdcb1e69026b1e29"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
 duration: 135m
