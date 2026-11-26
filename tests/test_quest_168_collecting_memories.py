@@ -7,8 +7,7 @@ minimum level are the ticket's world rows. The ticket lists no giver or
 spawn rows, so the giver entry and the spawns are fixture-only, and the
 zone stands in with the Deadmines place id the site's places table uses.
 
-Five questers held the quest for two hours of play and its objectives
-did not move at all. Loot rows alone do not say a dropper is spawned, so
+Loot rows alone do not say a dropper is spawned, so
 this file pins the quester's behaviour for each sourcing the world rows
 can hide, in the shape of the Recipe For Death rows:
 
