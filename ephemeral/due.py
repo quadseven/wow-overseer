@@ -13,7 +13,9 @@ import re
 from .miniyaml import YamlError, loads
 
 LABEL_WAITING = "awaiting-live-check"
-PROOF_RE = re.compile(r"^[ \t]*Proof:[ \t]+decree[ \t]+([a-z0-9][a-z0-9-]*)[ \t]*$", re.M)
+PROOF_RE = re.compile(
+    r"^[ \t]*Proof:[ \t]+decree[ \t]+([a-z0-9][a-z0-9-]*)[ \t]*$", re.M
+)
 
 
 def proof_decree(body):
@@ -42,7 +44,9 @@ def has_submission(results_dir, decree_id):
 
 def load_decree(gh, repo, decree_id):
     """The decree parsed from the default branch, or None when absent or unreadable."""
-    doc = gh.api(f"repos/{repo}/contents/data/decrees/{decree_id}.yaml?ref=main", missing_ok=True)
+    doc = gh.api(
+        f"repos/{repo}/contents/data/decrees/{decree_id}.yaml?ref=main", missing_ok=True
+    )
     if not doc or doc.get("encoding") != "base64":
         return None
     try:
@@ -55,11 +59,14 @@ def due(gh, cfg, repos=None):
     """[(repo, issue number, decree id)] oldest issue first."""
     out = []
     for repo in repos or [cfg.decree_repo]:
-        issues = gh.api(
-            f"repos/{repo}/issues?state=open&labels={LABEL_WAITING}"
-            "&sort=created&direction=asc&per_page=100",
-            paginate=True,
-        ) or []
+        issues = (
+            gh.api(
+                f"repos/{repo}/issues?state=open&labels={LABEL_WAITING}"
+                "&sort=created&direction=asc&per_page=100",
+                paginate=True,
+            )
+            or []
+        )
         for it in issues:
             if "pull_request" in it:
                 continue

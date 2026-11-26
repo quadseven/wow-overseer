@@ -23,13 +23,14 @@ class FakeGh:
         text = self.decrees.get(did)
         if text is None:
             return None
-        return {"encoding": "base64", "content": base64.b64encode(text.encode()).decode()}
+        return {
+            "encoding": "base64",
+            "content": base64.b64encode(text.encode()).decode(),
+        }
 
 
 def decree(did, issue):
-    return (
-        f"decree: v1\nid: {did}\nproves: [{{repo: {REPO}, issue: {issue}, criterion: \"x\"}}]\n"
-    )
+    return f'decree: v1\nid: {did}\nproves: [{{repo: {REPO}, issue: {issue}, criterion: "x"}}]\n'
 
 
 def issue(n, body):
@@ -46,18 +47,25 @@ class DueTest(unittest.TestCase):
         return due.due(FakeGh(issues, decrees), self.cfg)
 
     def test_proof_line_present_is_due(self):
-        got = self.run_due([issue(5, "text\nProof: decree alpha\n")], {"alpha": decree("alpha", 5)})
+        got = self.run_due(
+            [issue(5, "text\nProof: decree alpha\n")], {"alpha": decree("alpha", 5)}
+        )
         self.assertEqual(got, [(REPO, 5, "alpha")])
 
     def test_no_proof_line_is_skipped(self):
-        self.assertEqual(self.run_due([issue(5, "no line")], {"alpha": decree("alpha", 5)}), [])
+        self.assertEqual(
+            self.run_due([issue(5, "no line")], {"alpha": decree("alpha", 5)}), []
+        )
 
     def test_decree_missing_is_skipped(self):
         self.assertEqual(self.run_due([issue(5, "Proof: decree alpha")], {}), [])
 
     def test_decree_proving_another_issue_is_skipped(self):
         self.assertEqual(
-            self.run_due([issue(5, "Proof: decree alpha")], {"alpha": decree("alpha", 6)}), []
+            self.run_due(
+                [issue(5, "Proof: decree alpha")], {"alpha": decree("alpha", 6)}
+            ),
+            [],
         )
 
     def test_already_submitted_is_skipped(self):
@@ -65,7 +73,10 @@ class DueTest(unittest.TestCase):
         d.mkdir()
         (d / "batch-abc123.json").write_text("{}")
         self.assertEqual(
-            self.run_due([issue(5, "Proof: decree alpha")], {"alpha": decree("alpha", 5)}), []
+            self.run_due(
+                [issue(5, "Proof: decree alpha")], {"alpha": decree("alpha", 5)}
+            ),
+            [],
         )
 
     def test_order_is_kept_and_pull_requests_skipped(self):
@@ -75,7 +86,9 @@ class DueTest(unittest.TestCase):
             issue(3, "Proof: decree a"),
         ]
         decrees = {"a": decree("a", 3), "b": decree("b", 9)}
-        self.assertEqual(self.run_due(issues, decrees), [(REPO, 9, "b"), (REPO, 3, "a")])
+        self.assertEqual(
+            self.run_due(issues, decrees), [(REPO, 9, "b"), (REPO, 3, "a")]
+        )
 
     def test_proof_regex_needs_whole_line(self):
         self.assertEqual(due.proof_decree("see Proof: decree a and more"), "")
