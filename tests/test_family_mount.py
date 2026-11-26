@@ -63,9 +63,18 @@ class WhoGetsAMountWalk(unittest.TestCase):
     def test_a_buy_is_never_planned_as_a_vendor_walk(self):
         # The module refuses walk-to-vendor for a roster character, so a walk
         # row would only error on every cooldown and never buy a mount.
-        step, note = self.step(mount_seat())
+        m = mount_seat()
+        step, note = self.step(m)
         self.assertIsNone(step)
         self.assertIn("waits to buy a mount", note)
+        self.assertIn(m.name, note)
+        self.assertIn("no roster character to a vendor", note)
+        self.assertNotIn("saves for a mount", note)
+        self.assertEqual(
+            "%s waits to buy a mount: the module walks no roster character to a vendor"
+            % m.name,
+            note,
+        )
 
     def test_the_mount_leaves_the_family_float(self):
         broke = mount_seat(money=PINTO.price)
@@ -94,6 +103,7 @@ class WhoGetsAMountWalk(unittest.TestCase):
         step, note = self.step(m)
         self.assertIsNone(step)
         self.assertIn("waits to buy a mount", note)
+        self.assertIn("no roster character to a vendor", note)
 
 
 class WhenFamilyMountIsHeld(unittest.TestCase):
