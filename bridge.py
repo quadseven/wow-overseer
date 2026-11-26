@@ -356,6 +356,8 @@ _JEV_GATE = jev_openai.ActGate()
 _JEV_REPORTER = jev_openai.Reporter(_JEV_GATE)
 if JEV_ACTIVE_BACKEND == "openai":
     jev.set_act_gate(_JEV_GATE)
+    for _line in jev_openai.act_plan_lines(os.environ):
+        log.info("%s", _line)
 # How long a pass with a kind in act mode waits for Jev before the heuristic
 # acts without it: the client's own deadline, so a slow Jev costs a pass at
 # most that and never more. The answers still arrive and are recorded.
@@ -33276,7 +33278,8 @@ def _jev_report_tick() -> None:
         return
     try:
         with _connect() as conn, conn.cursor() as cur:
-            report = jev_openai.fetch_report(cur, os.environ)
+            report = jev_openai.fetch_report(
+                cur, os.environ, db_errors=(pymysql.err.MySQLError,))
     except pymysql.err.MySQLError:
         log.exception("jev: the OpenAI report could not be read")
         return
