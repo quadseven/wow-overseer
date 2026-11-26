@@ -40,6 +40,11 @@ The fire resistance source is one, not one a group: the operator read the
 realm's Spell.dbc (wow-overseer#684) and Fire Resistance Aura and the Fire
 Resistance Totem's aura are APPLY_AREA_AURA_RAID, 40 and 30 yards.
 
+The resistance asks come from the pinned playerbots Molten Core strategy
+(MCStrategy.cpp registers shadow resistance triggers for Lucifron, Gehennas
+and Majordomo and fire resistance for Magmadar, Garr, Baron Geddon, Sulfuron
+Harbinger, Golemagg and Ragnaros; BossAuraActions.cpp casts the paladin aura).
+
 The counts are planning numbers. The scripts say which mechanic exists; how
 many hands it takes (two curse dispellers so one death does not stop the
 fight) is a judgement, kept here in one table so a change is one line.
@@ -85,6 +90,7 @@ INTERRUPT = "interrupt"
 FEAR_PROTECTION = "fear_protection"
 TRANQUILIZING_SHOT = "tranquilizing_shot"
 FIRE_RESISTANCE = "fire_resistance"
+SHADOW_RESISTANCE = "shadow_resistance"
 
 # Tanks are counted from the seat, not the class: a warrior in a damage seat
 # is not holding Golemagg's ragers. Every other capability is the class.
@@ -123,6 +129,10 @@ CAPABILITIES = {
         "fire resistance source",
         "fire resistance sources",
     ),
+    # Shadow Resistance Aura, the paladin aura the pinned playerbots strategy casts.
+    SHADOW_RESISTANCE: Capability(
+        frozenset({PALADIN}), "shadow resistance source", "shadow resistance sources"
+    ),
 }
 
 
@@ -144,6 +154,7 @@ _CAPABILITY_SPELLS = {
     FEAR_PROTECTION: {PRIEST: (6346,), SHAMAN: (8143,), WARRIOR: (18499,)},
     TRANQUILIZING_SHOT: {HUNTER: (19801,)},
     FIRE_RESISTANCE: {PALADIN: (19891,), SHAMAN: (8184,)},
+    SHADOW_RESISTANCE: {PALADIN: (19876,)},
 }
 _CLASS_NAMES = {
     WARRIOR: "Warrior",
@@ -181,24 +192,24 @@ class Encounter(NamedTuple):
 ENCOUNTERS = (
     Encounter(
         "Lucifron",
-        {TANKS: 3, CURSE_DISPEL: 2, MAGIC_DISPEL: 2},
+        {TANKS: 3, CURSE_DISPEL: 2, MAGIC_DISPEL: 2, SHADOW_RESISTANCE: 1},
         "Lucifron and his two Flamewaker Protectors are held apart; "
         "Lucifron's Curse is decursed and Impending Doom dispelled.",
     ),
     Encounter(
         "Magmadar",
-        {TANKS: 1, FEAR_PROTECTION: 1, TRANQUILIZING_SHOT: 1},
+        {TANKS: 1, FEAR_PROTECTION: 1, TRANQUILIZING_SHOT: 1, FIRE_RESISTANCE: 1},
         "Panic fears the raid and the tank; Frenzy is removed by Tranquilizing Shot.",
     ),
     Encounter(
         "Gehennas",
-        {TANKS: 3, CURSE_DISPEL: 2},
+        {TANKS: 3, CURSE_DISPEL: 2, SHADOW_RESISTANCE: 1},
         "Gehennas and his two Flamewakers are held apart; Gehennas' Curse cuts "
         "healing taken and is decursed.",
     ),
     Encounter(
         "Garr",
-        {TANKS: 2, BANISH: 2},
+        {TANKS: 2, BANISH: 2, FIRE_RESISTANCE: 1},
         "Garr is held while the Firesworn are banished, and banished again "
         "after each Eruption.",
     ),
@@ -214,18 +225,18 @@ ENCOUNTERS = (
     ),
     Encounter(
         "Golemagg",
-        {TANKS: 3},
+        {TANKS: 3, FIRE_RESISTANCE: 1},
         "Golemagg and his two Core Ragers each need a tank.",
     ),
     Encounter(
         "Sulfuron Harbinger",
-        {TANKS: 2, INTERRUPT: 4, MAGIC_DISPEL: 2},
+        {TANKS: 2, INTERRUPT: 4, MAGIC_DISPEL: 2, FIRE_RESISTANCE: 1},
         "The four Flamewaker Priests' Dark Mending is interrupted and their "
         "Shadow Word: Pain dispelled.",
     ),
     Encounter(
         "Majordomo Executus",
-        {TANKS: 4, CROWD_CONTROL: 4, INTERRUPT: 4},
+        {TANKS: 4, CROWD_CONTROL: 4, INTERRUPT: 4, SHADOW_RESISTANCE: 1},
         "Eight adds: the four Flamewaker Elites are tanked and the four healers "
         "held by crowd control until half are dead, then interrupted.",
     ),

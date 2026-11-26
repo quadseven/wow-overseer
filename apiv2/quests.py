@@ -22,7 +22,8 @@ GET /api/v2/quests/{id}
 
   One catalogue quest with every quester's attempt at it. A quest outside the
   catalogue is a 404. The generic failed-log reason explains the recorded
-  status without assigning a cause.
+  status without assigning a cause, and the generic stall reason explains
+  that one quester's stall is not a finding about the quest itself.
 
 GET /api/v2/questers
 
@@ -184,11 +185,25 @@ def quests(query: dict, ctx) -> tuple[int, dict]:
     )
 
 
+# The questers' generic stall reason (questers.STALLED), stored verbatim on
+# a broken ledger row. It records one quester's objectives not moving, which
+# the quester pass itself does not read as a fact about the quest
+# (questers.ledger_state reads a stall row as stalled, not broken).
+STALL_REASON = "its objectives did not move for 2 hours of play"
+STALL_REASON_EXPLAINED = (
+    "Its objectives did not move for 2 hours of play for this quester. "
+    "A stall is one quester's attempt, not a finding that the quest "
+    "cannot be finished."
+)
+
+
 def _attempt(row) -> dict:
     name = str(row.get("character_name") or "")
     reason = str(row.get("reason") or "")
     if reason == questledger.FAILED_REASON:
         reason = "The quest log reported a failure. The cause was not recorded."
+    elif reason == STALL_REASON:
+        reason = STALL_REASON_EXPLAINED
     return {
         "character": name,
         "guid": int(row["guid"]),

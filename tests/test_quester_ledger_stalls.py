@@ -33,6 +33,12 @@ class TheLedgerReading(unittest.TestCase):
             questers.LEDGER_STALLED, questers.ledger_state("broken", questers.FAILED)
         )
 
+    def test_a_failed_attempt_with_its_world_fact_still_reads_stalled(self):
+        reason = questers.FAILED + "; its objective creature 1192 has no spawn"
+        self.assertEqual(
+            questers.LEDGER_STALLED, questers.ledger_state("broken", reason)
+        )
+
     def test_a_broken_row_for_a_world_fact_reads_broken(self):
         self.assertEqual(
             "broken", questers.ledger_state("broken", questers.ENDER_MISSING)

@@ -67,8 +67,10 @@ import asyncio
 import json
 from dataclasses import dataclass, replace
 
+import bag_pressure
 import bank
 import classic
+import classreagents
 import clearance
 import goals
 import guildshare
@@ -76,7 +78,7 @@ import jev
 import lockbox
 import materials
 import raidlineup
-from jev_items import Judgment
+from jev_items import FACTS_LIMIT, Judgment
 
 KIND = "item_keep"
 
@@ -109,7 +111,7 @@ DEFAULT_INTERVAL_MINUTES = 180
 
 # item_template.class values. Gear (2, 4) is item_disposition's; containers
 # (1) are the surplus-bag pass's.
-CONTAINER, WEAPON, GEM, ARMOR, REAGENT, TRADE_GOODS = 1, 2, 3, 4, 5, 7
+CONTAINER, WEAPON, GEM, ARMOR, REAGENT, PROJECTILE, TRADE_GOODS = 1, 2, 3, 4, 5, 6, 7
 RECIPE, QUEST, KEY, MISC = 9, 12, 13, 15
 NOT_ASKED = frozenset({CONTAINER, WEAPON, ARMOR})
 _CLASS_WORDS = {
@@ -458,6 +460,118 @@ def options(row: dict, template: dict, who: list, heuristic_answer: str) -> dict
     return out
 
 
+def _auction_price(row: dict, market: dict | None) -> str:
+    """The cheapest live buyout each, or why it is not known (#3303).
+
+    The auction house holds live listings only, with no sale history, so an
+    item nobody lists has no price here; that is said, never guessed.
+    """
+    if market is None:
+        return "not known: the auction house was not read"
+    price = market.get(_int(row.get("entry")))
+    if price:
+        return _money(price)
+    return "not known: no live listing on the family's auction house"
+
+
+# A read the caller did not make, told apart from one that failed (None).
+NOT_READ = object()
+
+_RANGED_WORDS = {2: "bow", 3: "gun", 16: "thrown", 18: "crossbow", 19: "wand"}
+
+
+def ranged_word(worn: dict | None) -> str:
+    """What a member wears in the ranged slot, as a word: bow, gun, ..."""
+    if not worn or _int(worn.get("item_class"), -1) != WEAPON:
+        return "none"
+    sub = _int(worn.get("item_subclass"), -1)
+    return _RANGED_WORDS.get(sub, "subclass %d" % sub)
+
+
+def darkmoon_deck(row: dict, carried) -> dict | None:
+    """What the family carries of a Darkmoon card's deck, or None (#3303).
+
+    A judge called vendoring a card a major loss whenever the deck's progress
+    was unknown. The ranks are counted over every carried stack the family
+    holds; banks are not read, which the row says. None without `carried`:
+    the family's bags were not read, so nothing is claimed about them.
+    """
+    card = bag_pressure.darkmoon_card(str(row.get("name") or ""))
+    if card is None or carried is None:
+        return None
+    rank, suit = card
+    held = {rank}
+    for r in carried or ():
+        other = bag_pressure.darkmoon_card(str(r.get("name") or ""))
+        if other is not None and other[1] == suit and _int(r.get("count"), 1) > 0:
+            held.add(other[0])
+    ranks = bag_pressure.DARKMOON_RANKS
+    return {
+        "deck": suit,
+        "family_carries": [r for r in ranks if r in held],
+        "missing": [r for r in ranks if r not in held],
+        "counted": "family bags only; banks not read",
+    }
+
+
+def spell_users_from(spell_rows, spell_reagents, entries, craft=None) -> dict:
+    """entry -> the family members whose known class spells use it. Pure.
+
+    `spell_rows` are (holder, spell) rows of the family's spellbooks and
+    `spell_reagents` spell -> ((entry, count), ...) (classreagents). Trade
+    recipes are left out: a trade's use of an item is `used_by_trades`.
+    """
+    known: dict = {}
+    for r in spell_rows or ():
+        known.setdefault(str(r.get("holder") or ""), set()).add(_int(r.get("spell")))
+    wanted = {_int(e) for e in entries}
+    out: dict = {}
+    for name in sorted(known):
+        for entry in classreagents.entries_for_known(
+            known[name], spell_reagents, craft
+        ):
+            if entry in wanted:
+                out.setdefault(entry, []).append(name)
+    return {e: tuple(names) for e, names in out.items()}
+
+
+def _family_facts(
+    state: dict,
+    row: dict,
+    *,
+    carried=None,
+    family_free=None,
+    guild_free=None,
+    spell_users=None,
+    ranged=None,
+    ranged_read: bool = False,
+) -> dict:
+    """The family-wide facts a player checks before parting with a stack
+    (#3303), added to `state` in place. A fact whose read was not passed is
+    left out; one whose read failed says "unknown"."""
+    item = state["item"]
+    deck = darkmoon_deck(row, carried)
+    if deck is not None:
+        item["darkmoon_deck"] = deck
+    item_class = _int(row.get("item_class"))
+    is_reagent = item_class == REAGENT or bool(row.get("reagent"))
+    if spell_users is not None and is_reagent:
+        users = list(spell_users.get(_int(row.get("entry")), ()))
+        item["class_spells_use_it"] = (
+            users or "no family member knows a spell that uses it"
+        )
+    if item_class == PROJECTILE and ranged_read:
+        item["family_ranged_weapons"] = (
+            dict(ranged) if ranged is not None else "unknown"
+        )
+    if family_free is not None:
+        state["bag_room"] = {
+            "family_free_bag_slots": dict(family_free),
+            "guild_bank_free_slots": "unknown" if guild_free is None else guild_free,
+        }
+    return state
+
+
 def state_for(
     row: dict, template: dict, holder: Holder, who: list, trades: tuple, market: dict
 ) -> dict:
@@ -471,11 +585,7 @@ def state_for(
         "max_stack": _int(template.get("stackable"), 1) or 1,
         "binds_to_holder": bound(template),
         "vendor_price_each": _money(row.get("sell_price")),
-        "auction_price_each": (
-            _money(market[_int(row.get("entry"))])
-            if market.get(_int(row.get("entry")))
-            else "not known"
-        ),
+        "auction_price_each": _auction_price(row, market),
         "an_open_quest_needs_it": bool(row.get("quest_item", False)),
         "why_it_is_protected": list(protection(row)),
     }
@@ -536,7 +646,8 @@ def question(state: dict, offered: dict) -> dict:
 def facts_line(state: dict) -> str:
     """The facts column: the state, compact, within the column's 1000."""
     text = json.dumps(state, separators=(",", ":"), sort_keys=True)
-    return text if len(text) <= 1000 else text[:997] + "..."
+    limit = FACTS_LIMIT
+    return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 # ---------------------------------------------------------------------------
@@ -545,11 +656,10 @@ def facts_line(state: dict) -> str:
 
 @dataclass(frozen=True)
 class KeepJudgment(Judgment):
-    """A jev_items.Judgment that also carries the facts it was asked with,
-    the routes Jev may carry out for this stack (`actable_routes`) and the
-    stack's size, which an order needs."""
+    """A jev_items.Judgment (whose `facts` it fills from facts_line) that also
+    carries the routes Jev may carry out for this stack (`actable_routes`) and
+    the stack's size, which an order needs."""
 
-    facts: str = ""
     actable: tuple = ()
     count: int = 1
 
@@ -613,12 +723,24 @@ def asks(
     mode,
     takers=None,
     register=None,
+    carried=None,
+    family_free=None,
+    guild_free=None,
+    spell_users=None,
+    ranged=NOT_READ,
 ):
     """(KeepJudgment, state, questions) per row, in the order given.
 
     `takers` and `register` come from the designated-crafters register
     (#248): a recipe's `give:` options follow its ranking, and the state
     names the trade's designated crafters.
+
+    The family-wide facts (#3303) change only the state, never an option or
+    an actable route: `carried` is every stack the family carries (a
+    Darkmoon card's deck progress), `family_free` name -> free bag slots,
+    `guild_free` the guild bank's free slots (None: unread), `spell_users`
+    entry -> the family members whose known class spells use it, and
+    `ranged` name -> ranged_word, or None when that read failed.
     """
     out = []
     for row in rows:
@@ -636,7 +758,16 @@ def asks(
             for a in actable_routes(row, template, who, holder, trades, answer)
             if a in offered
         )
-        state = state_for(row, template, holder, who, trades, market or {})
+        state = _family_facts(
+            state_for(row, template, holder, who, trades, market),
+            row,
+            carried=carried,
+            family_free=family_free,
+            guild_free=guild_free,
+            spell_users=spell_users,
+            ranged=None if ranged is NOT_READ else ranged,
+            ranged_read=ranged is not NOT_READ,
+        )
         seats = designated_for(template, register)
         if seats and "teaches" in state["item"]:
             state["item"]["teaches"]["designated_crafters"] = seats

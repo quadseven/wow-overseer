@@ -241,6 +241,20 @@ class EveryQuestInReach(unittest.TestCase):
         self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 30))
         self.assertIn("goes on to", p.move.said)
 
+    def test_a_quest_with_no_objective_spawns_is_not_offered(self):
+        # Quest 99 requires killing creature 999, but no spawns for 999 are provided.
+        cat = world(
+            extra_quests=[quest(99, ELWYNN, 2, kill=999, title="Unspawned Hunt")],
+            extra_givers=[
+                giver(99, "start", 1099, 199, 100, 0),
+                giver(99, "end", 1099, 199, 100, 0),
+            ],
+        )
+        # The quest has a giver but no objective spawns - it should not be in reach.
+        self.assertNotIn(99, questers.in_reach(cat, mirra(), ELWYNN))
+        # The quest should also not be open_to the member.
+        self.assertFalse(questers.open_to(cat, mirra(), 99))
+
     def test_a_zone_on_the_other_continent_is_crossed_to(self):
         far = [quest(40, 148, 4, title="Darkshore Fish")]
         cat = world(
@@ -879,6 +893,70 @@ class Broken(unittest.TestCase):
             reason,
             "requires crafted Crab Cakes (item 2683); questers cannot cook",
         )
+
+    def test_seasoned_wolf_kabobs_ledger_explains_the_unsupported_cooking_step(self):
+        quest = classquest.Quest(
+            90,
+            "Seasoned Wolf Kabobs",
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            items=((1017, 10),),
+        )
+        facts = questers.Facts(zone=DUSKWOOD, level=25, ender_npcs=True)
+
+        reason = questers._broken_reason(
+            quest,
+            facts,
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+
+        self.assertEqual(
+            reason,
+            "requires crafted Seasoned Wolf Kabobs (item 1017); questers cannot cook",
+        )
+
+    def _failed_reason(self, cat, qid):
+        return questers._broken_reason(
+            cat.quest(qid),
+            cat.facts[qid],
+            questers.STATUS_FAILED,
+            0,
+            frozenset(),
+            {},
+        )
+
+    def test_a_failed_quest_names_its_objective_off_the_quests_map(self):
+        # The quest is given on map 0; its boars stand on map 1 only.
+        cat = world(
+            extra_quests=[quest(258, ELWYNN, 17, min_level=11, kill=1192, count=5)],
+            extra_givers=[giver(258, "start", 1258, 140, 0, 0)],
+            extra_spawns=[spawn(3001, 1192, 0, 0, map_id=1, name="Boar")],
+        )
+        self.assertEqual(cat.facts[258].home_map, 0)
+        self.assertEqual(
+            self._failed_reason(cat, 258),
+            questers.FAILED
+            + "; its objective creature 1192 has no spawn on the quest's map "
+            "(1 on other maps)",
+        )
+
+    def test_a_failed_quest_with_its_objective_on_its_map_keeps_the_plain_reason(
+        self,
+    ):
+        cat = world(
+            extra_quests=[quest(258, ELWYNN, 17, min_level=11, kill=1192, count=5)],
+            extra_givers=[giver(258, "start", 1258, 140, 0, 0)],
+            extra_spawns=[spawn(3001, 1192, 0, 0, map_id=0, name="Boar")],
+        )
+        self.assertEqual(self._failed_reason(cat, 258), questers.FAILED)
 
     def test_quest_101_carries_no_hard_coded_reason(self):
         """The Totem of Infliction is a plain three-item collect quest in the
@@ -1992,6 +2070,71 @@ class Broken(unittest.TestCase):
         self.assertNotEqual(p.move.quest, 1)
 
 
+# Coarse Thread (item 2320) is sold by vendors only; no creature drops it, no
+# chest holds it and no take hands it over. The objective's creature is hunted
+# all the same, so the quest was never judged unsourced (#3149).
+COARSE_THREAD = 2320
+
+
+def thread_world(extra_quests=(), extra_givers=(), extra_loot=()):
+    thread = quest(9, NORTHSHIRE, 2, kill=200, title="The Chill of Thread")
+    thread.update(item1=COARSE_THREAD, item_count1=1)
+    return world(
+        extra_quests=[thread, *extra_quests],
+        extra_givers=[
+            giver(9, "start", 1009, 109, 0, 0),
+            giver(9, "end", 1009, 109, 0, 0),
+            *extra_givers,
+        ],
+        extra_loot=extra_loot,
+    )
+
+
+class VendorOnlyItemQuest(unittest.TestCase):
+    def test_a_quest_with_a_vendor_only_item_is_not_taken(self):
+        cat = thread_world()
+        p = questers.plan(cat, mirra(), questers.Clock(), 0.0)
+        self.assertNotEqual((p.move.kind, p.move.quest), (classquest.TAKE, 9))
+        reason = next(b.reason for b in p.broken if b.quest == 9)
+        self.assertEqual(reason, questers.UNSOURCED_ITEM % COARSE_THREAD)
+        self.assertIn("questers cannot buy items from vendors", reason)
+
+    def test_a_quester_already_carrying_the_item_may_take_it(self):
+        cat = thread_world()
+        carrying = mirra(quest_item_objectives={9: {COARSE_THREAD: 1}})
+        self.assertEqual(questers._vendor_item(cat.quest(9), {COARSE_THREAD: 1}), 0)
+        p = questers.plan(cat, carrying, questers.Clock(), 0.0)
+        self.assertFalse([b for b in p.broken if b.quest == 9])
+
+    def test_a_drop_of_the_item_makes_it_sourced(self):
+        cat = thread_world(extra_loot=[{"item": COARSE_THREAD, "entry": 200}])
+        self.assertEqual(questers._vendor_item(cat.quest(9), {}), 0)
+
+    def test_a_held_quest_with_a_huntable_objective_is_explained_on_stall(self):
+        reason = questers._broken_reason(
+            thread_world().quest(9),
+            thread_world().facts[9],
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+            vendor_item=COARSE_THREAD,
+        )
+        self.assertEqual(reason, questers.STALLED_UNSOURCED)
+
+    def test_a_stall_with_a_huntable_objective_and_no_vendor_item_stays_stalled(self):
+        cat = thread_world()
+        reason = questers._broken_reason(
+            cat.quest(9),
+            cat.facts[9],
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+        self.assertEqual(reason, questers.STALLED)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -2411,6 +2554,73 @@ class ASummonedObjectEnder(unittest.TestCase):
             (move.kind, move.quest, move.spot.entry),
             (classquest.HUNT, 167, 626),
         )
+
+    def test_digging_through_the_ooze_hunts_the_bag_drop_and_turns_in(self):
+        ooze = quest(470, 11, 24, min_level=19, title="Digging Through the Ooze")
+        ooze.update(
+            npc1=1031,
+            npc_count1=0,
+            npc2=1032,
+            npc_count2=0,
+            npc3=1033,
+            npc_count3=0,
+            item1=3349,
+            item_count1=1,
+        )
+        cat = world(
+            extra_quests=[ooze],
+            extra_givers=[
+                giver(470, "start", 5470, 1347, 400, 0),
+                giver(470, "end", 5470, 1347, 400, 0),
+            ],
+            extra_spawns=[
+                spawn(5471, 1031, 10, 0, level=24),
+                spawn(5472, 1032, 20, 0, level=24),
+                spawn(5473, 1033, 30, 0, level=24),
+            ],
+            extra_loot=[
+                {"item": 3349, "entry": 1031},
+                {"item": 3349, "entry": 1032},
+                {"item": 3349, "entry": 1033},
+            ],
+        )
+        member = mirra(
+            level=24,
+            zone_id=11,
+            quest_log={470: questers.STATUS_INCOMPLETE},
+            quest_progress={470: 0},
+            quest_objectives={470: {1031: 0, 1032: 0, 1033: 0}},
+            quest_item_objectives={470: {3349: 0}},
+        )
+
+        plan = questers.plan(cat, member, questers.Clock(), 0.0)
+
+        self.assertEqual(cat.quest(470).kills, ())
+        self.assertEqual(cat.quest(470).items, ((3349, 1),))
+        self.assertEqual(
+            cat.quest(470).drops,
+            ((3349, 1031), (3349, 1032), (3349, 1033)),
+        )
+        self.assertEqual(
+            (plan.move.kind, plan.move.quest, plan.move.spot.entry),
+            (classquest.HUNT, 470, 1031),
+        )
+        step = questers.step_for(member, plan.move, 0, cat.quest(470))
+        self.assertEqual(
+            [row.command for row in step.rows],
+            ["hunt-spawn creature:1031 item:3349 count:1 max:480"],
+        )
+        member = mirra(
+            level=24,
+            zone_id=11,
+            quest_log={470: questers.STATUS_INCOMPLETE},
+            quest_progress={470: 1},
+            quest_item_objectives={470: {3349: 1}},
+        )
+
+        plan = questers.plan(cat, member, questers.Clock(), 0.0)
+
+        self.assertEqual((plan.move.kind, plan.move.quest), (classquest.TURN_IN, 470))
 
     def test_an_incomplete_quest_whose_object_spawns_are_gone_is_still_broken(self):
         member = mirra(quest_log={40: 3})

@@ -605,7 +605,7 @@ class ABankBagStepTakesTheFamilyToABanker(unittest.TestCase):
 
     NAMES = ["Grug", "Og", "Ugga"]
 
-    def drive(self, at_banker, outstanding=0, seen=()):
+    def drive(self, at_banker, outstanding=0, seen=(), bag_facts=None):
         this = bridge.Bridge.__new__(bridge.Bridge)
         steps, aims, released, inserted = [], [], [], []
 
@@ -639,7 +639,7 @@ class ABankBagStepTakesTheFamilyToABanker(unittest.TestCase):
             warning=lambda *a, **k: None,
             debug=lambda *a, **k: None,
         )
-        bag_facts = [
+        bag_facts = bag_facts or [
             bankbags.Facts(name="Grug", money=0, worn=(6, 6, 6, 6)),
             bankbags.Facts(name="Og", money=5000, worn=(6, 6, 6, 6)),
             bankbags.Facts(name="Ugga", money=0, bought=1, worn=(6, 6, 6, 6)),
@@ -681,6 +681,24 @@ class ABankBagStepTakesTheFamilyToABanker(unittest.TestCase):
         self.assertEqual(steps, [bank.BANK_ERRAND_HOLD])
         self.assertEqual(inserted, [("Og", "buy slot")])
         self.assertEqual((aims, released), ([], []))
+
+    def test_an_empty_bank_bag_is_withdrawn_before_its_replacement_is_placed(self):
+        facts = [
+            bankbags.Facts(
+                "Og",
+                bought=1,
+                placed=1,
+                worn=(12,) * 4,
+                bag_free=1,
+                bank_bags=(bankbags.Bag(300, 4496, 6),),
+                spare=(bankbags.Bag(400, 4499, 12),),
+            )
+        ]
+        _steps, _aims, _released, inserted = self.drive(at_banker=True, bag_facts=facts)
+        self.assertEqual(
+            inserted,
+            [("Og", "withdraw guid:300"), ("Og", "place-bag guid:400")],
+        )
 
     def test_the_aim_holds_while_the_row_is_unanswered_and_is_then_handed_back(self):
         asked = {("Og", "buy slot")}

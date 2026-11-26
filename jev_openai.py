@@ -26,7 +26,13 @@ calls all of them:
   THE BAR. A kind may act only where `misses` is empty for it: enough calls,
   and an answer rate, latency, agreement and cost per 1,000 calls that all
   clear the numbers in BAR. `ActGate` holds the last verdict and `jev.mode`
-  asks it, so `JEV_MODE_<KIND>=act` runs as compare until then.
+  asks it, so `JEV_MODE_<KIND>=act` runs as compare until then. Agreement
+  with the heuristic cannot be the bar for a kind meant to beat it, so the
+  operator may waive that one measure with JEV_OPENAI_REVIEWED_<KIND>=1 once
+  an independent judge has found Jev's answers equal or better than the
+  rules' on a sample of their disagreements; calls, answer rate, latency and
+  cost still bind. `act_plan_lines` says at start-up which kinds are set to
+  act and what each waits on.
 
 Model free text is never kept. `clean_reason` strips any text that must be
 stored to a strict charset, so a crafted answer cannot smuggle markup, an
@@ -511,6 +517,7 @@ def report(
             "cost_per_1000": (spent / n * 1000.0) if n else None,
         }
         item["misses"] = misses(item, kind, bar, env)
+        item["reviewed"] = reviewed(kind, env)
         out[kind] = item
     return out
 
@@ -545,9 +552,10 @@ def summary_line(kind: str, item: dict) -> str:
     verdict = (
         "clears" if not item["misses"] else "short(" + ",".join(item["misses"]) + ")"
     )
+    waived = " agreement_bar=waived" if item.get("reviewed") else ""
     return (
         "jev: openai report kind=%s calls=%d answer_rate=%s p50_ms=%s p95_ms=%s "
-        "agreement=%s compared=%d cost_per_1000=%s bar=%s"
+        "agreement=%s compared=%d cost_per_1000=%s bar=%s%s"
         % (
             kind,
             item["calls"],
@@ -558,8 +566,43 @@ def summary_line(kind: str, item: dict) -> str:
             item["compared"],
             _fmt(item["cost_per_1000"], "%.3f"),
             verdict,
+            waived,
         )
     )
+
+
+def act_plan_lines(env: Mapping[str, str]) -> list:
+    """What the act gate will hold each kind to, one line per kind that is set
+    to act or reviewed, logged once at start-up so an operator can read which
+    kinds may act and why without waiting for the hourly report."""
+    kinds = set()
+    for name, value in env.items():
+        if name.startswith("JEV_MODE_") and str(value).strip().lower() == "act":
+            kinds.add(name[len("JEV_MODE_") :].lower())
+        elif name.startswith("JEV_OPENAI_REVIEWED_") and reviewed(
+            name[len("JEV_OPENAI_REVIEWED_") :], env
+        ):
+            kinds.add(name[len("JEV_OPENAI_REVIEWED_") :].lower())
+    if not kinds:
+        return ["jev: openai act plan: no kind is set to act"]
+    lines = []
+    for kind in sorted(kinds):
+        acts = str(env.get("JEV_MODE_" + kind.upper(), "")).strip().lower() == "act"
+        if not acts:
+            why = "reviewed, but not set to act; it stays as its JEV_MODE says"
+        elif reviewed(kind, env):
+            why = (
+                "acts once it clears calls, answer rate, latency and cost; "
+                "agreement bar waived by JEV_OPENAI_REVIEWED_%s=1 (a reviewed "
+                "sample judged it equal or better than the rules)" % kind.upper()
+            )
+        else:
+            why = (
+                "acts once it clears the whole bar, agreement with the "
+                "heuristic included"
+            )
+        lines.append("jev: openai act plan kind=%s %s" % (kind, why))
+    return lines
 
 
 class ActGate:
@@ -683,13 +726,31 @@ def fetch_calls(cur, page: int = CALLS_PAGE) -> list:
         before = min(int(r["id"]) for r in rows)
 
 
-def fetch_report(cur, env=None, bar: Bar = BAR) -> dict:
-    """The per-kind report from the two tables, through an open cursor."""
+def fetch_report(cur, env=None, bar: Bar = BAR, db_errors: tuple = ()) -> dict:
+    """The per-kind report from the two tables, through an open cursor.
+
+    `db_errors` are the driver's exception classes (this module imports no
+    driver): one of them on the agreement read is logged and the report
+    stands on the spend table alone. Anything else rises."""
     calls = fetch_calls(cur)
-    cur.execute(AGREE_SQL, (WINDOW_DAYS,))
-    agreement = {
-        str(r["kind"]): (int(r["agreed"]), int(r["compared"])) for r in cur.fetchall()
-    }
+    # The agreement read scans the judgment table, far larger than the spend
+    # table, and has timed out on a busy database. A report that failed whole
+    # left the gate empty, so no kind could act at all. Without it every kind
+    # misses on "compared 0", which only a reviewed kind does not consult:
+    # a missing read can never let an unreviewed kind act.
+    try:
+        cur.execute(AGREE_SQL, (WINDOW_DAYS,))
+        agreement = {
+            str(r["kind"]): (int(r["agreed"]), int(r["compared"]))
+            for r in cur.fetchall()
+        }
+    except db_errors as exc:
+        log.warning(
+            "jev: the agreement read failed (%s); reporting on the spend table "
+            "alone, so only reviewed kinds can clear the bar",
+            exc.__class__.__name__,
+        )
+        agreement = {}
     return report(calls, agreement, bar, env)
 
 

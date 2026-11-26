@@ -25,6 +25,8 @@ export const DARK_STREAK = 3;
 export const SAMPLE_INTERVAL_MS = 500;
 export const SAMPLE_WIDTH = 96;
 
+let lumaScratch = new Float64Array(0);
+
 // The luma at the bottom of an ImageData's brightest tenth of pixels, 0-255:
 // the sorted lumas read at index floor(0.9 n), so "the brightest tenth sits at
 // 39 or more" reads 39 or more. 0 for an empty buffer.
@@ -33,7 +35,8 @@ export function highBrightness(imageData) {
   if (!data || !data.length) return 0;
   const count = Math.floor(data.length / 4);
   if (!count) return 0;
-  const luma = new Float64Array(count);
+  if (lumaScratch.length < count) lumaScratch = new Float64Array(count);
+  const luma = lumaScratch.subarray(0, count);
   for (let i = 0; i < count; i++) {
     const j = i * 4;
     luma[i] = 0.299 * data[j] + 0.587 * data[j + 1] + 0.114 * data[j + 2];
@@ -97,10 +100,11 @@ export function darkSampler(video, onChange, options = {}) {
 
   function sample() {
     if (!running) return;
-    if (!video.videoWidth || video.readyState < 2) return;
+    if (typeof document !== "undefined" && document.hidden) return;
+    if (video.paused || !video.videoWidth || video.readyState < 2) return;
     const height = Math.max(1, Math.round(width * video.videoHeight / video.videoWidth));
-    canvas.width = width;
-    canvas.height = height;
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
     ctx.drawImage(video, 0, 0, width, height);
     let dark;
     try {

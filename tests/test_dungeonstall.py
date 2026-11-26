@@ -453,6 +453,11 @@ class StoreCursor:
                 if tuple(r[:3]) == want
             ][:1]
         if flat.startswith(
+            "SELECT COUNT(*) AS n FROM overseer_dungeon_pace WHERE family = %s"
+        ):
+            # _order_holds: holds of the order with no run formed since.
+            return [{"n": getattr(store, "order_holds", 0)}]
+        if flat.startswith(
             "SELECT id, created_at, TIMESTAMPDIFF(SECOND, NOW(), created_at"
         ):
             # _order_parked: the newest ORDER_DECISION row for this family and
@@ -541,6 +546,7 @@ class StallWorld(FakeWorld):
         self.held_left = None
         self.park_left = None
         self.park_at = None
+        self.order_holds = 0
         self.ordered_after = set()
         self.hold_said = {}
         self.stood_down = {}
@@ -571,6 +577,7 @@ def _pass(world):
         [
             "_campaign_queue_family_once",
             "_campaign_queue_once",
+            "_mc_requeue",
             "_apply_queue_move",
             "_prune_bag_hold_stuck",
             "_queue_holds",
@@ -579,6 +586,7 @@ def _pass(world):
             "_stall_reads",
             "_stall_held",
             "_order_parked",
+            "_order_holds",
             "_order_hold",
             "_order_step_past",
             "_regroup_wait",
@@ -1550,6 +1558,7 @@ class TheDoorWedgeReads(unittest.TestCase):
             {
                 "campaignqueue": campaignqueue,
                 "dungeonstall": stall,
+                "raidrun": raidrun,
                 "jobs": jobs,
                 "time": types.SimpleNamespace(
                     monotonic=lambda: clock[0], time=lambda: clock[0]
@@ -1677,6 +1686,7 @@ class TheDoorWedgeReads(unittest.TestCase):
             {
                 "campaignqueue": campaignqueue,
                 "dungeonstall": stall,
+                "raidrun": raidrun,
                 "jobs": jobs,
                 "time": types.SimpleNamespace(
                     monotonic=lambda: clock[0], time=lambda: clock[0]
@@ -1919,6 +1929,25 @@ class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
         self.assertEqual((163,), got.drop)
         self.assertEqual(stall.ORDER_DECISION, got.decision)
 
+    def test_an_order_held_over_and_over_with_no_run_formed_is_given_up(self):
+        rows = [self.order(501), queue_row(164, "uldaman", "queued", 1)]
+        held = stall.leave(rows, self.stuck(), stall.ORDER_HOLD_LIMIT - 1)
+        self.assertEqual((501,), held.park)
+        got = stall.leave(rows, self.stuck(), stall.ORDER_HOLD_LIMIT)
+        self.assertEqual((), got.park)
+        self.assertEqual((501,), got.drop)
+        self.assertEqual(stall.DECISION, got.decision)
+        self.assertIn("given up", got.why)
+        self.assertIn("Uldaman runs next", got.why)
+
+    def test_the_hold_count_reads_only_holds_since_the_order_and_the_last_run(self):
+        sql = stall.HOLDS_SQL.format(holes=stall.holes(2))
+        self.assertEqual(
+            sql.count("%s"), len(stall.holds_args("Fam", "d", 5, ["A", "B"]))
+        )
+        self.assertIn("overseer_dungeon_queue WHERE id", sql)
+        self.assertIn("MAX(started_at)", sql)
+
     def test_a_lone_operator_order_is_not_dropped(self):
         got = stall.leave([self.order(501)], self.stuck())
         self.assertEqual((), got.drop)
@@ -1974,6 +2003,15 @@ class AnOperatorOrderIsHeldNotCancelled(unittest.TestCase):
 
     def cancels(self, w):
         return [c for c in w.calls if "SET status = 'cancelled'" in c[0]]
+
+    def test_an_order_held_again_and_again_with_no_run_is_given_up(self):
+        w = self.world()
+        w.order_holds = stall.ORDER_HOLD_LIMIT
+        _pass(w)
+        self.assertEqual("cancelled", w.queue[0]["status"])
+        self.assertEqual(1, len(self.cancels(w)))
+        self.assertEqual(stall.DECISION, w.records[0][1])
+        self.assertEqual({jobs.DEFAULT}, {r["job"] for r in w.family("Zug")}, w.jobs)
 
     def test_a_stalled_operator_order_stays_pending_and_the_family_quests(self):
         w = self.world()
@@ -2326,6 +2364,7 @@ class TheErrandARunWaitsOn(unittest.TestCase):
             "campaignqueue": campaignqueue,
             "dungeonstall": stall,
             "jobs": jobs,
+            "raidrun": raidrun,
             "log": types.SimpleNamespace(info=lambda *a, **k: None),
             "time": types.SimpleNamespace(monotonic=lambda: clock[0]),
             "_jobs_of": lambda names: {n: "dungeon:maraudon-orange" for n in names},

@@ -56,6 +56,9 @@ The `kubectl` commands below take the deployment's own names from the shell, so 
    differently, or when the merge is not ahead of the deployed one (a rollback: revert the pin PR instead,
    section 3). `changed=false` means that digest is already pinned and there is nothing to ship. Do not
    hand-edit a digest around a refusal; fix its cause.
+   The body lists each carried PR on one line: the sentence under its `## Player story` heading when its body
+   has one, else its title (`playerstory.collect`, one `(number, title, body)` row per PR, in order). The
+   section is optional in a PR body; see `AGENTS.md`.
 4. The body carries a `Pre-ship review verdict: PENDING` line. Run the Pre-roll adversarial review (section 2)
    on the batch and replace that line with its verdict before the PR merges.
 5. Render it (`kubectl kustomize "$MANIFESTS_DIR"`), commit, open the infra PR with the printed

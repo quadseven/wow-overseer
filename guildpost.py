@@ -48,6 +48,41 @@ def is_held(said) -> bool:
     return HELD_WORDS in str(said or "")
 
 
+# A DEATH ON THE ROAD IS REMEMBERED UNTIL THE MEMBER IS STRONGER (#2152). The
+# module ends a mailbox walk "died on the way to the mailbox" when the member
+# dies between where it stands and the box, and the pass forgot it and walked
+# the same road again next cycle. A player who died on a road does not walk it
+# again until something changed, so the receiver is left alone until its level
+# differs from the level it died at, and at the longest for DIED_HOLD_SECONDS
+# (a level-capped member gains no level, so the level alone would bar it for
+# ever, as deathloop.AVOID_SECONDS says for a zone).
+DIED_WORDS = "died on the way to the mailbox"
+DIED_HOLD_SECONDS = 24 * 3600
+
+
+def is_died(said) -> bool:
+    """Whether the module's answer to a mailbox walk was a death on the road."""
+    return DIED_WORDS in str(said or "")
+
+
+def died_names(struck, levels, now) -> frozenset:
+    """The receivers still held for a death on the road.
+
+    `struck` maps a name to (its level when it died or None when unread, the
+    time the hold ends); `levels` maps a name to its level now. A hold ends at
+    its time, or when the member's level now differs from the level it died at:
+    a member whose level is unread now keeps its hold until the time."""
+    out = set()
+    for name, (level, until) in (struck or {}).items():
+        if until <= now:
+            continue
+        now_level = (levels or {}).get(name)
+        if level is not None and now_level is not None and now_level != level:
+            continue
+        out.add(name)
+    return frozenset(out)
+
+
 # A TAKE REFUSED FOR ROOM IS REMEMBERED TOO (#2971). A member whose bags are
 # full is refused "no room in the bags" by every take row; the pass broke out
 # of the visit and, with no backoff, walked the same member again next pass
@@ -201,6 +236,7 @@ def visits(
     roster=frozenset(),
     sitting_out=frozenset(),
     held=frozenset(),
+    died=frozenset(),
 ):
     """(visits, notes): which guild members walk to take out their post.
 
@@ -217,6 +253,10 @@ def visits(
 
     `held` holds the names whose last walk was refused as held by another
     verb, lately enough that the hold has not lapsed (is_held); they wait.
+
+    `died` holds the names whose last walk ended in a death on the road and who
+    are no stronger since (died_names); they wait too, and are not walked the
+    same road again (#2152).
     """
     free_slots = free_slots or {}
     online, busy = set(online or ()), set(busy or ())
@@ -235,6 +275,9 @@ def visits(
     for receiver in order:
         if len(out) >= WALKS_PER_PASS:
             notes.append("%s waits: %d walks this pass" % (receiver, WALKS_PER_PASS))
+            continue
+        if receiver in died and receiver in online:
+            notes.append("%s waits: died on the way to the mailbox" % receiver)
             continue
         if receiver in held and receiver in online:
             notes.append("%s waits: held by another verb" % receiver)

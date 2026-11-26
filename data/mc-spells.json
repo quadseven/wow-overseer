@@ -67,6 +67,10 @@
       }
     },
     "Paladin": {
+      "19876": {
+        "level": 28,
+        "name": "Shadow Resistance Aura"
+      },
       "19891": {
         "level": 36,
         "name": "Fire Resistance Aura"
