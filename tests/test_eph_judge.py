@@ -10,6 +10,7 @@ import pathlib
 import tempfile
 import unittest
 import uuid
+from unittest import mock
 
 from ephemeral import dbschema, guard, judge
 from ephemeral.miniyaml import loads
@@ -1029,6 +1030,28 @@ class ConfigMapStoreTest(unittest.TestCase):
         self.assertEqual(headers["Authorization"], "Bearer " + self.marker)
         self.assertEqual(json.loads(body)["metadata"]["name"], "eph-result-run-1")
 
+    def test_reads_the_rotated_projected_token_for_each_attempt(self):
+        first, second = fresh_marker(), fresh_marker()
+        http = mock.Mock(side_effect=[(503, b"{}"), (201, b"{}")])
+        env = {
+            "KUBERNETES_SERVICE_HOST": "api.example.invalid",
+            "KUBERNETES_SERVICE_PORT": "443",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            token = pathlib.Path(directory) / "token"
+            token.write_text(self.marker, encoding="utf-8")
+            with mock.patch.object(judge, "urllib_http", return_value=http):
+                store = judge.ConfigMapStore.in_cluster("eph-ns", env, directory)
+            token.write_text(first + "\n", encoding="utf-8")
+            store.sleep = lambda _: token.write_text(second, encoding="utf-8")
+            store.log = mock.Mock()
+            store.write(self.cm())
+
+        self.assertEqual(
+            [call.args[2]["Authorization"] for call in http.call_args_list],
+            [f"Bearer {first}", f"Bearer {second}"],
+        )
+
     def test_refuses_any_other_name_or_namespace(self):
         http = FakeHttp()
         s = self.store(http)
@@ -1169,8 +1192,7 @@ class InClusterTest(unittest.TestCase):
     def test_the_api_server_address_comes_from_the_pod_environment(self):
         with tempfile.TemporaryDirectory() as tmp:
             d = pathlib.Path(tmp)
-            marker = fresh_marker()
-            (d / "token").write_text(marker + chr(10), encoding="utf-8")
+            (d / "token").write_text(fresh_marker(), encoding="utf-8")
             store = judge.ConfigMapStore.in_cluster(
                 "eph-ns",
                 {
@@ -1180,7 +1202,6 @@ class InClusterTest(unittest.TestCase):
                 sa_dir=d,
             )
         self.assertEqual(store.base_url, "https://192.0.2.1:443")
-        self.assertEqual(store.token, marker)  # read from the token file, trimmed
 
     def test_an_ipv6_host_is_bracketed(self):
         with tempfile.TemporaryDirectory() as tmp:
