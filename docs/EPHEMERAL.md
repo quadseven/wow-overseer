@@ -396,9 +396,14 @@ label and never closes an issue. An issue closes only when the same decree FAILe
 and PASSed on every treatment run, every run valid, the fix verified present in
 the treatment image and absent from the control, the decree on the default
 branch byte for byte, that decree's pull request approved by someone other than
-its author or the posting App (each reviewer's latest formal review or approval marker decides, by time; a COMMENTED review changes nothing and any outstanding request for changes refuses), and no unticked box left in the issue body (the
-live-check boxes are ticked first, then the label is removed, then the issue is
-closed as completed). An epic is never closed. A disproven result comments,
+its author or the posting App (each reviewer's latest formal review or approval marker decides, by time; a COMMENTED review changes nothing and any outstanding request for changes refuses).
+The collector posts evidence for each distinct batch. The decree's `criterion`
+must match the full text of exactly one issue checkbox.
+Capitalization, whitespace, and an initial `Live:` label may differ. The
+collector records that checkbox even when others remain open. Once no unchecked
+boxes remain, it removes the label and closes the issue as completed. A missing
+or ambiguous match leaves the issue body and state unchanged. An epic is never
+closed. A disproven result comments,
 removes the label and leaves the issue open. A treatment pass without a usable
 control comments and leaves it open. A passing control and an INVALID run post
 nothing to the issue. A decree not yet merged posts to its own pull request when
@@ -431,7 +436,11 @@ The runner config names each class template in `template_images`. A dated tag
 repository, take the newest `<class>-<stamp>` tag, and run the template by its digest
 (`host/path@sha256:...`); the digest is recorded as `template_image` in the submission,
 so a run stays reproducible after the forge prunes old tags. The forge keeps only the newest
-few stamps, so a pinned dated tag goes stale; prefer `newest`.
+few stamps, so a pinned dated tag goes stale; prefer `newest`. For a private
+template registry, set `template_pull_secret` to its pull Secret in the
+ephemeral namespace. It defaults to the existing bridge pull Secret when
+empty. Template discovery supports Basic and Bearer registry challenges and
+verifies that the manifest is available by digest before creating Jobs.
 
 The template is forged from the live realm: its characters and auth databases and its
 world database are at the live schema, and its `updates` table holds each module SQL file

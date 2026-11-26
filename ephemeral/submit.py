@@ -329,7 +329,8 @@ def default_template_image(cfg, kube):
             return ref
         try:
             host = ref.split("/", 1)[0]
-            secret = kube.get("secrets", BRIDGE_PULL_NAME, missing_ok=True)
+            secret_name = cfg.template_pull_secret or BRIDGE_PULL_NAME
+            secret = kube.get("secrets", secret_name, missing_ok=True)
             return imagecommit.newest_template(
                 ref, klass, imagecommit.credentials(secret, host)
             )

@@ -144,17 +144,26 @@ TPL_MANIFEST = b'{"schemaVersion": 2, "marker": "newest lean"}'
 class TemplateRegistry:
     """A fake registry listing template tags and serving a manifest per tag."""
 
-    def __init__(self, tags):
+    def __init__(self, tags, *, basic=False):
         self.tags = tags
         self.calls = []
+        self.basic = basic
 
     def __call__(self, url, headers):
         self.calls.append(url)
         if "/token?" in url:
+            if self.basic:
+                return 404, {}, b""
             return 200, {}, json.dumps({"token": "tok"}).encode()
+        want = "Basic " + base64.b64encode(":".join(CREDS).encode()).decode()
+        if self.basic and headers.get("Authorization") != want:
+            return 401, {"www-authenticate": 'Basic realm="Templates"'}, b""
+        if not self.basic and headers.get("Authorization") != "Bearer tok":
+            return 401, {"www-authenticate": "Bearer"}, b""
         if url.endswith("/tags/list"):
             return 200, {}, json.dumps({"name": "x", "tags": self.tags}).encode()
-        if url.endswith("/manifests/lean-20261120T020000Z"):
+        digest = "sha256:" + hashlib.sha256(TPL_MANIFEST).hexdigest()
+        if url.rsplit("/", 1)[-1] in ("lean-20261120T020000Z", digest):
             return 200, {}, TPL_MANIFEST
         return 200, {}, b"other " + url.encode()
 
@@ -170,7 +179,26 @@ class NewestTemplateTest(unittest.TestCase):
         got = imagecommit.newest_template(f"{TPL}:newest", "lean", CREDS, reg)
         want = "sha256:" + hashlib.sha256(TPL_MANIFEST).hexdigest()
         self.assertEqual(got, f"{TPL}@{want}")
-        self.assertTrue(reg.calls[-1].endswith("/manifests/lean-20261120T020000Z"))
+        self.assertTrue(reg.calls[-2].endswith("/manifests/lean-20261120T020000Z"))
+        self.assertTrue(reg.calls[-1].endswith("/manifests/" + want))
+
+    def test_basic_without_matching_credentials_never_requests_a_token(self):
+        reg = TemplateRegistry(self.TAGS, basic=True)
+        with self.assertRaisesRegex(imagecommit.RegistryError, "requires Basic"):
+            imagecommit.newest_template(f"{TPL}:newest", "lean", None, reg)
+        host, repo = TPL.split("/", 1)
+        self.assertEqual(reg.calls, [f"https://{host}/v2/{repo}/tags/list"])
+
+    def test_newest_refuses_a_manifest_that_cannot_be_pulled_by_digest(self):
+        reg = TemplateRegistry(self.TAGS)
+
+        def fetch(url, headers):
+            if "/manifests/sha256:" in url:
+                return 200, {}, b"{}"
+            return reg(url, headers)
+
+        with self.assertRaisesRegex(imagecommit.RegistryError, "does not match"):
+            imagecommit.newest_template(f"{TPL}:newest", "lean", CREDS, fetch)
 
     def test_a_class_with_no_tag_is_an_error(self):
         reg = TemplateRegistry(["full-20261125T020000Z"])

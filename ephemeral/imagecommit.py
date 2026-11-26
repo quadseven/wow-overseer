@@ -178,6 +178,35 @@ def is_newest(ref):
     return isinstance(ref, str) and ref.endswith(NEWEST)
 
 
+def _template_headers(fetch, host, path, creds):
+    headers = {"Accept": ACCEPT}
+    status, response, _ = fetch(f"https://{host}/v2/{path}/tags/list", headers)
+    if status == 200:
+        return headers
+    if status != 401:
+        raise RegistryError(f"registry answered {status}")
+    scheme = response.get("www-authenticate", "").partition(" ")[0].lower()
+    auth = {}
+    if creds:
+        auth["Authorization"] = (
+            "Basic " + base64.b64encode(f"{creds[0]}:{creds[1]}".encode()).decode()
+        )
+    if scheme == "basic":
+        if not auth:
+            raise RegistryError("template registry requires Basic credentials")
+        return {**headers, **auth}
+    if scheme != "bearer":
+        raise RegistryError("unsupported template registry authentication challenge")
+    q = urllib.parse.urlencode(
+        {"service": host, "scope": f"repository:{path}:pull"}, safe=":/"
+    )
+    try:
+        token = json.loads(_get(fetch, f"https://{host}/token?{q}", auth))["token"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise RegistryError("registry gave no token") from exc
+    return {**headers, "Authorization": f"Bearer {token}"}
+
+
 def newest_template(ref, klass, creds, fetch=None):
     """Resolve `host/path:newest` to `host/path@sha256:...` for the newest `<klass>-<stamp>` tag.
 
@@ -189,19 +218,7 @@ def newest_template(ref, klass, creds, fetch=None):
     if not m or klass not in ("lean", "full"):
         raise RegistryError("template image must be host/path:newest")
     host, path = m["host"], m["path"]
-    q = urllib.parse.urlencode(
-        {"service": host, "scope": f"repository:{path}:pull"}, safe=":/"
-    )
-    auth = {}
-    if creds:
-        auth["Authorization"] = (
-            "Basic " + base64.b64encode(f"{creds[0]}:{creds[1]}".encode()).decode()
-        )
-    try:
-        token = json.loads(_get(fetch, f"https://{host}/token?{q}", auth))["token"]
-    except (ValueError, KeyError, TypeError) as exc:
-        raise RegistryError("registry gave no token") from exc
-    headers = {"Authorization": f"Bearer {token}", "Accept": ACCEPT}
+    headers = _template_headers(fetch, host, path, creds)
     base = f"https://{host}/v2/{path}"
     try:
         tags = json.loads(_get(fetch, f"{base}/tags/list", headers))["tags"] or []
@@ -212,4 +229,6 @@ def newest_template(ref, klass, creds, fetch=None):
     if not mine:
         raise RegistryError(f"no {klass} template tag in the registry")
     body = _get(fetch, f"{base}/manifests/{mine[-1]}", headers)
-    return f"{host}/{path}@sha256:" + hashlib.sha256(body).hexdigest()
+    digest = "sha256:" + hashlib.sha256(body).hexdigest()
+    _verified(fetch, f"{base}/manifests/{digest}", headers, digest)
+    return f"{host}/{path}@{digest}"
