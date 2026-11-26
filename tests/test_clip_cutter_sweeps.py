@@ -85,7 +85,11 @@ class ExpiredFiles(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.dir = tmp.name
+        # The clip folder is a child of the test's own directory, so a file
+        # written beside it never lands in the shared temp directory.
+        clips = pathlib.Path(tmp.name) / "clips"
+        clips.mkdir()
+        self.dir = str(clips)
 
     def sweep(self, rows):
         self.ledger = CutterLedger(rows)
@@ -110,7 +114,6 @@ class ExpiredFiles(unittest.TestCase):
     def test_a_stored_name_that_is_a_path_removes_nothing_outside(self):
         outside = pathlib.Path(self.dir).parent / "keep-me.txt"
         outside.write_bytes(b"x")
-        self.addCleanup(outside.unlink)
         self.sweep([clip_row(state="expired", file_name="../keep-me.txt")])
         self.assertTrue(outside.exists())
         self.assertEqual(self.ledger.rows[0]["state"], "deleted")
