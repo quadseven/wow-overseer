@@ -126,6 +126,7 @@ class World:
             "_ERRAND_SERVED": {},
             "_current_travel_npc": lambda name: self.aims.get(name, ""),
             "_door_run_boss_age": lambda leader: None,
+            "_door_open_run_id": lambda leader: 12345,
             "_door_wedge_evidence": self.members,
             "_fetch_live_maps": lambda names: {
                 n: self.maps[n] for n in names if n in self.maps
@@ -293,13 +294,17 @@ class ARecallCannotLoop(unittest.TestCase):
         self.assertIsNone(world.judge(ns))
         self.assertEqual([("Oz", "vendor")], world.released)
 
-    def test_a_new_queue_entry_starts_the_clock_over(self):
+    def test_a_new_run_starts_the_clock_over(self):
         world = World()
         ns = world.namespace(strict=True)
         key = ("Zug", "Oz", stall.ERRAND_STATE)
+        # Served under run_id 7, recalled at 1000.0 with 600s served.
         ns["_ERRAND_SERVED"][("Zug", "Oz")] = errandgate.Served(7, 600.0, 1000.0)
+        # Same run_id (7): clock continues from recalled errand.
         self.assertEqual(400.0, ns["_errand_clock_start"](key, 7, 1060.0))
+        # Different run_id (8): clock resets to now.
         self.assertEqual(1060.0, ns["_errand_clock_start"](key, 8, 1060.0))
+        # Dead state: not an errand, clock starts at now.
         dead = ("Zug", "Oz", "dead")
         self.assertEqual(1060.0, ns["_errand_clock_start"](dead, 7, 1060.0))
 

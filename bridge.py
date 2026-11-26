@@ -6593,10 +6593,10 @@ def _door_hold_subject(key: tuple[str, str]) -> str:
     return json.dumps(key, separators=(",", ":"))
 
 
-def _door_hold_memo_put(key: tuple[str, str], head_id: int,
+def _door_hold_memo_put(key: tuple[str, str], clock_id: int,
                         since: float, now: float) -> None:
     wall_now = time.time()
-    value = {"head_id": int(head_id)}
+    value = {"clock_id": int(clock_id)}
     args = (
         DOOR_HOLD_MEMO_KIND,
         _door_hold_subject(key),
@@ -6634,12 +6634,13 @@ def _restore_door_hold_memos(now: float) -> None:
             if not isinstance(pair, list) or len(pair) != 2:
                 raise ValueError("memo subject is not a leader/member pair")
             key = (str(pair[0]), str(pair[1]))
-            head_id = int(value["head_id"])
+            # Support both old "head_id" and new "clock_id" keys for backward compatibility.
+            clock_id = int(value.get("clock_id", value.get("head_id", 0)))
             since = min(now, float(since_wall) - offset)
             if now - since > DOOR_HOLD_MEMO_SECONDS:
                 _door_hold_memo_delete(key)
                 continue
-            _DOOR_HOLD_SINCE.setdefault(key, (head_id, since))
+            _DOOR_HOLD_SINCE.setdefault(key, (clock_id, since))
         except (KeyError, TypeError, ValueError):
             log.exception("bridge memo: invalid door-wedge hold memo for %s", subject)
     _DOOR_HOLD_MEMO_READ_AT = now
@@ -6720,12 +6721,13 @@ def _door_wedge_member_recovered(leader: str, member: str, positions: dict) -> b
     return distance_sq <= DOOR_HOLD_RECOVER_YARDS ** 2
 
 
-def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
+def _door_wedge_ages(leader: str, members, head_id: int, run_id: int | None) -> dict:
     """name -> (state, seconds in the active hold) for wedged members.
 
     The clock belongs to the leader/member pair, not the published state. A
     transient state flip leaves the family just as split, so it does not stop
-    the clock. A different queue entry starts a new one.
+    the clock. A different RUN starts a new one; a different queue entry for
+    the same run does not.
 
     The states are the module's member-state words (MemberStateWord):
     "dead", and the holds with no errand of the member's own choosing at
@@ -6774,17 +6776,19 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
             continue
         key = (leader, member.name)
         stamp = _DOOR_HOLD_SINCE.get(key)
-        if stamp is None or stamp[0] != head_id:
+        # Use run_id for clock keying; fall back to head_id when no run yet.
+        clock_id = run_id if run_id is not None else head_id
+        if stamp is None or stamp[0] != clock_id:
             start = globals().get("_errand_clock_start")
             since = (
-                start((leader, member.name, member.state), head_id, now)
+                start((leader, member.name, member.state), clock_id, now)
                 if start else now
             )
-            stamp = (head_id, since)
+            stamp = (clock_id, since)
             _DOOR_HOLD_SINCE[key] = stamp
             write_memo = globals().get("_door_hold_memo_put")
             if write_memo is not None:
-                write_memo(key, head_id, since, now)
+                write_memo(key, clock_id, since, now)
         ages[member.name] = (member.state, now - stamp[1])
     return ages
 
@@ -6805,17 +6809,32 @@ _DOOR_BOSS_SQL = (
 )
 
 
-def _door_run_boss_age(leader: str):
-    """Seconds since the leader's open run last credited a boss, or None
-    when it has no open run or no credit yet. A table this realm cannot
-    answer (1054 or 1146) reads as None, so the clocks run as before."""
+def _door_open_run_id(leader: str) -> int | None:
+    """The leader's open run id, or None when there is none. A table this
+    realm cannot answer (1054 or 1146) reads as None."""
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(_DOOR_RUN_SQL, (leader,))
             runs = cur.fetchall()
             if not runs:
                 return None
-            cur.execute(_DOOR_BOSS_SQL, (int(runs[0]["id"]),))
+            return int(runs[0]["id"])
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            return None
+
+
+def _door_run_boss_age(leader: str):
+    """Seconds since the leader's open run last credited a boss, or None
+    when it has no open run or no credit yet. A table this realm cannot
+    answer (1054 or 1146) reads as None, so the clocks run as before."""
+    run_id = _door_open_run_id(leader)
+    if run_id is None:
+        return None
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_DOOR_BOSS_SQL, (run_id,))
             rows = cur.fetchall()
         except pymysql.err.MySQLError as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
@@ -6884,13 +6903,13 @@ def _economy_aimable(claimant: str, names, inside=()) -> tuple:
         n for n in names if not _economy_aim_hold(claimant, n, n in inside))
 
 
-def _errand_clock_start(key: tuple, head_id: int, now: float) -> float:
+def _errand_clock_start(key: tuple, clock_id: int, now: float) -> float:
     """When the fresh hold clock `key` (leader, name, state) counts from: now,
-    or for an errand taken up again after a recall under the same queue entry,
+    or for an errand taken up again after a recall under the same run,
     when the recalled errand began (#2323)."""
     if key[2] != dungeonstall.ERRAND_STATE:
         return now
-    return errandgate.resume_since(now, _ERRAND_SERVED.get(key[:2]), head_id)
+    return errandgate.resume_since(now, _ERRAND_SERVED.get(key[:2]), clock_id)
 
 
 def _members_inside_instance(names: list) -> frozenset:
@@ -6923,7 +6942,7 @@ def _release_instance_economy_aims(names: list) -> list:
     return released
 
 
-def _recall_door_errands(leader: str, ages: dict, head_id: int = 0) -> list:
+def _recall_door_errands(leader: str, ages: dict, run_id: int | None = 0) -> list:
     """Hand back the errand of every member whose errand of its own has kept
     the family waiting at the door past dungeonstall.RECALL_SECONDS (#2280).
 
@@ -6935,7 +6954,7 @@ def _recall_door_errands(leader: str, ages: dict, head_id: int = 0) -> list:
     for the stand-down. Returns the names released.
 
     THE STAND-DOWN CLOCK IS KEPT ACROSS THE RECALL (#2323). The errand time
-    served is recorded under queue entry `head_id`, and a member whose clock
+    served is recorded under the run `run_id`, and a member whose clock
     has reached the stand-down bound is not recalled again: recall after
     recall would put the stand-down off for good."""
     released = []
@@ -6950,7 +6969,7 @@ def _recall_door_errands(leader: str, ages: dict, head_id: int = 0) -> list:
         now = time.monotonic()
         _ERRAND_RECALLED[name] = now
         _ERRAND_SERVED[(leader, name)] = errandgate.Served(
-            head_id, ages[name][1], now)
+            run_id if run_id is not None else 0, ages[name][1], now)
         released.append(name)
         log.info(
             "door recall: %s had been on an errand of its own (%s) for %d "
@@ -6988,8 +7007,9 @@ def _door_wedge(head: dict, names: list, leader: str):
         return None
     keyword = str(head.get("keyword") or "")
     head_id = int(head.get("id") or 0)
+    run_id = _door_open_run_id(leader)
     restarts, members = _door_wedge_evidence(leader, head_id)
-    ages = _door_wedge_ages(leader, members, head_id)
+    ages = _door_wedge_ages(leader, members, head_id, run_id)
     # A run that credits a boss is not wedged (#2181): a party one member
     # short clears the dungeon while that member's hold ages. The hold and
     # death clocks start over at the run's newest boss credit, so a run that
@@ -7006,7 +7026,7 @@ def _door_wedge(head: dict, names: list, leader: str):
     if recall is not None and ages:
         # The member's hold clock is NOT restarted (#2323): it ends when the
         # errand state does, and an errand taken up again counts on.
-        for name in recall(leader, ages, head_id):
+        for name in recall(leader, ages, run_id):
             ages.pop(name, None)
     # A RAID DOOR IS NEVER LEFT BY THE BREAKER, but a member's errand of its
     # own is still handed back there: the recall above is the only bound on it,
