@@ -80,6 +80,20 @@ def pvp_crossing_row(name, age):
     return guildjobs.recent_from_rows([row])[0]
 
 
+def quester_crossing_row(name, age):
+    """An in-flight crossing row written by the quester pass."""
+    row = {
+        "id": 902,
+        "target_name": name,
+        "command": "cross-to-map map:%d" % KALIMDOR,
+        "source": guildjobs.source_for(guildjobs.QUESTER_CROSS_ACTION, name),
+        "status": "applied",
+        "age": age,
+        "result": "",
+    }
+    return guildjobs.recent_from_rows([row])[0]
+
+
 def cross_steps(result):
     return [
         s for s in result.steps if s.rows and classquest.is_cross_row(s.rows[0].command)
@@ -192,6 +206,12 @@ class ThePvpCrossing(unittest.TestCase):
         pvp = (pvp_crossing_row("Bigzug", 5),)
         self.assertTrue(guildjobs.class_crossing_cooling("Bigzug", own))
         self.assertFalse(guildjobs.class_crossing_cooling("Bigzug", pvp))
+
+    def test_a_quester_crossing_does_not_delay_the_class_boat(self):
+        recent = (quester_crossing_row("Bigzug", 5),)
+        steps = cross_steps(class_plan([eastern()], recent=recent))
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0].action, classquest.ACTION)
 
     def test_the_pvp_buyer_still_cools_on_every_crossing(self):
         for row in (crossing_row("Bigzug", 5), pvp_crossing_row("Bigzug", 5)):

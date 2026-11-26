@@ -16,7 +16,7 @@ import unittest
 import classquest
 import guildjobs
 import questers
-from test_questers import giver, mirra, quest, world
+from test_questers import giver, mirra, quest, spawn, world
 
 DARKSHORE = 148
 WALL = "no transport the module knows sails from this map to that map for this faction"
@@ -153,6 +153,39 @@ class TheHold(unittest.TestCase):
         p = plan(boats=[young])
         self.assertIsNone(p.boat)
         self.assertIsNone(p.move)
+
+    def test_a_long_boat_hold_does_not_count_toward_the_quest_stall(self):
+        cat = world(
+            extra_quests=[
+                quest(40, DARKSHORE, 4, kill=140, count=1, title="Darkshore Fish")
+            ],
+            extra_givers=[
+                giver(40, "start", 1040, 140, *MAINLAND_GIVER, map_id=1),
+                giver(40, "end", 1040, 140, *MAINLAND_GIVER, map_id=1),
+            ],
+            extra_spawns=[spawn(2040, 140, *MAINLAND_GIVER, level=4, map_id=1)],
+        )
+        member = isle(
+            zone_id=DARKSHORE,
+            quest_log={40: questers.STATUS_INCOMPLETE},
+            quest_progress={40: 0},
+            quest_objectives={40: {}},
+        )
+        clock = questers.Clock()
+
+        for minute in range(0, questers.STALL_SECONDS // 60 + 1, 5):
+            crossings = guildjobs.recent_from_rows([boat_refused(30 + minute)])
+            p = questers.plan(
+                cat,
+                member,
+                clock,
+                minute * 60.0,
+                last_quest=40,
+                crossings=crossings,
+            )
+            self.assertEqual(p.broken, (), minute)
+
+        self.assertLess(clock.played("Mirra", 40), questers.STALL_SECONDS)
 
 
 if __name__ == "__main__":

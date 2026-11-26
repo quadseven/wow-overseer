@@ -8880,17 +8880,14 @@ def crossing_cooling(name, recent, skip=frozenset()) -> bool:
     return int(newest.age_minutes) < minutes
 
 
-# CLASS QUESTS COME FIRST (#1921): an honor buyer's crossing to its vendor
-# (pvpgear.CROSS_ACTION) does not hold a class quest's crossing back. The PvP
-# buyer still cools on every crossing row, the class quest's included, and the
-# class step runs ahead of the PvP step (_quest_first before _pvp_first), so a
-# class crossing that is due is the one written.
-CLASS_CROSS_SKIPS = frozenset({pvpgear.CROSS_ACTION})
+# CLASS QUESTS COME FIRST (#1921): crossings started by the PvP and quester
+# passes do not hold a class quest's crossing back. Those passes still cool on
+# every crossing row; the class step runs first and gets its own crossing row.
+CLASS_CROSS_SKIPS = frozenset({pvpgear.CROSS_ACTION, QUESTER_CROSS_ACTION})
 
 
 def class_crossing_cooling(name, recent) -> bool:
-    """crossing_cooling for a class quest's crossing: a PvP crossing row
-    (CLASS_CROSS_SKIPS) does not count."""
+    """crossing_cooling for a class quest's crossing, skipping lower-priority rows."""
     return crossing_cooling(name, recent, CLASS_CROSS_SKIPS)
 
 

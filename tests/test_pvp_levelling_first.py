@@ -4,8 +4,21 @@ battleground queue that does not pop holds it out of both."""
 
 import unittest
 
+import guildjobs
 import pvpgear
-from test_pvp_cohort import ALLIANCE, filler, run, wanter
+from test_pvp_cohort import filler, run, wanter
+
+
+def queued_filler(name="Low", age=5):
+    aim = pvpgear._filler(filler(name, level=39), pvpgear.WSG)
+    return guildjobs.Recent(
+        name,
+        pvpgear.ACTION,
+        age,
+        status="queued",
+        command=pvpgear.queue_command(aim),
+        result='{"outcome":"queued"}',
+    )
 
 
 class LevellingFirst(unittest.TestCase):
@@ -34,11 +47,37 @@ class LevellingFirst(unittest.TestCase):
         self.assertEqual(sum(len(c.fillers) for c in cohorts), 2)
 
     def test_a_member_already_inside_a_battleground_below_the_floor_is_held(self):
-        aim = pvpgear.Aim(
-            "In", "Cave", 45, 1, "x", 100, 0, pvpgear.WSG, faction=ALLIANCE
+        aims, moves, _cohorts = run(
+            [filler("Low", level=39)], maps={"Low": pvpgear.WSG.map_id}
         )
-        move = pvpgear.next_move(aim, pvpgear.WSG.map_id, False, ())
-        self.assertTrue(move.holds)
+        self.assertIn("Low", aims)
+        self.assertEqual(moves["Low"].kind, pvpgear.INSIDE)
+        self.assertTrue(moves["Low"].holds)
+
+    def test_a_member_waiting_in_a_queue_below_the_floor_is_held(self):
+        aims, moves, _cohorts = run(
+            [filler("Low", level=39)], recent=(queued_filler(),)
+        )
+        self.assertIn("Low", aims)
+        self.assertEqual(moves["Low"].kind, pvpgear.WAITING)
+        member = guildjobs.Member(
+            name="Low", guild="Cave", role=guildjobs.RAIDER, level=39,
+            online=True, map_id=0, x=0.0, y=0.0, eligible=True,
+        )  # fmt: skip
+        step, _doing, held = guildjobs._pvp_first(
+            member, (aims["Low"], moves["Low"]), (), 0
+        )
+        self.assertIsNone(step)
+        self.assertTrue(held)
+
+    def test_a_queue_that_ended_does_not_requeue_a_member_below_the_floor(self):
+        aims, moves, cohorts = run(
+            [filler("Low", level=39)],
+            recent=(queued_filler(age=pvpgear.WAITING_MINUTES),),
+        )
+        self.assertNotIn("Low", aims)
+        self.assertNotIn("Low", moves)
+        self.assertTrue(all("Low" not in c.fillers for c in cohorts))
 
 
 if __name__ == "__main__":
