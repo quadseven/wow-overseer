@@ -480,10 +480,10 @@ digests and the `pin` it was built from, plus `bridge` and `bridge_commit` for a
 build. `submit` takes the newest entry whose pin lacks the fix (the same ancestor check as
 above; for a fix in this repository's bridge code, the entry's `bridge_commit`) and whose
 digests the registry still serves, fills `--control-worldserver`, `--control-dbimport` and
-`--control-pin` (and `--control-bridge` for a bridge fix) from it, and records the choice as
+`--control-pin` (and `--control-bridge` from the set's `bridge` when the decree turns the bridge on) from it, and records the choice as
 a fidelity delta. It refuses a `TODO` fix commit, an empty or unreadable history, a history
 where every set carries the fix or no set without it still resolves, and explicit
-control image flags given beside it. `--control-drop-keys` is still given by hand.
+control image flags, `--control-bridge` included, given beside it. With the bridge on, a chosen set whose `bridge` is missing or no longer resolves is refused. `--control-drop-keys` is still given by hand.
 
 With `world.bridge: "on"` the template's bridge sidecar is kept, at the arm's own
 image: the control arm's is `--control-bridge` (the build before the fix), the

@@ -111,6 +111,48 @@ class ControlAutoTest(Base):
     def test_auto_and_explicit_control_images_are_refused_together(self):
         with self.assertRaisesRegex(submit.SubmitError, "--control auto"):
             self.auto(control_worldserver=OLD_WS)
+        with self.assertRaisesRegex(submit.SubmitError, "--control-bridge"):
+            self.auto(control_bridge=OLD_BRIDGE)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def write_history(self, *entries):
+        self.history.write_text(json.dumps(list(entries)), encoding="utf-8")
+
+    def test_auto_with_the_bridge_on_takes_the_chosen_sets_bridge(self):
+        self.write_history(
+            {
+                "worldserver": OLD_WS,
+                "dbimport": OLD_DB,
+                "pin": OLD,
+                "bridge": OLD_BRIDGE,
+            }
+        )
+        self.submit(
+            CHECKED.replace("bridge: off", 'bridge: "on"'),
+            control="auto", control_history=str(self.history),
+        )  # fmt: skip
+        for job in self.cluster.of("jobs"):
+            want = {"control": OLD_BRIDGE, "treatment": BRIDGE}
+            self.assertEqual(
+                _bridge(job)["image"], want[job["metadata"]["labels"]["eph/arm"]]
+            )
+
+    def test_auto_with_the_bridge_on_refuses_a_set_without_a_live_bridge(self):
+        on = CHECKED.replace("bridge: off", 'bridge: "on"')
+        self.write_history({"worldserver": OLD_WS, "dbimport": OLD_DB, "pin": OLD})
+        with self.assertRaisesRegex(submit.SubmitError, "bridge"):
+            self.submit(on, control="auto", control_history=str(self.history))
+        self.write_history(
+            {
+                "worldserver": OLD_WS,
+                "dbimport": OLD_DB,
+                "pin": OLD,
+                "bridge": OLD_BRIDGE,
+            }
+        )
+        self.resolves = lambda ref: ref != OLD_BRIDGE
+        with self.assertRaisesRegex(submit.SubmitError, "bridge"):
+            self.submit(on, control="auto", control_history=str(self.history))
         self.assertEqual(self.cluster.of("jobs"), [])
 
     def test_auto_needs_a_readable_history_list(self):
@@ -135,6 +177,13 @@ class ControlAutoTest(Base):
         gone = imagecommit.RegistryError("registry answered 404")
         with mock.patch.object(imagecommit, "image_env", side_effect=gone):
             self.assertFalse(resolves(OLD_WS))
+        self.assertFalse(resolves("not-a-digest-ref"))
+        broken = kube.KubeError("forbidden: secrets")
+        with (
+            mock.patch.object(self.kube, "get", side_effect=broken),
+            self.assertRaises(kube.KubeError),
+        ):
+            resolves(OLD_WS)
 
     def test_an_unknown_control_mode_is_refused(self):
         with self.assertRaisesRegex(submit.SubmitError, "auto"):

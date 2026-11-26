@@ -328,14 +328,19 @@ def default_resolves(cfg, kube):
             host = imagecommit.parse_ref(ref)[0]
             secret = kube.get("secrets", BRIDGE_PULL_NAME, missing_ok=True)
             imagecommit.image_env(ref, imagecommit.credentials(secret, host))
-        except (imagecommit.RegistryError, KubeError, KeyError, TypeError, ValueError):
+        except imagecommit.RegistryError:
             return False
         return True
 
     return resolves
 
 
-_CONTROL_FLAGS = ("control_worldserver", "control_dbimport", "control_pin")
+_CONTROL_FLAGS = (
+    "control_worldserver",
+    "control_dbimport",
+    "control_pin",
+    "control_bridge",
+)
 
 
 def _control_auto(gh, decree, args, resolves, deltas):
@@ -375,8 +380,15 @@ def _control_auto(gh, decree, args, resolves, deltas):
         "control_dbimport": entry["dbimport"],
         "control_pin": pin,
     }
-    if bridge_fix and not args.get("control_bridge"):
-        filled["control_bridge"] = entry["bridge"]
+    if bridge_fix:
+        filled["control_bridge"] = entry["bridge"]  # pick_control checked it resolves
+    elif decree["world"]["bridge"] == "on":
+        bridge = entry.get("bridge")
+        if not (bridge and resolves(bridge)):
+            raise SubmitError(
+                f"--control auto: the chosen set (pin {pin}) has no bridge image that still resolves"
+            )
+        filled["control_bridge"] = bridge
     deltas.append(
         f"control arm: chosen by --control auto from the history: pin {pin}, "
         f"worldserver {entry['worldserver']}"
