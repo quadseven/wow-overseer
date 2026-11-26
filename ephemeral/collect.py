@@ -104,6 +104,7 @@ class Collector:
     def __init__(self, cfg, kube, gh, env=None, out=print, clock=time.time):
         self.cfg, self.kube, self.gh, self.out, self.clock = cfg, kube, gh, out, clock
         self.env = env if env is not None else {}
+        self.posted_batches = set()
 
     # -- step 1: copy
     def fetch(self):
@@ -133,19 +134,41 @@ class Collector:
         return got
 
     def prune(self):
-        """Delete result ConfigMaps older than the keep window that are already copied."""
+        """Delete copied posted results, or aged results from decided batches or orphans."""
+        known_runs = set()
+        decisions = {}
+        for path in self.records():
+            rec = json.loads(path.read_text(encoding="utf-8"))
+            known_runs.update((rec["decree_id"], run["run_id"]) for run in rec["runs"])
+            done = path.with_name(f"decision-{rec['batch']}.json")
+            if not done.exists():
+                continue
+            decision = json.loads(done.read_text(encoding="utf-8"))
+            if (
+                decision.get("outcome") not in decide.OUTCOMES
+                or decision["outcome"] == "pending"
+            ):
+                continue
+            for run in rec["runs"]:
+                decisions[(rec["decree_id"], run["run_id"])] = decision
         limit = self.cfg.result_keep_days * 86400
         for cm in self.kube.list("configmaps", selector="eph/verdict"):
             name = cm["metadata"]["name"]
             rid = name[len("eph-result-") :]
             decree = cm["metadata"]["labels"].get("eph/decree", "") or "unknown"
-            copy = pathlib.Path(self.cfg.results_dir) / decree / f"{rid}.json"
-            created = cm["metadata"].get("creationTimestamp", "")
-            try:
-                age = self.clock() - _epoch(created)
-            except ValueError:
+            decision = decisions.get((decree, rid))
+            if decision is None and (decree, rid) in known_runs:
                 continue
-            if name.startswith("eph-result-") and age > limit and copy.exists():
+            copy = pathlib.Path(self.cfg.results_dir) / decree / f"{rid}.json"
+            if decision is None or not decision.get("posted", False):
+                created = cm["metadata"].get("creationTimestamp", "")
+                try:
+                    age = self.clock() - _epoch(created)
+                except ValueError:
+                    continue
+                if age <= limit:
+                    continue
+            if name.startswith("eph-result-") and copy.exists():
                 self.kube.delete("configmaps", name)
                 self.out(f"pruned {name}")
 
@@ -166,6 +189,13 @@ class Collector:
             rec = json.loads(path.read_text(encoding="utf-8"))
             done = path.with_name(f"decision-{rec['batch']}.json")
             if done.exists():
+                if post:
+                    decision = json.loads(done.read_text(encoding="utf-8"))
+                    if "posted" not in decision:
+                        decision["posted"] = self._was_posted(rec)
+                        done.write_text(
+                            json.dumps(decision, indent=2), encoding="utf-8"
+                        )
                 continue
             res = self._results(rec)
             d = decide.decide(rec, res)
@@ -177,7 +207,15 @@ class Collector:
                 continue
             notes = self._act(rec, d, res)
             done.write_text(
-                json.dumps({"outcome": d["outcome"], "notes": notes}, indent=2),
+                json.dumps(
+                    {
+                        "outcome": d["outcome"],
+                        "notes": notes,
+                        "posted": (rec["decree_id"], rec["batch"])
+                        in self.posted_batches,
+                    },
+                    indent=2,
+                ),
                 encoding="utf-8",
             )
         if post:
@@ -268,13 +306,29 @@ class Collector:
         self.gh.close_completed(repo, n)
         return True, ""
 
-    def _comment_once(self, repo, n, body, rec):
+    def _posted_comment(self, repo, n, rec):
         mark = decide.marker(rec["decree_id"], rec["decree_sha256"])
         for c in self.gh.comments(repo, n):
             mine = (c.get("user") or {}).get("login") == self.cfg.author_login
             if mine and mark in (c.get("body") or ""):
-                return c.get("html_url", "")
-        return self.gh.comment(repo, n, body).get("html_url", "")
+                return c
+        return None
+
+    def _was_posted(self, rec):
+        """Recover posting state for decisions saved before the posted flag existed."""
+        targets = [
+            (e["repo"], e["issue"])
+            for e in rec["proves"]
+            if isinstance(e.get("issue"), int)
+        ]
+        if rec.get("decree_pr"):
+            targets.append((self.cfg.decree_repo, rec["decree_pr"]))
+        return any(self._posted_comment(repo, n, rec) for repo, n in targets)
+
+    def _comment_once(self, repo, n, body, rec):
+        comment = self._posted_comment(repo, n, rec) or self.gh.comment(repo, n, body)
+        self.posted_batches.add((rec["decree_id"], rec["batch"]))
+        return comment.get("html_url", "")
 
     def _ledger(self, repo, n, verdict, evidence, url):
         if not self.cfg.ledger_path:
