@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from urllib.parse import unquote
 
 from _stub_modules import PYMYSQL, stub_modules
 from sandbox_caps import LOCALHOST, NO_LOCALHOST
@@ -83,13 +84,14 @@ class OnlyLedgerNamesAreServed(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
-        root = pathlib.Path(self.dir.name)
+        root = pathlib.Path(self.dir.name) / "clips"
+        root.mkdir()
+        self.clips_dir = str(root)
         (root / NAME).write_bytes(BODY)
         (root / "clip-2-loot.mp4").write_bytes(BODY)
         (root / "stray.mp4").write_bytes(BODY)
         self.outside = root.parent / "outside-secret.txt"
         self.outside.write_bytes(b"secret")
-        self.addCleanup(self.outside.unlink)
         self.ledger = FakeLedger(
             [
                 clip_row(id=1, file_name=NAME),
@@ -99,7 +101,7 @@ class OnlyLedgerNamesAreServed(unittest.TestCase):
 
     def get(self, path, clips_dir=None):
         with serving(
-            self.ledger, self.dir.name if clips_dir is None else clips_dir
+            self.ledger, self.clips_dir if clips_dir is None else clips_dir
         ) as get:
             return get(path)
 
@@ -117,6 +119,11 @@ class OnlyLedgerNamesAreServed(unittest.TestCase):
 
     def test_traversal_names_are_404(self):
         for name in ("..%2Foutside-secret.txt", "%2e%2e/outside-secret.txt", "a/b.mp4"):
+            if unquote(name).startswith("../"):
+                target = (pathlib.Path(self.clips_dir) / unquote(name)).resolve()
+                self.assertEqual(target, self.outside.resolve())
+                self.assertFalse(target.is_relative_to(self.clips_dir))
+                self.assertEqual(target.read_bytes(), b"secret")
             self.assertEqual(self.get("/clips/" + name)[0], 404, name)
 
     def test_a_ledger_name_that_escapes_the_directory_is_not_opened(self):
@@ -159,9 +166,20 @@ class OnlyLedgerNamesAreServed(unittest.TestCase):
 
         self.ledger.connect = boom
         with mock.patch.object(map_server, "_connect", boom):
-            with mock.patch.object(map_server, "CLIPS_DIR", self.dir.name):
+            with mock.patch.object(map_server, "CLIPS_DIR", self.clips_dir):
                 with self.assertRaises(RuntimeError):
                     map_server._ready_clip_path(NAME)
+
+
+class FixtureOwnership(unittest.TestCase):
+    def test_outside_file_lives_and_dies_with_the_temporary_parent(self):
+        fixture = OnlyLedgerNamesAreServed()
+        self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
+        parent = pathlib.Path(fixture.dir.name).resolve()
+        self.assertTrue(fixture.outside.resolve().is_relative_to(parent))
+        fixture.dir.cleanup()
+        self.assertFalse(fixture.outside.exists())
 
 
 class RangeRules(unittest.TestCase):
