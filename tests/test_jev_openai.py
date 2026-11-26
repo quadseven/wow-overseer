@@ -387,6 +387,115 @@ class Gate(unittest.TestCase):
         self.assertFalse(jo.ActGate()("loot_council"))
 
 
+class ReviewedKinds(unittest.TestCase):
+    """A reviewed kind (JEV_OPENAI_REVIEWED_<KIND>=1: an independent judge
+    found Jev better than the rules on a sample of their disagreements) may
+    act below the agreement bar; every other measure still binds."""
+
+    def tearDown(self):
+        jev.set_act_gate(None)
+
+    def gate_for(self, rows, agreement, env):
+        gate = jo.ActGate()
+        gate.update(jo.report(rows, agreement, env=env))
+        jev.set_act_gate(gate)
+
+    def test_a_reviewed_kind_with_low_agreement_acts(self):
+        env = {"JEV_MODE_MOVEMENT": "act", "JEV_OPENAI_REVIEWED_MOVEMENT": "1"}
+        self.gate_for(calls("movement", 200), {"movement": (29, 100)}, env)
+        self.assertEqual(jev.mode("movement", env), jev.ACT)
+
+    def test_an_unreviewed_kind_with_low_agreement_stays_compare(self):
+        env = {"JEV_MODE_ITEM_KEEP": "act", "JEV_OPENAI_REVIEWED_MOVEMENT": "1"}
+        self.gate_for(calls("item_keep", 200), {"item_keep": (60, 100)}, env)
+        with self.assertLogs("wow-overseer.jev", "WARNING"):
+            self.assertEqual(jev.mode("item_keep", env), jev.SHADOW)
+
+    def test_a_reviewed_kind_short_of_the_answer_rate_stays_compare(self):
+        env = {"JEV_MODE_MOVEMENT": "act", "JEV_OPENAI_REVIEWED_MOVEMENT": "1"}
+        rows = calls("movement", 180) + calls("movement", 20, "error", 100)
+        self.gate_for(rows, {"movement": (29, 100)}, env)
+        with self.assertLogs("wow-overseer.jev", "WARNING"):
+            self.assertEqual(jev.mode("movement", env), jev.SHADOW)
+
+    def test_a_reviewed_kind_with_too_few_calls_stays_compare(self):
+        env = {"JEV_MODE_MOVEMENT": "act", "JEV_OPENAI_REVIEWED_MOVEMENT": "1"}
+        self.gate_for(calls("movement", 199), {"movement": (29, 100)}, env)
+        with self.assertLogs("wow-overseer.jev", "WARNING"):
+            self.assertEqual(jev.mode("movement", env), jev.SHADOW)
+
+    def test_the_summary_line_says_the_agreement_bar_is_waived(self):
+        env = {"JEV_OPENAI_REVIEWED_K": "1"}
+        rep = jo.report(calls("k", 200), {"k": (29, 100)}, env=env)["k"]
+        self.assertIn("agreement_bar=waived", jo.summary_line("k", rep))
+        plain = jo.report(calls("k", 200), {"k": (90, 100)})["k"]
+        self.assertNotIn("waived", jo.summary_line("k", plain))
+
+
+class ActPlanAtStartup(unittest.TestCase):
+    def test_every_act_kind_is_named_with_what_it_waits_on(self):
+        env = {
+            "JEV_MODE_MOVEMENT": "act",
+            "JEV_OPENAI_REVIEWED_MOVEMENT": "1",
+            "JEV_MODE_LOOT_COUNCIL": "act",
+            "JEV_MODE_ITEM_KEEP": "compare",
+            "JEV_OPENAI_REVIEWED_ITEM_KEEP": "1",
+        }
+        lines = jo.act_plan_lines(env)
+        self.assertEqual(len(lines), 3, lines)
+        [move] = [x for x in lines if "kind=movement" in x]
+        self.assertIn("agreement bar waived", move)
+        self.assertIn("JEV_OPENAI_REVIEWED_MOVEMENT=1", move)
+        [loot] = [x for x in lines if "kind=loot_council" in x]
+        self.assertIn("agreement", loot)
+        self.assertNotIn("waived", loot)
+        [keep] = [x for x in lines if "kind=item_keep" in x]
+        self.assertIn("not set to act", keep)
+
+    def test_nothing_set_to_act_says_so(self):
+        self.assertEqual(
+            jo.act_plan_lines({}), ["jev: openai act plan: no kind is set to act"]
+        )
+
+
+class DriverError(Exception):
+    """Stands in for the driver's error class, which the module never imports."""
+
+
+class AgreementUnreadable(unittest.TestCase):
+    """The agreement read scans the judgment table and can time out on a busy
+    database; the report then stands on the spend table alone."""
+
+    class Cursor(PagedCursor):
+        def __init__(self, total, error=DriverError):
+            super().__init__(total)
+            self.error = error
+
+        def execute(self, sql, args):
+            if "overseer_jev_judgment" in sql:
+                raise self.error("Lost connection")
+            super().execute(sql, args)
+
+    def test_a_failed_agreement_read_still_reports_every_kind(self):
+        env = {"JEV_OPENAI_REVIEWED_K": "1"}
+        with self.assertLogs("wow-overseer.jev", "WARNING") as logs:
+            rep = jo.fetch_report(self.Cursor(250), env, db_errors=(DriverError,))
+        self.assertIn("agreement", logs.output[0])
+        self.assertEqual(rep["k"]["calls"], 250)
+        self.assertEqual(rep["k"]["misses"], [])
+
+    def test_without_agreement_an_unreviewed_kind_cannot_clear(self):
+        with self.assertLogs("wow-overseer.jev", "WARNING"):
+            rep = jo.fetch_report(self.Cursor(250), {}, db_errors=(DriverError,))
+        self.assertTrue(rep["k"]["misses"][0].startswith("compared 0"))
+
+    def test_any_other_error_rises(self):
+        with self.assertRaises(KeyError):
+            jo.fetch_report(self.Cursor(250, KeyError), {}, db_errors=(DriverError,))
+        with self.assertRaises(DriverError):
+            jo.fetch_report(self.Cursor(250), {})
+
+
 class Reporting(unittest.TestCase):
     def test_the_report_logs_hourly_and_feeds_the_gate(self):
         now = [0.0]
@@ -674,6 +783,8 @@ class SourceShape(unittest.TestCase):
             "jev.set_act_gate(",
             "jev_openai.fetch_report(",
             "_jev_report_tick()",
+            "jev_openai.act_plan_lines(os.environ)",
+            "db_errors=(pymysql.err.MySQLError,)",
         ):
             self.assertIn(needle, text)
 

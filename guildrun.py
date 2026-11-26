@@ -2926,6 +2926,15 @@ def _runs(reader, where: str, params: tuple, n: int) -> list:
     return _rows(reader, sql, params + (n,), "overseer_guild_run", thin)
 
 
+def active_runs(reader) -> list:
+    """Active runs (queued or inside) shaped with run_view, newest first.
+
+    Used by /api/live so it reads only in-flight runs instead of scanning
+    hundreds of ended runs through recent() + page()."""
+    rows = _runs(reader, "state IN ('queued', 'inside')", (), 200)
+    return [run_view(r) for r in rows]
+
+
 def active_names(reader) -> set:
     """Everyone in a run that is queued or inside, for the roster's reading of
     a member the bridge records no step for (nowstatus.idle_reading)."""
@@ -3072,13 +3081,22 @@ BOSSES_SQL = (
 # map id -> its bosses' level, read once per process: the world's bosses do
 # not change under a running site. An empty read is not kept, so it is tried
 # again.
+_BOSSES: set = set()
 _BOSS_LEVELS: dict = {}
 _ZONES: dict = {}
 
 
 def _bosses(reader) -> frozenset:
+    """Boss creature entries from instance_encounters, read once per process.
+
+    An empty read is not kept, matching _boss_levels below."""
+    if _BOSSES:
+        return frozenset(_BOSSES)
     rows = _rows(reader, BOSSES_SQL, (), "instance_encounters")
-    return frozenset(int(r["creditEntry"]) for r in rows if r.get("creditEntry"))
+    found = frozenset(int(r["creditEntry"]) for r in rows if r.get("creditEntry"))
+    if found:
+        _BOSSES.update(found)
+    return found
 
 
 def _boss_levels(reader) -> dict:

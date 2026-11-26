@@ -62,6 +62,7 @@ import json
 from dataclasses import dataclass, field, replace
 
 import jev
+import jev_items
 import situation
 
 KIND = "movement"
@@ -132,6 +133,8 @@ class Facts:
     hearthstone point (character_homebind) as a situation.Point. `hearthed`
     is the members that used a hearthstone in the last hour. `errand` is the
     travel column holder's aim when this process wrote it, else "".
+    `bind_zones` maps a member to its hearthstone point's zone id, so the
+    question can name where the stone lands (#3303).
     """
 
     family: str
@@ -140,6 +143,7 @@ class Facts:
     hearthed: frozenset = frozenset()
     errand: str = ""
     claimant: str = ""
+    bind_zones: dict = field(default_factory=dict)
 
 
 def _body(f: Facts, name: str):
@@ -382,11 +386,54 @@ def repeated_death_action(f: Facts) -> tuple | None:
     return None
 
 
+def _yards_word(a, b):
+    d = situation.yards(a, b)
+    return "another map" if d is None else int(round(d))
+
+
+def hearth_rows(f: Facts) -> dict:
+    """member -> where its hearthstone lands and whether it is ready (#3303).
+
+    The judge could not tell whether a hearth helped without each member's
+    bind: a stone that lands beside the leader or the goal ends a long walk,
+    and one that lands a continent away undoes it. Distances are straight
+    lines on one map; "another map" when the bind is not on the leader's.
+    """
+    lead = f.where.lead_body
+    goal = f.where.goal.at if f.where.goal is not None else None
+    out = {}
+    for b in f.where.bodies:
+        bind = f.binds.get(b.name)
+        if bind is None:
+            out[b.name] = {"hearthstone": "no bind read"}
+            continue
+        zone = f.bind_zones.get(b.name)
+        row = {
+            "bind": (situation.zone_name(zone, bind.map) if zone else "")
+            or situation.UNKNOWN,
+            "bind_yards_from_leader": situation.UNKNOWN
+            if lead is None or lead.at is None
+            else _yards_word(lead.at, bind),
+        }
+        if goal is not None:
+            row["bind_yards_from_goal"] = _yards_word(goal, bind)
+        row["hearthstone"] = (
+            "used in the last hour" if b.name in f.hearthed else "ready"
+        )
+        out[b.name] = row
+    return out
+
+
 def question(f: Facts, offered: dict):
     """(state, questions) for "what does the family do about how it moves"."""
+    where = f.where.state()
+    hearths = hearth_rows(f)
+    for m in where.get("members", ()):
+        if m.get("name") in hearths:
+            m["hearth"] = hearths[m["name"]]
     state = {
         "family": f.family,
-        "situation": f.where.state(),
+        "situation": where,
         "why_now": trouble(f),
     }
     if f.errand:
@@ -406,7 +453,11 @@ def question(f: Facts, offered: dict):
         "the family keeps failing to finish, or keeps dying on, is given up "
         "for now; and when the trouble is already being handled (the leader "
         "is waiting for a straggler who is walking back, or the family is "
-        "moving and closing on its goal) they carry on." + situation.INSTRUCTION
+        "moving and closing on its goal) they carry on. Each member's `hearth` "
+        "says where its hearthstone lands, how far that is from the leader "
+        "and from his goal, and whether the stone is ready; a hearth that "
+        "lands farther from the family than the member already stands is no "
+        "help." + situation.INSTRUCTION
     )
     return state, {"movement": jev.choice(instructions, dict(offered))}
 
@@ -516,11 +567,12 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
         mode=rule.mode,
         status="",
         item_name=why[:120],
-        facts=f.where.line(1000),
         straggler=stranded(f),
         homeward=homeward(f),
     )
     state, questions = question(f, offered)
+    # The record holds what Jev was asked with, options first (#3303).
+    base = replace(base, facts=jev_items.facts_line(state, offered))
     outcome = await client.ask(KIND, state, questions)
     if outcome.answers is None:
         return replace(base, status=outcome.status, latency_ms=outcome.latency_ms)

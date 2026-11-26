@@ -274,6 +274,16 @@ bound on that count:
 - `{at_most: N}`: N or fewer matching lines.
 - `{at_least: N, at_most: M}`: a range, with N no greater than M.
 
+A check that requires or caps a line (`at_least` or `at_most`) is only as good as
+its pattern: a line no code writes fails every run when required and passes every
+run when capped. `tests/test_eph_required_lines.py` therefore lists each such
+check beside the format string of the call that writes its line, and fails when
+the pinned source no longer logs that wording, when the logger does not reach the
+log the judge reads, or when the pattern does not match the line as formatted. A
+new bounded check needs an entry there. The judge reads one file, so only a line
+of the module or of the bots can be required: the bridge's own log, and a core
+logger the world does not send to that file, are out of its reach.
+
 Every bound is a whole number, zero or more; lint rejects a negative, missing or
 unknown bound, and a judge handed one anyway reports the check as an error
 (INVALID), never as held. Across repeated looks the worst one wins and never improves:
@@ -332,6 +342,13 @@ a control worldserver image (with `bridge: on`, also without `--control-bridge`)
 each image was built from; a `TODO` commit is recorded as unchecked, and an
 unchecked decree can never close or disprove anything). It saves a submission
 record under the results directory.
+
+If the fix commit diverges from an image pin, `submit` also checks the fix
+repository's default branch. An off-branch commit is refused by name, with
+the associated pull's merge commit when GitHub reports one for a merged pull.
+Use the squash merge or default-branch port in `fix.commit`, then resubmit;
+an open pull's test merge is not a shipped fix. An unknown reachability result
+refuses verification rather than declaring the commit off branch.
 
 `dispatch` is the only thing that starts worlds. One instance runs at a time,
 enforced by a Kubernetes Lease. Each pass it unsuspends the oldest queued Job

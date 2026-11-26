@@ -680,6 +680,8 @@ class Situation:
                 members.append({"name": b.name, "seen": False})
                 continue
             m = {"name": b.name, "movement": self.progress.get(b.name, UNKNOWN)}
+            if b.name != self.leader:
+                m.update(_from_leader(lead, b))
             if b.dead:
                 m["dead"] = True
             elif b.health_pct is not None and b.health_pct < 100:
@@ -751,6 +753,22 @@ class Situation:
         if self.vision and self.vision.get("screen"):
             parts.append("screen %s" % self.vision["screen"])
         return "; ".join(parts)[:limit]
+
+
+def _from_leader(lead: Body | None, b: Body) -> dict:
+    """A member's yards from the leader and height above him, as a row's two
+    columns (#3303). Every member gets them, not only the far ones
+    `cohesion` lists, so a reader sees who is near as well as who is not."""
+    if lead is None or lead.at is None:
+        return {"yards_from_leader": UNKNOWN}
+    d = yards(lead.at, b.at)
+    if d is None:
+        return {"yards_from_leader": "another map"}
+    out = {"yards_from_leader": int(round(d))}
+    up = height(lead.at, b.at)
+    if up is not None and abs(up) > 10:
+        out["height_vs_leader"] = int(round(up))
+    return out
 
 
 def trail_state(lp: Progress | None) -> dict | None:

@@ -17,7 +17,8 @@ reach of a quester when:
   * its race and class masks hold the quester's, its minimum level is met, its
     maximum level (MaxLevel, 0 for none) is not passed, and its own level is
     at most levelroute.ABOVE over the quester's;
-  * the quest before it is rewarded (or held, for a negative PrevQuestID), and
+  * the quest before it is rewarded (or held, for a negative PrevQuestID),
+    including the world's quest-available conditions, and
     no quest of its exclusive group is rewarded or held. "The quest before it"
     is the world's list, not the row's: its own PrevQuestID or any quest whose
     NextQuestID names it, a quest of a negative exclusive group standing for
@@ -68,7 +69,9 @@ granted: a quest is never completed, skipped or rewarded by a command.
 
 BROKEN (`Broken`, `failures`). A quest is broken when:
 
-  * FAILED: the log holds it as failed (an escort died, a timer ran out);
+  * FAILED: the log holds it as failed (an escort died, a timer ran out), and
+    the world rows' fact that an objective creature has spawns only off the
+    quest's map is added to the reason when it does (`_failed_reason`);
   * STALLED: its objectives (status and counters) have not moved for
     STALL_SECONDS of play while the quester was working it (`Clock`). Play is
     time online and alive between two looks, at most PLAY_GAP_SECONDS each, so
@@ -87,10 +90,18 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     (#1594). An incomplete quest one of whose enders is an object with no
     static spawn is not judged on its ender at all: a script or an event
     summons that object, so it is worked and only a stall breaks it (#1606);
+  * UNSOURCED_ITEM: a required item no creature drops, no chest holds and no
+    quest hands over, and the quester does not carry, is sold by vendors only
+    (questers cannot buy from a vendor). The take is not made, and a held quest
+    is broken as STALLED_UNSOURCED at once, even when its creature objective
+    can be hunted (#3149);
   * SOURCE_MISSING: the world refused every spawn of its objective as gone.
     A quest whose objective no spawned creature is or drops is not judged on
     that alone (a script may summon it, a chest or a vendor may hold the
     item): it stalls, and its stall says so (STALLED_UNSOURCED);
+  * NO_OBJECTIVES: two hours of play pass while the quest is incomplete and
+    the world rows define no required creature, item, or object objective a
+    quester can work;
   * REFUSED_TAKE / REFUSED_TURN_IN: the world refused the take or the hand-in
     FAILS_BEFORE_BROKEN times in a day, with its own words appended;
   * CANNOT_TURN_IN: the world refused the hand-in once and said no retry
@@ -250,8 +261,13 @@ def _quest_complete(quest, status, progress=0) -> bool:
 # The reasons a quest is broken, as the ledger records them. FAILED is the
 # ledger's own words for it (questledger.FAILED_REASON, #923).
 FAILED = "the quest failed in the log"
+# The world rows' fact added to FAILED for an objective creature with spawns
+# only on other maps (`_failed_reason`): entry, then the spawn count.
+OFF_HOME_MAP = (
+    "its objective creature %d has no spawn on the quest's map (%d on other maps)"
+)
 STALLED = "its objectives did not move for 2 hours of play"
-NO_OBJECTIVES = "the world defines no required objectives to complete"
+NO_OBJECTIVES = "the world rows define no required creature, item, or object objective a quester can work"
 SCRIPTED_EVENT = "the quest completes only by a scripted event no lone quester drives"
 GIVER_MISSING = "the quest giver is not in the world"
 # Further Concerns and Report to Gryan Stoutmantle require speaking to an NPC
@@ -302,6 +318,12 @@ STALLED_UNSOURCED = (
     + ", no huntable source supplies what it asks for, and questers cannot buy items from vendors"
 )
 REFUSED_TAKE = "the quest giver would not give it"
+# A required item no creature drops, no chest holds and no take hands over: the
+# quester cannot buy it from a vendor, so the quest cannot be finished (#3149).
+UNSOURCED_ITEM = (
+    "requires item %d, which no creature drops, no chest holds and no quest "
+    "hands over; questers cannot buy items from vendors"
+)
 REFUSED_TURN_IN = "the turn-in NPC would not take it"
 # The module refused the hand-in and marked it never retryable (#19 in
 # quadseven/mod-overseer): the world names nothing that takes the quest in,
@@ -543,9 +565,7 @@ def ledger_state(state, reason) -> str:
     # (quest 298, refused "not eligible" while its start item had no
     # bag room, stayed broken for weeks). A quest the log held as failed is a
     # failed attempt too: dropping and retaking it can finish it.
-    if state == LEDGER_BROKEN and (
-        reason.startswith((STALLED, REFUSED_TAKE)) or reason == FAILED
-    ):
+    if state == LEDGER_BROKEN and (reason.startswith((STALLED, REFUSED_TAKE, FAILED))):
         return LEDGER_STALLED
     return state
 
@@ -688,6 +708,9 @@ class Facts:
 
     zone: int
     level: int
+    # The map of the creature or object that gives the quest (its start row),
+    # -1 when no start row names one.
+    home_map: int = -1
     classes: int = 0
     # quest_template_addon.MaxLevel: a quester over it is refused the take
     # (SatisfyQuestLevel). 0: no cap.
@@ -768,10 +791,12 @@ def catalogue(
     link_rows=(),
     chest_rows=(),
     object_rows=(),
+    condition_rows=(),
 ):
     """The Catalogue from the world's rows: QUESTS_SQL's, classquest's
     GIVERS_SQL, SPAWNS_SQL and LOOT_SQL rows for these quests, STARTERS_SQL's,
-    ENDERS_SQL's and LINKS_SQL's.
+    ENDERS_SQL's, LINKS_SQL's and `classquest.CONDITIONS_SQL` rows for the
+    quest-available conditions.
 
     Only the classic world: a quest is kept when its zone holds a quest whose
     giver is spawned on a classic continent, or is one of the starting lands.
@@ -790,6 +815,7 @@ def catalogue(
         object_rows=object_rows,
         start_rows=start_rows,
         every=True,
+        condition_rows=condition_rows,
     )
     named, npc_enders, object_enders = _named(start_rows, ender_rows)
     object_spots = _object_ender_spots(ender_rows)
@@ -797,6 +823,7 @@ def catalogue(
     zones = {_int(r.get("id")): zone_of(r.get("zone")) for r in rows}
     classic_zones = _classic_zones(book, zones)
     links = _links(rows, link_rows)
+    homes = _home_maps(giver_rows)
     facts = {}
     kept = {}
     band_rows = []
@@ -808,6 +835,7 @@ def catalogue(
         facts[qid] = Facts(
             zone=zones[qid],
             level=max(_int(r.get("level")), quest.min_level, 1),
+            home_map=homes.get(qid, -1),
             classes=_int(r.get("classes")),
             max_level=_int(r.get("max_level")),
             prev=_int(r.get("prev_signed")),
@@ -837,6 +865,15 @@ def catalogue(
         )
     bands = {side: levelroute.bands(band_rows, side) for side in levelroute.RACE_MASK}
     return Catalogue(classquest.Book(kept), facts, bands, hostile_givers(giver_rows))
+
+
+def _home_maps(giver_rows) -> dict:
+    """quest id -> the map of its first start row (-1 when a row gives none)."""
+    out = {}
+    for r in giver_rows or ():
+        if r.get("role") == "start":
+            out.setdefault(_int(r.get("quest")), _int(r.get("map_id"), -1))
+    return out
 
 
 def hostile_givers(giver_rows) -> dict:
@@ -1570,7 +1607,10 @@ def open_to(cat: Catalogue, member, quest_id, broken=frozenset()) -> bool:
         return False
     if facts.level > int(member.level) + levelroute.ABOVE:
         return False
-    if facts.before and not any(
+    if quest.needs:
+        if not any(all(p in member.quests_done for p in way) for way in quest.needs):
+            return False
+    elif facts.before and not any(
         all(_before_met(member, p) for p in way) for way in facts.before
     ):
         return False
@@ -1657,7 +1697,8 @@ def _working(
     a dozen more in one day, each one a quest no quester had yet gone after.
     A quest it could hunt waits its turn; one it cannot hunt has nothing to
     wait for, so its clock still runs and a quest nobody can work still
-    stalls (STALLED_UNSOURCED)."""
+    stalls (STALLED_UNSOURCED). The last move's quest runs its clock too,
+    unless it is only waiting for the quester's levels (`_awaiting_levels`)."""
     out = {
         qid
         for qid in member.quest_log
@@ -1667,7 +1708,11 @@ def _working(
             and _unhuntable(cat, member, qid, left, object_left, idle)
         )
     }
-    if last_quest and int(last_quest) in member.quest_log:
+    if (
+        last_quest
+        and int(last_quest) in member.quest_log
+        and not _awaiting_levels(cat, member, int(last_quest), left, object_left, idle)
+    ):
         out.add(int(last_quest))
     return out
 
@@ -1691,13 +1736,15 @@ def _unhuntable(
     over its level is not unhuntable: it waits for the quester's levels, so
     its clock waits too. A quester may take a quest levelroute.ABOVE levels
     over itself, and quest 25 (Stonetalon Standstill), taken three levels
-    under it, was dropped as stalled by five questers (#1728)."""
+    under it, was dropped as stalled by five questers (#1728). Only the spawns
+    of the objectives still short count (`_short_entries`): the droppers of an
+    ingredient already gathered are never hunted, so they do not hold the clock."""
     quest = cat.quest(qid)
     if quest is None:
         return True
     if _nearest_chest(member, qid, quest, object_left) is not None:
         return False
-    solo = tuple(s for s in classquest.solo_fields(quest) if s.entry not in idle)
+    solo = _solo_targets(member, qid, quest, idle)
     fields = classquest.within_level(member, solo)
     if _nearest(member, fields, left) is not None:
         return False
@@ -1709,6 +1756,31 @@ def _unhuntable(
     return True
 
 
+def _solo_targets(member, qid: int, quest: classquest.Quest, idle) -> tuple:
+    """The solo objective spawns that serve a short objective of the quest and
+    whose entry is not left idle, before the quester's level is applied."""
+    targets = _short_entries(member, qid, quest)
+    return tuple(
+        s
+        for s in classquest.solo_fields(quest)
+        if s.entry in targets and s.entry not in idle
+    )
+
+
+def _awaiting_levels(cat, member, qid, left, object_left, idle) -> bool:
+    """True when the quest has no short objective the quester may hunt at its
+    level, but one that stands on its map just over it: the quest waits for
+    the quester's levels, so no clock runs for it (`_unhuntable`)."""
+    quest = cat.quest(qid)
+    if quest is None or _nearest_chest(member, qid, quest, object_left) is not None:
+        return False
+    solo = _solo_targets(member, qid, quest, idle)
+    fields = classquest.within_level(member, solo)
+    if _nearest(member, fields, left) is not None:
+        return False
+    return _nearest(member, _over_level(solo, fields), left) is not None
+
+
 def _over_level(spawns, within) -> tuple:
     """The spawns of `spawns` that classquest.within_level left out of
     `within`: the ones too far over the quester's level to hunt yet."""
@@ -1717,8 +1789,10 @@ def _over_level(spawns, within) -> tuple:
 
 
 def _chested(quest) -> bool:
-    """True when a chest holds an item the quest asks for (a USE_OBJECT use)."""
-    return any(u.verb == classquest.USE_OBJECT and u.item for u in quest.uses)
+    """True when a spawned chest holds an item the quest asks for."""
+    return any(
+        u.verb == classquest.USE_OBJECT and u.item and u.spots for u in quest.uses
+    )
 
 
 def chest_spots(member, qid: int, quest: classquest.Quest) -> tuple:
@@ -1834,7 +1908,16 @@ def failures(
         if quest is None or facts is None:
             continue
         reason = _broken_reason(
-            quest, facts, status, played, gone, refused, final, object_gone, prog
+            quest,
+            facts,
+            status,
+            played,
+            gone,
+            refused,
+            final,
+            object_gone,
+            prog,
+            _vendor_item(quest, member.quest_item_objectives.get(qid, {})),
         )
         if reason.startswith(STALLED):
             fields = _held_objective_fields(member, qid, quest)
@@ -1848,6 +1931,27 @@ def failures(
     return out
 
 
+def _off_home(quest, facts: Facts) -> list:
+    """(creature entry, spawn count) of each objective creature with spawns,
+    none of them on the map the quest is given on (Facts.home_map)."""
+    if facts.home_map < 0:
+        return []
+    out = []
+    for entry, _n in quest.kills:
+        spawns = [s for s in quest.fields if s.entry == entry]
+        if spawns and not any(int(s.map_id) == facts.home_map for s in spawns):
+            out.append((entry, len(spawns)))
+    return out
+
+
+def _failed_reason(quest, facts: Facts) -> str:
+    """FAILED, with the world rows' fact about each objective creature whose
+    spawns all stand off the quest's map, so the ledger says where its
+    objective is. The game's own FAILED is kept: this names no cause."""
+    notes = [OFF_HOME_MAP % (entry, n) for entry, n in _off_home(quest, facts)]
+    return "; ".join([FAILED, *notes])
+
+
 def _broken_reason(
     quest,
     facts: Facts,
@@ -1858,12 +1962,13 @@ def _broken_reason(
     final=None,
     object_gone=frozenset(),
     progress=0,
+    vendor_item=0,
 ) -> str:
     """Why a quest the quester holds is broken, "" when it is not (yet). A
     complete quest's objectives cannot move, so stillness never stalls it:
     it is due a turn-in, not a drop (#1085)."""
     if status == STATUS_FAILED:
-        return FAILED
+        return _failed_reason(quest, facts)
     if quest.id in (35, 109):
         return UNSUPPORTED_OBJECTIVE
     if quest.id == 93 and status == STATUS_INCOMPLETE and (2683, 6) in quest.items:
@@ -1934,7 +2039,8 @@ def _broken_reason(
     if played < STALL_SECONDS or complete:
         return ""
     # A chest that holds the item is a source: its quest is worked, not unsourced.
-    unsourced = (
+    # A vendor-only item is unsourced whatever the quest's other objectives are.
+    unsourced = bool(vendor_item) or (
         (quest.kills or quest.items) and not quest.fields and not _chested(quest)
     )
     return STALLED_UNSOURCED if unsourced else STALLED
@@ -1942,6 +2048,18 @@ def _broken_reason(
 
 def _refused_words(reason, words) -> str:
     return "%s: %s" % (reason, words) if words else reason
+
+
+def _vendor_item(quest, item_progress) -> int:
+    """The first required item no source supplies that the quester's counters
+    show it lacks, 0 when none. An item use may credit the objective, so a
+    quest that uses an item on a creature is not judged here (`_unmet`)."""
+    if any(u.verb == classquest.USE_ITEM for u in quest.uses):
+        return 0
+    for item, count in classquest.unsourced_items(quest):
+        if item_progress.get(item, 0) < count:
+            return item
+    return 0
 
 
 def _giver_failure(cat: Catalogue, member, qid, gone, refused):
@@ -1955,6 +2073,9 @@ def _giver_failure(cat: Catalogue, member, qid, gone, refused):
         return SCRIPTED_EVENT
     if int(qid) in (35, 109):
         return UNSUPPORTED_OBJECTIVE
+    vendor = _vendor_item(quest, member.quest_item_objectives.get(qid, {}))
+    if vendor:
+        return UNSOURCED_ITEM % vendor
     count, words = refused.get(("take", qid), (0, ""))
     if count >= FAILS_BEFORE_BROKEN:
         return _refused_words(REFUSED_TAKE, words)
@@ -2428,8 +2549,12 @@ def judged_stalls(judged, retried, found, held, quest_log) -> frozenset:
     return frozenset(q for q in set(judged) | set(retried) | stalled if q in keep)
 
 
-def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
-    """Eligible kill and item-drop fields for one incomplete held quest."""
+def _short_entries(member, qid: int, quest: classquest.Quest) -> set:
+    """The creature entries an incomplete held quest still needs: its kills
+    the quester has not made, and the droppers of each ingredient still short.
+    Item-only objectives have no creature counter, so an ingredient's own
+    counter decides it; the aggregate quest counter cannot tell which
+    ingredient of a shared collection quest is still needed."""
     progress = member.quest_objectives.get(qid)
     item_progress = member.quest_item_objectives.get(qid, {})
     kills = dict(quest.kills)
@@ -2439,16 +2564,17 @@ def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
             for entry, count in kills.items()
             if int(progress.get(entry, 0)) < count
         }
-    # Item-only objectives have no creature counter. Keep only droppers for
-    # item objectives whose own counters are still short; the aggregate quest
-    # counter cannot distinguish which ingredient a shared collection quest
-    # still needs.
     items = dict(quest.items)
-    targets = set(kills) | {
+    return set(kills) | {
         entry
         for item, entry in quest.drops
         if int(item_progress.get(item, 0)) < items.get(item, 0)
     }
+
+
+def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
+    """Eligible kill and item-drop fields for one incomplete held quest."""
+    targets = _short_entries(member, qid, quest)
     return classquest.within_level(
         member,
         tuple(

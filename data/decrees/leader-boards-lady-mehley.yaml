@@ -3,14 +3,16 @@
 # and its door is on the Eastern Kingdoms. The boarding steps and the 'released from its cross hold' line
 # are what the criterion reads; here the observation is the outcome: everyone ashore on map 0.
 # Fix: mod-overseer pull 849.
-# Scope: pairing each 'steps aboard' line with an 'aboard' line before departure is a comparison of two bridge
-# log lines, which a decree cannot do (a log assertion is an exact count of one pattern and can only forbid).
-# The pairing is not claimed. What is proven by rows: the whole family ends on one map, the continent of the
-# far berth (or the instance beyond it), and the leader is among them.
+# Scope: the leader's 'steps aboard' line and his 'is aboard ... between maps' line for the Lady Mehley are
+# worldserver text the module writes, and each is required at least once (wow-overseer issue 2767). Pairing
+# every step with an aboard line before the same departure is a comparison of two lines, which one count per
+# pattern does not make, so the pairing of each step is still outside this decree. Also proven by rows: the
+# whole family ends on one map, the continent of the far berth (or the instance beyond it), and the leader is
+# among them.
 decree: v1
 id: leader-boards-lady-mehley
 proves:
-  - {repo: quadseven/mod-overseer, issue: 758, criterion: "the family is ashore together on map 0 after the Theramore to Menethil leg (the steps-aboard and aboard pairing is not asserted here)"}
+  - {repo: quadseven/mod-overseer, issue: 758, criterion: "the leader steps aboard the Lady Mehley and is aboard between the maps, shown by both lines in the log, and the family is ashore together on map 0 after the Theramore to Menethil leg (each step is not paired with its own aboard line)"}
 fix: {repo: quadseven/mod-overseer, commit: "d6fa94a7adf106bbc6d7abc449f65990cae1ef1d"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -52,3 +54,10 @@ observe:
   - name: no-release-from-cross-hold-while-ship-docked
     role: check
     log: {pattern: "released from its cross hold - he is walking to the berth again", expect: {count: 0}}
+  # The leader's two boarding lines; pinned to the module source by tests/test_eph_required_lines.py.
+  - name: the-leader-stepped-aboard
+    role: check
+    log: {pattern: "'Grug' steps aboard 'Ship \\(The Lady Mehley\\)' at \\(", expect: {at_least: 1}}
+  - name: the-leader-was-aboard-between-the-maps
+    role: check
+    log: {pattern: "the leader 'Grug' is aboard 'Ship \\(The Lady Mehley\\)' between maps [0-9]+ and [0-9]+", expect: {at_least: 1}}

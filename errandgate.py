@@ -54,6 +54,7 @@ import dungeonstall
 # The reasons a verdict holds an aim, as words.
 INSIDE_INSTANCE = "inside_instance"
 RECALL_COOLDOWN = "recall_cooldown"
+DEAD = "dead"
 
 # The town slot claimants whose aim is a self-contained economy errand: the
 # member leaves the party for a counter, a mailbox or a forge and comes back.
@@ -118,10 +119,26 @@ class Verdict:
                 "family waited at a door, so %s takes no errand for it for "
                 "%d more minute(s)" % (member, claimant, minutes)
             )
+        if self.reason == DEAD:
+            return (
+                "%s is dead or a ghost, so %s takes no errand for it; the "
+                "corpse run comes first" % (member, claimant)
+            )
         return ""
 
 
 ALLOWED = Verdict(True)
+
+
+def dead_hold(dead: bool) -> Verdict:
+    """A dead or ghost traveller is aimed nowhere, by any claimant.
+
+    The module refuses every walk for a character that is dead, so an aim
+    written for one is handed back at once and the quest drive takes the
+    leader again, over and over, while the corpse run never starts. Every
+    claimant is held, the economy's and the campaign's alike: nothing walks
+    a body that has not been recovered."""
+    return Verdict(False, DEAD) if dead else ALLOWED
 
 
 def decide(now, last_recall_at, aim_kind, inside_instance: bool = False) -> Verdict:
@@ -173,3 +190,10 @@ def recall_due(seconds, hold: float = dungeonstall.HOLD_SECONDS) -> bool:
     """Is a member this long on its errand still handed it back, or has it
     reached the bound where the run is stood down instead?"""
     return float(seconds) < float(hold)
+
+
+def is_dead_row(row) -> bool:
+    """Does a snapshot row (health, corpses) read dead or ghost? No row, no."""
+    if not row:
+        return False
+    return int(row.get("health") or 0) <= 0 or int(row.get("corpses") or 0) > 0

@@ -325,6 +325,33 @@ function fold(ctx, agendas, need) {
 </details>`;
 }
 
+// Cheap object-identity stamps for after()'s inputs so 5s quick polls do not
+// JSON.stringify ~170KB of map dots, wall members, or achievements on every tick.
+const refIds = new WeakMap();
+const ghostStamps = new WeakMap();
+let nextRefId = 1;
+
+function refId(value) {
+  if (!value || typeof value !== "object") return value ?? null;
+  let id = refIds.get(value);
+  if (id === undefined) {
+    id = nextRefId++;
+    refIds.set(value, id);
+  }
+  return id;
+}
+
+function ghostStamp(rosterRead) {
+  const data = rosterRead && rosterRead.data;
+  if (!data || typeof data !== "object") return "";
+  let cached = ghostStamps.get(data);
+  if (cached === undefined) {
+    cached = [...rosterModel(rosterRead).ghostNames()].join(",");
+    ghostStamps.set(data, cached);
+  }
+  return cached;
+}
+
 export default {
   // The tile panels draw the profile's and the guild bank's frames, in their styles.
   css: ["views/now.css", "views/members.css", "views/economy.css", ACH_CSS, WATCH_CSS],
@@ -352,13 +379,15 @@ ${reportSection(ctx, allGuilds())}`;
     const map = ctx.get("/api/map");
     const wall = ctx.get("/api/wall");
     const shapes = ctx.get("/shapes.json");
+    const achievements = ctx.get("/api/v2/achievements");
     return JSON.stringify([
       stage.isNarrow(), savedStage(), streams.retryDue(),
       // The mini maps draw from the shapes, which can arrive after the markup.
-      shapes.data && Object.keys(shapes.data),
-      map.data && map.data.dots, wall.data && wall.data.members,
-      [...rosterModel(ctx.get("/api/v2/roster")).ghostNames()],
-      ctx.get("/api/v2/achievements").data,
+      refId(shapes && shapes.data),
+      refId(map && map.data && map.data.dots),
+      refId(wall && wall.data && wall.data.members),
+      ghostStamp(ctx.get("/api/v2/roster")),
+      refId(achievements && achievements.data),
     ]);
   },
   // The wall's slots stay in the page, so a redraw does not take a playing

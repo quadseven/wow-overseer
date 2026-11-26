@@ -7,17 +7,17 @@
 # Reflection shield (issue 767) including for an area spell (issue 1659), and no raider dies to reflected
 # damage. The precondition reads the core's credit for Majordomo himself and fails the run as INVALID if the
 # encounter is never reached.
-# Scope: what a throwaway world cannot show is NOT claimed here. The holding line ("casters holding,
-# magic reflection on <add>") and the tank retaking adds after Teleport Target (patch 0020 logs nothing) leave no
-# database row, and a log assertion is an exact count that cannot demand presence, so neither is asserted. The
-# damage-target path and the area-target path (issue 1659) write the same line, so a world cannot tell them
-# apart. What is proven: the encounter is reached and credited by the core, and no raider is killed by the
-# shielded adds or by Majordomo, at most three raiders die at the encounter, and no death line names reflection.
+# Scope: the holding line ("[MC] majordomo: N casters holding, magic reflection on <add>", patch 0017, logger
+# playerbots at info) is required at least once in the run's log (wow-overseer issue 2767). The tank retaking
+# adds after Teleport Target is still not claimed: patch 0020 logs nothing and leaves no row. The damage-target
+# path and the area-target path (issue 1659) write the same holding line, so a world still does not tell them
+# apart. Also proven: the encounter is reached and credited by the core, no raider is killed by the shielded
+# adds or by Majordomo, at most three raiders die at the encounter, and no death line names reflection.
 # Fix: wow-overseer pull 1663 (area-target reflect hold).
 decree: v1
 id: majordomo-reflect-hold
 proves:
-  - {repo: quadseven/wow-overseer, issue: 767, criterion: "no raider dies to reflected damage at Majordomo (the holding line and the tank re-take are not asserted here)"}
+  - {repo: quadseven/wow-overseer, issue: 767, criterion: "casters hold on a Magic Reflection add, shown by the holding line in the log, and no raider dies to reflected damage at Majordomo (the tank re-take is outside this decree)"}
   - {repo: quadseven/wow-overseer, issue: 1659, criterion: "no raider dies to the shielded adds in a credited Majordomo encounter (area versus damage targeting is not distinguishable here)"}
 fix: {repo: quadseven/wow-overseer, commit: "e40c8878685ccac66320288a253eb4c3b0d7ac18"}
 world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
@@ -66,3 +66,7 @@ observe:
   - name: no-reflected-damage-death-line
     role: check
     log: {pattern: "died to (reflected|its own) (damage|spell)", expect: {count: 0}}
+  # The line patch 0017 writes when casters hold; pinned to that patch by tests/test_eph_required_lines.py.
+  - name: casters-held-on-a-magic-reflection-add
+    role: check
+    log: {pattern: "\\[MC\\] majordomo: [0-9]+ casters holding, magic reflection on ", expect: {at_least: 1}}
