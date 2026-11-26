@@ -326,6 +326,7 @@ digest-pinned tools image. A missing or malformed file is an error.
 
     python3 -m ephemeral submit [--arm both] [--node N] --control-worldserver REF --control-dbimport REF --control-pin SHA
         [--control-playerbots-prefix NAME] [--control-drop-keys A,B,C] data/decrees/<name>.yaml
+    python3 -m ephemeral submit --control auto --control-history FILE data/decrees/<name>.yaml
     python3 -m ephemeral dispatch [--once] [--owner NAME]
     python3 -m ephemeral dispatch --stop --owner NAME
     python3 -m ephemeral collect [--dry-run]
@@ -471,6 +472,18 @@ own `config:`) with that prefix; the treatment arm is untouched, and a fidelity
 delta records it. Any other key the control dist lacks still fails closed; a key a
 module added after the control build (its dist predates it) is removed from the control
 arm's override files with `--control-drop-keys A,B,C`, which records a delta naming them.
+
+`--control auto` finds the control images instead of taking them by hand.
+`--control-history FILE` is a JSON list of past image sets, newest first, that the deploy
+side writes (never a file in this repository): each entry has `worldserver` and `dbimport`
+digests and the `pin` it was built from, plus `bridge` and `bridge_commit` for a bridge
+build. `submit` takes the newest entry whose pin lacks the fix (the same ancestor check as
+above; for a fix in this repository's bridge code, the entry's `bridge_commit`) and whose
+digests the registry still serves, fills `--control-worldserver`, `--control-dbimport` and
+`--control-pin` (and `--control-bridge` for a bridge fix) from it, and records the choice as
+a fidelity delta. It refuses a `TODO` fix commit, an empty or unreadable history, a history
+where every set carries the fix or no set without it still resolves, and explicit
+control image flags given beside it. `--control-drop-keys` is still given by hand.
 
 With `world.bridge: "on"` the template's bridge sidecar is kept, at the arm's own
 image: the control arm's is `--control-bridge` (the build before the fix), the

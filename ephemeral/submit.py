@@ -19,7 +19,7 @@ import time
 from urllib.parse import quote
 
 from . import anchors as anchors_mod
-from . import confmerge, dbschema, imagecommit, lint, podpaths, runids
+from . import confmerge, controlauto, dbschema, imagecommit, lint, podpaths, runids
 from .kube import KubeError
 from .miniyaml import YamlError, loads
 
@@ -320,6 +320,70 @@ def default_image_env(cfg, kube):
     return image_env
 
 
+def default_resolves(cfg, kube):
+    """resolves(ref): True when the registry still serves the image by its digest."""
+
+    def resolves(ref):
+        try:
+            host = imagecommit.parse_ref(ref)[0]
+            secret = kube.get("secrets", BRIDGE_PULL_NAME, missing_ok=True)
+            imagecommit.image_env(ref, imagecommit.credentials(secret, host))
+        except (imagecommit.RegistryError, KubeError, KeyError, TypeError, ValueError):
+            return False
+        return True
+
+    return resolves
+
+
+_CONTROL_FLAGS = ("control_worldserver", "control_dbimport", "control_pin")
+
+
+def _control_auto(gh, decree, args, resolves, deltas):
+    """args with the control images filled from the history file (`--control auto`)."""
+    if args.get("control") != "auto":
+        raise SubmitError("--control takes only auto")
+    given = [f for f in _CONTROL_FLAGS if args.get(f)]
+    if given:
+        raise SubmitError(
+            "--control auto picks the control images itself; drop "
+            + ", ".join("--" + f.replace("_", "-") for f in given)
+        )
+    fix = decree["fix"]
+    if not _SHA.match(str(fix.get("commit", ""))):
+        raise SubmitError("--control auto needs fix.commit as a full commit sha")
+    path = args.get("control_history")
+    if not path:
+        raise SubmitError(
+            "--control auto needs --control-history (the deploy side's list of past image sets)"
+        )
+    try:
+        history = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SubmitError(f"control history {path} is unreadable: {exc}") from exc
+    if not isinstance(history, list) or not all(isinstance(e, dict) for e in history):
+        raise SubmitError("control history must be a JSON list of image sets")
+    bridge_fix = fix["repo"].endswith("/wow-overseer")
+    try:
+        entry = controlauto.pick_control(
+            history, lambda sha: fix_presence(gh, fix, sha), resolves, bridge_fix
+        )
+    except controlauto.AutoError as exc:
+        raise SubmitError(f"--control auto: {exc}") from exc
+    pin = entry["bridge_commit" if bridge_fix else "pin"]
+    filled = {
+        "control_worldserver": entry["worldserver"],
+        "control_dbimport": entry["dbimport"],
+        "control_pin": pin,
+    }
+    if bridge_fix and not args.get("control_bridge"):
+        filled["control_bridge"] = entry["bridge"]
+    deltas.append(
+        f"control arm: chosen by --control auto from the history: pin {pin}, "
+        f"worldserver {entry['worldserver']}"
+    )
+    return {**args, **filled}
+
+
 def default_template_image(cfg, kube):
     """template(klass): the template image to run, a `:newest` ref resolved to a digest."""
 
@@ -350,7 +414,7 @@ def default_template_image(cfg, kube):
 
 def submit(
     cfg, kube, gh, decree_path, args=None, clock=time.time, out=print, image_env=None,
-    template_image=None,
+    template_image=None, resolves=None,
 ):  # fmt: skip
     """Create the suspended Jobs. Returns the submission record (also saved)."""
     args = dict(args or {})
@@ -407,6 +471,9 @@ def submit(
             f"control arm: playerbots keys written as {prefix}.* (the control image predates the rename to Playerbots.*)"
         )
     arms = ["control", "treatment"] if arm_arg == "both" else [arm_arg]
+    if args.get("control") is not None and "control" in arms:
+        resolves = resolves or default_resolves(cfg, kube)
+        args = _control_auto(gh, decree, args, resolves, deltas)
     arm_bridge = {
         arm: _images_for(arm, live_images, args, live_bridge).get("bridge")
         for arm in arms
