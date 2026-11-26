@@ -79,6 +79,39 @@ def wild_hearts_world(spawn_droppers=True, spawn_chest=False):
     )
 
 
+WAR_BANNERS, BANNER_ITEM = 464, 3337
+WAR_BANNER_ENTRIES = (1034, 1035, 1036, 1037, 1038, 1057, 2091)
+# Fixture-only entries: the ticket does not include the giver rows.
+WAR_BANNER_GIVER = 9004
+
+
+def war_banners_world(spawn_droppers=True):
+    """The quest's rows as its ticket gives them: one required item, dropped by
+    the seven creatures the template rows name."""
+    war_banners = quest(WAR_BANNERS, WESTFALL, 26, min_level=23, title="War Banners")
+    war_banners.update(item1=BANNER_ITEM, item_count1=8)
+    giver_rows = [
+        giver(WAR_BANNERS, "start", 9901, WAR_BANNER_GIVER, 0, 0, name="Banner Keeper"),
+        giver(WAR_BANNERS, "end", 9901, WAR_BANNER_GIVER, 0, 0, name="Banner Keeper"),
+    ]
+    source_spawns = (
+        [
+            spawn(9910 + i, entry, 100.0 + 30.0 * i, 0.0, level=26, name="Ogre")
+            for i, entry in enumerate(WAR_BANNER_ENTRIES)
+        ]
+        if spawn_droppers
+        else []
+    )
+    return questers.catalogue(
+        [war_banners],
+        giver_rows,
+        source_spawns,
+        [{"item": BANNER_ITEM, "entry": entry} for entry in WAR_BANNER_ENTRIES],
+        [{"quest": WAR_BANNERS, "kind": "creature", "entry": WAR_BANNER_GIVER}],
+        [ended(WAR_BANNERS, WAR_BANNER_GIVER)],
+    )
+
+
 def holder(**kw):
     base = dict(
         level=12,
@@ -391,6 +424,78 @@ class AChestThatOpenedNothingIsLeftForAWhile(unittest.TestCase):
             heirloom_world(), holder(), last_quest=0, object_left=left
         )
         self.assertIn(64, working)
+
+
+class WarBannersAreHonestlyBrokenWithoutSpawns(unittest.TestCase):
+    """Quest 464 (War Banners) asks for 8 Dragonmaw War Banners, a template drop of
+    seven creatures; the rows name no spawn for any of them."""
+
+    def test_no_spawns_no_hunt_no_source(self):
+        cat = war_banners_world(spawn_droppers=False)
+        war_banners = cat.quest(WAR_BANNERS)
+
+        self.assertEqual(war_banners.items, ((BANNER_ITEM, 8),))
+        self.assertEqual(war_banners.fields, ())
+        self.assertEqual(war_banners.droppable, frozenset())
+        self.assertEqual(war_banners.uses, ())
+        member = mirra(level=26, zone_id=WESTFALL)
+        self.assertNotIn(WAR_BANNERS, questers.in_reach(cat, member, WESTFALL))
+        self.assertFalse(questers.open_to(cat, member, WAR_BANNERS))
+
+    def test_the_ledger_names_the_cause_with_no_spawns(self):
+        cat = war_banners_world(spawn_droppers=False)
+        holder = mirra(
+            level=26,
+            zone_id=WESTFALL,
+            quest_log={WAR_BANNERS: questers.STATUS_INCOMPLETE},
+            quest_progress={WAR_BANNERS: 0},
+            quest_item_objectives={WAR_BANNERS: {BANNER_ITEM: 0}},
+        )
+        clock = questers.Clock()
+        plan = questers.plan(cat, holder, clock, 0.0, last_quest=WAR_BANNERS)
+        for minute in range(1, 13):
+            plan = questers.plan(
+                cat, holder, clock, 600.0 * minute, last_quest=WAR_BANNERS
+            )
+
+        self.assertEqual([b.quest for b in plan.broken], [WAR_BANNERS])
+        self.assertEqual(plan.broken[0].reason, questers.STALLED_UNSOURCED)
+
+    def test_spawned_sources_make_it_finishable(self):
+        cat = war_banners_world(spawn_droppers=True)
+        member = mirra(level=26, zone_id=WESTFALL)
+
+        take = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(
+            (take.move.kind, take.move.quest), (classquest.TAKE, WAR_BANNERS)
+        )
+
+        holder = mirra(
+            level=26,
+            zone_id=WESTFALL,
+            quest_log={WAR_BANNERS: questers.STATUS_INCOMPLETE},
+            quest_progress={WAR_BANNERS: 0},
+            quest_item_objectives={WAR_BANNERS: {BANNER_ITEM: 0}},
+        )
+        hunt = questers.plan(cat, holder, questers.Clock(), 0.0)
+        self.assertEqual(
+            (hunt.move.kind, hunt.move.quest), (classquest.HUNT, WAR_BANNERS)
+        )
+        self.assertIn(hunt.move.spot.entry, WAR_BANNER_ENTRIES)
+        step = questers.step_for(holder, hunt.move, 0, cat.quest(WAR_BANNERS))
+        self.assertIn("item:%d" % BANNER_ITEM, step.rows[0].command)
+
+        completed = mirra(
+            level=26,
+            zone_id=WESTFALL,
+            quest_log={WAR_BANNERS: questers.STATUS_INCOMPLETE},
+            quest_progress={WAR_BANNERS: 8},
+            quest_item_objectives={WAR_BANNERS: {BANNER_ITEM: 8}},
+        )
+        hand_in = questers.plan(cat, completed, questers.Clock(), 0.0)
+        self.assertEqual(
+            (hand_in.move.kind, hand_in.move.quest), (classquest.TURN_IN, WAR_BANNERS)
+        )
 
 
 if __name__ == "__main__":
