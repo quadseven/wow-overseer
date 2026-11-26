@@ -297,20 +297,25 @@ class Collector:
             "epic" in (lb.get("name", "")).lower() for lb in issue.get("labels", [])
         ):
             return False, "an epic is never closed"
-        body, _ = decide.tick_boxes(issue.get("body") or "", entry.get("criterion", ""))
+        original = issue.get("body") or ""
+        body, refusal = decide.tick_criterion(original, entry.get("criterion", ""))
+        if refusal:
+            return False, refusal
+        if body != original:
+            self.gh.edit_body(repo, n, body)
         if decide.unticked(body):
             return False, "unticked boxes remain that this run does not prove"
-        if body != (issue.get("body") or ""):
-            self.gh.edit_body(repo, n, body)
         self.gh.remove_label(repo, n, LABEL_WAITING)
         self.gh.close_completed(repo, n)
         return True, ""
 
     def _posted_comment(self, repo, n, rec):
         mark = decide.marker(rec["decree_id"], rec["decree_sha256"])
+        rows = [f"| `{run['run_id']}` |" for run in rec["runs"]]
         for c in self.gh.comments(repo, n):
             mine = (c.get("user") or {}).get("login") == self.cfg.author_login
-            if mine and mark in (c.get("body") or ""):
+            text = c.get("body") or ""
+            if mine and mark in text and rows and all(row in text for row in rows):
                 return c
         return None
 
