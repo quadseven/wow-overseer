@@ -3,15 +3,15 @@
 The guild-ad prune first landed as an unapplied SQL file under
 data/sql/playerbots, which nothing reads; it now ships as a playerbots patch
 in the module repository, where the module's own database updater reads it.
-This test pins that the patch deletes rows 741 and 743 (and any other
-suggest_something line that advertises for a guild) and that it applies to
-the pinned fork.
+These tests replay the patch's SQL to check that it removes guild ads without
+deleting unrelated suggestions that reuse the old seed IDs.
 """
 
 import os
 import pathlib
 import re
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -58,15 +58,41 @@ class GuildAdsPatchTest(unittest.TestCase):
         self.assertTrue(PATCH.name.startswith("0023-"))
         self.text.encode("ascii")
 
-    def test_patch_deletes_rows_741_and_743(self):
-        self.assertIn(
-            "DELETE FROM `ai_playerbot_texts` WHERE `id` IN (741, 743);", self.sql
+    def seed(self, *rows):
+        db = sqlite3.connect(":memory:")
+        self.addCleanup(db.close)
+        db.execute(
+            "CREATE TABLE ai_playerbot_texts (id INTEGER PRIMARY KEY, name TEXT, text TEXT)"
         )
+        db.executemany("INSERT INTO ai_playerbot_texts VALUES (?, ?, ?)", rows)
+        return db
 
-    def test_patch_audits_suggest_something_guild_ads(self):
-        self.assertIn("name` = 'suggest_something'", self.sql)
-        self.assertIn("looking for guild", self.sql)
-        self.assertIn("join a good guild", self.sql)
+    def test_patch_prunes_seed_ads_and_new_matches_on_replay(self):
+        db = self.seed(
+            (741, "suggest_something", "%my_role is looking for guild."),
+            (743, "suggest_something", "%my_role wants to join a good guild."),
+            (2001, "suggest_something", "Looking for a guild to join."),
+            (2002, "suggest_something", "Let's run a dungeon."),
+        )
+        for _ in range(2):
+            db.executescript(self.sql)
+            self.assertEqual(
+                [(2002,)], db.execute("SELECT id FROM ai_playerbot_texts").fetchall()
+            )
+
+    def test_patch_preserves_reused_ids_without_a_matching_class_and_text(self):
+        preserved = (
+            (741, "suggest_something", "Let's run a dungeon."),
+            (743, "another_class", "Looking for a guild to join."),
+        )
+        db = self.seed(*preserved)
+        db.executescript(self.sql)
+        self.assertEqual(
+            list(preserved),
+            db.execute(
+                "SELECT id, name, text FROM ai_playerbot_texts ORDER BY id"
+            ).fetchall(),
+        )
 
     def test_series_files_exist_in_order(self):
         for name in SERIES:
