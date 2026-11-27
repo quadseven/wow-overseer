@@ -3,16 +3,22 @@
 // The two quester parties (#922) set out to prove every quest can be done by
 // playing it. The page draws, top to bottom:
 //
-//   Parties     one card per quester, grouped by guild: level, zone, the
-//               quests in its log, and how many it has completed and found
-//               broken (/api/v2/questers)
+//   The door    Broken and Taken chips counted off the quests read's
+//               totals, one tap each to the catalogue filtered to that set
+//   Parties     one card per quester, grouped by guild: level, the online
+//               word, zone, the quests in its log (the whole log behind a
+//               disclosure), and its all time ledger counts
+//               (/api/v2/questers)
 //   Coverage    completed, broken, taken, abandoned and not reached, per
 //               faction from the by_faction totals in /api/v2/quests, and per
-//               zone counted off that read's quests
+//               zone counted off that read's quests; not reached is the
+//               coverage bar's track, not a segment
 //   Catalogue   every quest in /api/v2/quests, narrowed by faction, zone,
-//               level range, status and a search. A row opens the quest's
-//               attempts (/api/v2/quests/<id>): who tried, how it ended and
-//               why it broke.
+//               level range, status and a search, in a chosen order (a
+//               broken list defaults to most attempts first), under a
+//               sticky line naming the count and the active filters. A row
+//               opens the quest's attempts (/api/v2/quests/<id>): who
+//               tried, how it ended and why it broke.
 //
 // The payloads, as apiv2/quests.py serves them (its docstring is the
 // contract; tests/test_quests_view.py builds its fixtures with that module's
@@ -77,11 +83,18 @@ const count = (v) => (num(v) === null ? notMeasured() : num(v).toLocaleString("e
 
 // ---- the filters ------------------------------------------------------------------
 
+// The catalogue's orders. "server" is the order the read itself lists; a
+// broken list with no sort chosen falls back to most attempts first, the
+// order that puts the most-tried failures at the top.
+const SORTS = ["server", "level", "attempts", "title"];
+
 export function filters(q) {
   const lvl = /^(\d*)-(\d*)$/.exec(q.lvl || "");
+  const status = STATUS_FILTER.includes(q.status) ? q.status : "";
   return {
     faction: q.faction || "", zone: q.zone || "",
-    status: STATUS_FILTER.includes(q.status) ? q.status : "",
+    status,
+    sort: SORTS.includes(q.sort) ? q.sort : status === "broken" ? "attempts" : "server",
     lo: lvl && lvl[1] ? Number(lvl[1]) : null, hi: lvl && lvl[2] ? Number(lvl[2]) : null,
     text: (q.q || "").trim().toLowerCase(),
   };
@@ -101,19 +114,21 @@ export function keep(x, f) {
 }
 
 // The filter keys a row's link carries to the quest and back.
-const FILTER_KEYS = ["faction", "zone", "lvl", "status", "q"];
+const FILTER_KEYS = ["faction", "zone", "lvl", "status", "q", "sort"];
 const kept = (q) => Object.fromEntries(FILTER_KEYS.filter((k) => known(q[k])).map((k) => [k, q[k]]));
 
 // ---- parties ----------------------------------------------------------------------
 
-// The quests in a quester's log, linked; the first few, then how many more.
-const CURRENT_SHOWN = 2;
+// The quests in a quester's log, linked: the first few on the card, and the
+// whole log behind a disclosure when the log runs longer than they show.
+const CURRENT_SHOWN = 3;
 function current(m) {
   const qs = (m.current || []).filter((x) => x && x.title);
   if (!qs.length) return notMeasured("no quest on");
   const link = (x) => (known(x.id) ? html`<a href="${build(["quests", String(x.id)], {})}">${x.title}</a>` : x.title);
-  const more = qs.length > CURRENT_SHOWN ? html` <span class="dim">+${qs.length - CURRENT_SHOWN} more</span>` : "";
-  return html`${qs.slice(0, CURRENT_SHOWN).map((x, i) => html`${i ? ", " : ""}${link(x)}`)}${more}`;
+  const joined = (list) => list.map((x, i) => html`${i ? ", " : ""}${link(x)}`);
+  if (qs.length <= CURRENT_SHOWN) return html`${joined(qs)}`;
+  return html`${joined(qs.slice(0, CURRENT_SHOWN))}<details class="qs-logfold"><summary>Show all ${qs.length} current quests</summary><span>${joined(qs)}</span></details>`;
 }
 
 function questerCard(m) {
@@ -121,10 +136,12 @@ function questerCard(m) {
   if (m.present === false) {
     return html`<div class="card qs-quester"><span class="row qs-between">${name}</span><span class="dim qs-s">not on the realm yet</span></div>`;
   }
-  return html`<div class="card qs-quester"><span class="row qs-between">${name}<span class="dim qs-s">${num(m.level) === null ? notMeasured("level not measured") : "L" + m.level}</span></span>
+  const level = num(m.level) === null ? notMeasured("level not measured") : "L" + m.level;
+  const onlineWord = m.online ? html`<span class="qs-on">online</span>` : html`<span class="dim">offline</span>`;
+  return html`<div class="card qs-quester"><span class="row qs-between">${name}<span class="dim qs-s">${level} ${onlineWord}</span></span>
 <span class="qs-s">${m.zone_name || notMeasured("zone not measured")}</span>
-<span class="qs-s">${current(m)}</span>
-<span class="row qs-s"><span class="qs-ok"><i class="ph-fill ph-check-circle" aria-hidden="true"></i>${count(m.completed)} completed</span><span class="qs-bad"><i class="ph-fill ph-x-circle" aria-hidden="true"></i>${count(m.broken)} broken</span></span></div>`;
+<div class="qs-s">${current(m)}</div>
+<span class="row qs-s"><span class="dim">All time</span><span class="qs-ok"><i class="ph-fill ph-check-circle" aria-hidden="true"></i>${count(m.completed)} completed</span><span class="qs-bad"><i class="ph-fill ph-x-circle" aria-hidden="true"></i>${count(m.broken)} broken</span><span>${count(m.taken)} taken</span><span>${count(m.abandoned)} abandoned</span></span></div>`;
 }
 
 // The server lists the questers flat, guild by guild; a party is one guild.
@@ -148,8 +165,10 @@ function parties(read) {
 
 // ---- coverage ---------------------------------------------------------------------
 
-// A stacked bar of the five statuses, with the numbers beside it in text: the
-// bar is the shape, the words are the record. `t` is a COUNTS of the server's.
+// A stacked bar of the reached statuses, with the numbers beside it in
+// text: the bar is the shape, the words are the record. Not reached draws
+// no segment: the track left behind the drawn segments is its share, and
+// the counts line states its number once. `t` is a COUNTS of the server's.
 function bar(t) {
   const total = num(t.quests);
   if (!total) return notMeasured();
@@ -161,7 +180,8 @@ function bar(t) {
   };
   const word = (k) => (num(t[k]) === null ? "not measured" : num(t[k]).toLocaleString("en-US")) + " " + STATUS[k][0].toLowerCase();
   const label = STATUS_FILTER.map(word).join(", ");
-  return html`<span class="qs-bar" role="img" aria-label="${label + " of " + total}" title="${label + " of " + total}">${STATUS_FILTER.map(part)}</span>`;
+  const drawn = STATUS_FILTER.filter((k) => k !== "not_reached");
+  return html`<span class="qs-bar" role="img" aria-label="${label + " of " + total}" title="${label + " of " + total}">${drawn.map(part)}</span>`;
 }
 
 function counts(t) {
@@ -190,51 +210,90 @@ function coverage(data) {
   const zs = zoneTotals(data.quests);
   if (!fs.length && !zs.length) return state("unmeasured", "Coverage not measured", "The server sent no totals with the quests.");
   const faction = fs.map((t) => html`<div class="card qs-cover"><a class="qs-cover-name" href="${build(["quests"], { faction: t.faction })}">${t.label}</a>${bar(t)}${counts(t)}</div>`);
-  const zone = zs.map((t) => html`<li class="qs-zone"><a class="qs-zone-name" href="${build(["quests"], { zone: t.zone })}">${t.zone}</a>${bar(t)}${counts(t)}</li>`);
-  return html`<div class="qs-covers">${faction}</div>${zone.length ? html`<details class="card qs-zones"><summary>Per zone <span class="dim qs-s">${plural(zone.length, "zone")}</span></summary><ul class="qs-zone-list">${zone}</ul></details>` : ""}`;
+  const zone = zs.map((t) => html`<li class="qs-zone"><span class="row qs-between"><a class="qs-zone-name" href="${build(["quests"], { zone: t.zone })}">${t.zone}</a><span class="qs-s"><span class="qs-ok">${count(t.completed)} completed</span> <span class="qs-bad">${count(t.broken)} broken</span></span></span>${bar(t)}</li>`);
+  const caption = fs.length ? html`<p class="dim qs-s qs-caption">Both sides quests count in each.</p>` : "";
+  return html`<div class="qs-covers">${faction}</div>${caption}${zone.length ? html`<details class="card qs-zones"><summary>Per zone <span class="dim qs-s">${plural(zone.length, "zone")}</span></summary><ul class="qs-zone-list">${zone}</ul></details>` : ""}`;
 }
 
 // ---- catalogue ----------------------------------------------------------------------
 
 // Rows drawn at once: a phone holding every quest in the game would crawl,
-// so the list grows by STEP on request. Changing a filter starts it over.
-const STEP = 100;
+// so the list grows by a step on request: 40 on a phone, 100 on a wide
+// screen. Changing a filter starts it over. render() and after() record
+// which one this is from the context they were handed.
+const STEP_WIDE = 100;
+const STEP_NARROW = 40;
+let narrow = false;
+const step = () => (narrow ? STEP_NARROW : STEP_WIDE);
 // Clicks and timed renders run to completion on the same browser thread; they
 // cannot interleave the count update. The filter key resets it on a new list.
-let shown = { key: "", n: STEP };
+let shown = { key: "", n: STEP_WIDE };
 function limitFor(q) {
   const key = JSON.stringify(kept(q));
-  if (shown.key !== key) shown = { key, n: STEP };
+  if (shown.key !== key) shown = { key, n: step() };
   return shown.n;
 }
 
 const levelText = (x) => (num(x.level) === null ? notMeasured() : String(x.level));
 
+// A quest's attempts as a fact: a count the read sent, or the words for a
+// count it did not send. Never a zero the page made up.
+const attemptsText = (x) => (num(x.attempts) === null ? "attempts not measured" : plural(num(x.attempts), "attempt"));
+
 function rows(list, q) {
   const link = (x) => build(["quests", String(x.id)], kept(q));
-  const cards = list.map((x) => html`<a class="card qs-qcard" href="${link(x)}"><span class="row qs-between"><span class="qs-title">${x.title}</span>${statusTag(x.status)}</span><span class="dim qs-s">L${levelText(x)} | ${zoneOf(x) || "zone not measured"} | ${x.faction ? sideName(x.faction) : "faction not measured"} | ${plural(num(x.attempts) || 0, "attempt")}</span></a>`);
+  const cards = list.map((x) => html`<a class="card qs-qcard" href="${link(x)}"><span class="row qs-between"><span class="qs-title">${x.title}</span>${statusTag(x.status)}</span><span class="qs-meta"><span>Level ${levelText(x)}</span><span>${zoneOf(x) || "zone not measured"}</span><span>${x.faction ? sideName(x.faction) : "faction not measured"}</span><span>${attemptsText(x)}</span></span></a>`);
   const tr = list.map((x) => html`<tr><td><a href="${link(x)}">${x.title}</a></td><td class="num">${levelText(x)}</td><td>${zoneOf(x) || notMeasured()}</td><td>${x.faction ? sideName(x.faction) : notMeasured()}</td><td>${statusTag(x.status)}</td><td class="num">${count(x.attempts)}</td></tr>`);
   return html`<div class="qs-qcards">${cards}</div><div class="card qs-table"><table class="table"><thead><tr><th scope="col">Quest</th><th scope="col">Lvl</th><th scope="col">Zone</th><th scope="col">Faction</th><th scope="col">Status</th><th scope="col">Attempts</th></tr></thead><tbody>${tr}</tbody></table></div>`;
+}
+
+// The chosen order applied to the matched list. An unmeasured level or
+// attempt count sorts last, never as zero.
+function sorted(list, sort) {
+  const byTitle = (a, b) => String(a.title || "").localeCompare(String(b.title || ""));
+  if (sort === "level") return [...list].sort((a, b) => (num(a.level) ?? Infinity) - (num(b.level) ?? Infinity) || byTitle(a, b));
+  if (sort === "attempts") return [...list].sort((a, b) => (num(b.attempts) ?? -1) - (num(a.attempts) ?? -1) || byTitle(a, b));
+  if (sort === "title") return [...list].sort(byTitle);
+  return list;
+}
+
+// The active filters in words, for the sticky line: "Broken · Horde ·
+// levels 10 to 20". Empty when nothing is filtered.
+function filterWords(f) {
+  const parts = [];
+  if (f.status) parts.push(STATUS[f.status][0]);
+  if (f.faction) parts.push(sideName(f.faction));
+  if (f.zone) parts.push(f.zone);
+  if (f.lo !== null && f.hi !== null) parts.push("levels " + f.lo + " to " + f.hi);
+  else if (f.lo !== null) parts.push("level " + f.lo + " and up");
+  else if (f.hi !== null) parts.push("up to level " + f.hi);
+  if (f.text) parts.push('"' + f.text + '"');
+  return parts;
 }
 
 export function catalogueBody(data, q) {
   const f = filters(q);
   const all = data.quests || [];
-  const match = all.filter((x) => keep(x, f));
+  const match = sorted(all.filter((x) => keep(x, f)), f.sort);
   if (!all.length) return state("empty", "No quests", "The server sent an empty catalogue.");
   if (!match.length) {
     return html`${state("empty", "No quests match", "No quest fits every filter you have on. Nothing is hidden by the server.")}<div><button type="button" class="btn btn-ghost" data-clear>Clear filters</button></div>`;
   }
   const n = limitFor(q);
-  const more = match.length > n ? html`<button type="button" class="btn btn-secondary qs-more" data-more>Show ${Math.min(STEP, match.length - n)} more</button>` : "";
-  return html`<p class="dim qs-s" data-region="count">${match.length.toLocaleString("en-US")} of ${all.length.toLocaleString("en-US")} quests${match.length > n ? ", the first " + n + " shown" : ""}</p>${rows(match.slice(0, n), q)}${more}`;
+  const more = match.length > n ? html`<button type="button" class="btn btn-secondary qs-more" data-more>Show ${Math.min(step(), match.length - n)} more</button>` : "";
+  const words = filterWords(f);
+  const active = words.length ? html`<span class="qs-active">${words.join(" · ")}</span><button type="button" class="btn btn-ghost qs-clear" data-clear>Clear filters</button>` : "";
+  return html`<div class="qs-sticky"><p class="dim qs-s" data-region="count">${match.length.toLocaleString("en-US")} of ${all.length.toLocaleString("en-US")} quests${match.length > n ? ", the first " + n + " shown" : ""}</p>${active}</div>${rows(match.slice(0, n), q)}${more}`;
 }
 
 // A faction or zone is server text. `html` escapes every interpolated value,
 // quotes included, so one holding `"` or `<` stays inside value="..." and the
 // option's text; the only markup passed through unescaped is raw(" selected").
-function select(id, label, value, options) {
-  return html`<label class="qs-field"><span class="qs-s dim">${label}</span><select class="input" id="${id}" aria-label="${label}"><option value="">All</option>${options.map(([v, text]) => html`<option value="${v}"${v === value ? raw(" selected") : ""}>${text}</option>`)}</select></label>`;
+// `blank` is the empty option's word ("All" on a filter); pass null where
+// every option is a real value, as the sort's are.
+function select(id, label, value, options, blank = "All") {
+  const empty = blank === null ? "" : html`<option value="">${blank}</option>`;
+  return html`<label class="qs-field"><span class="qs-s dim">${label}</span><select class="input" id="${id}" aria-label="${label}">${empty}${options.map(([v, text]) => html`<option value="${v}"${v === value ? raw(" selected") : ""}>${text}</option>`)}</select></label>`;
 }
 
 function controls(data, q) {
@@ -245,7 +304,7 @@ function controls(data, q) {
   const zones = uniq(all.filter((x) => keep(x, { ...f, zone: "", status: "", lo: null, hi: null, text: "" })).map(zoneOf));
   if (f.zone && !zones.includes(f.zone)) zones.unshift(f.zone);
   return html`<div class="qs-controls"><label class="qs-search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input class="input" id="qs-q" type="search" placeholder="Search quests by name, zone or id" value="${q.q || ""}" aria-label="Search quests" autocomplete="off"></label>
-${select("qs-faction", "Faction", f.faction, SIDES)}${select("qs-zone", "Zone", f.zone, zones.map((v) => [v, v]))}${select("qs-status", "Status", f.status, STATUS_FILTER.map((k) => [k, STATUS[k][0]]))}
+${select("qs-faction", "Faction", f.faction, SIDES)}${select("qs-zone", "Zone", f.zone, zones.map((v) => [v, v]))}${select("qs-status", "Status", f.status, STATUS_FILTER.map((k) => [k, STATUS[k][0]]))}${select("qs-sort", "Sort", f.sort, [["server", "Server order"], ["level", "Level"], ["attempts", "Most attempts"], ["title", "Title"]], null)}
 <fieldset class="qs-field qs-levels"><legend class="qs-s dim">Level</legend><span class="row"><input class="input" id="qs-lo" type="number" inputmode="numeric" min="1" max="80" placeholder="From" aria-label="Lowest level" value="${f.lo === null ? "" : f.lo}"><span class="dim">to</span><input class="input" id="qs-hi" type="number" inputmode="numeric" min="1" max="80" placeholder="To" aria-label="Highest level" value="${f.hi === null ? "" : f.hi}"></span></fieldset></div>`;
 }
 
@@ -290,12 +349,22 @@ function summary(data) {
   return n("completed") + " quests completed and " + n("broken") + " found broken, of " + n("quests") + ".";
 }
 
+// The door to the actionable sets: the broken and the taken, counted off the
+// read's own totals, one tap each to the catalogue already filtered there.
+function chips(data) {
+  const t = data.totals || {};
+  if (num(t.quests) === null) return "";
+  const chip = (status, label) => html`<a class="qs-chip" href="${build(["quests"], { status })}">${label} · ${count(t[status])}</a>`;
+  return html`<div class="qs-chips">${chip("broken", "Broken")}${chip("taken", "Taken")}</div>`;
+}
+
 export default {
   css: ["views/quests.css"],
   reads: (ctx) => (ctx.params.id ? [questPath(ctx.params.id)] : [QUESTERS, QUESTS]),
   every: 30000,
   title: (ctx) => (ctx.params.id ? "Quest " + ctx.params.id : "Quests"),
   render(ctx) {
+    narrow = !!ctx.isPhone;
     if (ctx.params.id) return html`<div class="qs">${questPage(ctx)}</div>`;
     const quests = ctx.get(QUESTS);
     const ok = ready(quests);
@@ -303,10 +372,11 @@ export default {
     const wait = pendingRead(quests, 4);
     const cover = wait || (ok ? coverage(quests.data) : state("unmeasured", "Quests not measured", "The quests read answered with no catalogue."));
     const cat = ok ? html`${controls(quests.data, q)}<div data-region="catalogue">${catalogueBody(quests.data, q)}</div>` : wait || "";
-    return html`<div class="qs">${pageHead("Quests", ok ? summary(quests.data) : "")}${sectionHead("", "Quester parties")}${parties(ctx.get(QUESTERS))}${sectionHead("", "Coverage")}${cover}${sectionHead("", "Catalogue")}<div class="qs-catalogue">${cat}</div></div>`;
+    return html`<div class="qs">${pageHead("Quests", ok ? summary(quests.data) : "")}${ok ? chips(quests.data) : ""}${sectionHead("", "Quester parties")}<p class="dim qs-s qs-parties-note">Two dedicated parties proving every quest can be played, one per guild.</p>${parties(ctx.get(QUESTERS))}${sectionHead("", "Coverage")}${cover}${sectionHead("", "Catalogue")}<div class="qs-catalogue">${cat}</div></div>`;
   },
   after(main, ctx) {
     if (ctx.params.id) return;
+    narrow = !!ctx.isPhone;
     const data = ctx.get(QUESTS).data;
     const region = main.querySelector("[data-region=catalogue]");
     if (!data || !region) return;
@@ -318,7 +388,15 @@ export default {
     const on = (id, ev, fn) => { const el = main.querySelector("#" + id); if (el) el.addEventListener(ev, fn); };
     on("qs-q", "input", () => redraw(setQuery({ q: val("qs-q") })));
     on("qs-zone", "change", () => redraw(setQuery({ zone: val("qs-zone") })));
-    on("qs-status", "change", () => redraw(setQuery({ status: val("qs-status") })));
+    on("qs-sort", "change", () => redraw(setQuery({ sort: val("qs-sort") })));
+    on("qs-status", "change", () => {
+      const q2 = setQuery({ status: val("qs-status") });
+      redraw(q2);
+      // A broken list with no sort chosen changes order under the reader
+      // (most attempts first); keep the select honest about it.
+      const s = main.querySelector("#qs-sort");
+      if (s) s.value = filters(q2).sort;
+    });
     on("qs-lo", "input", () => redraw(setQuery({ lvl: levels() })));
     on("qs-hi", "input", () => redraw(setQuery({ lvl: levels() })));
     // The controls and the list together, when the controls change too: a new
@@ -336,7 +414,7 @@ export default {
     on("qs-faction", "change", () => redrawAll(setQuery({ faction: val("qs-faction"), zone: "" }), "qs-faction"));
     region.addEventListener("click", (e) => {
       if (e.target.closest("[data-more]")) {
-        shown.n += STEP;
+        shown.n += step();
         redraw(liveQuery());
       } else if (e.target.closest("[data-clear]")) {
         redrawAll(setQuery({ faction: "", zone: "", lvl: "", status: "", q: "" }), "qs-q");
