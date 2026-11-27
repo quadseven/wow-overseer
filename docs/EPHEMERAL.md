@@ -309,17 +309,35 @@ was written, whatever it was; exit 2 means the harness could not write one.
 
 Two rules keep a PASS honest. A scalar expectation needs exactly one row and one
 column; any other shape is INVALID, so row order can never hide a failing value.
-And a decree that arranges an instance cannot PASS without a held precondition
-that reads `log_encounter` (a real FROM or JOIN, not a name in a string), the
-core's own credited-encounter record. That observation must reject zero credits
+An instance run also needs a held precondition backed by a core encounter record.
+The core writes `log_encounter` for Wrath raids. A precondition using that source
+must read the table and reject zero credits
 (an expectation like `>= 0` is refused) and be bounded to this run, with
 `time >= @t0` and the arranged instance's map as conjuncts of a flat AND chain in
 a single plain SELECT (no OR, NOT, XOR, BETWEEN, parentheses, UNION or subquery,
 so no row from an earlier run can satisfy it). The observation reads
 `log_encounter` exactly once (no self-join) and both bounds apply to that one
-alias, or are unqualified when it is the only table; a run's
-completion flag is never evidence, and a run with no credit is INVALID. The
-judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
+alias, or are unqualified when it is the only table. A run with no core encounter
+evidence is INVALID.
+
+Use a typed `encounter` end precondition for the supported bosses in Blackrock
+Depths and Molten Core. Its alias must identify the decree's only arranged
+instance, on the boss's map and bound to a member of the cast. The judge reads
+the same instance save before any act and again at the end. A missing or malformed
+save or a selected encounter that is already DONE before the first act makes
+the run INVALID. The precondition holds when a selected encounter reaches DONE
+in that instance.
+
+- `encounter: {instance: brd, boss: Magmus}` reads the Iron Hall state in Blackrock
+  Depths.
+- `encounter: {instance: mc, boss: "Majordomo Executus"}` requires the core state
+  set when the last add dies and Majordomo surrenders.
+- `encounter: {instance: mc, boss: Ragnaros}` requires the core state set on
+  Ragnaros's death.
+- `encounter: {instance: mc, boss: "Any Molten Core boss"}` accepts any of the ten
+  Molten Core encounters on an instance where all ten began incomplete.
+
+The judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`; without them it prints an INVALID verdict and exits 2,
 because there is nowhere to write the result.
 

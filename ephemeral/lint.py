@@ -970,11 +970,11 @@ def _observe(lint, doc, whos, aliases):
         if lint.keys(
             path,
             o,
-            ("name", "role", "sql", "log", "expect", "when", "online"),
+            ("name", "role", "sql", "log", "expect", "when", "online", "encounter"),
             ("name", "role"),
         ):
             roles.append(o.get("role"))
-            _observe_one(lint, path, o, seen, known_var)
+            _observe_one(lint, path, o, seen, known_var, doc)
     lint.ensure(
         "precondition" in roles,
         "decree.observe",
@@ -986,7 +986,7 @@ def _observe(lint, doc, whos, aliases):
     )
 
 
-def _observe_one(lint, path, o, seen, known_var):
+def _observe_one(lint, path, o, seen, known_var, doc):
     name = o.get("name")
     if not isinstance(name, str) or not _KEBAB.match(name):
         lint.err(f"{path}.name", "schema", "must be kebab-case")
@@ -1000,6 +1000,14 @@ def _observe_one(lint, path, o, seen, known_var):
         "schema",
         "must be precondition or check",
     )
+    if "encounter" in o:
+        lint.ensure(
+            encounter_instance(doc, o) is not None,
+            f"{path}.encounter",
+            "schema",
+            "requires an end precondition for a supported boss in the only arranged, cast-bound instance of its map",
+        )
+        return
     if "online" in o:
         _observe_online(lint, path, o)
         return
@@ -1010,6 +1018,50 @@ def _observe_one(lint, path, o, seen, known_var):
         _observe_sql(lint, path, o, known_var)
     if "log" in o:
         _observe_log(lint, path, o)
+
+
+def _encounter_selector(observation):
+    """Read a supported end precondition's instance alias and boss map."""
+    encounter = observation.get("encounter")
+    if (
+        not isinstance(encounter, dict)
+        or set(encounter) != {"boss", "instance"}
+        or not isinstance(encounter["boss"], str)
+        or encounter["boss"] not in gamedata.INSTANCE_ENCOUNTERS
+        or not isinstance(encounter["instance"], str)
+        or observation.get("role") != "precondition"
+        or observation.get("when") != "end"
+        or {"sql", "log", "online", "expect"} & observation.keys()
+    ):
+        return None
+    map_name, _ = gamedata.INSTANCE_ENCOUNTERS[encounter["boss"]]
+    return encounter["instance"], map_name
+
+
+def encounter_instance(doc, observation):
+    """The alias and map ID of the one cast-bound save this selector can read."""
+    selector = _encounter_selector(observation)
+    if selector is None:
+        return None
+    alias, map_name = selector
+    arrange, cast = doc.get("arrange"), doc.get("cast")
+    if not isinstance(arrange, list) or not isinstance(cast, list):
+        return None
+    instances = [
+        e["instance"] for e in arrange if isinstance(e, dict) and "instance" in e
+    ]
+    if len(instances) != 1 or not isinstance(instances[0], dict):
+        return None
+    instance = instances[0]
+    bound = instance.get("bind")
+    if (
+        instance.get("as") == alias
+        and instance.get("map") == map_name
+        and isinstance(bound, str)
+        and any(isinstance(e, dict) and e.get("who") == bound for e in cast)
+    ):
+        return alias, gamedata.INSTANCE_MAPS[map_name]
+    return None
 
 
 def _observe_online(lint, path, o):
