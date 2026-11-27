@@ -72,6 +72,13 @@ observe:
         AND created_at >= @t0
         AND (phase = 'ENTER' OR (phase = 'IDLE' AND detail LIKE '%never reached a quorum at the door%'))
     expect: {scalar: ">= 1"}
+  # The hold warning names the shortage during the extra wait. The end
+  # warning announces the decision and the IDLE event confirms release.
+  - name: the-hold-warned-about-the-shortfall
+    role: check
+    log:
+      pattern: "raid run for family 'Grug' holds at the door - [0-5] of 5, short [0-9]+ seats, [0-9]+ tanks, [0-9]+ healers"
+      expect: {at_least: 1}
   - name: the-shortfall-was-logged
     role: check
     log:
