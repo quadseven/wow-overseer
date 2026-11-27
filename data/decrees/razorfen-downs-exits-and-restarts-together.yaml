@@ -1,19 +1,23 @@
 # A Razorfen Downs campaign exits through trigger 444 and starts its next run
 # with the same five members together (mod-overseer issue 1269).
 # The start precondition requires a five-member family; another size is INVALID.
+# No run opens while a member has 3 or fewer free backpack slots, so each member
+# starts with 8 free (room for the first run's loot before the second opens).
+# The full class gives the worldserver the larger memory limit: the lean one was
+# OOMKilled at 3584Mi with every template family loaded.
 # Fix: mod-overseer pull 1277.
 decree: v1
 id: razorfen-downs-exits-and-restarts-together
 proves:
   - {repo: quadseven/mod-overseer, issue: 1269, criterion: "a Razorfen Downs attempt walks all five members out through trigger 444, then starts the same campaign's next run with the full family together"}
 fix: {repo: quadseven/mod-overseer, commit: "8a98f69519e4a384a0c2f78d7849aeb5f12994f1"}
-world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
+world: {class: full, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
 duration: 90m
 cast:
   - who: family:grug
-    set: {alive: true, health_pct: 100, at: {creature: "Amnennar the Coldbringer"}}
-    ceiling: "nothing granted but position"
+    set: {alive: true, health_pct: 100, at: {creature: "Amnennar the Coldbringer"}, free_backpack_slots: 8}
+    ceiling: "nothing granted but position and eight free backpack slots; no levels, items, gold or gear"
 arrange:
   - group: {members: family:grug, leader: Grug}
   - instance: {map: "Razorfen Downs", as: rfd, bind: family:grug}
@@ -27,13 +31,12 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast) AND map_id = 129 AND instance_id = @rfd
     expect: {scalar: "= 5"}
+  # The core writes log_encounter only for Wrath raids, so the credit is read
+  # from the arranged instance's completed-encounter mask.
   - name: encounter-credited
     role: precondition
     when: end
-    sql: |
-      SELECT COUNT(*) FROM log_encounter
-      WHERE map = 129 AND time >= @t0
-    expect: {scalar: ">= 1"}
+    encounter: {instance: rfd, boss: "Any Razorfen Downs boss"}
   - name: all-five-walk-out-through-trigger-444
     role: check
     log:
@@ -55,9 +58,8 @@ observe:
     when: end
     sql: |
       SELECT COUNT(DISTINCT s.guid) FROM overseer_snapshot s
-      JOIN overseer_dungeon_run_damage d ON d.instance_id = s.instance_id
-      JOIN overseer_dungeon_run next_run ON next_run.id = d.run_id
-      WHERE s.guid IN (@cast) AND s.map_id = 129 AND next_run.map_id = 129
+      JOIN overseer_dungeon_run next_run ON FIND_IN_SET(s.name, next_run.members) > 0
+      WHERE s.guid IN (@cast) AND next_run.map_id = 129
         AND next_run.family = 'Grug' AND next_run.run_number = 2 AND next_run.started_at >= @t0
     expect: {scalar: "= 5"}
   - name: no-exit-hearth-was-used
