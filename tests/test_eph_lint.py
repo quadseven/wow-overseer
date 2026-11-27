@@ -4,6 +4,7 @@ import contextlib
 import copy
 import io
 import pathlib
+import sqlite3
 import unittest
 
 from ephemeral import anchors as anchors_mod
@@ -268,6 +269,65 @@ class CoordinatesTest(unittest.TestCase):
         d = doc()
         d["cast"][0]["set"]["at"] = {"graveyard": "nearest"}
         self.assertIn("schema", rules(d))
+
+
+class RaidSeatFixtureTest(unittest.TestCase):
+    def test_raid_seats_need_one_bounded_and_distinct_cast_selection(self):
+        seat = {"who": "Grug", "role": "tank"}
+        fixture = {"family": "Grug", "keyword": "moltencore", "seats": [seat]}
+        d = doc()
+        d["arrange"] = [{"raid_seats": fixture}]
+        self.assertEqual(errors(d), [])
+        mutations = [
+            {"family": ""}, {"keyword": "too-long-or-not-a-raid-keyword"}, {"seats": []},
+            {"seats": [seat, seat]}, {"seats": [{**seat, "who": "Zug"}]},
+            {"seats": [{**seat, "role": "other"}]},
+        ]  # fmt: skip
+        for patch in mutations:
+            with self.subTest(patch=patch):
+                d["arrange"] = [{"raid_seats": {**fixture, **patch}}]
+                self.assertTrue(errors(d))
+        d["arrange"] = [{"raid_seats": fixture}] * 2
+        self.assertTrue(errors(d))
+
+    def test_under_quorum_decree_requires_a_decision_and_counts_real_entry(self):
+        d = loads((ROOT / "data/decrees/raid-under-quorum-at-door.yaml").read_text())
+        check = next(
+            o for o in d["observe"] if o["name"] == "no-enter-event-was-written"
+        )
+        self.assertEqual(check["expect"], {"scalar": "= 0"})
+        decision = next(
+            o
+            for o in d["observe"]
+            if o["name"] == "the-order-reached-a-decision-at-the-door"
+        )
+        self.assertEqual(decision["role"], "precondition")
+        self.assertEqual(decision["expect"], {"scalar": ">= 1"})
+        params = {"t0": 10}
+        with contextlib.closing(sqlite3.connect(":memory:")) as db:
+            db.execute(
+                "CREATE TABLE overseer_dungeon_run_event (family, portal, kind, phase, created_at, detail)"
+            )
+            insert = "INSERT INTO overseer_dungeon_run_event VALUES (?, ?, ?, ?, ?, ?)"
+            db.executemany(insert, [
+                ("Grug", "moltencore", "phase", "ASSEMBLE", 20, ""),
+                ("Grug", "moltencore", "phase", "IDLE", 21, "order canceled"),
+                ("Grug", "moltencore", "phase", "ENTER", 5, ""),
+                ("Zug", "moltencore", "phase", "ENTER", 20, ""),
+                ("Grug", "blackwinglair", "phase", "ENTER", 20, ""),
+            ])  # fmt: skip
+            self.assertEqual(db.execute(decision["sql"], params).fetchone(), (0,))
+            self.assertEqual(db.execute(check["sql"], params).fetchone(), (0,))
+            db.execute(insert, ("Grug", "moltencore", "phase", "ENTER", 22, ""))
+            self.assertEqual(db.execute(decision["sql"], params).fetchone(), (1,))
+            self.assertEqual(db.execute(check["sql"], params).fetchone(), (1,))
+            db.execute("DELETE FROM overseer_dungeon_run_event WHERE created_at = 22")
+            db.execute(insert, (
+                "Grug", "moltencore", "phase", "IDLE", 22,
+                "the raid never reached a quorum at the door; the order ends",
+            ))  # fmt: skip
+            self.assertEqual(db.execute(decision["sql"], params).fetchone(), (1,))
+            self.assertEqual(db.execute(check["sql"], params).fetchone(), (0,))
 
 
 class GmAndAuctionTest(unittest.TestCase):

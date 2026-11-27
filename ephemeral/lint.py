@@ -702,6 +702,7 @@ def _anchor_captured(lint, path, v):
 
 def _arrange(lint, doc, whos):
     aliases = set()
+    raid_seats_seen = False
     arrange = doc.get("arrange")
     if arrange is None:
         return aliases
@@ -712,7 +713,9 @@ def _arrange(lint, doc, whos):
         path = f"decree.arrange[{i}]"
         if not isinstance(entry, dict) or len(entry) != 1:
             lint.err(
-                path, "schema", "must be a one-key mapping: instance, group or creature"
+                path,
+                "schema",
+                "must be a one-key mapping: instance, group, creature or raid_seats",
             )
             continue
         kind, v = next(iter(entry.items()))
@@ -724,9 +727,59 @@ def _arrange(lint, doc, whos):
             _arrange_group(lint, f"{path}.group", v, whos)
         elif kind == "creature":
             _arrange_creature(lint, f"{path}.creature", v, aliases)
+        elif kind == "raid_seats":
+            seat_path = f"{path}.raid_seats"
+            lint.ensure(
+                not raid_seats_seen, seat_path, "schema", "may appear only once"
+            )
+            raid_seats_seen = True
+            _arrange_raid_seats(lint, seat_path, v, whos)
         else:
             lint.err(path, "schema", f"unknown arrange kind {kind!r}")
     return aliases
+
+
+def _arrange_raid_seats(lint, path, v, whos):
+    fields = ("family", "keyword", "seats")
+    if not lint.keys(path, v, fields, fields):
+        return
+    family, keyword, seats = (v[k] for k in fields)
+    lint.ensure(
+        isinstance(family, str) and _NAME.fullmatch(family),
+        f"{path}.family",
+        "schema",
+        "must be a family name",
+    )
+    lint.ensure(
+        isinstance(keyword, str) and len(keyword) <= 20 and _ALIAS.fullmatch(keyword),
+        f"{path}.keyword",
+        "schema",
+        "must be a lowercase raid keyword of at most 20 characters",
+    )
+    if not isinstance(seats, list) or not seats:
+        lint.err(f"{path}.seats", "schema", "must be a nonempty list")
+        return
+    seen = set()
+    for i, seat in enumerate(seats):
+        seat_path = f"{path}.seats[{i}]"
+        if lint.keys(seat_path, seat, ("who", "role"), ("who", "role")):
+            who = seat["who"]
+            if isinstance(who, str) and who in whos:
+                lint.ensure(
+                    who not in seen,
+                    f"{seat_path}.who",
+                    "schema",
+                    "duplicate seat selector",
+                )
+                seen.add(who)
+            else:
+                lint.err(f"{seat_path}.who", "schema", "must name a cast entry")
+            lint.ensure(
+                seat["role"] in ("tank", "healer", "dps"),
+                f"{seat_path}.role",
+                "schema",
+                "must be tank, healer or dps",
+            )
 
 
 def _arrange_instance(lint, path, v, whos, aliases):
