@@ -111,9 +111,10 @@ class WorldRows(unittest.TestCase):
         )
 
     def test_beren_peril_ticket_explains_a_stall_as_an_observation(self):
-        # The quest row and creature counts mirror questcatalogue.QUESTS_SQL
-        # and SPAWN_COUNTS_SQL. Ledger and counter rows mirror
-        # questtickets.BROKEN_SQL and OBJECTIVES_SQL.
+        # The quest row and creature counts come from the ticket's world rows
+        # in the shape questcatalogue.QUESTS_SQL and SPAWN_COUNTS_SQL reads.
+        # The ledger reason is written by questers.BROKEN_SQL and read by
+        # questtickets.BROKEN_SQL; counters are read by OBJECTIVES_SQL.
         world_row = quest_row(
             516,
             title="Beren's Peril",
