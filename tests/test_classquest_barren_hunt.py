@@ -54,6 +54,38 @@ class BarrenHunt(unittest.TestCase):
         hunts = hunts_after_a_stall(looted(1, 20), looted(2, 12), looted(3, 4))
         self.assertEqual(len(hunts.get("Aa").tried), 1)
 
+    def test_a_delayed_kill_row_does_not_undo_a_pack_reroll(self):
+        hunts = classquest.Hunts()
+        member = who("Aa", **HUNTER)
+        book = two_packs()
+        first, _ = guildjobs._class_move(member, book, recent(), hunts, 0.0)
+        rerolled, _ = guildjobs._class_move(
+            member, book, recent(), hunts, float(STALL_SECONDS + 5)
+        )
+        self.assertNotEqual(first.spot, rerolled.spot)
+
+        next_move, _ = guildjobs._class_move(
+            member, book, recent(barren(1, 2)), hunts, float(STALL_SECONDS + 65)
+        )
+        self.assertEqual(next_move.spot, rerolled.spot)
+
+        advanced = who("Aa", quest_progress={1498: 2}, **HUNTER)
+        guildjobs._class_move(
+            advanced, book, recent(barren(1, 2)), hunts, float(STALL_SECONDS + 70)
+        )
+        self.assertEqual(hunts.get("Aa").progress, 2)
+        self.assertEqual(hunts.get("Aa").tried, ())
+
+    def test_a_delayed_kill_row_does_not_reopen_a_given_up_quest(self):
+        hunts = classquest.Hunts()
+        hunts.give_up("Aa", 1498, float(STALL_SECONDS))
+        now = float(STALL_SECONDS + 65)
+        move, _ = guildjobs._class_move(
+            who("Aa", **HUNTER), two_packs(), recent(barren(1, 2)), hunts, now
+        )
+        self.assertIsNone(move)
+        self.assertEqual(hunts.state("Aa", now)[1], frozenset({1498}))
+
     def test_a_moved_quest_counter_restarts_the_clock_whatever_the_rows_say(self):
         # The criterion's progress half: Hunts.observe sees the counter move and
         # starts the clock over, so three kill rows at one pack are not a stall.
