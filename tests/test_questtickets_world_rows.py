@@ -261,12 +261,12 @@ class WorldRows(unittest.TestCase):
             "creature entries 1172, 1173, 1174, 1175, 1176, 1177, 1202", ticket
         )
         self.assertIn(
-            "The take step asks the world for a living creature linked to the quest "
-            "within the 20-yard arrival radius.",
+            "The take was refused because no living creature linked to the quest "
+            "matched within the 20-yard arrival radius at that time.",
             ticket,
         )
         self.assertIn(
-            "The refusal means none matched then; the stored rows do not distinguish "
+            "This explains the ledger reason, but the stored rows do not distinguish "
             "a missing, distant, dead, or otherwise unavailable creature.",
             ticket,
         )
@@ -329,12 +329,12 @@ class WorldRows(unittest.TestCase):
         self.assertIn("gameobject loot entries 2742", ticket)
         self.assertIn("Zone: Teldrassil", ticket)
         self.assertIn(
-            "The take step asks the world for a living creature linked to the quest "
-            "within the 20-yard arrival radius.",
+            "The take was refused because no living creature linked to the quest "
+            "matched within the 20-yard arrival radius at that time.",
             ticket,
         )
         self.assertIn(
-            "The refusal means none matched then; the stored rows do not distinguish "
+            "This explains the ledger reason, but the stored rows do not distinguish "
             "a missing, distant, dead, or otherwise unavailable creature.",
             ticket,
         )
