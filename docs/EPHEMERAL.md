@@ -196,12 +196,14 @@ and checkbox rules. After siblings are gone, `collect` only prunes numeric
 results once they are archived locally and the retention window has elapsed.
 
 A submission error after preflight stops the command and returns an error.
-Each subsequent non-dry-run `submit --due` expires staging reservations at
-least one hour old, even when there are no due proofs. Expiry checks both
-the UID and resource version, so if the receipt was committed just before
-expiry, the delete conflicts and the committed batch survives. Kubernetes
-then removes expired reservations' Jobs and inputs in the background. A
-retry can use the same decree name as soon as its reservation is gone.
+If staging fails, the command attempts to remove the original reservation.
+Each subsequent non-dry-run `submit --due` also expires staging reservations
+at least one hour old, even when there are no due proofs. This recovers
+staging after a process interruption or a failed cleanup. Both deletions
+check the reservation's UID and resource version. If a receipt was committed
+first, or a new reservation took the name, the delete conflicts and preserves
+it. Kubernetes removes the deleted reservation's Jobs and inputs in the
+background. A retry can use the same decree name after its reservation is gone.
 Retain committed receipts. Deleting one also deletes its remaining Jobs.
 The path form of `submit` still supports manual image, config and single-arm
 options.

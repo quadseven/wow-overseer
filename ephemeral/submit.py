@@ -618,8 +618,35 @@ def _check_stage_request(kube, namespace, decree_id, arm):
 
 
 def _stage_batch(cfg, kube, pending, record, raw, control_files, treatment_files):
-    batch, decree_id, sha = (record[k] for k in ("batch", "decree_id", "decree_sha256"))
     reservation = _reserve_batch(kube, cfg.namespace, record)
+    files = {"control": control_files, "treatment": treatment_files}
+    try:
+        members = _stage_members(kube, pending, record, raw, files, reservation)
+        _commit_batch(kube, cfg.namespace, record, members, reservation)
+    except SubmitError as error:
+        # The original version can only delete the still-staging marker.
+        # A commit whose response was lost changes the server-side version.
+        try:
+            kube.delete_configmap_version(
+                {
+                    "metadata": {"namespace": cfg.namespace, **reservation},
+                }
+            )
+        except KubeError as cleanup_error:
+            raise SubmitError(
+                f"{error}. Staging cleanup failed: {cleanup_error}"
+            ) from error
+        raise
+    try:
+        batchseal.install_record(cfg.results_dir, record)
+    except (OSError, ValueError) as exc:
+        raise SubmitError(
+            f"batch {record['batch']} committed but local record was not installed: {exc}"
+        ) from exc
+
+
+def _stage_members(kube, pending, record, raw, arm_files, reservation):
+    batch, decree_id, sha = (record[k] for k in ("batch", "decree_id", "decree_sha256"))
     owner = {
         "apiVersion": "v1",
         "kind": "ConfigMap",
@@ -633,7 +660,6 @@ def _stage_batch(cfg, kube, pending, record, raw, control_files, treatment_files
         labels.pop(runids.JOB_LABEL_ARM, None)
         labels[batchseal.STAGED_LABEL] = batch
         job["metadata"]["ownerReferences"] = [owner]
-        files = control_files if arm == "control" else treatment_files
         try:
             members[rid] = _create_run(
                 kube,
@@ -644,19 +670,13 @@ def _stage_batch(cfg, kube, pending, record, raw, control_files, treatment_files
                 batch,
                 decree_id,
                 raw,
-                files,
+                arm_files[arm],
                 sha,
                 staged=True,
             )
         except KubeError as exc:
             raise SubmitError(f"could not stage run {rid}: {exc}") from exc
-    _commit_batch(kube, cfg.namespace, record, members, reservation)
-    try:
-        batchseal.install_record(cfg.results_dir, record)
-    except (OSError, ValueError) as exc:
-        raise SubmitError(
-            f"batch {batch} committed but local record was not installed: {exc}"
-        ) from exc
+    return members
 
 
 def _reserve_batch(kube, namespace, record):
@@ -846,7 +866,7 @@ def _create_run(
         "data": data,
     }  # fmt: skip
     if staged:
-        # A failed or interrupted staged write is left inert for reconciliation.
+        # The staging reservation owns the Job and cascades any cleanup.
         cm["immutable"] = True
         inputs = kube.create(cm)
         return _staged_member(job_uid, inputs, cm)

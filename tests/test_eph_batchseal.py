@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 import test_eph_due_submit as due_fixture
-from ephemeral import batchseal, collect, dispatch, due, kube, runids, submit
+from ephemeral import batchseal, collect, dispatch, due, runids, submit
 from test_eph_dispatch import GIB, T0, iso
 
 
@@ -120,15 +120,15 @@ class BatchFlowTest(unittest.TestCase):
         fixture = self.fixture
         create = fixture.kube.create
 
-        def fail_first_treatment_input(obj):
+        def interrupt_first_treatment_input(obj):
             if obj["kind"] == "ConfigMap" and obj["metadata"]["name"].endswith("-t1"):
-                raise kube.KubeError("treatment input failed")
+                raise KeyboardInterrupt
             return create(obj)
 
         with mock.patch.object(
-            fixture.kube, "create", side_effect=fail_first_treatment_input
+            fixture.kube, "create", side_effect=interrupt_first_treatment_input
         ):
-            with self.assertRaisesRegex(submit.SubmitError, "treatment input failed"):
+            with self.assertRaises(KeyboardInterrupt):
                 fixture.submit_staged()
         return fixture.marker()
 
@@ -148,7 +148,7 @@ class BatchFlowTest(unittest.TestCase):
             ),
         ] = []
 
-    def test_input_failure_stays_inert_and_aged_cleanup_allows_retry(self):
+    def test_interrupted_staging_stays_inert_and_aged_cleanup_allows_retry(self):
         fixture, ns = self.fixture, self.ns
         reservation = self.interrupt_staging()
         _, batch = batchseal.parse_reservation(reservation, ns)

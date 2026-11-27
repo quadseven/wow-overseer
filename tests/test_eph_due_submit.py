@@ -200,7 +200,7 @@ class DueSubmitIntegrationTest(fixture.Base):
             marker["metadata"]["resourceVersion"],
         )
 
-    def test_failed_input_keeps_partial_stage_inert_and_without_receipt(self):
+    def test_failed_input_discards_its_stage_and_allows_immediate_retry(self):
         original = self.cluster.v_create
 
         def fail_third_inputs(ns, args, body):
@@ -217,17 +217,49 @@ class DueSubmitIntegrationTest(fixture.Base):
             ),
         ):
             self.submit_staged(out=output.append)
-        worlds = self.cluster.of("jobs", "wow-ephemeral")
-        self.assertEqual(len(worlds), 3)
-        self.assertTrue(all(job["spec"]["suspend"] for job in worlds))
-        self.assertEqual(self.kube.list("jobs", selector=runids.JOB_LABEL_ARM), [])
-        self.assertIsNone(batchseal.parse(self.marker(), self.cfg.namespace))
+        self.assertIsNone(self.marker())
+        self.assertEqual(self.cluster.of("jobs", self.cfg.namespace), [])
         self.assertEqual(
-            batchseal.parse_reservation(self.marker(), self.cfg.namespace)[0],
-            self.decree_id,
+            self.kube.list("configmaps", selector=runids.JOB_LABEL_REALM), []
         )
         self.assertFalse((pathlib.Path(self.cfg.results_dir) / self.decree_id).exists())
         self.assertEqual(output, [])
+        record = self.submit_staged()
+        self.assertEqual(batchseal.parse(self.marker(), self.cfg.namespace)[0], record)
+
+    def test_rejected_commit_discards_its_stage(self):
+        with (
+            mock.patch.object(
+                self.cluster, "v_replace", return_value=(1, "", "Forbidden")
+            ),
+            self.assertRaisesRegex(submit.SubmitError, "reservation was not committed"),
+        ):
+            self.submit_staged()
+        self.assertIsNone(self.marker())
+        self.assertEqual(self.cluster.of("jobs", self.cfg.namespace), [])
+
+    def test_failed_cleanup_reports_both_errors_and_leaves_the_stage_inert(self):
+        original = self.cluster.v_create
+
+        def fail_input(ns, args, body):
+            if json.loads(body)["metadata"]["name"].startswith("eph-run-"):
+                return 1, "", "input create was rejected"
+            return original(ns, args, body)
+
+        with (
+            mock.patch.object(self.cluster, "v_create", side_effect=fail_input),
+            mock.patch.object(
+                self.cluster, "v_delete", return_value=(1, "", "Forbidden")
+            ),
+            self.assertRaisesRegex(
+                submit.SubmitError, r"input create was rejected.*cleanup.*Forbidden"
+            ),
+        ):
+            self.submit_staged()
+        self.assertIsNotNone(
+            batchseal.parse_reservation(self.marker(), self.cfg.namespace)
+        )
+        self.assertEqual(self.kube.list("jobs", selector=runids.JOB_LABEL_ARM), [])
 
     def test_unconfirmed_input_immutability_prevents_batch_commit(self):
         original = self.cluster.v_create
@@ -250,11 +282,8 @@ class DueSubmitIntegrationTest(fixture.Base):
             ),
         ):
             self.submit_staged()
-        self.assertIsNone(batchseal.parse(self.marker(), self.cfg.namespace))
-        self.assertEqual(
-            batchseal.parse_reservation(self.marker(), self.cfg.namespace)[0],
-            self.decree_id,
-        )
+        self.assertIsNone(self.marker())
+        self.assertEqual(self.cluster.of("jobs", self.cfg.namespace), [])
 
     def test_numeric_proves_and_box_are_preserved_in_the_receipt(self):
         box = "the family leaves the bar without a patron dying"
@@ -290,6 +319,20 @@ class DueSubmitIntegrationTest(fixture.Base):
             self.submit_staged()
         self.assertEqual(len(self.cluster.of("jobs", "wow-ephemeral")), 6)
 
+    def test_local_record_failure_does_not_roll_back_the_committed_stage(self):
+        with (
+            mock.patch.object(
+                batchseal, "install_record", side_effect=OSError("disk full")
+            ),
+            self.assertRaisesRegex(
+                submit.SubmitError, "committed but local record was not installed"
+            ),
+        ):
+            self.submit_staged()
+        self.assertIsNotNone(batchseal.parse(self.marker(), self.cfg.namespace))
+        self.assertEqual(len(self.cluster.of("jobs", self.cfg.namespace)), 6)
+        self.assertFalse(any("delete" in args for args, _ in self.cluster.calls))
+
     def test_ambiguous_marker_never_removes_potentially_committed_runs(self):
         original_replace = self.cluster.v_replace
         original_get = self.cluster.v_get
@@ -317,10 +360,18 @@ class DueSubmitIntegrationTest(fixture.Base):
             ),
         ):
             self.submit_staged(out=output.append)
-        self.assertIsNotNone(batchseal.parse(self.marker(), self.cfg.namespace))
+        marker = self.marker()
+        self.assertIsNotNone(batchseal.parse(marker, self.cfg.namespace))
         self.assertEqual(len(self.cluster.of("jobs", "wow-ephemeral")), 6)
         self.assertFalse((pathlib.Path(self.cfg.results_dir) / self.decree_id).exists())
-        self.assertFalse(any("delete" in args for args, _ in self.cluster.calls))
+        (options,) = [
+            json.loads(body) for args, body in self.cluster.calls if "delete" in args
+        ]
+        preconditions = options["preconditions"]
+        self.assertEqual(preconditions["uid"], marker["metadata"]["uid"])
+        self.assertNotEqual(
+            preconditions["resourceVersion"], marker["metadata"]["resourceVersion"]
+        )
         self.assertEqual(output, [])
 
     def test_competing_reservation_cannot_stage_jobs(self):
