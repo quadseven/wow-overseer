@@ -266,6 +266,11 @@ FAILED = "the quest failed in the log"
 OFF_HOME_MAP = (
     "its objective creature %d has no spawn on the quest's map (%d on other maps)"
 )
+# The world rows' fact added to STALLED for an objective creature with spawns
+# but none in the quester's current zone.
+NO_SPAWNS_HERE = (
+    "its objective creature %d has no spawn in this zone (%d total)"
+)
 STALLED = "its objectives did not move for 2 hours of play"
 NO_OBJECTIVES = "the world rows define no required creature, item, or object objective a quester can work"
 SCRIPTED_EVENT = "the quest completes only by a scripted event no lone quester drives"
@@ -1944,6 +1949,17 @@ def _off_home(quest, facts: Facts) -> list:
     return out
 
 
+def _no_spawns_here(quest, facts: Facts, zone: int) -> list:
+    """(creature entry, spawn count) of each objective creature with spawns,
+    none of them in the quester's current zone (facts.zone)."""
+    out = []
+    for entry, _n in quest.kills:
+        spawns = [s for s in quest.fields if s.entry == entry]
+        if spawns and not any(int(s.zone_id) == zone for s in spawns):
+            out.append((entry, len(spawns)))
+    return out
+
+
 def _failed_reason(quest, facts: Facts) -> str:
     """FAILED, with the world rows' fact about each objective creature whose
     spawns all stand off the quest's map, so the ledger says where its
@@ -2023,6 +2039,15 @@ def _broken_reason(
     complete = _quest_complete(quest, status, progress)
     if missing and not (not complete and facts.object_unspawned):
         return missing
+    # A stall when spawns exist but none are in the quester's current zone.
+    if (
+        not complete
+        and played >= STALL_SECONDS
+        and _fields_gone(quest, gone) is False
+        and facts.zone > 0
+        and _no_spawns_here(quest, facts, facts.zone)
+    ):
+        return "; ".join([STALLED, *[_NO_SPAWNS_HERE % (entry, n) for entry, n in _no_spawns_here(quest, facts, facts.zone)]])
     if not complete and _fields_gone(quest, gone):
         return SOURCE_MISSING
     if quest.id in (final or {}):
