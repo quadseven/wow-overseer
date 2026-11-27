@@ -1,4 +1,4 @@
-"""A break's restore is written again until the leader is off the break's job.
+"""A break's restore is written again until its fishers are off the break's job.
 
 On wow-dev (2026-09-28) Jev sent Zug's family fishing. When the break ended,
 Zug was offline for that moment, and his `quest` row came back
@@ -45,39 +45,47 @@ class _Pass:
 class RestoreRetryTest(unittest.TestCase):
     def setUp(self):
         self.written = []
-        patcher = mock.patch.object(
-            bridge,
-            "_insert_job",
-            lambda name, mode, source: self.written.append((name, mode)),
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.jobs = dict.fromkeys(NAMES, FISH)
+        for name, fake in (
+            (
+                "_insert_job",
+                lambda name, mode, source: self.written.append((name, mode)),
+            ),
+            ("_jobs_of", lambda names: {n: self.jobs[n] for n in names}),
+            ("_last_job_source", lambda name: jev_activity.SOURCE),
+        ):
+            patcher = mock.patch.object(bridge, name, fake)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
-    def restore(self, this, job, now):
-        return asyncio.run(bridge.Bridge._activity_restore_job(this, "Zug", job, now))
+    def restore(self, this, now):
+        return asyncio.run(bridge.Bridge._activity_restore_job(this, "Zug", NAMES, now))
 
     def test_a_restore_the_leader_missed_is_written_again(self):
         this = _Pass(until=100.0)
-        self.assertTrue(self.restore(this, FISH, 100.0))
+        self.assertTrue(self.restore(this, 100.0))
         self.assertEqual([(n, BACK) for n in NAMES], self.written)
         # The leader's row was refused: he still reads the break's job.
         self.written.clear()
-        self.assertFalse(self.restore(this, FISH, 101.0))
+        self.assertFalse(self.restore(this, 101.0))
         self.assertEqual([], self.written)
         later = 100.0 + bridge.ACTIVITY_RESTORE_RETRY_SECONDS
-        self.assertTrue(self.restore(this, FISH, later))
-        self.assertEqual([(n, BACK) for n in NAMES], self.written)
+        self.jobs.update(dict.fromkeys(NAMES[1:], BACK))
+        self.assertTrue(self.restore(this, later))
+        self.assertEqual([("Zug", BACK)], self.written)
 
     def test_it_stops_once_the_leader_is_off_the_break(self):
         this = _Pass(until=100.0)
-        self.assertTrue(self.restore(this, FISH, 100.0))
+        self.assertTrue(self.restore(this, 100.0))
         later = 100.0 + bridge.ACTIVITY_RESTORE_RETRY_SECONDS
-        self.assertFalse(self.restore(this, BACK, later))
+        self.jobs.update(dict.fromkeys(NAMES, BACK))
+        self.assertFalse(self.restore(this, later))
         self.assertNotIn("Zug", this._activity_restore)
 
     def test_a_family_moved_on_by_somebody_else_is_left_alone(self):
         this = _Pass(until=100.0)
-        self.assertFalse(self.restore(this, "dungeon:ragefire", 100.0))
+        self.jobs.update(dict.fromkeys(NAMES, "dungeon:ragefire"))
+        self.assertFalse(self.restore(this, 100.0))
         self.assertEqual([], self.written)
         self.assertNotIn("Zug", this._activity_restore)
 
