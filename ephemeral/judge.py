@@ -549,48 +549,55 @@ class Judge:
     def _plan_acts(self, observes):
         steps = []
         for i, cmd in enumerate(acts.act_commands(self.decree)):
-            travel_guard = cmd["kind"] == acts.TRAVEL_GUARD and "guard_enabled" in cmd
-            quest_aim = cmd["kind"] == acts.QUEST_AIM and "quest_id" in cmd
-            typed = travel_guard or quest_aim
-            if cmd["kind"] not in guard.COMMAND_KINDS and not typed:
-                raise JudgeError(
-                    f"act step {i}: command kind {cmd['kind']!r} is not allowed"
-                )
-            if "when" in cmd and cmd["when"] not in observes:
-                raise JudgeError(
-                    f"act step {i}: waits for unknown observation {cmd['when']!r}"
-                )
-            who = cmd["who"]
-            targets = self._targets(who, i)
-            if typed and (
-                targets != [who]
-                or not any(x["who"] == who for x in self.handoff.get("members", []))
-            ):
-                raise JudgeError(
-                    f"act step {i}: {cmd['kind']} needs one named cast member"
-                )
-            at = lint.duration_seconds(cmd["at"]) if "at" in cmd else None
-            if "at" in cmd and at is None:
-                raise JudgeError(f"act step {i}: bad time {cmd['at']!r}")
-            by = lint.duration_seconds(cmd["by"]) if "by" in cmd else None
-            if "by" in cmd and (at is not None or by is None):
-                raise JudgeError(
-                    f"act step {i}: by needs a conditional act and a valid time"
-                )
+            targets, payload_field = self._validate_act(cmd, i, observes)
+            at, by = self._act_timing(cmd, i)
             row = {
                 "index": i, "who": cmd["who"], "targets": targets, "kind": cmd["kind"],
                 "text": cmd["text"], "fired": False,
             }  # fmt: skip
-            if travel_guard:
-                row["guard_enabled"] = cmd["guard_enabled"]
-            if quest_aim:
-                row["quest_id"] = cmd["quest_id"]
+            if payload_field is not None:
+                row[payload_field] = cmd[payload_field]
             if by is not None:
                 row["by_s"] = by
             row["at" if "at" in cmd else "when"] = cmd.get("at", cmd.get("when"))
             self.act_rows.append(row)
             steps.append((row, at))
         return steps
+
+    def _validate_act(self, cmd, i, observes):
+        kind = cmd["kind"]
+        payload_field = None
+        if kind == acts.TRAVEL_GUARD and "guard_enabled" in cmd:
+            payload_field = "guard_enabled"
+        elif kind == acts.QUEST_AIM and "quest_id" in cmd:
+            payload_field = "quest_id"
+        elif kind not in guard.COMMAND_KINDS:
+            raise JudgeError(f"act step {i}: command kind {kind!r} is not allowed")
+
+        if "when" in cmd and cmd["when"] not in observes:
+            raise JudgeError(
+                f"act step {i}: waits for unknown observation {cmd['when']!r}"
+            )
+        who = cmd["who"]
+        targets = self._targets(who, i)
+        if payload_field is not None and (
+            targets != [who]
+            or not any(x["who"] == who for x in self.handoff.get("members", []))
+        ):
+            raise JudgeError(f"act step {i}: {kind} needs one named cast member")
+        return targets, payload_field
+
+    @staticmethod
+    def _act_timing(cmd, i):
+        at = lint.duration_seconds(cmd["at"]) if "at" in cmd else None
+        if "at" in cmd and at is None:
+            raise JudgeError(f"act step {i}: bad time {cmd['at']!r}")
+        by = lint.duration_seconds(cmd["by"]) if "by" in cmd else None
+        if "by" in cmd and (at is not None or by is None):
+            raise JudgeError(
+                f"act step {i}: by needs a conditional act and a valid time"
+            )
+        return at, by
 
     def _targets(self, who, i):
         members = self.handoff.get("members") or []
