@@ -466,7 +466,6 @@ UNPINNED = {
     "alliance-brd-campaign-home": "emitter not in the pinned module source",
     "brd-core-fragment-chest": "emitter not in the pinned module source",
     "brd-fineous-ironfel-pickup": "dungeon module source not here",
-    "class-trainer-crosses-map-and-learns": "emitter not in the pinned module source",
     "cross-map-party-split-is-reported": "emitter not in the pinned module source",
     "cross-map-stranded-member-names-its-way": "emitter not in the pinned module source",
     "deadmines-early-entrant-barrier": "emitter not in the pinned module source",
