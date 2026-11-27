@@ -15,28 +15,57 @@ cast:
     ceiling: "position only; nothing granted"
 act:
   - at: 0s
-    command: {who: Ugga, kind: job, text: "ride-to-stop map:1 x:6341.38 y:557.68"}
+    command: {who: Ugga, kind: job, text: "ride-to-stop map:1 x:6341.4 y:557.7"}
 observe:
-  - name: member-starts-on-teldrassil
+  - name: cast-is-online
+    role: precondition
+    when: start
+    online: cast
+  - name: enabled-alliance-member-starts-at-ruttheran
     role: precondition
     when: start
     sql: |
-      SELECT COUNT(*) FROM characters WHERE guid = @Ugga AND map = 1 AND zone = 141
+      SELECT COUNT(*) FROM characters c JOIN overseer_roster r ON r.name = c.name
+      WHERE c.guid = @cast0 AND c.race = 1 AND c.map = 1 AND c.zone = 141
+        AND c.instance_id = 0 AND c.health > 0 AND r.enabled = 1
     expect: {scalar: "= 1"}
+  # Retain pricing refusals and crossings that ran. A refusal before pricing
+  # or polling leaves the scenario unwitnessed.
+  - name: the-ride-produced-a-terminal-crossing-receipt
+    role: precondition
+    when: end
+    sql: |
+      SELECT id, status, detail, JSON_UNQUOTE(JSON_EXTRACT(
+        CASE WHEN JSON_VALID(result) THEN result ELSE '{}' END, '$.reason'))
+      FROM overseer_command WHERE target_name = 'Ugga' AND kind = 'job'
+        AND command = 'ride-to-stop map:1 x:6341.4 y:557.7'
+        AND source = 'eph-judge' AND created_at >= @t0
+        AND JSON_UNQUOTE(JSON_EXTRACT(
+          CASE WHEN JSON_VALID(result) THEN result ELSE '{}' END, '$.map')) = '1'
+        AND (status, JSON_UNQUOTE(JSON_EXTRACT(
+          CASE WHEN JSON_VALID(result) THEN result ELSE '{}' END, '$.outcome')))
+          IN (('applied', 'arrived'), ('error', 'refused'), ('unchanged', 'timeout'))
+        AND (status <> 'error'
+          OR detail = 'no transport the module knows sails from this map to that map for this faction'
+          OR JSON_UNQUOTE(JSON_EXTRACT(
+            CASE WHEN JSON_VALID(result) THEN result ELSE '{}' END, '$.steps')) + 0 > 0)
+    expect: {rows: 1}
   - name: same-map-ride-command-was-applied
     role: check
     when: end
     sql: |
       SELECT COUNT(*) FROM overseer_command
       WHERE target_name = 'Ugga' AND kind = 'job'
-        AND command = 'ride-to-stop map:1 x:6341.38 y:557.68'
-        AND status = 'applied' AND created_at >= @t0
-    expect: {scalar: ">= 1"}
+        AND command = 'ride-to-stop map:1 x:6341.4 y:557.7'
+        AND source = 'eph-judge' AND created_at >= @t0 AND status = 'applied'
+        AND JSON_UNQUOTE(JSON_EXTRACT(
+          CASE WHEN JSON_VALID(result) THEN result ELSE '{}' END, '$.outcome')) = 'arrived'
+    expect: {scalar: "= 1"}
   - name: member-reaches-auberdine
     role: check
     when: end
     sql: |
       SELECT COUNT(*) FROM characters
-      WHERE guid = @Ugga AND map = 1
+      WHERE guid = @cast0 AND map = 1
         AND POW(position_x - 6341.38, 2) + POW(position_y - 557.68, 2) <= 2500
     expect: {scalar: "= 1"}
