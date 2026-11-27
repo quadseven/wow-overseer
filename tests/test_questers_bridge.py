@@ -430,6 +430,47 @@ class TheQuesterPass(unittest.TestCase):
             [(b.quest, b.reason) for b in run.recorded], [(3, questers.ENDER_MISSING)]
         )
 
+    def test_a_stale_retryable_reward_refusal_is_cleared_and_retried(self):
+        row = quest(320, 1, 8, min_level=2, prev=319, title="Return to Bellowfiz")
+        row.update(item1=2696, item_count1=1, provided0=2696)
+        cat = world(
+            extra_quests=[row],
+            extra_givers=[
+                giver(320, "start", 1320, 1320, 0, 0, name="Bellowfiz"),
+                giver(320, "end", 1320, 1320, 0, 0, name="Bellowfiz"),
+            ],
+        )
+        member = quester(
+            name="Quester",
+            level=8,
+            zone_id=1,
+            x=0.0,
+            free_slots=8,
+            quests_done=frozenset({319}),
+            quest_log={320: questers.STATUS_COMPLETE},
+            quest_progress={320: 1},
+            quest_item_objectives={320: {2696: 1}},
+        )
+        reason = questers.RETRYABLE_REWARD_LEDGER_REASON
+        ledger = {
+            ("Quester", 320): questers.ledger_state(questers.LEDGER_BROKEN, reason)
+        }
+
+        async def inline_read(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        with mock.patch.object(bridge.asyncio, "to_thread", new=inline_read):
+            run = Pass(
+                [member],
+                ledger=ledger,
+                cat=cat,
+                broken={"Quester": {320: reason}},
+            ).run()
+
+        self.assertEqual([r.command for r in run.started[0].rows], ["turnin quest:320"])
+        self.assertEqual(run.broken_written, {"Quester": {}})
+        self.assertEqual(run.recorded, [])
+
     def test_a_broken_quest_is_never_taken_again(self):
         run = Pass([quester(x=0.0)], ledger={("Mirra", 1): "broken"}).run()
         self.assertNotIn(

@@ -20271,8 +20271,9 @@ class Bridge(discord.Client):
         # The hunt rows still open are the questers' own as much as anyone's: an
         # unread count holds them to QUESTER_HUNTS from this pass alone.
         hunts_left = max(0, QUESTER_HUNTS - min(int(hunts_open or 0), QUESTER_HUNTS))
-        # A quester with full bags sells before its move (questers.sell_step,
-        # #1813): its bags, worn gear and sale rows are read only for those.
+        # A quester with bag pressure or a retryable reward refusal sells before
+        # its move (questers.sell_step): its bags, worn gear and sale rows are
+        # read only for those.
         full = [m.name for m in members if questers.needs_sale(m, tried)]
         carried, worn, sold = (await asyncio.to_thread(_fetch_quester_bags, full)
                                if full else ({}, {}, ()))
@@ -20296,6 +20297,10 @@ class Bridge(discord.Client):
                 held.pop(qid)
                 log.info("questers: %s asks again for quest %d, whose take was "
                          "refused and has no refusal left on record", m.name, qid)
+            for qid in questers.retry_reward_refusals(m.name, held, tried):
+                held.pop(qid)
+                log.info("questers: %s asks again for quest %d after its "
+                         "retryable reward refusal aged out", m.name, qid)
             known = questers.known_broken(m.name, held, ledger)
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
                                  self._quester_last.get(m.name, 0), crossings)
@@ -20340,8 +20345,9 @@ class Bridge(discord.Client):
                        sale=None) -> bool:
         """Start the quester's move as a step, unless it is on one already or
         has none; True when the step holds a hunt row (one of QUESTER_HUNTS).
-        A `sale` (questers.sell_step: its bags are full) goes first, in the
-        move's place: the move is planned again on the next pass."""
+        A `sale` (questers.sell_step: bag pressure or retryable reward refusal)
+        goes first, in the move's place: the move is planned again on the next
+        pass."""
         if m.name not in self._job_steps and sale is not None:
             self._quester_last.pop(m.name, None)
             log.info("questers: %s", sale.said)

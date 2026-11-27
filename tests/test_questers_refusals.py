@@ -53,6 +53,29 @@ class ARefusedTakeIsNotBrokenForGood(unittest.TestCase):
         self.assertEqual(questers.retry_take_refusals("Mirra", held, tried), set())
 
 
+class ARetryableRewardRefusalIsNotBrokenForGood(unittest.TestCase):
+    def test_a_ledger_row_for_a_retryable_reward_refusal_is_not_hard_broken(self):
+        reason = questers.RETRYABLE_REWARD_LEDGER_REASON
+        state = questers.ledger_state(questers.LEDGER_BROKEN, reason)
+        self.assertEqual(state, questers.LEDGER_STALLED)
+        ledger = {("Mirra", 320): state}
+        self.assertEqual(questers.known_broken("Mirra", {}, ledger), frozenset())
+
+    def test_a_held_reward_refusal_is_reopened_when_its_result_ages_out(self):
+        held = {320: questers.RETRYABLE_REWARD_LEDGER_REASON}
+        self.assertEqual(questers.retry_reward_refusals("Mirra", held, ()), {320})
+        recent = questers.Attempt(
+            "Mirra",
+            "turnin quest:320",
+            "error",
+            reason=questers.REWARD_REFUSAL,
+            age_minutes=2,
+        )
+        self.assertEqual(
+            questers.retry_reward_refusals("Mirra", held, [recent]), frozenset()
+        )
+
+
 class AnItemHuntRefusedForBagRoomSellsFirst(unittest.TestCase):
     def test_the_refusal_is_read_for_this_quester_inside_the_cooldown(self):
         self.assertTrue(questers.bags_full_hunt("Mirra", [full_hunt()]))

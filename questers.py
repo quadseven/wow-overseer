@@ -119,7 +119,10 @@ each into the quest ledger (questledger.py, #923) with its reason.
 A HAND-IN THE WORLD KEEPS REFUSING IS HELD (`turn_in_held`). A complete quest
 whose hand-in was refused FAILS_BEFORE_BROKEN times is not handed in again
 until TURN_IN_RETRY_MINUTES have passed since the last refusal, the hold
-doubling with each refusal past those; then it is tried once more.
+doubling with each refusal past those; then it is tried once more. A refusal
+the module marked retryable is never counted as a broken quest; the quester
+schedules a sale and retries after SELL_COOLDOWN_MINUTES, regardless of the
+free-slot read.
 A hand-in refused as never retryable (CANNOT_TURN_IN) is held from its
 first refusal while that row is in the rows the pass reads.
 
@@ -135,6 +138,8 @@ for). Kept: every item a catalogue quest needs, hands over or uses, quest
 items, an upgrade, a piece judged while its worn gear is unread, and a stack
 reserved in overseer_keep (keep.py; unread reservations sell nothing). The
 sale is asked at most once in SELL_COOLDOWN_MINUTES, and before the move.
+A retryable reward refusal also schedules that sale, even when the bridge's
+bag-room read says it has more free slots.
 
 A TAKE REFUSED FOR BAG ROOM IS A WAIT, NOT A BROKEN QUEST (#1992). The module
 refuses a take whose start item will not fit in the bags with its own words
@@ -170,9 +175,9 @@ import weaponskill
 # The step's action word, in the command log's source (guildjobs.source_for).
 ACTION = "quester"
 WALK_ACTION = ACTION + "-walk"
-# The sale of a quester with full bags (`sell_step`, #1813): its own action
-# word, under ACTION's source prefix so the pass's recent read holds its rows,
-# and not one `attempts` reads as a quest's take, hand-in or walk.
+# The sale of a quester after bag pressure or a retryable reward refusal
+# (`sell_step`): its own action word, under ACTION's source prefix so the pass's
+# recent read holds its rows, and not one `attempts` reads as a quest command.
 SELL_ACTION = ACTION + "-sell"
 SELL_WALK_ACTION = SELL_ACTION + "-walk"
 # The destroy of a quester with full bags (`destroy_step`, #1813): quest
@@ -342,10 +347,10 @@ LOG_STATE_REFUSALS = frozenset(
 # is asked again (#1992).
 BAG_ROOM_REFUSAL = "no bag room for the item the giver hands over"
 # The module's words for a hand-in CanRewardQuest refuses (mod-overseer
-# QUEST_CORE_WILL_NOT_REWARD, retryable). Among its causes is a reward the bags
-# cannot hold: a quest with a reward choice is refused for a quester whose
-# bags are full (#2788, #2790).
+# QUEST_CORE_WILL_NOT_REWARD, retryable). It may reflect reward capacity, but
+# the refusal is a wait whenever the module marks it retryable (#2790).
 REWARD_REFUSAL = "the core will not reward it now"
+RETRYABLE_REWARD_LEDGER_REASON = REFUSED_TURN_IN + ": " + REWARD_REFUSAL
 
 # The world's own words for a spawn that is not there (classquest.SPAWN_REFUSALS).
 GONE = "no such spawn in the world"
@@ -556,16 +561,17 @@ LEDGER_STALLED = "stalled"
 
 def ledger_state(state, reason) -> str:
     """The quester pass's reading of one ledger row: LEDGER_STALLED for a
-    broken row whose reason is a stall, else the row's own state."""
+    broken row whose reason can change with play or a retry, else its state."""
     state = str(state or "")
     reason = str(reason or "")
-    # A stall and a refused take are each one quester's hour, not a fact about
-    # the quest: a full bag or a level too low refuses a take that a later pass
-    # may win, so neither holds the quest broken for good
+    # A stall, a refused take and a retryable reward refusal are not facts
+    # about the quest: a later pass may win them, so none holds it broken for good
     # (quest 298, refused "not eligible" while its start item had no
     # bag room, stayed broken for weeks). A quest the log held as failed is a
     # failed attempt too: dropping and retaking it can finish it.
-    if state == LEDGER_BROKEN and (reason.startswith((STALLED, REFUSED_TAKE, FAILED))):
+    if state == LEDGER_BROKEN and reason.startswith(
+        (STALLED, REFUSED_TAKE, FAILED, RETRYABLE_REWARD_LEDGER_REASON)
+    ):
         return LEDGER_STALLED
     return state
 
@@ -1340,40 +1346,37 @@ def walk_wall(name, tried) -> tuple:
     return (reason, wait) if wait > 0 else ("", 0)
 
 
-def _reward_room_refusal(a, free_slots) -> bool:
-    """Whether this hand-in refusal is the core's reward refusal for a quester
-    whose bags read full: the reward has nowhere to go, so the refusal says
-    nothing about the quest (#2788, #2790). A refusal for a quester whose bags
-    are unread or have room is left to count, since it names some other rule."""
-    if a.reason != REWARD_REFUSAL or free_slots is None or int(free_slots) > 0:
+def _retryable_reward_refusal(a) -> bool:
+    """Whether this is a turn-in refusal the module explicitly says may pass
+    later. The free-slot read cannot override its retryable result."""
+    if a.reason != REWARD_REFUSAL or not a.retryable:
         return False
     found = _CHAIN_ROW.match(a.command)
     return bool(found and found.group(1) == "turnin")
 
 
-def reward_room_refused(name, tried, free_slots) -> frozenset:
-    """The quest ids whose hand-in the core refused for this quester, whose
-    bags read full, inside SELL_COOLDOWN_MINUTES: the hand-in waits for the
-    sale and is asked again after it (the take's wait, `bag_room_refused`)."""
+def retryable_reward_refused(name, tried) -> frozenset:
+    """The quest ids with a recent retryable reward refusal. Keep the hand-in
+    out of the broken ledger and retry after SELL_COOLDOWN_MINUTES."""
     return frozenset(
         int(_CHAIN_ROW.match(a.command).group(2))
         for a in tried or ()
         if a.name == name
         and a.failed
         and a.age_minutes < SELL_COOLDOWN_MINUTES
-        and _reward_room_refusal(a, free_slots)
+        and _retryable_reward_refusal(a)
     )
 
 
-def refusals(name, tried, free_slots=None) -> dict:
+def refusals(name, tried) -> dict:
     """(verb, quest id) -> (times refused, the last words) for this quester's
-    takes and hand-ins the world refused. A hand-in the core refused to reward
-    while the quester's bags read full (`free_slots`) is not counted."""
+    takes and hand-ins the world refused. Retryable reward refusals and bag-room
+    refusals are waits, not evidence that the quest is broken."""
     out: dict = {}
     for a in sorted(tried or (), key=lambda a: -a.age_minutes):
         if a.name != name or not a.failed or a.reason in LOG_STATE_REFUSALS:
             continue
-        if a.reason == BAG_ROOM_REFUSAL or _reward_room_refusal(a, free_slots):
+        if a.reason == BAG_ROOM_REFUSAL or _retryable_reward_refusal(a):
             continue
         found = _CHAIN_ROW.match(a.command)
         if not found:
@@ -1394,6 +1397,18 @@ def retry_take_refusals(name, held, tried) -> frozenset:
         for qid, reason in held.items()
         if str(reason).startswith(REFUSED_TAKE)
         and now.get(("take", int(qid)), (0, ""))[0] < FAILS_BEFORE_BROKEN
+    )
+
+
+def retry_reward_refusals(name, held, tried) -> frozenset:
+    """The held reward refusals with no current retryable result. Once the
+    module's retry window has passed, the quester asks for that hand-in again."""
+    waiting = retryable_reward_refused(name, tried)
+    return frozenset(
+        int(qid)
+        for qid, reason in held.items()
+        if str(reason).startswith(RETRYABLE_REWARD_LEDGER_REASON)
+        and int(qid) not in waiting
     )
 
 
@@ -1457,7 +1472,7 @@ def _module_complete(name, tried) -> frozenset:
     )
 
 
-def turn_in_held(name, tried, free_slots=None) -> frozenset:
+def turn_in_held(name, tried) -> frozenset:
     """The quest ids whose hand-in this quester leaves for now: the world
     refused it FAILS_BEFORE_BROKEN times or more, and its last refusal is
     newer than TURN_IN_RETRY_MINUTES, doubled for each refusal past those.
@@ -1475,16 +1490,14 @@ def turn_in_held(name, tried, free_slots=None) -> frozenset:
     from the first refusal for as long as that row is in the rows the pass
     reads: asking again cannot change the answer.
 
-    A hand-in the core refused to reward while the quester's bags read full
-    (`free_slots`) is neither counted nor held for the long hold: the quester
-    sells first and asks again after SELL_COOLDOWN_MINUTES (`reward_room_refused`).
-    Pindle's Return to Bellowfiz was refused 959 times in six days and Fizzik's
-    The Perfect Stout hand-in sat refused for nine, each with every bag slot
-    full, and both were filed as broken quests."""
+    A hand-in refused with the module's retryable reward reason is neither
+    counted nor broken. It is held for SELL_COOLDOWN_MINUTES, then tried again
+    (`retryable_reward_refused`). The sale step still runs when its own bag-room
+    read says a sale is due."""
     count: dict = {}
     newest: dict = {}
     for a in tried or ():
-        if a.name != name or not a.failed or _reward_room_refusal(a, free_slots):
+        if a.name != name or not a.failed or _retryable_reward_refusal(a):
             continue
         found = _CHAIN_ROW.match(a.command)
         if not found or found.group(1) != "turnin":
@@ -1500,7 +1513,7 @@ def turn_in_held(name, tried, free_slots=None) -> frozenset:
             and newest[qid] < TURN_IN_RETRY_MINUTES * 2 ** (times - FAILS_BEFORE_BROKEN)
         )
         | frozenset(cannot_turn_in(name, tried))
-        | reward_room_refused(name, tried, free_slots)
+        | retryable_reward_refused(name, tried)
     )
 
 
@@ -1883,7 +1896,7 @@ def failures(
     objective fields."""
     gone = gone_spawns(member.name, tried)
     object_gone = gone_spawns(member.name, tried, OBJECT_KIND)
-    refused = refusals(member.name, tried, member.free_slots)
+    refused = refusals(member.name, tried)
     final = cannot_turn_in(member.name, tried)
     working = _working(
         cat,
@@ -2284,7 +2297,7 @@ def next_move(
     # holds broken is still handed in; one whose turn-in NPC this pass found
     # missing is left, and so is one whose hand-in the world keeps refusing,
     # until its hold is over (`turn_in_held`), the module-complete ones too.
-    hand_skip = turn_in_held(member.name, tried, member.free_slots) | {
+    hand_skip = turn_in_held(member.name, tried) | {
         b.quest for b in found if b.reason in (ENDER_MISSING, OBJECT_ENDER_MISSING)
     }
     object_left = object_spawns_left(cat, member.name, tried)
@@ -2690,17 +2703,21 @@ def _selling_lately(name, recent) -> bool:
 
 
 def needs_sale(member, tried=()) -> bool:
-    """Whether the quester's bags are read and at SELL_FLOOR or under, or the
-    world just refused one of its takes for bag room (`bag_room_refused`),
-    whatever its bags read (#1992)."""
-    if bag_room_refused(member.name, tried) or bags_full_hunt(member.name, tried):
+    """Whether the quester's bags are at SELL_FLOOR, or a retryable take,
+    hunt, or reward refusal calls for a sale, whatever its bags read."""
+    if (
+        bag_room_refused(member.name, tried)
+        or retryable_reward_refused(member.name, tried)
+        or bags_full_hunt(member.name, tried)
+    ):
         return True
     return member.free_slots is not None and int(member.free_slots) <= SELL_FLOOR
 
 
 def sell_step(member, carried, worn, kept, cat: Catalogue, recent, cap, tried=()):
-    """The guildcorps.Step that sends a quester with full bags to a vendor, or
-    None: its bags have room or are unread, it is offline, dead or unplaced,
+    """The guildcorps.Step that sends a quester to a vendor after bag pressure
+    or a retryable reward refusal, or None: its bags have room and no such
+    refusal, it is offline, dead or unplaced,
     its last sale is younger than SELL_COOLDOWN_MINUTES, the reservations are
     unread, or it carries nothing it may sell.
 
@@ -2726,6 +2743,8 @@ def sell_step(member, carried, worn, kept, cat: Catalogue, recent, cap, tried=()
     free = member.free_slots
     if bag_room_refused(member.name, tried):
         room = "was refused a quest for %s" % BAG_ROOM_REFUSAL
+    elif retryable_reward_refused(member.name, tried):
+        room = "was refused a quest reward"
     elif bags_full_hunt(member.name, tried):
         room = "was refused a hunt for a full bag"
     else:

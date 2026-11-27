@@ -122,6 +122,17 @@ class TheLedgerMoves(unittest.TestCase):
         entry = moved([old], [log(180, 8)])[(180, 8)]
         self.assertEqual((entry.state, entry.reason), ("taken", ""))
 
+    def test_a_retryable_reward_refusal_back_in_the_log_clears_its_reason(self):
+        old = ledger(
+            320,
+            8,
+            "broken",
+            finished=EARLIER,
+            reason="the turn-in NPC would not take it: the core will not reward it now",
+        )
+        entry = moved([old], [log(320, 8, status=1)])[(320, 8)]
+        self.assertEqual((entry.state, entry.reason), ("taken", ""))
+
     def test_a_failed_quest_back_in_the_log_clears_its_ledger_reason(self):
         old = ledger(29, 7, "broken", finished=EARLIER, reason=ql.FAILED_REASON)
         entry = moved([old], [log(29, 7)])[(29, 7)]
