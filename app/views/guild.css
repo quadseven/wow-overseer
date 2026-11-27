@@ -16,7 +16,12 @@
 .g-title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .g-facts { flex: 1 1 200px; min-width: 0; color: var(--color-neutral-400); }
 .g-pick { margin-left: auto; }
-@media (max-width: 759.98px) { .g-pick { display: none; } }
+@media (max-width: 759.98px) {
+  /* The switcher stays on a phone: it is the only way across guilds there.
+     It takes its own full-width row under the title, links at tap size. */
+  .g-pick { margin-left: 0; flex: 1 1 100%; }
+  .g-pick > a { min-height: 44px; display: flex; align-items: center; justify-content: center; flex: 1; }
+}
 .g-summary { font-size: var(--fs-3); color: var(--color-neutral-200); max-width: 820px; }
 
 /* ---- progress ---------------------------------------------------------------- */
@@ -25,6 +30,25 @@
 .g-kpi .k { order: 0; }
 .g-kpi .v { order: 1; }
 .g-kpi .s { order: 2; font-size: var(--fs-1); color: var(--color-neutral-400); }
+.g-ready { gap: 10px; }
+.g-ready-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: var(--fs-2); }
+.g-ready-row .num { font-variant-numeric: tabular-nums; }
+.g-ready-bar { height: 6px; border-radius: 3px; background: var(--color-neutral-800); overflow: hidden; }
+.g-ready-bar > span { display: block; height: 100%; background: var(--color-accent); }
+.g-ready-line { font-size: var(--fs-1); color: var(--color-neutral-400); }
+.g-ready-link { font-size: var(--fs-1); }
+.g-ticks { display: grid; grid-template-columns: repeat(20, 1fr); gap: 3px; }
+.g-ticks > i { height: 10px; border-radius: 2px; background: var(--color-neutral-800); }
+.g-ticks > i.on { background: var(--color-accent); }
+.g-cq-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.g-jump { display: none; }
+@media (max-width: 759.98px) {
+  .g-jump { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 6px; scrollbar-width: none; }
+  .g-jump::-webkit-scrollbar { display: none; }
+  .g-jump .chip { flex: 0 0 auto; }
+  .section[id] { scroll-margin-top: 8px; }
+}
+
 .g-two { display: grid; gap: 12px; align-items: start; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
 .g-two-wide { grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
 .g-card { gap: 8px; }

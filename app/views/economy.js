@@ -7,6 +7,7 @@
 import { html, raw, isHttps, pageHead, sectionHead, tabs, item, notMeasured, gold, plural, duration, pendingRead, state, classVar, memberHref, member } from "../ui.js";
 import { build } from "../router.js";
 import { familyKeys } from "../families.js";
+import { since, fromClock } from "../models/time.js";
 
 const TABS = [
   ["gold", "Bags and gold"],
@@ -317,8 +318,59 @@ ${c.list.slice(0, 6).map(row)}${c.list.length > 6 ? fold("skill|" + c.name, plur
 
 // ---- guild bank ---------------------------------------------------------------
 
-function bankCell(c) {
-  return html`<span class="eco-cell">${item({ entry: c.entry, name: c.name, quality: c.quality, icon: c.icon, mark: c.letters })}${c.count > 1 ? html`<span class="ct" aria-hidden="true">${c.count}</span>` : ""}</span>`;
+// The bank page's own view state: which way the tab is drawn and the name
+// filter, kept across the view's redraws like the folds above.
+const bankUI = { mode: "grid", q: "" };
+
+// The guild the reader last looked at, so the bank opens on it when the
+// URL does not say. Guarded the way store.js guards: storage can refuse.
+const BANK_GUILD_KEY = "overseer.bank-guild";
+let bankGuildMem = "";
+function savedBankGuild() {
+  try { return (typeof window !== "undefined" && window.localStorage && window.localStorage.getItem(BANK_GUILD_KEY)) || bankGuildMem; } catch { return bankGuildMem; }
+}
+function saveBankGuild(g) {
+  bankGuildMem = g;
+  try { if (typeof window !== "undefined" && window.localStorage) window.localStorage.setItem(BANK_GUILD_KEY, g); } catch { /* storage refused */ }
+}
+
+const SMALL_WORD = new Set(["of", "the", "a", "an"]);
+
+// The two letters an icon-less stack shows. The server's letters are the
+// first two words' initials, so every Libram reads "LO"; where distinct
+// items in one tab share a mark, the mark is rebuilt from the item's own
+// first and last full words (Libram of Rumination -> LR).
+export function bankMarks(cells) {
+  const entries = new Map();
+  cells.forEach((c) => {
+    if (!entries.has(c.letters)) entries.set(c.letters, new Set());
+    entries.get(c.letters).add(c.entry);
+  });
+  const marks = new Map();
+  cells.forEach((c) => {
+    if (marks.has(c.entry)) return;
+    let mark = c.letters;
+    if (entries.get(c.letters).size > 1) {
+      const words = String(c.name || "").split(/\s+/).filter((w) => /[a-z]/i.test(w) && !SMALL_WORD.has(w.toLowerCase()));
+      if (words.length >= 2) mark = (words[0][0] + words[words.length - 1][0]).toUpperCase();
+    }
+    marks.set(c.entry, mark);
+  });
+  return marks;
+}
+
+// The list view's rows: one per distinct item, its stacks summed.
+export function bankListRows(cells) {
+  const byEntry = new Map();
+  cells.forEach((c) => {
+    if (!byEntry.has(c.entry)) byEntry.set(c.entry, { cell: c, count: 0 });
+    byEntry.get(c.entry).count += c.count || 1;
+  });
+  return [...byEntry.values()];
+}
+
+function bankCell(c, mark) {
+  return html`<span class="eco-cell" data-bank-cell>${item({ entry: c.entry, name: c.name, quality: c.quality, icon: c.icon, mark: mark || c.letters })}${c.count > 1 ? html`<span class="ct" aria-hidden="true">${c.count}</span>` : ""}</span>`;
 }
 
 // A tab's stacks under small headers by kind (cloth, herbs, recipes...),
@@ -335,30 +387,68 @@ export function bankGroups(cells) {
   return Array.from(groups.values()).sort((a, b) => a.rank - b.rank);
 }
 
-function bankGrid(cells) {
-  const groups = bankGroups(cells);
-  if (groups.length < 2) return html`<div class="eco-grid">${cells.map(bankCell)}</div>`;
-  return html`<div class="eco-cats">${groups.map((g) => html`<section class="eco-cat" aria-label="${g.label}"><h3 class="eco-cat-head"><span>${g.label}</span><span class="num">${g.cells.length}</span></h3><div class="eco-grid">${g.cells.map(bankCell)}</div></section>`)}</div>`;
+// The tab's empty slots, drawn as the game draws them, capped: a wall of
+// 98 blanks says nothing after the first row, so past seven the rest are
+// one counted cell.
+const EMPTY_DRAWN = 7;
+function emptyCells(empties) {
+  if (!empties) return "";
+  const plain = empties <= EMPTY_DRAWN ? empties : EMPTY_DRAWN - 1;
+  const cells = [];
+  for (let i = 0; i < plain; i += 1) cells.push(html`<span class="eco-cell eco-empty" aria-hidden="true"></span>`);
+  if (empties > EMPTY_DRAWN) cells.push(html`<span class="eco-cell eco-empty eco-more" aria-hidden="true">+${empties - plain} empty</span>`);
+  return html`${cells}`;
 }
 
-// Also the Now tiles' Guild bank panel (now/panel.js).
+function bankGrid(cells, marks, empties) {
+  const tail = emptyCells(empties || 0);
+  const groups = bankGroups(cells);
+  if (groups.length < 2) return html`<div class="eco-grid">${cells.map((c) => bankCell(c, marks.get(c.entry)))}${tail}</div>`;
+  return html`<div class="eco-cats">${groups.map((g) => html`<section class="eco-cat" aria-label="${g.label}"><h3 class="eco-cat-head"><span>${g.label}</span><span class="num">${g.cells.length}</span></h3><div class="eco-grid">${g.cells.map((c) => bankCell(c, marks.get(c.entry)))}</div></section>`)}${tail ? html`<div class="eco-grid">${tail}</div>` : ""}</div>`;
+}
+
+function bankList(cells, marks) {
+  return html`<div class="eco-banklist">${bankListRows(cells).map((r) => html`<div class="eco-brow" data-bank-row>${item({ entry: r.cell.entry, name: r.cell.name, quality: r.cell.quality, icon: r.cell.icon, mark: marks.get(r.cell.entry) })}${r.cell.category ? html`<span class="eco-meta">${r.cell.category}</span>` : ""}<span class="num">${r.count}</span></div>`)}</div>`;
+}
+
+// Also the Now tiles' Guild bank panel (now/panel.js). The panel host
+// passes its own ctx (params.tab "guildbank"): it gets the grid as it
+// always has, without the page's tools, and it neither reads nor writes
+// the last-viewed guild.
 export function bankTab(ctx, get) {
   const reads = familyKeys().map((n) => get(bankPath(n)));
   if (!reads.length) return state("unmeasured", "Which families the realm has is not measured yet.");
   const ready = reads.filter((r) => r.data && r.data.guild);
   if (!ready.length) return pendingRead(reads[0], 3) || state("empty", "Neither family is in a guild.");
-  const wanted = (ctx.query.guild || "").toLowerCase();
-  const bank = (ready.find((r) => r.data.guild.toLowerCase() === wanted) || ready[0]).data;
+  const onPage = !!ctx.params && ctx.params.tab === "bank";
+  const wanted = (ctx.query.guild || (onPage ? savedBankGuild() : "") || "").toLowerCase();
+  const chosen = ready.find((r) => r.data.guild.toLowerCase() === wanted) || ready[0];
+  const bank = chosen.data;
   const g = bank.guild.toLowerCase();
+  if (onPage) saveBankGuild(g);
   const pick = html`<div class="eco-chips" role="group" aria-label="Guild">${ready.map((r) => chipLink(r.data.guild, ecoHref("bank", { guild: r.data.guild.toLowerCase() }), r.data === bank))}</div>`;
   const head = html`<div class="eco-line eco-vault"><span>${bank.guild} vault holds ${money(bank.money ? { total: Number(bank.money.gold || 0) * 10000 + Number(bank.money.silver || 0) * 100 + Number(bank.money.copper || 0) } : null)}</span></div>`;
   const tabs = (bank.tabs || []).filter(Boolean);
   if (!tabs.length) return html`${pick}${head}${state("empty", bank.note || "The guild has not bought a bank tab yet.")}`;
+  const stacks = tabs.reduce((n, t) => n + (t.used || 0), 0);
+  const stamp = chosen.at ? html`<div class="eco-meta">${bank.guild} vault · read ${since(fromClock(chosen.at))} · ${plural(stacks, "stack")} in ${plural(tabs.length, "tab")}</div>` : "";
   const at = tabs.find((t) => String(t.tab) === String(ctx.query.tab)) || tabs[0];
-  const tabCards = tabs.map((t) => html`<a class="card eco-btab" href="${ecoHref("bank", { guild: g, tab: t.tab })}"${t === at ? raw(' aria-current="true"') : ""}><div class="eco-line"><span class="eco-trade">${t.name}</span><span class="eco-meta">${t.used} of ${t.total}</span></div>${bar((100 * t.used) / (t.total || 1), "accent")}${t.holds ? html`<span class="eco-meta">${sentence(t.holds)}</span>` : ""}</a>`);
-  const cells = (at.cells || []).filter(Boolean);
-  return html`${pick}${head}<div class="eco-btabs">${tabCards}</div>
-<div class="section eco-bank">${sectionHead("", at.name, plural(cells.length, "stack"))}${cells.length ? bankGrid(cells) : state("empty", "This tab is empty.")}</div>`;
+  const rail = html`<div class="eco-chips" role="group" aria-label="Bank tab">${tabs.map((t) => chipLink(t.name + " · " + t.used + "/" + t.total, ecoHref("bank", { guild: g, tab: t.tab }), t === at))}</div>`;
+  const pctFull = Math.round((100 * (at.used || 0)) / (at.total || 1));
+  const full = html`<div class="eco-full">${bar(pctFull, pctFull >= 85 ? "warn" : "accent")}<span class="eco-meta">${at.name} is ${pctFull} percent full</span></div>${at.holds ? html`<span class="eco-meta">${sentence(at.holds)}</span>` : ""}`;
+  const rawCells = at.cells || [];
+  const cells = rawCells.filter(Boolean);
+  const empties = Math.max(0, (at.total || rawCells.length) - cells.length);
+  const marks = bankMarks(cells);
+  const tools = onPage && cells.length ? html`<div class="eco-bank-tools"><div class="seg" role="group" aria-label="Bank view"><button type="button" data-bank-mode="grid" aria-pressed="${bankUI.mode === "grid" ? "true" : "false"}">Grid</button><button type="button" data-bank-mode="list" aria-pressed="${bankUI.mode === "list" ? "true" : "false"}">List</button></div><label class="eco-bank-filter"><i class="ph ph-funnel" aria-hidden="true"></i><input class="input" type="search" data-bank-q placeholder="Filter by item name" value="${bankUI.q}"></label></div>` : "";
+  const drawn = !cells.length
+    ? state("empty", "This tab is empty.")
+    : onPage
+      ? html`<div data-bank-grid${bankUI.mode === "list" ? raw(" hidden") : ""}>${bankGrid(cells, marks, empties)}</div><div data-bank-list${bankUI.mode === "grid" ? raw(" hidden") : ""}>${bankList(cells, marks)}</div><p class="eco-note" data-bank-none hidden>No item in this tab matches the filter.</p>`
+      : bankGrid(cells, marks, empties);
+  return html`${pick}${head}${stamp}${rail}${full}
+<div class="section eco-bank" data-bank>${sectionHead("", at.name, plural(cells.length, "stack") + (empties ? " · " + empties + " empty" : ""))}${tools}${drawn}</div>
+<p class="eco-note">Read only. The bank changes in game.</p>`;
 }
 
 // ---- the view -----------------------------------------------------------------
@@ -405,5 +495,31 @@ export default {
     main.querySelectorAll("details[data-fold]").forEach((d) => {
       d.addEventListener("toggle", () => folds.set(d.getAttribute("data-fold"), d.open));
     });
+    const box = main.querySelector("[data-bank]");
+    if (!box) return;
+    // The filter works on what is already drawn: it hides cells and rows
+    // in place, so typing never loses the input to a redraw.
+    const applyBank = () => {
+      const query = bankUI.q.trim().toLowerCase();
+      let hits = 0;
+      box.querySelectorAll("[data-bank-cell], [data-bank-row]").forEach((el) => {
+        const anchor = el.querySelector("[data-name]");
+        const hit = !query || (anchor && (anchor.getAttribute("data-name") || "").toLowerCase().includes(query));
+        el.classList.toggle("eco-hide", !hit);
+        if (hit) hits += 1;
+      });
+      box.querySelectorAll(".eco-empty").forEach((el) => el.classList.toggle("eco-hide", !!query));
+      const none = box.querySelector("[data-bank-none]");
+      if (none) none.hidden = !(query && hits === 0);
+      const grid = box.querySelector("[data-bank-grid]");
+      const list = box.querySelector("[data-bank-list]");
+      if (grid) grid.hidden = bankUI.mode !== "grid";
+      if (list) list.hidden = bankUI.mode !== "list";
+      box.querySelectorAll("[data-bank-mode]").forEach((b) => b.setAttribute("aria-pressed", String(b.getAttribute("data-bank-mode") === bankUI.mode)));
+    };
+    box.querySelectorAll("[data-bank-mode]").forEach((b) => b.addEventListener("click", () => { bankUI.mode = b.getAttribute("data-bank-mode"); applyBank(); }));
+    const input = box.querySelector("[data-bank-q]");
+    if (input) input.addEventListener("input", () => { bankUI.q = input.value; applyBank(); });
+    applyBank();
   },
 };
