@@ -194,18 +194,18 @@ class Filing(unittest.TestCase):
         self.assertEqual(text.count("Last objective counts: not in the log now"), 2)
         self.assertEqual(
             text.count(
-                "The take step asks the world for a living creature linked to the quest "
-                "within the 20-yard arrival radius."
+                "The take was refused because no living creature linked to the quest "
+                "matched within the 20-yard arrival radius at that time."
             ),
             1,
         )
         self.assertIn(
-            "The refusal means none matched then; the stored rows do not distinguish "
+            "This explains the ledger reason, but the stored rows do not distinguish "
             "a missing, distant, dead, or otherwise unavailable creature.",
             text,
         )
         self.assertNotIn(
-            "The take step asks the world for a living creature",
+            "The take was refused because no living creature",
             qt.body(218, None, [row(218)], [], ""),
         )
 
