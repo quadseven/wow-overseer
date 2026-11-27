@@ -796,6 +796,26 @@ class LogAssertionTest(unittest.TestCase):
         r = run(self.decree(0), guzzler_world(clock), clock, log="all quiet\n")
         self.assertEqual(r["verdict"], "PASS", r["reasons"])
 
+    def test_an_unwitnessed_scenario_is_invalid_even_when_an_outcome_check_fails(self):
+        d = self.bounded({"at_least": 1})
+        observation = d["observe"][-1]
+        observation.update(name="observed-encounter", role="precondition", when="end")
+        observation["log"]["pattern"] = "the family entered the hall"
+        for log, patrons, verdict in (
+            ("", [("Grim Patron", 5, 1234)], "INVALID"),
+            ("the family entered the hall", [("Grim Patron", 5, 1234)], "FAIL"),
+            ("the family entered the hall", [], "PASS"),
+        ):
+            with self.subTest(log=log, verdict=verdict):
+                clock = Clock()
+                world = guzzler_world(clock, patrons=patrons)
+                result = run(d, world, clock, log=log)
+                self.assertEqual(result["verdict"], verdict, result["reasons"])
+                if verdict == "INVALID":
+                    self.assertIn(
+                        "precondition observed-encounter", result["reasons"][0]
+                    )
+
     def bounded(self, expect):
         d = self.decree(0)
         d["observe"][-1]["log"]["expect"] = expect

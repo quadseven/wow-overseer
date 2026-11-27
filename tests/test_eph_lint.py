@@ -433,16 +433,37 @@ class ObserveSqlTest(unittest.TestCase):
         d["observe"][1]["expect"] = {"scalar": "about three"}
         self.assertIn("schema", rules(d))
 
-    def test_log_assertion_is_a_check_only(self):
+    def test_log_precondition_requires_explicit_end_and_positive_evidence(self):
         d = doc()
-        d["observe"].append(
-            {
-                "name": "log-rule",
-                "role": "precondition",
-                "log": {"pattern": "x", "expect": {"count": 0}},
-            }
-        )
+        observation = {
+            "name": "log-rule",
+            "role": "precondition",
+            "log": {"pattern": "x", "expect": {"at_least": 1}},
+        }
+        d["observe"].append(observation)
         self.assertIn("schema", rules(d))
+        for when in ("start", "continuous"):
+            observation["when"] = when
+            self.assertIn("schema", rules(d), when)
+        observation["when"] = "end"
+        self.assertEqual(errors(d), [])
+        for expect in ({"at_most": 1}, {"count": 0}, {"exactly": 0}):
+            observation["log"]["expect"] = expect
+            self.assertIn("schema", rules(d), expect)
+
+    def test_log_precondition_rejects_vacuous_patterns(self):
+        d = doc()
+        observation = {
+            "name": "log-rule",
+            "role": "precondition",
+            "when": "end",
+            "log": {"pattern": "entered hall", "expect": {"at_least": 1}},
+        }
+        d["observe"].append(observation)
+        self.assertEqual(errors(d), [])
+        for pattern in ("", " ", ".*", "^"):
+            observation["log"]["pattern"] = pattern
+            self.assertIn("schema", rules(d), pattern)
 
 
 class LogBoundTest(unittest.TestCase):
@@ -478,6 +499,13 @@ class LogBoundTest(unittest.TestCase):
     def test_a_missing_bound_is_rejected(self):
         for expect in ({}, None, {"at_least": None}, {"exactly": None}, 3, "1"):
             self.assertIn("schema", rules(self.with_expect(expect)), expect)
+
+    def test_a_conflicting_top_level_log_expectation_is_rejected(self):
+        d = self.with_expect({"at_least": 1})
+        d["observe"][-1]["expect"] = {"count": 0}
+        self.assertIn("schema", rules(d))
+        d["observe"][-1].update(role="precondition", when="end")
+        self.assertIn("schema", rules(d))
 
     def test_a_bound_that_is_not_a_whole_number_is_rejected(self):
         for value in ("1", 1.5, True, [1]):
