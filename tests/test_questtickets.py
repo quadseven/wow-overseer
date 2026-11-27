@@ -195,10 +195,14 @@ class Filing(unittest.TestCase):
         self.assertEqual(
             text.count(
                 "At that take, the quest command found no live creature giver within "
-                "its 20-yard arrival radius. The stored rows explain the refusal "
-                "but do not identify why the lookup found no giver."
+                "its 20-yard arrival radius."
             ),
             1,
+        )
+        self.assertIn(
+            "The stored rows explain the refusal but do not identify why the lookup "
+            "found no giver.",
+            text,
         )
         self.assertNotIn(
             "The take was refused because no living creature",
