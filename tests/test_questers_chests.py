@@ -10,6 +10,7 @@ hours and was filed broken. The catalogue now reads the chests
 
 import unittest
 
+import classic
 import classquest
 import questers
 from test_questers import WESTFALL, ended, giver, mirra, quest, spawn
@@ -18,6 +19,8 @@ WATCH, WARDROBE = 841, 290
 SILVERPINE = 130
 WILD_HEARTS, WORG_HEART = 429, 3164
 WORG_ENTRIES = (1765, 1766, 1923, 12431)
+ARUGAL_FOLLY, REMEDY, ARUGAL_CHEST = 422, 3155, 1571
+SHADOWFANG_KEEP = 33
 # Fixture-only entries: the ticket does not include the giver or spawn rows.
 WILD_GIVER, WILD_CHEST = 9002, 9003
 
@@ -76,6 +79,37 @@ def wild_hearts_world(spawn_droppers=True, spawn_chest=False):
         [ended(WILD_HEARTS, WILD_GIVER)],
         chest_rows=[{"item": WORG_HEART, "entry": WILD_CHEST}],
         object_rows=object_rows,
+    )
+
+
+def arugals_folly_world():
+    # The ticket supplies the quest, item, and loot entry. These rows use the
+    # classquest.QUESTS_SQL, CHEST_SQL, and OBJECT_SPAWNS_SQL result shapes; map
+    # 33 is Shadowfang Keep in classic.py and models an unreachable chest.
+    row = {
+        "id": ARUGAL_FOLLY,
+        "title": "Arugal's Folly",
+        "sort": SILVERPINE,
+        "min_level": 9,
+        "item1": REMEDY,
+        "item_count1": 1,
+    }
+    book = classquest.build(
+        [row],
+        [giver(ARUGAL_FOLLY, "end", 4222, 1, 0.0, 0.0, name="Quest ender")],
+        [],
+        [],
+        chest_rows=[{"item": REMEDY, "entry": ARUGAL_CHEST}],
+        object_rows=[chest_spawn(4221, ARUGAL_CHEST, 0.0, 0.0, map_id=SHADOWFANG_KEEP)],
+        every=True,
+    )
+    return questers.Catalogue(
+        book,
+        {
+            ARUGAL_FOLLY: questers.Facts(
+                zone=SILVERPINE, level=11, prev=421, ender_npcs=True
+            )
+        },
     )
 
 
@@ -289,6 +323,26 @@ class AChestQuestIsWorkedNotUnsourced(unittest.TestCase):
         self.assertNotIn(64, working)
         bare = questers._working(heirloom_world(chests=False), holder(), last_quest=0)
         self.assertIn(64, bare)
+
+    def test_arugals_folly_explains_its_instance_only_item_source(self):
+        self.assertIn(SHADOWFANG_KEEP, classic.CLASSIC_DUNGEON_MAPS)
+        member = mirra(
+            level=12,
+            zone_id=SILVERPINE,
+            quest_log={ARUGAL_FOLLY: questers.STATUS_INCOMPLETE},
+            quest_progress={ARUGAL_FOLLY: 0},
+            quest_item_objectives={ARUGAL_FOLLY: {REMEDY: 0}},
+        )
+        cat = arugals_folly_world()
+        clock = questers.Clock()
+        plan = questers.plan(cat, member, clock, 0.0, last_quest=ARUGAL_FOLLY)
+        for i in range(1, 14):
+            plan = questers.plan(cat, member, clock, 600.0 * i, last_quest=ARUGAL_FOLLY)
+
+        self.assertEqual(
+            [(broken.quest, broken.reason) for broken in plan.broken],
+            [(ARUGAL_FOLLY, questers.STALLED_INSTANCE_CHEST)],
+        )
 
     def test_the_stall_reopens_when_a_chest_can_now_be_opened(self):
         held = {64: questers.STALLED}

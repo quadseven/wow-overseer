@@ -99,6 +99,8 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     A quest whose objective no spawned creature is or drops is not judged on
     that alone (a script may summon it, a chest or a vendor may hold the
     item): it stalls, and its stall says so (STALLED_UNSOURCED);
+  * STALLED_INSTANCE_CHEST: every unfinished required item has chest spawns,
+    and all of those spawns are on classic instance maps outside questers' routes;
   * NO_OBJECTIVES: two hours of play pass while the quest is incomplete and
     the world rows define no required creature, item, or object objective a
     quester can work;
@@ -316,6 +318,10 @@ SOURCE_MISSING = "an objective's creature or item is never found in the world"
 STALLED_UNSOURCED = (
     STALLED
     + ", no huntable source supplies what it asks for, and questers cannot buy items from vendors"
+)
+STALLED_INSTANCE_CHEST = (
+    STALLED
+    + "; its required-item chests are only in instance maps outside questers' routes"
 )
 REFUSED_TAKE = "the quest giver would not give it"
 # A required item no creature drops, no chest holds and no take hands over: the
@@ -1795,6 +1801,59 @@ def _chested(quest) -> bool:
     )
 
 
+def _only_instance_chest_source(member, qid: int, quest) -> bool:
+    """Whether each unfinished item objective has chest spawns only in classic
+    instance maps outside the quester's routes."""
+    if quest.kills or quest.objects or quest.fields or not quest.items:
+        return False
+    progress = member.quest_item_objectives.get(qid, {})
+    missing = [
+        item for item, count in quest.items if int(progress.get(item, 0)) < count
+    ]
+    if not missing:
+        return False
+    for item in missing:
+        if item in quest.droppable or item in quest.provided or item in quest.held:
+            return False
+        spots = [
+            spot
+            for use in quest.uses
+            if use.verb == classquest.USE_OBJECT and use.item == item
+            for spot in use.spots
+        ]
+        if (
+            not spots
+            or any(
+                use.item == item and use.verb != classquest.USE_OBJECT
+                for use in quest.uses
+            )
+            or any(
+                int(spot.map_id) not in classic.CLASSIC_INSTANCE_MAPS
+                or (
+                    member.map_id is not None and int(spot.map_id) == int(member.map_id)
+                )
+                for spot in spots
+            )
+        ):
+            return False
+    return True
+
+
+def explain_instance_stalls(cat, member, held) -> dict:
+    """Replace held generic stall reasons when the catalogue proves their only
+    unfinished item sources are chests inside classic instances."""
+    out = dict(held or {})
+    for qid, reason in out.items():
+        quest = cat.quest(qid)
+        if (
+            quest
+            and str(reason).startswith(STALLED)
+            and _only_instance_chest_source(member, qid, quest)
+        ):
+            out[qid] = STALLED_INSTANCE_CHEST
+    return out
+
+
 def chest_spots(member, qid: int, quest: classquest.Quest) -> tuple:
     """(Use, gameobject spawn) of every chest that holds an item of the quest the
     quester has not yet got in full: its own counter for that item is short.
@@ -1919,6 +1978,10 @@ def failures(
             prog,
             _vendor_item(quest, member.quest_item_objectives.get(qid, {})),
         )
+        if reason.startswith(STALLED) and _only_instance_chest_source(
+            member, qid, quest
+        ):
+            reason = STALLED_INSTANCE_CHEST
         if reason.startswith(STALLED):
             fields = _held_objective_fields(member, qid, quest)
             destination = classquest.cross_map(member, fields)

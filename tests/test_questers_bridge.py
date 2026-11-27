@@ -24,6 +24,7 @@ from test_questers import (
     spawn,
     world,
 )
+from test_questers_chests import ARUGAL_FOLLY, REMEDY, arugals_folly_world
 
 SILVERPINE = 130
 
@@ -70,10 +71,18 @@ class Pass:
     """A bridge with only what the quester pass reads, and what it wrote."""
 
     def __init__(
-        self, members, ledger=None, cat=None, broken=None, clock=None, judged=None
+        self,
+        members,
+        ledger=None,
+        ledger_reasons=None,
+        cat=None,
+        broken=None,
+        clock=None,
+        judged=None,
     ):
         self.members = list(members)
         self.ledger = dict(ledger or {})
+        self.ledger_reasons = dict(ledger_reasons or {})
         self.cat = cat or world()
         self.broken = {name: dict(rows) for name, rows in (broken or {}).items()}
         self.clock = dict(clock or {})
@@ -103,7 +112,14 @@ class Pass:
 
     def _facts(self, names):
         self.asked.append(list(names))
-        return self.members, self.tried, self.ledger, self.hunts_open, self.crossings
+        return (
+            self.members,
+            self.tried,
+            self.ledger,
+            self.hunts_open,
+            self.crossings,
+            self.ledger_reasons,
+        )
 
     def _write_memos(self, _clock, broken, _now):
         self.broken_written = {name: dict(rows) for name, rows in broken.items()}
@@ -112,6 +128,9 @@ class Pass:
         self.judged_written = dict(judged)
 
     def run(self, now=0.0):
+        async def to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
         with (
             mock.patch.multiple(
                 bridge,
@@ -124,6 +143,7 @@ class Pass:
                 _record_quest_broken=lambda b: self.recorded.append(b) or True,
                 _share_family_quests=lambda *a: self.shared.append(a),
             ),
+            mock.patch.object(bridge.asyncio, "to_thread", to_thread),
             mock.patch.object(bridge.time, "time", return_value=now),
         ):
             asyncio.run(bridge.Bridge._quester_once(self.self))
@@ -313,6 +333,33 @@ class TheQuesterPass(unittest.TestCase):
         self.assertEqual([r.command for r in left.started[0].rows], ["take quest:2"])
         done = Pass([quester(level=5, quests_done=frozenset({1, 2, 3, 6}))]).run()
         self.assertEqual([r.command for r in done.started[0].rows], ["take quest:20"])
+
+    def test_a_held_instance_chest_stall_rewrites_the_ledger_reason(self):
+        key = ("Mirra", ARUGAL_FOLLY)
+        run = Pass(
+            [
+                quester(
+                    level=12,
+                    zone_id=SILVERPINE,
+                    quest_log={ARUGAL_FOLLY: questers.STATUS_INCOMPLETE},
+                    quest_progress={ARUGAL_FOLLY: 0},
+                    quest_item_objectives={ARUGAL_FOLLY: {REMEDY: 0}},
+                )
+            ],
+            ledger={key: questers.LEDGER_STALLED},
+            ledger_reasons={key: questers.STALLED},
+            cat=arugals_folly_world(),
+            broken={"Mirra": {ARUGAL_FOLLY: questers.STALLED}},
+        ).run()
+
+        self.assertEqual(
+            [(b.quest, b.reason) for b in run.recorded],
+            [(ARUGAL_FOLLY, questers.STALLED_INSTANCE_CHEST)],
+        )
+        self.assertEqual(
+            run.broken_written,
+            {"Mirra": {ARUGAL_FOLLY: questers.STALLED_INSTANCE_CHEST}},
+        )
 
     def test_a_crossing_the_world_refused_for_good_is_not_written_every_pass(self):
         # Two death knights in Acherus asked for Kalimdor 1,097 times in a day
