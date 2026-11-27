@@ -72,6 +72,8 @@ the travel manager, the other raid actions.
   quest strategies, fishing and sell actions. Behaviour not read. Keys:
   `EnableNewRpgStrategy`, `RpgStatusProbWeight.*`, `AutoDoQuests`,
   `EnableRandomBotTrading`, `EnableGuildTasks`.
+- **Random-bot population.** See [class selection and leveling](research/random-bot-population.md)
+  for how factory refills and Overseer retirement affect the classic realm census.
 - **Key prefix.** The keys are `Playerbots.*`. Older docs say `AiPlayerbot.*`.
 - **Random-bot gate.** Many upstream systems return early unless the bot is a
   random bot. Roster characters use named accounts, so they are not. Check that

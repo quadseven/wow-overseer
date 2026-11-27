@@ -403,6 +403,8 @@ def door_unreachable(keyword: str, restarts) -> Stuck | None:
 # breaker's bounds and verdict are untouched, and at its bound the
 # breaker speaks, not the slope.
 SLOPE_RESTART_BOUND = 3
+# Retained in the pace row whether a door is left or an order is held.
+RESTART_SLOPE_REASON = "on the climb to the wedge"
 
 
 def door_restart_slope(keyword: str, restarts) -> Stuck | None:
@@ -427,8 +429,8 @@ def door_restart_slope(keyword: str, restarts) -> Stuck | None:
     return _wedged(
         keyword,
         "the leader's walk to the door ended and restarted %d times without "
-        "arriving, on the climb to the wedge; the run is stood down and "
-        "the door left before the wedge forms" % quick,
+        "arriving, %s; the run is stood down and "
+        "the door left before the wedge forms" % (quick, RESTART_SLOPE_REASON),
     )
 
 
