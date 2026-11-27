@@ -13,6 +13,7 @@ at the end, which is what refuses a NEW aim writer that asks nobody.
 import ast
 import asyncio
 import importlib
+import inspect
 import pathlib
 import types
 import unittest
@@ -29,6 +30,7 @@ import jev_family_intent
 import jobs
 import professions
 import townslot
+import weaponskill
 
 BRIDGE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
     encoding="utf-8"
@@ -468,10 +470,10 @@ def _mentions(node) -> set:
     return out
 
 
-def _module_strings() -> dict:
-    """bridge.py's module-level NAME = "text" constants."""
+def _module_strings(tree) -> dict:
+    """The module's NAME = "text" constants."""
     out = {}
-    for node in TREE.body:
+    for node in tree.body:
         if (
             isinstance(node, ast.Assign)
             and isinstance(node.value, ast.Constant)
@@ -497,9 +499,12 @@ def _claimant_of(arg, constants) -> str | None:
 
 
 class NoAimWriterBypassesTheHelper(unittest.TestCase):
-    """The scan that refuses the next writer. Parsed, never grepped: bridge.py
-    quotes these names in prose while it explains them."""
+    """Parse the town-slot callers so prose cannot count as a claim."""
 
+    MODULES = {
+        "bridge.py": TREE,
+        "weaponskill.py": ast.parse(inspect.getsource(weaponskill)),
+    }
     HELPER = "_economy_aim_hold"
     # The same check over a list of names, for a pass that aims several.
     HELPERS = frozenset({"_economy_aim_hold", "_economy_aimable"})
@@ -515,14 +520,18 @@ class NoAimWriterBypassesTheHelper(unittest.TestCase):
     }
 
     def claims(self):
-        constants = _module_strings()
-        for node in ast.walk(TREE):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == self.DOOR
-            ):
-                yield node.lineno, _claimant_of(node.args[0], constants)
+        for filename, tree in self.MODULES.items():
+            constants = _module_strings(tree)
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == self.DOOR
+                ):
+                    yield (
+                        f"{filename}:{node.lineno}",
+                        _claimant_of(node.args[0], constants),
+                    )
 
     def test_the_door_asks_the_helper_before_it_reads_the_slot(self):
         self.assertTrue(
@@ -533,10 +542,10 @@ class NoAimWriterBypassesTheHelper(unittest.TestCase):
     def test_every_pass_that_asks_the_door_is_classified(self):
         known = set(errandgate.ECONOMY_CLAIMANTS) | set(errandgate.OTHER_CLAIMANTS)
         seen, unknown = set(), []
-        for line, claimant in self.claims():
+        for location, claimant in self.claims():
             seen.add(claimant)
             if claimant not in known:
-                unknown.append("line %d: %r" % (line, claimant))
+                unknown.append(f"{location}: {claimant!r}")
         self.assertEqual(
             [],
             unknown,
@@ -555,12 +564,15 @@ class NoAimWriterBypassesTheHelper(unittest.TestCase):
 
     def test_every_writer_beside_the_door_asks_the_helper(self):
         offenders = []
-        for name, node in FUNCTIONS.items():
-            if name == self.DOOR or name in self.NOT_ECONOMY_WRITERS:
-                continue
-            names = _mentions(node)
-            if self.WRITE in names and not names & self.HELPERS:
-                offenders.append("%s (line %d)" % (name, node.lineno))
+        for filename, tree in self.MODULES.items():
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if node.name == self.DOOR or node.name in self.NOT_ECONOMY_WRITERS:
+                    continue
+                names = _mentions(node)
+                if self.WRITE in names and not names & self.HELPERS:
+                    offenders.append(f"{node.name} ({filename}:{node.lineno})")
         self.assertEqual(
             [],
             offenders,

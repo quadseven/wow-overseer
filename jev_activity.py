@@ -28,11 +28,13 @@ WHAT JEV IS OFFERED. Only what the family can carry out now (`options`):
             trainjob.readiness has something to learn (this bridge's family).
   fish      job=fish, mod-overseer's fishing drive (jobs.DRIVES): the bots'
             own fishing AI, which a player reaches for between errands (#267).
-            Offered only with room in every member's bags and the run not
-            withheld. The heuristic schedules a bounded break every few
-            hours, so this path works even while Jev is unavailable. Nothing
-            else writes job=fish, so when its lease ends the bridge puts the
-            family back on the default job and the queue resumes.
+            When some bags are tight, members of this bridge's own family
+            with room, a pole and Fishing below its cap can still go. A
+            family with room in every bag can fish together and use the
+            fishing job's pole supply pass. The
+            heuristic schedules a bounded break every few hours when no run
+            is withheld. When the lease ends, the bridge puts its fishers
+            back on the default job and the queue resumes.
 
 REST IS NOT OFFERED, and that is the honest choice set rather than an
 omission. `jobs.MODES` names `rest` but it is not in `jobs.IMPLEMENTED`, and
@@ -51,8 +53,8 @@ operator named: sell or buy bags.
 ACT MODE WITH A CONFIDENCE FLOOR. `policy` defaults this kind to act at 0.6
 (JEV_MODE_ACTIVITY_CHOICE and JEV_THRESHOLD_ACTIVITY_CHOICE override both).
 The heuristic normally means "carry on with what today's rules are doing".
-One safe exception is a due fishing break: when the family has room in every
-bag, that bounded interlude is carried out even if Jev is slow, down, busy,
+One safe exception is a due fishing break: when a member is ready to fish,
+that bounded interlude is carried out even if Jev is slow, down, busy,
 has no key, or answers below the floor. All other heuristic choices leave
 the existing job and queue alone.
 
@@ -137,8 +139,7 @@ SPREAD = 0.25
 # even while the run can still start. bag_pressure.TOWN_RUN_FREE_SLOTS is the
 # stricter floor at which the run is withheld outright.
 SELL_FREE_SLOTS = 6
-# Fishing fills bags with the catch, so it is offered only while every member
-# has more than this many free slots.
+# A member needs more than this many free slots to take home the catch.
 FISH_FREE_SLOTS = 10
 # A fishing break is an occasional interlude, not a replacement for the
 # campaign. `None` means the family has not fished in this bridge session.
@@ -205,6 +206,9 @@ class Member:
     empty_gear_slots: int | None = None
     trade_goods: int = 0
     recipe: bool = False
+    has_pole: bool = False
+    fishing_skill: int = 0
+    fishing_cap: int = 0
 
 
 @dataclass(frozen=True)
@@ -231,6 +235,7 @@ class Facts:
     # jev_outcomes.history: Jev's recent overrides of this kind, every family,
     # and what followed each (#584). Empty leaves the question as it was.
     history: tuple = ()
+    allow_partial_fishing: bool = False
 
     @property
     def levels(self) -> list:
@@ -251,7 +256,16 @@ class Facts:
 GEAR_SLOTS = tuple(s for s in range(18) if s != 3)
 
 
-def members_from_rows(names, level_rows, free_slots, worn_rows, goods_rows, recipes):
+def members_from_rows(
+    names,
+    level_rows,
+    free_slots,
+    worn_rows,
+    goods_rows,
+    recipes,
+    pole_holders=(),
+    fishing_rows=(),
+):
     """Members, in `names` order, from the bridge's reads. Pure.
 
     A member with no level row is still shown, at level 0, rather than
@@ -264,6 +278,7 @@ def members_from_rows(names, level_rows, free_slots, worn_rows, goods_rows, reci
     goods = _counts(goods_rows, "stacks")
     free = dict(free_slots or {})
     holders = set(recipes or ())
+    fishing = {r["name"]: r for r in fishing_rows}
     return tuple(
         Member(
             name=name,
@@ -273,6 +288,9 @@ def members_from_rows(names, level_rows, free_slots, worn_rows, goods_rows, reci
             empty_gear_slots=_empty(worn, name),
             trade_goods=goods.get(name, 0) if goods else 0,
             recipe=name in holders,
+            has_pole=name in pole_holders,
+            fishing_skill=int(fishing.get(name, {}).get("value") or 0),
+            fishing_cap=int(fishing.get(name, {}).get("max") or 0),
         )
         for name in names
     )
@@ -395,24 +413,34 @@ def options(f: Facts) -> dict:
         )
     if f.can_train:
         out[TRAIN] = "Visit a trainer to learn the ranks and trades waiting."
-    if can_fish(f):
-        out[FISH] = "Take a break by the water: fish together for food and reagents."
+    fishers = fishing_members(f)
+    if fishers:
+        out[FISH] = "Send %s fishing for food and reagents." % ", ".join(fishers)
     return out
 
 
-def can_fish(f: Facts) -> bool:
-    """Fishing fills bags, so it is offered only with room in every member's
-    (and never while the run is withheld for bag space)."""
-    if f.withheld or not f.members:
-        return False
-    return all(
-        m.free_slots is not None and m.free_slots > FISH_FREE_SLOTS for m in f.members
+def fishing_members(f: Facts) -> tuple[str, ...]:
+    """Members to send on a fishing break while no run is withheld."""
+    if f.withheld:
+        return ()
+    roomy = tuple(
+        m
+        for m in f.members
+        if m.free_slots is not None and m.free_slots > FISH_FREE_SLOTS
+    )
+    if len(roomy) == len(f.members):
+        # The whole family on job=fish can take the existing pole-buying trip.
+        return tuple(m.name for m in roomy)
+    if not f.allow_partial_fishing:
+        return ()
+    return tuple(
+        m.name for m in roomy if m.has_pole and 0 < m.fishing_skill < m.fishing_cap
     )
 
 
 def fishing_due(f: Facts) -> bool:
     """Whether the safe fishing interlude is due for this family."""
-    return can_fish(f) and (
+    return bool(fishing_members(f)) and (
         f.minutes_since_fishing is None
         or f.minutes_since_fishing >= FISH_INTERVAL_MINUTES
     )

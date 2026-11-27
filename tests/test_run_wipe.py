@@ -90,6 +90,49 @@ class TheLoopCarriesItsRun(unittest.TestCase):
         self.assertEqual(out["Clunk"].run, 0)
 
 
+class RunStepDownDecision(unittest.TestCase):
+    def tagged(self, runs):
+        rows = []
+        for name in runs:
+            rows += [dict(d, name=name) for d in five()]
+        found = deathloop.loops(rows, {n: 60 for n in runs})
+        return deathloop.tag_runs(found, runs)
+
+    def test_two_looping_members_of_one_run_give_one_step_down(self):
+        found = self.tagged({"Clunk": RUN, "Brann": RUN})
+        out = deathloop.run_step_downs(found)
+        self.assertEqual(list(out), [RUN])
+        self.assertEqual(out[RUN].members, ("Brann", "Clunk"))
+        self.assertEqual(out[RUN].zone, ZONE)
+        self.assertTrue(out[RUN].reason().startswith("run wipe (run 6257): 2 members"))
+
+    def test_one_looping_member_of_a_run_gives_nothing(self):
+        self.assertEqual(deathloop.run_step_downs(self.tagged({"Clunk": RUN})), {})
+
+    def test_loops_outside_a_run_are_never_grouped(self):
+        self.assertEqual(
+            deathloop.run_step_downs(self.tagged({"Clunk": 0, "Brann": 0})), {}
+        )
+
+    def test_a_run_that_clears_is_untouched_on_the_next_pass(self):
+        runs = {"Clunk": RUN, "Brann": RUN}
+        self.assertEqual(list(deathloop.run_step_downs(self.tagged(runs))), [RUN])
+        # Next pass: the run cleared, so only one member still has the deaths
+        # of a loop and the other has none in the window.
+        rows = [dict(d, name="Clunk") for d in five()]
+        found = deathloop.tag_runs(deathloop.loops(rows, {n: 60 for n in runs}), runs)
+        self.assertEqual(list(found), ["Clunk"])
+        self.assertEqual(deathloop.run_step_downs(found), {})
+        # And once no member dies at all, nothing is grouped.
+        cleared = deathloop.tag_runs(deathloop.loops([], {n: 60 for n in runs}), runs)
+        self.assertEqual(deathloop.run_step_downs(cleared), {})
+
+    def test_two_runs_are_judged_apart(self):
+        found = self.tagged({"Clunk": RUN, "Brann": RUN + 1})
+        self.assertEqual(deathloop.run_step_downs(found), {})
+        self.assertEqual(deathloop.run_step_downs(None), {})
+
+
 class TheStuckReaderNamesTheWipe(unittest.TestCase):
     def test_a_member_in_a_live_run_is_listed_as_a_run_wipe_and_still_counted(self):
         view = members.stuck_view(roster(five(), {"Clunk": RUN}))
