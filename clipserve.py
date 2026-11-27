@@ -1,7 +1,7 @@
-"""Serving a saved clip: the Range header, and a file streamed in chunks.
+"""Serving a saved clip or its poster: the Range header, and chunked files.
 
 Pure apart from the file it is handed: no database, no request object. The map
-server decides WHICH file (only a name the ledger holds as ready) and passes an
+server decides WHICH file (a ready clip or its derived poster) and passes an
 open file here; nothing in this module sees a request path.
 """
 
@@ -76,10 +76,16 @@ def stream(
     return sent
 
 
-def headers(size: int, span, *, send: Callable[[str, str], None]) -> int:
+def headers(
+    size: int,
+    span,
+    *,
+    send: Callable[[str, str], None],
+    content_type: str = CONTENT_TYPE,
+) -> int:
     """Send the entity headers for `span` (None = whole file). Returns the
     status: 200 whole, 206 partial."""
-    send("Content-Type", CONTENT_TYPE)
+    send("Content-Type", content_type)
     send("Accept-Ranges", "bytes")
     if span is None:
         send("Content-Length", str(size))

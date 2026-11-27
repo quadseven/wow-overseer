@@ -4659,9 +4659,27 @@ def _read_boss_kills(roster: list, subjects: list) -> list:
 
 _CLIP_SHELF_SQL = (
     "SELECT id, kind, `character`, event_at, state, file_name, detail"
-    " FROM overseer_clip"
+    ", event_key FROM overseer_clip"
     " WHERE state = 'ready' AND file_name IS NOT NULL"
     " ORDER BY event_at DESC, id DESC LIMIT %s"
+)
+
+_CLIP_SHELF_EVENTS_SQL = (
+    "SELECT id, kind, character_name, subject_id, subject_name, subject_quality, "
+    "map, zone, source, first_seen FROM overseer_event "
+    "WHERE id IN ({holes}) AND kind = 'item_loot'"
+)
+
+_CLIP_SHELF_ITEMS_SQL = (
+    "SELECT entry, name, Quality AS quality, displayid "
+    "FROM acore_world.item_template WHERE entry IN ({holes})"
+)
+
+_CLIP_SHELF_RUNS_SQL = (
+    "SELECT id, map_id, started_at, ended_at FROM overseer_dungeon_run "
+    "WHERE map_id IN ({holes}) AND started_at <= %s "
+    "AND (ended_at IS NULL OR ended_at >= %s) "
+    "ORDER BY started_at DESC LIMIT 1000"
 )
 
 _CLIP_MISSED_SQL = (
@@ -4670,20 +4688,67 @@ _CLIP_MISSED_SQL = (
     " ORDER BY event_at DESC, id DESC LIMIT %s"
 )
 
+
+def _clip_shelf_payload(read, rows: list, lost: list, *, icons=None, zones=None) -> dict:
+    """Join ready loot clips to their item, zone and unique dungeon run facts."""
+    event_ids = clipledger.loot_event_ids(rows)
+    events = []
+    if event_ids:
+        holes = ", ".join(["%s"] * len(event_ids))
+        events = read.rows(
+            _CLIP_SHELF_EVENTS_SQL.format(holes=holes),
+            tuple(event_ids),
+            what="clip shelf loot events",
+        )
+
+    entries = clipledger.item_entries(events)
+    items = []
+    if entries:
+        holes = ", ".join(["%s"] * len(entries))
+        items = read.rows(
+            _CLIP_SHELF_ITEMS_SQL.format(holes=holes),
+            tuple(entries),
+            what="clip shelf items",
+        )
+
+    run_rows = []
+    maps, earliest, latest = clipledger.run_context_window(events)
+    if maps:
+        holes = ", ".join(["%s"] * len(maps))
+        try:
+            run_rows = read.rows(
+                _CLIP_SHELF_RUNS_SQL.format(holes=holes),
+                (*maps, latest, earliest),
+                what="clip shelf dungeon runs",
+            )
+        except realmread.Gap as gap:
+            if gap.code != realmread.MISSING_TABLE:
+                raise
+            log.info("clip shelf run context unavailable (no run table)")
+
+    return clipledger.shelf(
+        [*rows, *lost],
+        event_rows=events,
+        item_rows=items,
+        run_rows=run_rows,
+        icons=ITEMS.icons if icons is None else icons,
+        zones=recap.zone_names(GEO.continents) if zones is None else zones,
+    )
+
 _LEDGER_DOWN = object()
 
 
 def _ready_clip_path(name: str):
-    """The path of the ready clip whose ledger file_name is `name`, or "" for
-    anything else (no directory, no ready row, a stored name that is not one
-    plain file name, a file outside the directory). _LEDGER_DOWN when the
-    ledger cannot be read."""
+    """A ready video or its derived poster path, else ""; ledger errors return
+    _LEDGER_DOWN. The video name remains the only file name stored in the row."""
     root = os.path.realpath(CLIPS_DIR) if CLIPS_DIR else ""
     if not root or not os.path.isdir(root):
         return ""
+    poster_request = name.endswith("-poster.jpg")
+    video_name = name[:-len("-poster.jpg")] + ".mp4" if poster_request else name
     try:
         with realmread.Session(_connect) as rd:
-            rows = rd.rows(_CLIP_FILE_SQL, (name,), what="a clip file")
+            rows = rd.rows(_CLIP_FILE_SQL, (video_name,), what="a clip file")
     except (pymysql.err.MySQLError, OSError):
         # What a ledger read raises: the driver's errors (the same class the
         # rest of this file catches) and a refused or dropped connection. A
@@ -4693,6 +4758,11 @@ def _ready_clip_path(name: str):
     stored = (rows[0].get("file_name") or "") if rows else ""
     if not stored or stored != os.path.basename(stored) or stored.startswith("."):
         return ""
+    if poster_request:
+        poster = clipledger.poster_name(stored)
+        if not poster or name != poster:
+            return ""
+        stored = poster
     full = os.path.realpath(os.path.join(root, stored))
     return full if full.startswith(root + os.sep) and os.path.isfile(full) else ""
 
@@ -6011,9 +6081,9 @@ class Handler(BaseHTTPRequestHandler):
     def _clip_file(self, name: str) -> None:
         """GET /clips/<file> - a saved clip, streamed, with Range support.
 
-        Only a file name the ledger holds in a ready row is served, and the
-        file opened is the one the ROW names, never the request's text. No
-        directory, or no such row or file, is a 404 and no error.
+        A video is served only under the filename in a ready row; its poster
+        is served only as the derived sibling of that row's video. No
+        directory, row or file is a 404 and no error.
         """
         found = _ready_clip_path(name)
         if found is _LEDGER_DOWN:
@@ -6036,7 +6106,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             self.send_response(206 if span else 200)
-            clipserve.headers(size, span, send=self.send_header)
+            content_type = "image/jpeg" if name.endswith("-poster.jpg") else clipserve.CONTENT_TYPE
+            clipserve.headers(
+                size, span, send=self.send_header, content_type=content_type
+            )
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             first, last = span if span else (0, size - 1)
@@ -7782,19 +7855,21 @@ class Handler(BaseHTTPRequestHandler):
 
     @_get_route("clip shelf query failed", default=str)
     def _clips(_query: dict, ctx) -> tuple[int, dict]:
-        """GET /api/clips - the saved clips, newest first, each naming whose view it shows.
+        """GET /api/clips - saved clips, newest first, with posters, loot item data, and place context.
 
         Only clips in a ready row, each with its kind, character, event time
         and the URL the file is served at, plus `view_owner`, the member whose
         live view the clip shows (the subject unless the ledger detail names
-        the leader or a party member). A realm with no ledger yet answers
-        an empty shelf. A failed read answers 503 (_answer).
+        the leader or a party member). Loot clips also include their item
+        name, quality and icon, plus the dungeon run and boss or the open-world
+        zone. A realm with no ledger yet answers an empty shelf. A failed read
+        answers 503 (_answer).
         """
         rows = ctx.read.rows(_CLIP_SHELF_SQL, (clipledger.SHELF_LIMIT,),
                              what="the clip shelf")
         lost = ctx.read.rows(_CLIP_MISSED_SQL, (clipledger.MISSED_LIMIT,),
                              what="the clip shelf")
-        return 200, clipledger.shelf([*rows, *lost])
+        return 200, _clip_shelf_payload(ctx.read, rows, lost)
 
     def _cutter_refused(self) -> bool:
         """True after answering a cutter call that lacks the cutter token."""

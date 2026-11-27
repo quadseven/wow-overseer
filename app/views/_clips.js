@@ -2,10 +2,10 @@
 //
 // The server decides everything here. /api/clips lists the ready clips, newest
 // first, each with the URL the file is served at, a poster frame beside the
-// video, and - for loot - the item's quality colour and icon plus a context
+// video, and - for loot - the item's quality color and icon plus a context
 // line (run and boss for a dungeon drop, zone for open-world). A clip plays in
-// place in the browser's own video element; nothing is fetched but its
-// metadata until Play.
+// place in the browser's own video element; the video loads only after Play,
+// while its poster loads lazily.
 
 import { html, state, pendingRead, item, esc } from "../ui.js";
 import { u } from "../api.js";

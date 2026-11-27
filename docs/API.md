@@ -21,7 +21,8 @@ otherwise). What else bounds the damage: every state change
 is conditional on the row's current state and a lost race answers 409;
 an upload is capped at 128 MiB, must start with an MP4 `ftyp` box, is
 saved only under a name derived from the row, and never overwrites an
-existing file; a note or reason may not contain the planner's `view:`
+existing file; ffmpeg extracts a poster frame before the row becomes
+ready; a note or reason may not contain the planner's `view:`
 marker. An upload is refused (404 or 409) before its body is read unless
 the row is `cutting` with no file; at most 2 uploads run at once (a third
 answers 503); the body must arrive within 600 seconds, and no single read
@@ -92,7 +93,7 @@ body is read.
 ## `GET /api/clips`
 
 - Query: none
-- Answers: the saved clips, newest first, each naming whose view it shows.
+- Answers: saved clips, newest first, with posters, loot item data, and place context.
 - Example: `overseer get /api/clips`
 
 ## `GET /api/clips/pending`

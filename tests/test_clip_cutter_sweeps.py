@@ -22,6 +22,12 @@ with stub_modules(pymysql=PYMYSQL):
     from clip_fakes import clip_row
     from cutter_fakes import NOW, CutterLedger
 
+JPEG = b"\xff\xd8poster-frame\xff\xd9"
+
+
+def write_test_poster(_video_path, poster_path):
+    pathlib.Path(poster_path).write_bytes(JPEG)
+
 
 class Rules(unittest.TestCase):
     def test_ftyp_box_is_required_at_byte_four(self):
@@ -97,10 +103,13 @@ class ExpiredFiles(unittest.TestCase):
 
     def test_an_expired_row_loses_its_file_and_becomes_deleted(self):
         path = pathlib.Path(self.dir) / "clip-1-loot.mp4"
+        poster = pathlib.Path(self.dir) / "clip-1-loot-poster.jpg"
         path.write_bytes(b"x")
+        poster.write_bytes(b"x")
         count = self.sweep([clip_row(state="expired", detail="kept")])
         self.assertEqual(count, 1)
         self.assertFalse(path.exists())
+        self.assertFalse(poster.exists())
         self.assertEqual(self.ledger.rows[0]["state"], "deleted")
         self.assertEqual(self.ledger.rows[0]["detail"], "kept")
 
@@ -177,7 +186,7 @@ class TheTick(unittest.TestCase):
 
 
 class PartialUploads(unittest.TestCase):
-    """#2251: a pod killed during an upload leaves its .upload-*.part behind."""
+    """A stopped upload or poster render leaves a prefixed temporary file."""
 
     CLOCK = 2_000_000.0
 
@@ -200,6 +209,13 @@ class PartialUploads(unittest.TestCase):
         self.assertEqual(self.sweep(), 1)
         self.assertFalse(old.exists())
 
+    def test_a_partial_poster_past_the_bound_is_removed(self):
+        old = self.aged(".upload-abc123.jpg", clipcutter.PART_MAX_AGE + 1)
+        young = self.aged(".upload-young.jpg", 5)
+        self.assertEqual(self.sweep(), 1)
+        self.assertFalse(old.exists())
+        self.assertTrue(young.exists())
+
     def test_a_partial_upload_at_the_bound_or_younger_is_kept(self):
         edge = self.aged(".upload-edge.part", clipcutter.PART_MAX_AGE)
         young = self.aged(".upload-young.part", 5)
@@ -214,6 +230,7 @@ class PartialUploads(unittest.TestCase):
         year = 365 * 24 * 3600
         kept = [
             self.aged("clip-1-loot.mp4", year),
+            self.aged("clip-1-loot-poster.jpg", year),
             self.aged("clip-2-boss_kill.mp4.part", year),
             self.aged(".upload-not-a-part.mp4", year),
             self.aged("upload-abc.part", year),
@@ -246,7 +263,12 @@ class PartialUploads(unittest.TestCase):
 
         body = b"\x00\x00\x00\x18ftypisom" + b"\x01" * 64
         ledger = CutterLedger([clip_row(state="cutting", file_name=None)])
-        with mock.patch.object(clipcutter.tempfile, "mkstemp", spy):
+        with (
+            mock.patch.object(clipcutter.tempfile, "mkstemp", spy),
+            mock.patch.object(
+                clipcutter, "write_poster", side_effect=write_test_poster
+            ),
+        ):
             code, _p = clipcutter.upload(
                 lambda: ledger, "1", io.BytesIO(body), len(body), str(self.dir), ""
             )
@@ -434,12 +456,18 @@ class Upload(unittest.TestCase):
                 return super().read1(n)
 
         ledger = CutterLedger([clip_row(state="cutting", file_name=None)])
-        code, _p = clipcutter.upload(
-            lambda: ledger, "1", Counting(body), len(body), tmp.name, ""
-        )
+        with mock.patch.object(
+            clipcutter, "write_poster", side_effect=write_test_poster
+        ):
+            code, _p = clipcutter.upload(
+                lambda: ledger, "1", Counting(body), len(body), tmp.name, ""
+            )
         self.assertEqual(code, 200)
         self.assertTrue(0 < Counting.biggest <= clipcutter.CHUNK)
-        self.assertEqual(os.listdir(tmp.name), ["clip-1-loot.mp4"])
+        self.assertEqual(
+            sorted(os.listdir(tmp.name)),
+            ["clip-1-loot-poster.jpg", "clip-1-loot.mp4"],
+        )
 
 
 class Conn:
@@ -470,6 +498,11 @@ class UploadCase(unittest.TestCase):
         self.dir = tmp.name
         self.ledger = CutterLedger([clip_row(state="cutting", file_name=None)])
         self.conn = Conn(self.ledger)
+        poster_patch = mock.patch.object(
+            clipcutter, "write_poster", side_effect=write_test_poster
+        )
+        poster_patch.start()
+        self.addCleanup(poster_patch.stop)
 
     def upload(self, rfile, length, **kw):
         return clipcutter.upload(self.conn, "1", rfile, length, self.dir, "", **kw)

@@ -9,6 +9,8 @@ import json
 import re
 import unittest
 
+import clipledger
+
 from test_app_flagship import app_file, needs_node, run_node
 
 API_STUB = (
@@ -97,6 +99,105 @@ class TheShelf(unittest.TestCase):
         self.assertIn("2026-11-10: 2 with no streamed member in view", m)
         self.assertIn("1 where recording failed", m)
         self.assertNotIn("2026-11-09", m)
+
+    def test_loot_event_fixtures_render_item_context_and_missed_counts(self):
+        rows = [
+            {
+                "id": 1,
+                "event_key": "loot:101",
+                "kind": "loot",
+                "character": "Testchar",
+                "event_at": "2026-11-12T22:27:00",
+                "state": "ready",
+                "file_name": "clip-1-loot.mp4",
+                "detail": "Shadowblade",
+            },
+            {
+                "id": 2,
+                "event_key": "loot:102",
+                "kind": "loot",
+                "character": "Testchar",
+                "event_at": "2026-11-13T10:57:00",
+                "state": "ready",
+                "file_name": "clip-2-loot.mp4",
+                "detail": "Shadowblade",
+            },
+            {
+                "id": 3,
+                "kind": "loot",
+                "character": "Testchar",
+                "event_at": "2026-11-13T11:00:00",
+                "state": "failed",
+                "detail": "encoder failed",
+            },
+            {
+                "id": 4,
+                "kind": "loot",
+                "character": "Testchar",
+                "event_at": "2026-11-13T11:01:00",
+                "state": "no_view",
+                "detail": "no streamed member in the run",
+            },
+        ]
+        event_rows = [
+            {
+                "id": event_id,
+                "kind": "item_loot",
+                "character_name": "Testchar",
+                "subject_id": 18821,
+                "subject_name": "Shadowblade",
+                "subject_quality": 4,
+                "map": 230,
+                "zone": 0,
+                "source": source,
+                "first_seen": at,
+            }
+            for event_id, at, source in (
+                (101, "2026-11-12T22:27:00", "General Angerforge"),
+                (102, "2026-11-13T10:57:00", "Houndmaster Grebmar"),
+            )
+        ]
+        payload = clipledger.shelf(
+            rows,
+            event_rows=event_rows,
+            item_rows=[
+                {"entry": 18821, "name": "Shadowblade", "quality": 4, "displayid": 77}
+            ],
+            run_rows=[
+                {
+                    "id": 42,
+                    "map_id": 230,
+                    "started_at": "2026-11-12T22:00:00",
+                    "ended_at": "2026-11-12T23:10:00",
+                },
+                {
+                    "id": 43,
+                    "map_id": 230,
+                    "started_at": "2026-11-13T10:00:00",
+                    "ended_at": "2026-11-13T11:10:00",
+                },
+            ],
+            icons={77: "inv_sword_04"},
+            zones={10: "Duskwood"},
+        )
+        m = self.draw({"data": payload, "loading": False})
+
+        self.assertEqual(m.count('class="card clip-card"'), 2)
+        self.assertEqual(m.count('class="item q4"'), 2)
+        self.assertIn("Blackrock Depths run 42, General Angerforge", m)
+        self.assertIn("Blackrock Depths run 43, Houndmaster Grebmar", m)
+        self.assertIn("q4", m)
+        self.assertIn("inv_sword_04.jpg", m)
+        self.assertIn('src="/m/clips/clip-1-loot-poster.jpg"', m)
+        self.assertIn('src="/m/clips/clip-2-loot-poster.jpg"', m)
+        self.assertIn("1 of 2", m)
+        self.assertIn("2 of 2", m)
+        self.assertIn(
+            "2026-11-13: 1 with no streamed member in view, 1 where recording failed.",
+            m,
+        )
+        self.assertNotIn("encoder failed", m)
+        self.assertNotIn("no streamed member in the run", m)
 
     def test_only_missed_moments_still_show_the_footer(self):
         missed = [{"day": "2026-11-10", "no_view": 1, "failed": 0}]
@@ -347,6 +448,7 @@ class TheShelfIsWiredIntoTheChronicle(unittest.TestCase):
         css = app_file("views/clips.css")
         self.assertIn("max-width: 100%", css)
         self.assertIn("min-height: 44px", css)
+        self.assertIn("padding-bottom: calc(var(--tabbar-h) + 56px)", css)
 
 
 if __name__ == "__main__":

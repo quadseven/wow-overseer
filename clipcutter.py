@@ -1,9 +1,11 @@
 """The cutter API: what a capture host that has only HTTP needs from the ledger.
 
-It lists pending rows, claims one, hands a file over and reports a drop. The
-rules live here and the handlers in map_server stay thin. Every state change is
-one conditional UPDATE that names the state it replaces, and a change that
-matched no row is a 409, never a quiet success. Every refusal is a sentence.
+It lists pending rows, claims one, hands a file over with its poster frame and
+reports a drop. Each saved clip has a JPEG frame beside it. The rules live
+here and the handlers in map_server stay thin.
+Every state change is one conditional UPDATE that names the state it replaces,
+and a change that matched no row is a 409, never a quiet success. Every refusal
+is a sentence.
 
 Nothing the request writes reaches a file name, a path or a state: the name is
 derived from the row, the state is one of two words, and every value is bound.
@@ -16,6 +18,7 @@ import hmac
 import os
 import re
 import stat
+import subprocess
 import tempfile
 import threading
 import time
@@ -130,6 +133,54 @@ def file_name(row_id: int, kind: str) -> str | None:
     if not isinstance(kind, str) or not _KIND.fullmatch(kind):
         return None
     return "clip-%d-%s.mp4" % (row_id, kind)
+
+
+def poster_name(file_name: str) -> str | None:
+    """The JPEG frame name beside an MP4 clip, or None for another name."""
+    if not file_name or not file_name.lower().endswith(".mp4"):
+        return None
+    return file_name[:-4] + "-poster.jpg"
+
+
+def write_poster(video_path: str, poster_path: str) -> None:
+    """Extract the first frame of a clip as a JPEG using the shipped ffmpeg."""
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                video_path,
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=640:360:force_original_aspect_ratio=decrease",
+                "-q:v",
+                "4",
+                poster_path,
+            ],
+            check=False,
+            capture_output=True,
+            timeout=30,
+        )
+    except OSError as exc:
+        raise RuntimeError(
+            "ffmpeg could not run: %s" % (exc.strerror or "I/O error")
+        ) from exc
+    if result.returncode:
+        raise RuntimeError("ffmpeg exited with status %d" % result.returncode)
+    with open(poster_path, "rb") as poster:
+        if os.fstat(poster.fileno()).st_size < 4:
+            raise RuntimeError("ffmpeg did not write a JPEG frame")
+        head = poster.read(2)
+        poster.seek(-2, os.SEEK_END)
+        tail = poster.read(2)
+    if head != b"\xff\xd8" or tail != b"\xff\xd9":
+        raise RuntimeError("ffmpeg did not write a JPEG frame")
 
 
 def clean_note(raw) -> str:
@@ -268,10 +319,9 @@ def result(cur, raw_id, state, reason):
 def sweep_partials(root: str, now: float | None = None) -> int:
     """Remove the partial uploads in `root` a dead process left behind.
 
-    A partial upload is a regular file directly in `root` named
-    PART_PREFIX...PART_SUFFIX, which is the only name `_receive` writes a body
-    under; a finished clip is renamed out of that shape, so no rule here can
-    reach one. One is removed only when it was last written more than
+    Partial upload bodies use PART_PREFIX...PART_SUFFIX; poster frames use
+    PART_PREFIX...`.jpg`. Finished clips have neither shape, so this cannot
+    reach one. A partial is removed only when it was last written more than
     PART_MAX_AGE seconds before `now` (the wall clock when left out). A folder
     or a link with the name is left alone. A file that cannot be read or
     removed logs one warning and the pass goes on. Returns how many it removed.
@@ -283,7 +333,7 @@ def sweep_partials(root: str, now: float | None = None) -> int:
         return 0
     removed = 0
     for name in names:
-        if not (name.startswith(PART_PREFIX) and name.endswith(PART_SUFFIX)):
+        if not (name.startswith(PART_PREFIX) and name.endswith((PART_SUFFIX, ".jpg"))):
             continue
         path = os.path.join(root, name)
         try:
@@ -304,8 +354,10 @@ def _discard(path):
         return
     try:
         os.unlink(path)
-    except OSError:
-        pass
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        log.warning("clip file cleanup failed: %s", exc.strerror or exc)
 
 
 class _Late(TimeoutError):
@@ -403,7 +455,12 @@ def _precheck(connect, raw_id, root, stream_path=""):
     if row["state"] != "cutting":
         return _moved(row)
     name = file_name(row["id"], row["kind"])
-    if row.get("file_name") or (name and os.path.lexists(os.path.join(root, name))):
+    poster = poster_name(name) if name else None
+    if (
+        row.get("file_name")
+        or (name and os.path.lexists(os.path.join(root, name)))
+        or (poster and os.path.lexists(os.path.join(root, poster)))
+    ):
         return _err(409, _EXISTS)
     return None
 
@@ -426,12 +483,12 @@ def upload(
     under the name the row gives, then the row becomes ready.
 
     At most MAX_UPLOADS run at once (503 past that). The row is checked first
-    with a short read; then the whole body lands in a temporary file with no
-    connection held; then `connect()` opens a cursor only for the conditional
-    UPDATE and the link into place. The link fails if the name exists, so an
-    existing file is never overwritten. A row that moved on while the body
-    streamed loses its new file. A `stream_path` the caller names must be the
-    row's own (403 otherwise)."""
+    with a short read; then the whole body and poster land in temporary files
+    with no connection held. `connect()` opens a cursor for the final row
+    check, links both files, and conditional UPDATE. A link fails if a name
+    exists, so existing files are never overwritten. A row that moved on while
+    the body streamed loses its new files. A `stream_path` the caller names
+    must be the row's own (403 otherwise)."""
     if parse_id(raw_id) is None:
         return _err(400, "The id must be a whole number above zero, as id=N.")
     note = clean_note(raw_note)
@@ -456,57 +513,117 @@ def _store(connect, raw_id, rfile, length, root, note, clock, bound, stream_path
     tmp, refusal = stage(rfile, length, root, clock, bound)
     if refusal:
         return refusal
+    poster_tmp = None
     try:
-        with connect() as cur:
-            row, refusal = _find(cur, raw_id)
-            if refusal:
-                return refusal
-            refusal = owns(row, stream_path)
-            if refusal:
-                return refusal
-            if row["state"] != "cutting":
-                return _moved(row)
-            name = file_name(row["id"], row["kind"])
-            if name is None:
-                return _err(
-                    409, "That clip request has a kind that cannot be saved as a file."
-                )
-            target = os.path.join(root, name)
-            if os.path.lexists(target):
-                return _err(409, _EXISTS)
-            try:
-                os.link(tmp, target)
-            except FileExistsError:
-                return _err(409, _EXISTS)
-            try:
-                cur.execute(_READY, (name, note, row["id"]))
-                landed = cur.rowcount
-            except BaseException:
-                _discard(target)
-                raise
-            if not landed:
-                _discard(target)
-                return _moved(_lookup(cur, row["id"]) or row)
-            poster = poster_name(name)
-            if poster:
-                poster_path = os.path.join(root, poster)
-                try:
-                    # "x": create only if missing; a ready row is never overwritten.
-                    fd = os.open(poster_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-                    os.close(fd)
-                except FileExistsError:
-                    pass
-                except OSError as exc:
-                    # A poster is a frame beside the video; the clip is still
-                    # ready without one, so log and continue instead of failing.
-                    log.warning("clip %s poster not written: %s", row["id"], exc.strerror or exc)
-            return 200, _public(_lookup(cur, row["id"]), *_COLUMNS.split(", "))
+        poster_tmp, refusal = _stage_poster(tmp, root, raw_id)
+        if refusal:
+            return refusal
+        return _land(connect, raw_id, stream_path, root, tmp, poster_tmp, note)
     finally:
         _discard(tmp)
+        _discard(poster_tmp)
 
 
-def poster_name(file_name: str) -> str | None:
-    """The poster frame name kept beside a clip, or None for a non-mp4 name."""
-    if not file_name or not file_name.lower().endswith(".mp4"):
-        return None
-    return file_name[:-4] + "-poster.jpg"
+def _cutting_row(cur, raw_id, stream_path):
+    row, refusal = _find(cur, raw_id)
+    if refusal:
+        return None, refusal
+    refusal = owns(row, stream_path)
+    if refusal:
+        return None, refusal
+    if row["state"] != "cutting":
+        return None, _moved(row)
+    if file_name(row["id"], row["kind"]) is None:
+        return None, _err(
+            409, "That clip request has a kind that cannot be saved as a file."
+        )
+    return row, None
+
+
+def _clip_targets(root, row):
+    name = file_name(row["id"], row["kind"])
+    poster = poster_name(name)
+    if poster is None:
+        return (
+            None,
+            None,
+            _err(409, "That clip request does not have a poster file name."),
+        )
+    target = os.path.join(root, name)
+    poster_target = os.path.join(root, poster)
+    if os.path.lexists(target) or os.path.lexists(poster_target):
+        return None, None, _err(409, _EXISTS)
+    return target, poster_target, None
+
+
+def _stage_poster(video_tmp, root, raw_id):
+    poster_tmp = None
+    try:
+        fd, poster_tmp = tempfile.mkstemp(prefix=PART_PREFIX, suffix=".jpg", dir=root)
+        os.close(fd)
+    except OSError as exc:
+        _discard(poster_tmp)
+        return None, _folder_error(exc)
+    try:
+        write_poster(video_tmp, poster_tmp)
+    except (RuntimeError, subprocess.SubprocessError) as exc:
+        _discard(poster_tmp)
+        log.warning("clip %s poster generation failed: %s", raw_id, exc)
+        return None, _err(
+            503, "The poster frame could not be generated; the clip was not saved."
+        )
+    except OSError as exc:
+        _discard(poster_tmp)
+        return None, _folder_error(exc)
+    return poster_tmp, None
+
+
+def _folder_error(exc):
+    return _err(
+        507,
+        "The clip folder could not be written: %s." % (exc.strerror or "I/O error"),
+    )
+
+
+def _link_targets(video_tmp, poster_tmp, target, poster_target):
+    try:
+        os.link(video_tmp, target)
+    except FileExistsError:
+        return _err(409, _EXISTS)
+    except OSError as exc:
+        return _folder_error(exc)
+    try:
+        os.link(poster_tmp, poster_target)
+    except FileExistsError:
+        _discard(target)
+        return _err(409, _EXISTS)
+    except OSError as exc:
+        _discard(target)
+        return _folder_error(exc)
+    return None
+
+
+def _land(connect, raw_id, stream_path, root, video_tmp, poster_tmp, note):
+    with connect() as cur:
+        row, refusal = _cutting_row(cur, raw_id, stream_path)
+        if refusal:
+            return refusal
+        target, poster_target, refusal = _clip_targets(root, row)
+        if refusal:
+            return refusal
+        refusal = _link_targets(video_tmp, poster_tmp, target, poster_target)
+        if refusal:
+            return refusal
+        try:
+            cur.execute(_READY, (os.path.basename(target), note, row["id"]))
+            if not cur.rowcount:
+                moved = _lookup(cur, row["id"]) or row
+                _discard(target)
+                _discard(poster_target)
+                return _moved(moved)
+            saved = _lookup(cur, row["id"])
+            return 200, _public(saved, *_COLUMNS.split(", "))
+        except BaseException:
+            _discard(target)
+            _discard(poster_target)
+            raise

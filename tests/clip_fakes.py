@@ -38,8 +38,11 @@ def clip_row(**over):
 class FakeLedger:
     """overseer_clip behind `_connect`. Every statement is kept in `asked`."""
 
-    def __init__(self, rows=()):
+    def __init__(self, rows=(), *, events=(), items=(), runs=()):
         self.rows = [dict(r) for r in rows]
+        self.events = [dict(r) for r in events]
+        self.items = [dict(r) for r in items]
+        self.runs = [dict(r) for r in runs]
         self.asked = []
         self._answer = []
 
@@ -61,6 +64,15 @@ class FakeLedger:
     def execute(self, sql, params=()):
         params = tuple(params or ())
         self.asked.append((sql, params))
+        if "FROM overseer_event" in sql:
+            self._answer = list(self.events)
+            return
+        if "FROM acore_world.item_template" in sql:
+            self._answer = list(self.items)
+            return
+        if "FROM overseer_dungeon_run" in sql:
+            self._answer = list(self.runs)
+            return
         rows = list(self.rows)
         if "state = 'ready'" in sql:
             rows = [r for r in rows if r["state"] == "ready"]

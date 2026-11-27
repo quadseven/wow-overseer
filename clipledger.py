@@ -18,6 +18,7 @@ from urllib.parse import quote
 import achievements
 import eventclips
 import eye
+import places
 
 log = logging.getLogger(__name__)
 
@@ -620,33 +621,47 @@ FILE_MISSING_DETAIL = "file was already missing"
 
 
 def delete_expired(cur, root: str) -> int:
-    """Remove the file of each expired row from `root`, then mark the row
-    deleted. A missing file, or a stored name that is not one plain file name,
-    still ends in deleted, with a note. A file that cannot be removed for
-    another reason leaves its row expired, logs one warning, and the pass goes
-    on. Returns how many rows the update took.
+    """Remove each expired clip and its poster, then mark the row deleted.
+
+    A missing file, or a stored name that is not one plain file name, still
+    ends in deleted, with a note. A file that cannot be removed for another
+    reason leaves its row expired, logs one warning, and the pass goes on.
+    Returns how many rows the update took.
     """
     cur.execute(_EXPIRED_SELECT)
     done = 0
     for r in cur.fetchall():
-        name = r.get("file_name") or ""
-        note = FILE_MISSING_DETAIL
-        if name and name == os.path.basename(name) and not name.startswith("."):
-            try:
-                os.unlink(os.path.join(root, name))
-                note = ""
-            except FileNotFoundError:
-                pass
-            except OSError as exc:
-                log.warning(
-                    "expired clip %s: file not removed, row stays expired: %s",
-                    r["id"],
-                    exc.strerror or exc,
-                )
-                continue
+        note, error = _remove_expired_files(root, r.get("file_name") or "")
+        if error:
+            log.warning(
+                "expired clip %s: files not removed, row stays expired: %s",
+                r["id"],
+                error.strerror or error,
+            )
+            continue
         cur.execute(_TO_DELETED, (note, r["id"]))
         done += 1 if cur.rowcount else 0
     return done
+
+
+def _remove_expired_files(root: str, name: str) -> tuple[str, OSError | None]:
+    if not name or name != os.path.basename(name) or name.startswith("."):
+        return FILE_MISSING_DETAIL, None
+    paths = [name]
+    poster = poster_name(name)
+    if poster:
+        paths.append(poster)
+    note = FILE_MISSING_DETAIL
+    for index, file_name in enumerate(paths):
+        try:
+            os.unlink(os.path.join(root, file_name))
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            return note, exc
+        if index == 0:
+            note = ""
+    return note, None
 
 
 def _count(value) -> int:
@@ -701,13 +716,120 @@ def clip_url(file_name: str) -> str:
 
 
 def poster_name(file_name: str) -> str | None:
-    """The poster frame name kept beside a clip, or None for a non-mp4 name.
-
-    The cutter writes an empty placeholder poster next to the video when a clip
-    lands; a real frame can replace it later without changing the name."""
+    """The JPEG frame name saved beside an MP4 clip, or None for another name."""
     if not file_name or not file_name.lower().endswith(".mp4"):
         return None
     return file_name[:-4] + "-poster.jpg"
+
+
+def loot_event_ids(rows: Iterable[Mapping]) -> list[int]:
+    """The event ids needed to enrich ready loot clips, in ledger order."""
+    found = set()
+    for row in rows:
+        if row.get("kind") != "loot" or row.get("state") != "ready":
+            continue
+        if not row.get("file_name"):
+            continue
+        match = re.fullmatch(r"loot:(\d+)", str(row.get("event_key") or ""))
+        if match:
+            found.add(int(match.group(1)))
+    return sorted(found)
+
+
+def _loot_event_id(row: Mapping) -> int | None:
+    match = re.fullmatch(r"loot:(\d+)", str(row.get("event_key") or ""))
+    return int(match.group(1)) if match else None
+
+
+def item_entries(event_rows: Iterable[Mapping]) -> list[int]:
+    """The distinct item entries in the shelf's matching loot events."""
+    return sorted(
+        {
+            int(row["subject_id"])
+            for row in event_rows
+            if row.get("kind") == "item_loot" and row.get("subject_id")
+        }
+    )
+
+
+def run_context_window(
+    event_rows: Iterable[Mapping],
+) -> tuple[list[int], datetime | None, datetime | None]:
+    """(instance maps, earliest event, latest event) to bound the run read."""
+    events = [
+        row
+        for row in event_rows
+        if row.get("kind") == "item_loot" and places.is_instance(row.get("map"))
+    ]
+    times = [_as_datetime(row.get("first_seen")) for row in events]
+    times = [at for at in times if at is not None]
+    maps = sorted({int(row["map"]) for row in events if row.get("map") is not None})
+    if not maps or not times:
+        return [], None, None
+    return maps, min(times), max(times)
+
+
+def _as_datetime(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(
+            tzinfo=None
+        )
+    except ValueError:
+        return None
+
+
+def _loot_item(event: Mapping, templates: Mapping, icons: Mapping) -> dict:
+    entry = int(event.get("subject_id") or 0)
+    template = templates.get(entry) or {}
+    quality = template.get("quality", template.get("Quality"))
+    if quality is None:
+        quality = event.get("subject_quality")
+    display = template.get("displayid")
+    return {
+        "entry": entry,
+        "name": template.get("name")
+        or template.get("item_name")
+        or event.get("subject_name")
+        or "",
+        "quality": quality,
+        "icon": icons.get(display) if display is not None else None,
+    }
+
+
+def _loot_context(event: Mapping, runs: Iterable[Mapping], zones: Mapping) -> str:
+    map_id = event.get("map")
+    if map_id is None:
+        return ""
+    map_id = int(map_id)
+    if not places.is_instance(map_id):
+        zone = zones.get(int(event.get("zone") or 0))
+        return places.zone_display(zone) if zone else places.map_name(map_id)
+
+    place = places.map_name(map_id)
+    at = _as_datetime(event.get("first_seen"))
+    matches = []
+    if at is not None:
+        for run in runs:
+            start = _as_datetime(run.get("started_at"))
+            end = _as_datetime(run.get("ended_at"))
+            if (
+                int(run.get("map_id") or 0) == map_id
+                and start is not None
+                and start <= at
+                and (end is None or at <= end)
+            ):
+                matches.append(run)
+    context = place
+    if len(matches) == 1:
+        context += " run %s" % matches[0]["id"]
+    source = str(event.get("source") or "").strip()
+    if source:
+        context += ", " + source
+    return context
 
 
 def _iso(t) -> str | None:
@@ -801,41 +923,63 @@ def repeats(rows: Iterable[Mapping]) -> dict:
     return out
 
 
-def shelf(rows: Iterable[Mapping]) -> dict:
+def shelf(
+    rows: Iterable[Mapping],
+    *,
+    event_rows: Iterable[Mapping] = (),
+    item_rows: Iterable[Mapping] = (),
+    run_rows: Iterable[Mapping] = (),
+    icons: Mapping | None = None,
+    zones: Mapping | None = None,
+) -> dict:
     """The /api/clips payload: ready rows with a file, newest event first, and
     the moments missed per day (`missed`). A clip of an item its character
-    caught more than once carries `nth` and `of`."""
+    caught more than once carries `nth` and `of`. Loot event and item rows add
+    the item data and the event's dungeon or zone context."""
     rows = list(rows)
+    run_rows = list(run_rows)
     again = repeats(rows)
     ready = [r for r in rows if r.get("state") == "ready" and r.get("file_name")]
     ready.sort(
         key=lambda r: (str(_iso(r.get("event_at")) or ""), r["id"]), reverse=True
     )
+    events = {int(row["id"]): row for row in event_rows if row.get("id") is not None}
+    templates = {
+        int(row["entry"]): row for row in item_rows if row.get("entry") is not None
+    }
+    icons = icons or {}
+    zones = zones or {}
+    clips = []
+    for row in ready[:SHELF_LIMIT]:
+        event_id = _loot_event_id(row)
+        event = events.get(event_id) if event_id is not None else None
+        item = (
+            _loot_item(event, templates, icons)
+            if event and event.get("subject_id")
+            else row.get("item")
+        )
+        context = _loot_context(event, run_rows, zones) if event else row.get("context")
+        poster = poster_name(row["file_name"])
+        clip = {
+            "id": row["id"],
+            "kind": row["kind"],
+            "character": row["character"],
+            "view_owner": view_owner(row),
+            "subject": subject(row),
+            "at": _iso(row.get("event_at")),
+            "url": clip_url(row["file_name"]),
+        }
+        if poster:
+            clip["poster"] = clip_url(poster)
+        if row["id"] in again and again[row["id"]][1] > 1:
+            clip.update(nth=again[row["id"]][0], of=again[row["id"]][1])
+        if item:
+            clip["item"] = item
+        if context:
+            clip["context"] = context
+        clips.append(clip)
     return {
-        "clips": [
-            {
-                "id": r["id"],
-                "kind": r["kind"],
-                "character": r["character"],
-                "view_owner": view_owner(r),
-                "subject": subject(r),
-                "at": _iso(r.get("event_at")),
-                "url": clip_url(r["file_name"]),
-                **(
-                    {"poster": clip_url(poster_name(r["file_name"]))}
-                    if r.get("file_name") and poster_name(r["file_name"])
-                    else {}
-                ),
-                **(
-                    {"nth": again[r["id"]][0], "of": again[r["id"]][1]}
-                    if r["id"] in again and again[r["id"]][1] > 1
-                    else {}
-                ),
-                **({"item": r["item"]} if r.get("item") else {}),
-                **({"context": r["context"]} if r.get("context") else {}),
-            }
-            for r in ready[:SHELF_LIMIT]
-        ],
+        "clips": clips,
         "missed": missed(rows),
         "empty": SHELF_EMPTY,
     }

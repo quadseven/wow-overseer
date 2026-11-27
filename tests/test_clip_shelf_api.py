@@ -12,7 +12,134 @@ from sandbox_caps import LOCALHOST, NO_LOCALHOST
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 with stub_modules(pymysql=PYMYSQL):
+    import map_server
     from clip_fakes import FakeLedger, clip_row, serving
+
+
+class ShelfPayload(unittest.TestCase):
+    def test_loot_events_add_inventory_item_data_and_unambiguous_run_context(self):
+        first = datetime(2026, 11, 12, 22, 27, 0)
+        second = datetime(2026, 11, 13, 10, 57, 0)
+        ledger_rows = [
+            clip_row(
+                id=1,
+                event_key="loot:101",
+                detail="Shadowblade",
+                file_name="clip-1-loot.mp4",
+                event_at=first,
+            ),
+            clip_row(
+                id=2,
+                event_key="loot:102",
+                detail="Shadowblade",
+                file_name="clip-2-loot.mp4",
+                event_at=second,
+            ),
+            clip_row(
+                id=3,
+                state="failed",
+                file_name=None,
+                event_at=second,
+            ),
+            clip_row(
+                id=4,
+                state="no_view",
+                file_name=None,
+                event_at=second,
+            ),
+        ]
+        events = [
+            {
+                "id": event_id,
+                "kind": "item_loot",
+                "character_name": "Testchar",
+                "subject_id": 18821,
+                "subject_name": "Shadowblade",
+                "subject_quality": 4,
+                "map": 230,
+                "zone": 0,
+                "source": "General Angerforge",
+                "first_seen": at,
+            }
+            for event_id, at in ((101, first), (102, second))
+        ]
+        items = [{"entry": 18821, "name": "Shadowblade", "quality": 4, "displayid": 77}]
+        runs = [
+            {
+                "id": 42,
+                "map_id": 230,
+                "started_at": datetime(2026, 11, 12, 22, 0, 0),
+                "ended_at": datetime(2026, 11, 13, 11, 10, 0),
+            }
+        ]
+
+        class Read:
+            def rows(self, sql, params, *, what):
+                if "FROM overseer_event" in sql:
+                    self.event_params = params
+                    return events
+                if "FROM acore_world.item_template" in sql:
+                    self.item_params = params
+                    return items
+                if "FROM overseer_dungeon_run" in sql:
+                    self.run_params = params
+                    return runs
+                raise AssertionError("unexpected shelf query: %s" % what)
+
+        read = Read()
+        payload = map_server._clip_shelf_payload(
+            read,
+            [row for row in ledger_rows if row["state"] == "ready"],
+            [row for row in ledger_rows if row["state"] != "ready"],
+            icons={77: "inv_sword_04"},
+            zones={10: "Duskwood"},
+        )
+
+        self.assertEqual(len(payload["clips"]), 2)
+        self.assertEqual(
+            [clip["item"]["entry"] for clip in payload["clips"]], [18821, 18821]
+        )
+        self.assertEqual([clip["item"]["quality"] for clip in payload["clips"]], [4, 4])
+        self.assertEqual(
+            [clip["item"]["icon"] for clip in payload["clips"]], ["inv_sword_04"] * 2
+        )
+        self.assertEqual(
+            [clip["context"] for clip in payload["clips"]],
+            ["Blackrock Depths run 42, General Angerforge"] * 2,
+        )
+        self.assertEqual(payload["missed"][0]["failed"], 1)
+        self.assertEqual(payload["missed"][0]["no_view"], 1)
+        self.assertEqual(read.event_params, (101, 102))
+        self.assertEqual(read.item_params, (18821,))
+
+    def test_open_world_loot_uses_the_event_zone(self):
+        payload = map_server.clipledger.shelf(
+            [
+                clip_row(
+                    id=1,
+                    detail="Test Blade",
+                    event_key="loot:101",
+                    event_at=datetime(2026, 11, 13, 10, 57, 0),
+                )
+            ],
+            event_rows=[
+                {
+                    "id": 101,
+                    "kind": "item_loot",
+                    "subject_id": 18821,
+                    "subject_name": "Test Blade",
+                    "subject_quality": 4,
+                    "map": 0,
+                    "zone": 10,
+                    "source": "",
+                    "first_seen": datetime(2026, 11, 13, 10, 57, 0),
+                }
+            ],
+            item_rows=[],
+            zones={10: "Duskwood"},
+        )
+
+        self.assertEqual(payload["clips"][0]["context"], "Duskwood")
 
 
 @unittest.skipUnless(LOCALHOST, NO_LOCALHOST)
@@ -54,6 +181,7 @@ class ShelfList(unittest.TestCase):
                     "subject": "Test Warden",
                     "at": "2026-11-09T11:30:00",
                     "url": "/clips/clip-2-boss_kill.mp4",
+                    "poster": "/clips/clip-2-boss_kill-poster.jpg",
                 },
                 {
                     "id": 1,
@@ -63,6 +191,7 @@ class ShelfList(unittest.TestCase):
                     "subject": "Test Blade",
                     "at": "2026-11-09T10:00:00",
                     "url": "/clips/clip-1-loot.mp4",
+                    "poster": "/clips/clip-1-loot-poster.jpg",
                 },
             ],
         )

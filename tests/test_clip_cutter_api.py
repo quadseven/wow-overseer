@@ -25,6 +25,7 @@ with stub_modules(pymysql=PYMYSQL):
     import clipcutter
 
 MP4 = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2" + b"\x01" * 64
+JPEG = b"\xff\xd8poster-frame\xff\xd9"
 
 
 def row(**over):
@@ -41,6 +42,29 @@ def row(**over):
     return clip_row(**base)
 
 
+class PosterFrame(unittest.TestCase):
+    def test_ffmpeg_extracts_one_jpeg_frame_from_the_uploaded_clip(self):
+        with tempfile.TemporaryDirectory() as root:
+            video = pathlib.Path(root) / "clip.mp4"
+            poster = pathlib.Path(root) / "clip-poster.jpg"
+            video.write_bytes(MP4)
+
+            def extract(command, **_options):
+                pathlib.Path(command[-1]).write_bytes(JPEG)
+                return mock.Mock(returncode=0, stderr=b"")
+
+            with mock.patch.object(clipcutter, "subprocess", create=True) as runner:
+                runner.run.side_effect = extract
+                clipcutter.write_poster(str(video), str(poster))
+
+            self.assertEqual(poster.read_bytes(), JPEG)
+            command, options = runner.run.call_args
+            self.assertIn("ffmpeg", command[0][0])
+            self.assertIn("-frames:v", command[0])
+            self.assertIn("1", command[0])
+            self.assertEqual(options["timeout"], 30)
+
+
 @unittest.skipUnless(LOCALHOST, NO_LOCALHOST)
 class CutterCase(unittest.TestCase):
     def setUp(self):
@@ -50,9 +74,18 @@ class CutterCase(unittest.TestCase):
 
     def run_with(self, rows, fn, clips_dir=None):
         self.ledger = CutterLedger(rows)
-        with serving_cutter(
-            self.ledger, self.dir if clips_dir is None else clips_dir
-        ) as c:
+
+        def write_poster(_video_path, poster_path):
+            pathlib.Path(poster_path).write_bytes(JPEG)
+
+        with (
+            mock.patch.object(
+                clipcutter, "write_poster", side_effect=write_poster, create=True
+            ),
+            serving_cutter(
+                self.ledger, self.dir if clips_dir is None else clips_dir
+            ) as c,
+        ):
             return fn(c)
 
     def state(self, rid=1):
@@ -173,8 +206,11 @@ class Upload(CutterCase):
             [row(state="cutting", detail="earlier")], go
         )
         self.assertEqual(status, 200)
-        self.assertEqual(self.files(), ["clip-1-loot.mp4"])
+        self.assertEqual(self.files(), ["clip-1-loot-poster.jpg", "clip-1-loot.mp4"])
         self.assertEqual((pathlib.Path(self.dir) / "clip-1-loot.mp4").read_bytes(), MP4)
+        self.assertEqual(
+            (pathlib.Path(self.dir) / "clip-1-loot-poster.jpg").read_bytes(), JPEG
+        )
         self.assertEqual(self.state()["state"], "ready")
         self.assertEqual(self.state()["file_name"], "clip-1-loot.mp4")
         self.assertEqual(self.state()["detail"], "earlier; cut late")
@@ -182,6 +218,20 @@ class Upload(CutterCase):
             [c["url"] for c in json.loads(shelf)["clips"]], ["/clips/clip-1-loot.mp4"]
         )
         self.assertEqual(served, MP4)
+
+    def test_the_generated_poster_is_served_as_jpeg_beside_its_video(self):
+        def go(c):
+            uploaded = c.post("/api/clips/file?id=1", MP4)
+            poster = c.get("/clips/clip-1-loot-poster.jpg")
+            return uploaded, poster
+
+        (status, _body), (poster_status, headers, body) = self.run_with(
+            [row(state="cutting")], go
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(poster_status, 200)
+        self.assertEqual(headers["content-type"], "image/jpeg")
+        self.assertEqual(body, JPEG)
 
     def test_a_note_that_forges_a_view_marker_is_400_and_leaves_no_file(self):
         status, body = self.up(query="id=1&note=view%3AOther")

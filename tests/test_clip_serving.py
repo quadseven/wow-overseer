@@ -23,6 +23,7 @@ with stub_modules(pymysql=PYMYSQL):
 
 BODY = bytes(range(256)) * 4  # 1024 bytes
 NAME = "clip-1-loot.mp4"
+POSTER = "clip-1-loot-poster.jpg"
 
 
 @unittest.skipUnless(LOCALHOST, NO_LOCALHOST)
@@ -88,6 +89,7 @@ class OnlyLedgerNamesAreServed(unittest.TestCase):
         root.mkdir()
         self.clips_dir = str(root)
         (root / NAME).write_bytes(BODY)
+        (root / POSTER).write_bytes(b"poster")
         (root / "clip-2-loot.mp4").write_bytes(BODY)
         (root / "stray.mp4").write_bytes(BODY)
         self.outside = root.parent / "outside-secret.txt"
@@ -107,6 +109,14 @@ class OnlyLedgerNamesAreServed(unittest.TestCase):
 
     def test_a_file_the_ledger_does_not_hold_is_404(self):
         self.assertEqual(self.get("/clips/stray.mp4")[0], 404)
+
+    def test_a_poster_is_served_only_beside_its_ready_clip(self):
+        status, headers, body = self.get("/clips/" + POSTER)
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["content-type"], "image/jpeg")
+        self.assertEqual(body, b"poster")
+        self.ledger.rows[0]["state"] = "expired"
+        self.assertEqual(self.get("/clips/" + POSTER)[0], 404)
 
     def test_a_row_that_is_not_ready_is_404(self):
         self.assertEqual(self.get("/clips/clip-2-loot.mp4")[0], 404)
@@ -182,6 +192,23 @@ class FixtureOwnership(unittest.TestCase):
         self.assertFalse(fixture.outside.exists())
 
 
+class PosterPath(unittest.TestCase):
+    def test_only_a_ready_clip_row_can_resolve_its_derived_poster(self):
+        with tempfile.TemporaryDirectory() as root:
+            video = pathlib.Path(root) / NAME
+            poster = pathlib.Path(root) / POSTER
+            video.write_bytes(BODY)
+            poster.write_bytes(b"poster")
+            ledger = FakeLedger([clip_row(file_name=NAME)])
+            with (
+                mock.patch.object(map_server, "_connect", ledger.connect),
+                mock.patch.object(map_server, "CLIPS_DIR", root),
+            ):
+                self.assertEqual(map_server._ready_clip_path(POSTER), str(poster))
+                ledger.rows[0]["state"] = "expired"
+                self.assertEqual(map_server._ready_clip_path(POSTER), "")
+
+
 class RangeRules(unittest.TestCase):
     def test_header_forms(self):
         import clipserve as c
@@ -224,6 +251,18 @@ class RangeRules(unittest.TestCase):
 
     def test_the_server_streams_through_clipserve_in_fixed_chunks(self):
         self.assertEqual(clip_chunk(), 64 * 1024)
+
+    def test_a_poster_response_uses_the_jpeg_content_type(self):
+        import clipserve as c
+
+        sent = []
+        c.headers(
+            10,
+            None,
+            send=lambda key, value: sent.append((key, value)),
+            content_type="image/jpeg",
+        )
+        self.assertIn(("Content-Type", "image/jpeg"), sent)
 
     def test_the_handler_never_calls_read_on_the_whole_file(self):
         src = (HERE / "map_server.py").read_text()
