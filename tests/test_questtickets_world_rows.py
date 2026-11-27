@@ -339,6 +339,105 @@ class WorldRows(unittest.TestCase):
             ticket,
         )
 
+    def test_fields_of_grief_rows_show_a_source_so_a_quester_can_finish(self):
+        # The world rows mirror the brief: item 2846 (Tirisfal Pumpkin) x10,
+        # sourced from gameobject loot entry 375. No creature drops it and no
+        # vendor sells it, but a gameobject loots it, so a quester can finish.
+        row = quest_row(
+            quest=365,
+            title="Fields of Grief",
+            level=7,
+            min_level=4,
+            sort=85,
+            item1=2846,
+            item_count1=10,
+        )
+        ids = "2846"
+        catalogue = self.catalogue(
+            row,
+            {
+                qc.ITEM_NAMES_SQL.format(ids=ids): [
+                    {"entry": 2846, "name": "Tirisfal Pumpkin"},
+                ],
+                qc.DROP_SQL.format(ids=ids): [],
+                qc.REWARD_SQL.format(ids=ids): [],
+                qc.VENDOR_SQL.format(ids=ids): [],
+                qc.OBJECT_LOOT_SQL.format(ids=ids): [
+                    {"item": 2846, "entry": 375},
+                ],
+            },
+        )
+        rows = [
+            {
+                "quest": 365,
+                "guid": 7,
+                "character_name": "Mortane",
+                "reason": qt.NO_GIVER_IN_REACH,
+            },
+            {
+                "quest": 365,
+                "guid": 8,
+                "character_name": "Hoofa",
+                "reason": qt.NO_GIVER_IN_REACH,
+            },
+            {
+                "quest": 365,
+                "guid": 9,
+                "character_name": "Morwick",
+                "reason": "the quest giver would not give it: already in the quest log",
+            },
+            {
+                "quest": 365,
+                "guid": 10,
+                "character_name": "Grakk",
+                "reason": "its objectives did not move for 2 hours of play, and no spawned creature is or drops what it asks for",
+            },
+            {
+                "quest": 365,
+                "guid": 11,
+                "character_name": "Zinja",
+                "reason": "its objectives did not move for 2 hours of play, no huntable source supplies what it asks for, and questers cannot buy items from vendors",
+            },
+            {
+                "quest": 365,
+                "guid": 12,
+                "character_name": "Tahomi",
+                "reason": "its objectives did not move for 2 hours of play, and no spawned creature is or drops what it asks for",
+            },
+        ]
+        ticket = qt.body(365, catalogue[0], rows, [], "")
+
+        self.assertIn("QuestLevel: 7; MinLevel: 4", ticket)
+        self.assertIn("Zone: Tirisfal Glades", ticket)
+        self.assertIn(
+            "Required item 2846 x10 (Tirisfal Pumpkin): gameobject loot entries 375",
+            ticket,
+        )
+        self.assertNotIn("no source in the world rows", ticket)
+        self.assertEqual(ticket.count("Reason: " + qt.NO_GIVER_IN_REACH), 2)
+        self.assertEqual(
+            ticket.count(
+                "Reason: the quest giver would not give it: already in the quest log"
+            ),
+            1,
+        )
+        self.assertIn(
+            "The take was refused because no living creature linked to the quest "
+            "matched within the 20-yard arrival radius at that time.",
+            ticket,
+        )
+        self.assertIn(
+            "This explains the ledger reason, but the stored rows do not distinguish "
+            "a missing, distant, dead, or otherwise unavailable creature.",
+            ticket,
+        )
+        self.assertIn(
+            "The take refusal records that the quest was already in the character's "
+            "quest log at the time. It is a log-state observation, not evidence that "
+            "the quest's objectives cannot be completed.",
+            ticket,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
