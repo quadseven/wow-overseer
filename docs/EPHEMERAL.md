@@ -173,10 +173,26 @@ The command prints each skip reason. A failed preflight, held target or new
 submission record leaves the slot available for the next decree. The command
 uses the default-branch file bytes for both arms and picks the control with
 `--control auto`. The selected control needs a `dist_inventory` from its
-exact image so preflight can check its overrides. Omit `--dry-run` to queue
-one suspended batch per selected decree. A submission error after preflight
-stops the command and returns an error. The path form of `submit` still
-supports manual image, config and single-arm options.
+exact image so preflight can check its overrides. Omit `--dry-run` to stage
+one suspended batch per selected decree. The submitter publishes one
+immutable `eph-due-<decree-id>` ConfigMap after all Jobs and their owned inputs
+exist. That record gates admission and prevents a second automatic commit
+for the same decree. Staged Jobs stay suspended without a matching record.
+The collector recovers missing local records from the committed ConfigMaps.
+Keep those records after collection so retries can still detect the batch.
+Collection retains staged batch verdicts until all sibling Jobs are gone.
+A stopped first pair can finish removing its surplus Jobs across dispatcher
+restarts. Numeric proofs are published through `report` under its timestamp
+and checkbox rules. After siblings are gone, `collect` only prunes numeric
+results once they are archived locally and the retention window has elapsed.
+
+A submission error after preflight stops the command and returns an error.
+An interrupted submission can leave inert staged Jobs and their inputs for
+operator reconciliation. The path form of `submit` still supports manual
+image, config and single-arm options.
+
+Deploy the dispatcher and collector that understand committed batches before
+enabling `submit --due` on a schedule.
 
 `eph report` posts the named decree's batch result, including each run's UTC
 start time and judge reason lines. It ticks one uniquely matching checkbox only

@@ -3,8 +3,8 @@
 An issue body names its decree with one line, `Proof: decree <id>`. A ticket is
 due when that decree is on the default branch, proves that issue, and nothing
 under `<results_dir>/<decree>/` exists yet (no batch record, no result).
-Discovery is read-only. `submit --due` preflights the selected proofs before
-submitting through the ordinary suspended-Job path.
+Discovery is read-only. `submit --due` preflights and stages the entire batch
+before publishing its admission record.
 """
 
 import base64
@@ -195,7 +195,13 @@ def submit_due(gh, cfg, cluster, limit, args, out=print):
         raw = proofs[0].raw
         try:
             submit.submit(
-                cfg, cluster, gh, path, {**options, "dry_run": True}, decree_bytes=raw
+                cfg,
+                cluster,
+                gh,
+                path,
+                {**options, "dry_run": True},
+                decree_bytes=raw,
+                stage_batch=True,
             )
         except (submit.SubmitError, kube.KubeError, ghx.GhError) as exc:
             out(f"skip {decree_id}: {exc}")
@@ -207,5 +213,7 @@ def submit_due(gh, cfg, cluster, limit, args, out=print):
             out(f"skip {decree_id}: a submission appeared during preflight")
             continue
         if not options.get("dry_run"):
-            submit.submit(cfg, cluster, gh, path, options, decree_bytes=raw)
+            submit.submit(
+                cfg, cluster, gh, path, options, decree_bytes=raw, stage_batch=True
+            )
         limit -= 1

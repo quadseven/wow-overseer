@@ -11,7 +11,7 @@ from unittest import mock
 import test_eph_submit as fixture
 from eph_fakes import OLD, OLD_DB, OLD_WS, SHA
 from ephemeral import __main__ as cli
-from ephemeral import submit
+from ephemeral import batchseal, runids, submit
 
 
 class DueSubmitIntegrationTest(fixture.Base):
@@ -83,6 +83,24 @@ class DueSubmitIntegrationTest(fixture.Base):
         self.assertFalse(any("-X" in args for args, _ in self.fake_gh.calls))
         return output.getvalue()
 
+    def submit_staged(self, out=lambda _: None):
+        return submit.submit(
+            self.cfg,
+            self.kube,
+            self.gh,
+            f"data/decrees/{self.decree_id}.yaml",
+            fixture.CONTROL,
+            clock=self.clock,
+            out=out,
+            decree_bytes=self.raw,
+            stage_batch=True,
+        )
+
+    def marker(self):
+        return self.kube.get(
+            "configmaps", batchseal.name(self.decree_id), missing_ok=True
+        )
+
     def test_dry_run_never_creates_jobs_configmaps_or_records(self):
         before = list(pathlib.Path(self.cfg.results_dir).iterdir())
         output = self.run_due_cli("--dry-run")
@@ -112,6 +130,13 @@ class DueSubmitIntegrationTest(fixture.Base):
         worlds = self.cluster.of("jobs", "wow-ephemeral")
         self.assertEqual(len(worlds), 6)
         self.assertTrue(all(job["spec"]["suspend"] for job in worlds))
+        self.assertEqual(self.kube.list("jobs", selector=runids.JOB_LABEL_ARM), [])
+        self.assertTrue(
+            all(
+                job["metadata"]["labels"][batchseal.STAGED_LABEL] == record["batch"]
+                for job in worlds
+            )
+        )
         configmaps = [
             cm
             for cm in self.cluster.of("configmaps", "wow-ephemeral")
@@ -121,11 +146,191 @@ class DueSubmitIntegrationTest(fixture.Base):
             [cm["data"]["decree.yaml"].encode() for cm in configmaps], [self.raw] * 6
         )
         for cm in configmaps:
+            self.assertIs(cm.get("immutable"), True)
             control = cm["metadata"]["labels"]["eph/arm"] == "control"
             self.assertEqual(
                 "Overseer.ObsoleteExample" in cm["data"]["overseer.overrides.conf"],
                 not control,
             )
+        marker = self.marker()
+        self.assertTrue(marker["immutable"])
+        saved, members = batchseal.parse(marker, self.cfg.namespace)
+        self.assertEqual(saved, record)
+        for job in worlds:
+            rid = runids.run_of_job(job)
+            inputs = next(
+                cm for cm in configmaps if cm["metadata"]["labels"]["eph/run"] == rid
+            )
+            self.assertEqual(
+                members[rid],
+                {
+                    "job_uid": job["metadata"]["uid"],
+                    "input_uid": inputs["metadata"]["uid"],
+                    "input_sha256": batchseal.fingerprint(inputs["data"]),
+                },
+            )
+        creates = [
+            json.loads(body)["metadata"]["name"]
+            for args, body in self.cluster.calls
+            if "create" in args and "--dry-run=client" not in args
+        ]
+        self.assertEqual(creates[-1], batchseal.name(self.decree_id))
+
+    def test_failed_input_keeps_partial_stage_inert_and_without_receipt(self):
+        original = self.cluster.v_create
+
+        def fail_third_inputs(ns, args, body):
+            obj = json.loads(body)
+            if obj["kind"] == "ConfigMap" and obj["metadata"]["name"].endswith("-c2"):
+                return 1, "", "input create was rejected"
+            return original(ns, args, body)
+
+        output = []
+        with (
+            mock.patch.object(self.cluster, "v_create", side_effect=fail_third_inputs),
+            self.assertRaisesRegex(
+                submit.SubmitError, r"could not stage run .*input create was rejected"
+            ),
+        ):
+            self.submit_staged(out=output.append)
+        worlds = self.cluster.of("jobs", "wow-ephemeral")
+        self.assertEqual(len(worlds), 3)
+        self.assertTrue(all(job["spec"]["suspend"] for job in worlds))
+        self.assertEqual(self.kube.list("jobs", selector=runids.JOB_LABEL_ARM), [])
+        self.assertIsNone(self.marker())
+        self.assertFalse((pathlib.Path(self.cfg.results_dir) / self.decree_id).exists())
+        self.assertEqual(output, [])
+
+    def test_unconfirmed_input_immutability_prevents_batch_commit(self):
+        original = self.cluster.v_create
+
+        def omit_immutability(ns, args, body):
+            result = original(ns, args, body)
+            obj = json.loads(body)
+            if obj["kind"] == "ConfigMap" and obj["metadata"]["name"].startswith(
+                "eph-run-"
+            ):
+                response = json.loads(result[1])
+                response.pop("immutable", None)
+                return 0, json.dumps(response), ""
+            return result
+
+        with (
+            mock.patch.object(self.cluster, "v_create", side_effect=omit_immutability),
+            self.assertRaisesRegex(
+                submit.SubmitError, "API did not confirm staged inputs"
+            ),
+        ):
+            self.submit_staged()
+        self.assertIsNone(self.marker())
+
+    def test_numeric_proves_and_box_are_preserved_in_the_receipt(self):
+        box = "the family leaves the bar without a patron dying"
+        start, end = self.raw.index(b"proves:\n"), self.raw.index(b"\nfix:")
+        self.raw = (
+            self.raw[:start] + f'proves: 12\nbox: "{box}"'.encode() + self.raw[end:]
+        )
+        record = self.submit_staged()
+        self.assertEqual(record["proves"], 12)
+        self.assertEqual(record["box"], box)
+        self.assertEqual(batchseal.parse(self.marker(), self.cfg.namespace)[0], record)
+
+    def test_lost_marker_response_is_confirmed_by_readback(self):
+        original = self.cluster.v_create
+
+        def lose_response(ns, args, body):
+            result = original(ns, args, body)
+            obj = json.loads(body)
+            if obj["metadata"]["name"] == batchseal.name(self.decree_id):
+                self.assertEqual(result[0], 0)
+                return 1, "", "connection lost after create"
+            return result
+
+        output = []
+        with mock.patch.object(self.cluster, "v_create", side_effect=lose_response):
+            record = self.submit_staged(out=output.append)
+        self.assertEqual(batchseal.parse(self.marker(), self.cfg.namespace)[0], record)
+        self.assertTrue(
+            submit.record_path(self.cfg, self.decree_id, record["batch"]).is_file()
+        )
+        self.assertEqual(len(output), len(record["runs"]))
+        with self.assertRaisesRegex(submit.SubmitError, "already exists"):
+            self.submit_staged()
+        self.assertEqual(len(self.cluster.of("jobs", "wow-ephemeral")), 6)
+
+    def test_ambiguous_marker_never_removes_potentially_committed_runs(self):
+        original_create = self.cluster.v_create
+        original_get = self.cluster.v_get
+        marker_name = batchseal.name(self.decree_id)
+
+        def lose_response(ns, args, body):
+            result = original_create(ns, args, body)
+            if json.loads(body)["metadata"]["name"] == marker_name:
+                return 1, "", "connection lost after create"
+            return result
+
+        def lose_readback(ns, args, body):
+            if (
+                marker_name in args
+                and ("configmaps", ns, marker_name) in self.cluster.objs
+            ):
+                return 1, "", "marker readback unavailable"
+            return original_get(ns, args, body)
+
+        output = []
+        with (
+            mock.patch.object(self.cluster, "v_create", side_effect=lose_response),
+            mock.patch.object(self.cluster, "v_get", side_effect=lose_readback),
+            self.assertRaisesRegex(
+                submit.SubmitError, "could not confirm batch marker"
+            ),
+        ):
+            self.submit_staged(out=output.append)
+        self.assertIsNotNone(batchseal.parse(self.marker(), self.cfg.namespace))
+        self.assertEqual(len(self.cluster.of("jobs", "wow-ephemeral")), 6)
+        self.assertFalse((pathlib.Path(self.cfg.results_dir) / self.decree_id).exists())
+        self.assertFalse(any("delete" in args for args, _ in self.cluster.calls))
+        self.assertEqual(output, [])
+
+    def test_competing_valid_receipt_cannot_report_this_batch_queued(self):
+        original = self.cluster.v_create
+
+        def race_marker(ns, args, body):
+            obj = json.loads(body)
+            if obj["metadata"]["name"] != batchseal.name(self.decree_id):
+                return original(ns, args, body)
+            record = json.loads(obj["data"]["batch.json"])
+            record["submitted_at"] += 1
+            obj["data"]["batch.json"] = json.dumps(record)
+            self.assertEqual(original(ns, args, json.dumps(obj))[0], 0)
+            return 1, "", "AlreadyExists"
+
+        output = []
+        with (
+            mock.patch.object(self.cluster, "v_create", side_effect=race_marker),
+            self.assertRaisesRegex(submit.SubmitError, "stored receipt differs"),
+        ):
+            self.submit_staged(out=output.append)
+        self.assertIsNotNone(batchseal.parse(self.marker(), self.cfg.namespace))
+        self.assertEqual(len(self.cluster.of("jobs", "wow-ephemeral")), 6)
+        self.assertFalse((pathlib.Path(self.cfg.results_dir) / self.decree_id).exists())
+        self.assertEqual(output, [])
+
+    def test_receipt_write_failure_leaves_durable_marker_for_recovery(self):
+        output = []
+        with (
+            mock.patch.object(
+                batchseal, "install_record", side_effect=OSError("no space")
+            ),
+            self.assertRaisesRegex(
+                submit.SubmitError, "committed but local record was not installed"
+            ),
+        ):
+            self.submit_staged(out=output.append)
+        self.assertIsNotNone(batchseal.parse(self.marker(), self.cfg.namespace))
+        self.assertEqual(len(self.cluster.of("jobs", "wow-ephemeral")), 6)
+        self.assertFalse((pathlib.Path(self.cfg.results_dir) / self.decree_id).exists())
+        self.assertEqual(output, [])
 
     def test_due_skips_a_control_without_dist_inventory(self):
         del self.control_entry["dist_inventory"]

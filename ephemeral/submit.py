@@ -5,6 +5,9 @@ Nothing here starts a world. A Job is created with `suspend: true`; only
 holding the decree and the merged config files the pod mounts, owned by its
 Job so the Job's TTL removes both.
 
+Automatic due submissions hide staged Jobs from dispatch until an immutable
+batch marker identifies every Job and input. The marker is the commit point.
+
 Refusals (an error, never a quiet downgrade): a decree that does not lint, an
 image other than `follow-dev`, a bridge-on decree whose template has no
 bridge sidecar (or whose sidecar could reach a secret or the API), a fix that is wrongly present or absent in an arm's image, a
@@ -19,7 +22,16 @@ import time
 from urllib.parse import quote
 
 from . import anchors as anchors_mod
-from . import confmerge, controlauto, dbschema, imagecommit, lint, podpaths, runids
+from . import (
+    batchseal,
+    confmerge,
+    controlauto,
+    dbschema,
+    imagecommit,
+    lint,
+    podpaths,
+    runids,
+)
 from .kube import KubeError
 from .miniyaml import YamlError, loads
 
@@ -481,7 +493,7 @@ def default_template_image(cfg, kube):
 
 def submit(
     cfg, kube, gh, decree_path, args=None, clock=time.time, out=print, image_env=None,
-    template_image=None, resolves=None, *, decree_bytes=None,
+    template_image=None, resolves=None, *, decree_bytes=None, stage_batch=False,
 ):  # fmt: skip
     """Create the suspended Jobs. Returns the submission record (also saved)."""
     args = dict(args or {})
@@ -499,6 +511,8 @@ def submit(
     decree_id = decree["id"]
     if not _LABEL.match(decree_id):
         raise SubmitError("decree id is not a label-safe name")
+    if stage_batch:
+        _check_stage_request(kube, cfg.namespace, decree_id, arm_arg)
     klass = world["class"]
     node = _pick_node(cfg, klass, args.get("node"))
     template, classes, used = read_template(kube)
@@ -579,6 +593,11 @@ def submit(
             f"dry run: {len(runs)} runs for {decree_id} in batch {batch}; nothing created"
         )
         return record
+    if stage_batch:
+        _stage_batch(cfg, kube, pending, record, raw, control_files, files)
+        for _, rid, arm, _ in pending:
+            out(f"queued {rid} ({arm}) on {node}")
+        return record
     for job, rid, arm, realm in pending:
         _create_run(
             kube, job, rid, arm, realm, batch, decree_id, raw,
@@ -587,6 +606,79 @@ def submit(
         out(f"queued {rid} ({arm}) on {node}")
     save_record(cfg, record)
     return record
+
+
+def _check_stage_request(kube, namespace, decree_id, arm):
+    if arm != "both":
+        raise SubmitError("a staged due batch requires both arms")
+    marker = batchseal.name(decree_id)
+    if kube.get("configmaps", marker, namespace=namespace, missing_ok=True) is not None:
+        raise SubmitError(f"batch marker {marker} already exists")
+
+
+def _stage_batch(cfg, kube, pending, record, raw, control_files, treatment_files):
+    batch, decree_id, sha = (record[k] for k in ("batch", "decree_id", "decree_sha256"))
+    members = {}
+    for job, rid, arm, realm in pending:
+        labels = job["metadata"].setdefault("labels", {})
+        labels.pop(runids.JOB_LABEL_ARM, None)
+        labels[batchseal.STAGED_LABEL] = batch
+        files = control_files if arm == "control" else treatment_files
+        try:
+            members[rid] = _create_run(
+                kube,
+                job,
+                rid,
+                arm,
+                realm,
+                batch,
+                decree_id,
+                raw,
+                files,
+                sha,
+                staged=True,
+            )
+        except KubeError as exc:
+            raise SubmitError(f"could not stage run {rid}: {exc}") from exc
+    _commit_batch(kube, cfg.namespace, record, members)
+    try:
+        batchseal.install_record(cfg.results_dir, record)
+    except (OSError, ValueError) as exc:
+        raise SubmitError(
+            f"batch {batch} committed but local record was not installed: {exc}"
+        ) from exc
+
+
+def _commit_batch(kube, namespace, record, members):
+    manifest = batchseal.manifest(namespace, record, members)
+    marker = manifest["metadata"]["name"]
+    expected = (record, members)
+    if batchseal.parse(manifest, namespace) != expected:
+        raise SubmitError(f"batch {record['batch']} could not form a valid marker")
+    problem = f"could not confirm batch marker {marker} for batch {record['batch']}"
+    create_error = None
+    try:
+        made = kube.create(manifest)
+    except KubeError as exc:
+        # The API might have committed the create before the response was lost.
+        create_error = exc
+        made = None
+    if batchseal.parse(made, namespace) == expected:
+        return
+    try:
+        current = kube.get("configmaps", marker, namespace=namespace, missing_ok=True)
+    except KubeError as exc:
+        raise SubmitError(f"{problem}: {exc}") from exc
+    observed = batchseal.parse(current, namespace)
+    if observed == expected:
+        return
+    if observed is not None:
+        reason = "stored receipt differs"
+    elif current is not None:
+        reason = "stored receipt is invalid"
+    else:
+        reason = "marker is not visible"
+    raise SubmitError(f"{problem} ({reason})") from create_error
 
 
 def _config_for(world, base_files, bridge_on=False):
@@ -682,7 +774,9 @@ def _check_job(job, rid, claim, namespace):
         )
 
 
-def _create_run(kube, job, rid, arm, realm, batch, decree_id, raw, files, sha):
+def _create_run(
+    kube, job, rid, arm, realm, batch, decree_id, raw, files, sha, *, staged=False
+):
     data = {"decree.yaml": raw.decode("utf-8")}
     data.update(
         {confmerge.FILES[g]: t for g, t in files.items() if g in confmerge.FILES}
@@ -690,6 +784,7 @@ def _create_run(kube, job, rid, arm, realm, batch, decree_id, raw, files, sha):
     if sum(len(v.encode("utf-8")) for v in data.values()) > CM_LIMIT_BYTES:
         raise SubmitError("run inputs are too large for a ConfigMap")
     made = kube.create(job)
+    job_uid = _staged_job_uid(made, job) if staged else made["metadata"]["uid"]
     cm = {
         "apiVersion": "v1", "kind": "ConfigMap",
         "metadata": {
@@ -702,16 +797,77 @@ def _create_run(kube, job, rid, arm, realm, batch, decree_id, raw, files, sha):
             "annotations": {"eph/decree-sha256": sha},
             "ownerReferences": [{
                 "apiVersion": "batch/v1", "kind": "Job", "name": made["metadata"]["name"],
-                "uid": made["metadata"]["uid"], "blockOwnerDeletion": False,
+                "uid": job_uid, "blockOwnerDeletion": False,
             }],
         },
         "data": data,
     }  # fmt: skip
+    if staged:
+        # A failed or interrupted staged write is left inert for reconciliation.
+        cm["immutable"] = True
+        inputs = kube.create(cm)
+        return _staged_member(job_uid, inputs, cm)
     try:
         kube.create(cm)
     except KubeError:
         kube.delete("jobs", runids.job_name(rid))
         raise
+    return None
+
+
+def _created_uid(actual, requested):
+    want = requested["metadata"]
+    meta = actual.get("metadata") if isinstance(actual, dict) else None
+    if not isinstance(meta, dict) or any(
+        meta.get(k) != want[k] for k in ("name", "namespace")
+    ):
+        raise SubmitError(f"API did not confirm the identity of {want['name']}")
+    uid = meta.get("uid")
+    if not isinstance(uid, str) or not uid:
+        raise SubmitError(f"API did not return a UID for {want['name']}")
+    return uid
+
+
+def _staged_job_uid(actual, requested):
+    uid = _created_uid(actual, requested)
+    expected = requested["metadata"]["labels"]
+    labels = actual["metadata"].get("labels") or {}
+    if (
+        actual.get("kind") != "Job"
+        or actual.get("spec", {}).get("suspend") is not True
+        or runids.JOB_LABEL_ARM in labels
+        or any(labels.get(k) != v for k, v in expected.items())
+    ):
+        raise SubmitError(
+            f"API did not confirm suspended staged Job {requested['metadata']['name']}"
+        )
+    return uid
+
+
+def _staged_member(job_uid, inputs, requested):
+    input_uid = _created_uid(inputs, requested)
+    current = inputs["metadata"]
+    expected = requested["metadata"]
+    if (
+        inputs.get("kind") != "ConfigMap"
+        or inputs.get("immutable") is not True
+        or inputs.get("data") != requested["data"]
+        or current.get("ownerReferences") != expected["ownerReferences"]
+        or any(
+            (current.get("labels") or {}).get(k) != v
+            for k, v in expected["labels"].items()
+        )
+        or (current.get("annotations") or {}).get("eph/decree-sha256")
+        != expected["annotations"]["eph/decree-sha256"]
+    ):
+        raise SubmitError(
+            f"API did not confirm staged inputs {requested['metadata']['name']}"
+        )
+    return {
+        "job_uid": job_uid,
+        "input_uid": input_uid,
+        "input_sha256": batchseal.fingerprint(inputs["data"]),
+    }
 
 
 def record_path(cfg, decree_id, batch):

@@ -2,9 +2,10 @@
 
 Order of work for each submitted batch with no finished decision:
 
-1. copy every `eph-result-*` ConfigMap to `<results_dir>/<decree>/<run>.json`;
-2. decide with `decide.decide` (control and treatment, validity, fix presence);
-3. post, never from a pod: the issue comment is idempotent (hidden marker),
+1. recover batch records from committed automatic submissions;
+2. copy every `eph-result-*` ConfigMap to `<results_dir>/<decree>/<run>.json`;
+3. decide with `decide.decide` (control and treatment, validity, fix presence);
+4. post, never from a pod: the issue comment is idempotent (hidden marker),
    boxes are ticked BEFORE a close, an epic is never closed, and a close needs
    all of: outcome `proven`, the decree on the default branch byte for byte,
    an approval of that decree's pull request by someone other than its author
@@ -20,7 +21,7 @@ import json
 import pathlib
 import time
 
-from . import decide
+from . import batchseal, decide, runids
 from .ghx import require_identity
 from .kube import KubeError
 
@@ -106,7 +107,30 @@ class Collector:
         self.env = env if env is not None else {}
         self.posted_batches = set()
 
-    # -- step 1: copy
+    # -- steps 1 and 2: recover and copy
+    def _recover_batches(self):
+        for cm in self.kube.list(
+            "configmaps", selector=f"{batchseal.COMMIT_LABEL}={batchseal.COMMITTED}"
+        ):
+            seal = batchseal.parse(cm, self.cfg.namespace)
+            if seal is None:
+                self.out(
+                    f"ignored invalid batch commit {cm.get('metadata', {}).get('name', '')}"
+                )
+                continue
+            record, _ = seal
+            try:
+                batchseal.install_record(self.cfg.results_dir, record)
+            except ValueError as exc:
+                # A conflicting receipt must never drive decisions or pruning.
+                raise CollectError(
+                    f"batch {record['batch']} disagrees with its local submission record"
+                ) from exc
+            except OSError as exc:
+                raise CollectError(
+                    f"could not recover batch {record['batch']}: {exc}"
+                ) from exc
+
     def fetch(self):
         got = {}
         for cm in self.kube.list("configmaps", selector="eph/verdict"):
@@ -134,11 +158,19 @@ class Collector:
         return got
 
     def prune(self):
-        """Delete copied posted results, or aged results from decided batches or orphans."""
+        """Prune copied results after staged siblings stop needing their verdicts."""
+        staged_batches = {
+            (labels.get(runids.JOB_LABEL_DECREE), labels.get(batchseal.STAGED_LABEL))
+            for job in self.kube.list("jobs", selector=batchseal.STAGED_LABEL)
+            if (labels := job["metadata"].get("labels"))
+        }
         known_runs = set()
         decisions = {}
         for path in self.records():
             rec = json.loads(path.read_text(encoding="utf-8"))
+            # Reporter reads local archives and does not write collector decisions.
+            if type(rec["proves"]) is int:
+                continue
             known_runs.update((rec["decree_id"], run["run_id"]) for run in rec["runs"])
             done = path.with_name(f"decision-{rec['batch']}.json")
             if not done.exists():
@@ -156,6 +188,9 @@ class Collector:
             name = cm["metadata"]["name"]
             rid = name[len("eph-result-") :]
             decree = cm["metadata"]["labels"].get("eph/decree", "") or "unknown"
+            run = runids.parse_run(rid)
+            if run is not None and (decree, run[0]) in staged_batches:
+                continue
             decision = decisions.get((decree, rid))
             if decision is None and (decree, rid) in known_runs:
                 continue
@@ -172,13 +207,14 @@ class Collector:
                 self.kube.delete("configmaps", name)
                 self.out(f"pruned {name}")
 
-    # -- step 2 and 3
+    # -- steps 3 and 4: decide and post
     def records(self):
         base = pathlib.Path(self.cfg.results_dir)
         return sorted(base.glob("*/batch-*.json")) if base.is_dir() else []
 
     def run(self, post=True):
         try:
+            self._recover_batches()
             self.fetch()
         except KubeError as exc:
             raise CollectError(f"cannot read results: {exc}") from exc
@@ -203,7 +239,8 @@ class Collector:
             self.out(
                 f"{rec['decree_id']} batch {rec['batch']}: {d['outcome']} ({d['reason']})"
             )
-            if d["outcome"] == "pending" or not post:
+            # Numeric proofs are published by report, with its UTC and box rules.
+            if d["outcome"] == "pending" or not post or type(rec["proves"]) is int:
                 continue
             notes = self._act(rec, d, res)
             done.write_text(

@@ -8,8 +8,9 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 
-from eph_fakes import FakeCluster, FakeGh, make_cfg
-from ephemeral import collect, ghx, kube
+from eph_fakes import DB, FIX, OLD, OLD_DB, OLD_WS, WS, FakeCluster, FakeGh, make_cfg
+from eph_fakes import SHA as CURRENT_PIN
+from ephemeral import batchseal, collect, ghx, kube, runids
 
 DECREE_TEXT = "decree: v1\nid: demo-decree\n"
 SHA = hashlib.sha256(DECREE_TEXT.encode()).hexdigest()
@@ -390,6 +391,159 @@ class IdentityTest(Base):
         with self.assertRaisesRegex(ghx.GhError, "someone-personal"):
             self.collect()
         self.assertEqual(self.closes(), [])
+
+
+class CommittedBatchTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.rec.update(
+            decree_path="data/decrees/demo-decree.yaml",
+            submitted_at=1794787200,
+            fix={"repo": REPO, "commit": FIX},
+            template_image=WS,
+        )
+        self.rec["presence"]["control"]["pin"] = OLD
+        self.rec["presence"]["treatment"]["pin"] = CURRENT_PIN
+        members = {}
+        for realm, run in enumerate(self.rec["runs"], 100):
+            control = run["arm"] == "control"
+            run.update(
+                realm_id=realm,
+                node="node-a",
+                images={
+                    "worldserver": OLD_WS if control else WS,
+                    "dbimport": OLD_DB if control else DB,
+                },
+            )
+            rid = run["run_id"]
+            members[rid] = {
+                "job_uid": f"job-{rid}",
+                "input_uid": f"input-{rid}",
+                "input_sha256": batchseal.fingerprint({"decree.yaml": DECREE_TEXT}),
+            }
+        self.receipt = (
+            pathlib.Path(self.cfg.results_dir) / "demo-decree" / "batch-abc123.json"
+        )
+        self.receipt.unlink()
+        self.members = members
+        self.marker = batchseal.manifest(self.cfg.namespace, self.rec, self.members)
+
+    def seal(self):
+        self.c.put(
+            "configmaps", self.cfg.namespace, batchseal.name("demo-decree"), self.marker
+        )
+
+    def stage_sibling(self):
+        sibling = ("jobs", self.cfg.namespace, runids.job_name("abc123-c1"))
+        self.c.put(*sibling, {
+            "metadata": {"labels": {
+                batchseal.STAGED_LABEL: "abc123", runids.JOB_LABEL_DECREE: "demo-decree",
+            }},
+            "spec": {"suspend": True},
+        })  # fmt: skip
+        return sibling
+
+    def test_recovers_and_collects_after_submitter_loses_its_receipt(self):
+        self.seal()
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        self.assertEqual(self.collect(), {"abc123": "proven"})
+        self.assertEqual(json.loads(self.receipt.read_text(encoding="utf-8")), self.rec)
+        self.assertEqual(len(self.closes()), 1)
+        self.assertIn(
+            ("configmaps", self.cfg.namespace, batchseal.name("demo-decree")),
+            self.c.objs,
+        )
+
+    def test_dry_run_imports_only_the_local_receipt(self):
+        self.seal()
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        self.assertEqual(self.collect(post=False, env={}), {"abc123": "proven"})
+        self.assertTrue(self.receipt.is_file())
+        self.assertEqual(self.writes(), [])
+        self.assertFalse(any("delete" in argv for argv, _ in self.c.calls))
+        self.assertFalse(self.receipt.with_name("decision-abc123.json").exists())
+
+    def test_idempotent_recovery_preserves_equal_receipt_bytes(self):
+        self.seal()
+        original = json.dumps(self.rec) + "\n"
+        self.receipt.write_text(original, encoding="utf-8")
+        self.assertEqual(self.collect(post=False), {"abc123": "pending"})
+        self.assertEqual(self.receipt.read_text(encoding="utf-8"), original)
+
+    def test_conflicting_local_receipt_stops_before_posting_or_pruning(self):
+        self.seal()
+        conflicting = json.dumps({**self.rec, "submitted_at": 0})
+        self.receipt.write_text(conflicting, encoding="utf-8")
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        with self.assertRaisesRegex(
+            collect.CollectError, "disagrees.*local submission record"
+        ):
+            self.collect()
+        self.assertEqual(self.receipt.read_text(encoding="utf-8"), conflicting)
+        self.assertEqual(self.writes(), [])
+        self.assertFalse(any("delete" in argv for argv, _ in self.c.calls))
+
+    def test_malformed_commit_cannot_supply_a_receipt(self):
+        self.marker.pop("immutable")
+        self.seal()
+        self.assertEqual(self.collect(post=False, env={}), {})
+        self.assertFalse(self.receipt.exists())
+        self.assertTrue(
+            any("ignored invalid batch commit" in line for line in self.logs)
+        )
+
+    def test_posted_result_survives_until_the_last_staged_sibling_is_gone(self):
+        self.seal()
+        self.results([None] * 3, ["FAIL", None, None])
+        sibling = self.stage_sibling()
+        result = ("configmaps", self.cfg.namespace, runids.result_name("abc123-t1"))
+        self.assertEqual(self.collect(), {"abc123": "disproven"})
+        self.assertIn(result, self.c.objs)
+
+        del self.c.objs[sibling]
+        self.assertEqual(self.collect(), {})
+        self.assertNotIn(result, self.c.objs)
+        self.assertEqual(len(self.fg.comments[f"repos/{REPO}/issues/12/comments"]), 1)
+
+    def test_numeric_receipt_is_recovered_for_report_without_posting(self):
+        self.rec.update(proves=12, box="Live: the family leaves")
+        self.marker = batchseal.manifest(self.cfg.namespace, self.rec, self.members)
+        self.seal()
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        self.assertEqual(self.collect(), {"abc123": "proven"})
+        self.assertEqual(json.loads(self.receipt.read_text(encoding="utf-8")), self.rec)
+        self.assertTrue(self.receipt.with_name("abc123-t1.json").is_file())
+        self.assertFalse(self.receipt.with_name("decision-abc123.json").exists())
+        self.assertEqual(self.writes(), [])
+        self.assertFalse(any("delete" in argv for argv, _ in self.c.calls))
+
+    def test_numeric_result_prunes_only_after_archive_age_and_sibling_checks(self):
+        self.rec.update(proves=12, box="Live: the family leaves")
+        self.marker = batchseal.manifest(self.cfg.namespace, self.rec, self.members)
+        self.seal()
+        self.c.now = "2026-10-01T00:00:00Z"
+        self.results([None] * 3, ["PASS"] * 3)
+        aged, uncopied, recent = (
+            ("configmaps", self.cfg.namespace, runids.result_name(f"abc123-t{n}"))
+            for n in (1, 2, 3)
+        )
+        self.c.objs[recent]["metadata"]["creationTimestamp"] = "2026-11-15T00:00:00Z"
+        sibling = self.stage_sibling()
+
+        self.collect()
+        self.assertIn(aged, self.c.objs)
+        del self.c.objs[sibling]
+        self.receipt.with_name("abc123-t2.json").unlink()
+        collector = collect.Collector(
+            self.cfg, self.k, self.gh, out=self.logs.append,
+            clock=lambda: self.rec["submitted_at"],
+        )  # fmt: skip
+        collector.prune()
+        self.assertNotIn(aged, self.c.objs.keys())
+        self.assertTrue(self.receipt.with_name("abc123-t1.json").is_file())
+        self.assertIn(uncopied, self.c.objs)
+        self.assertIn(recent, self.c.objs)
+        self.assertEqual(self.writes(), [])
 
 
 class FetchTest(Base):
