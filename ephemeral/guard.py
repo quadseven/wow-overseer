@@ -72,6 +72,23 @@ class GuardError(SeedError):
     """The guard refused; nothing was run."""
 
 
+def _check_travel_guard_request(
+    target: str, enabled: bool, expected: str | None
+) -> None:
+    if not isinstance(target, str) or _CHARACTER_NAME.fullmatch(target) is None:
+        raise GuardError("travel guard needs a character name")
+    if type(enabled) is not bool:
+        raise GuardError("travel guard enabled must be boolean")
+    if enabled and expected is not None:
+        raise GuardError("setting a travel guard needs a blank travel aim")
+    if not enabled and (
+        not isinstance(expected, str)
+        or not expected.startswith(_TRAVEL_GUARD_PREFIX)
+        or not len(_TRAVEL_GUARD_PREFIX) < len(expected) <= _TRAVEL_AIM_MAX_CHARS
+    ):
+        raise GuardError("clearing a travel guard needs this run's exact guard")
+
+
 def _homebind_guard(map_id: int, x: float, y: float, z: float) -> str:
     coords = (x, y, z)
     if type(map_id) is not int or not 0 <= map_id <= 65535:
@@ -211,18 +228,7 @@ class GuardedConnection:
     ) -> str:
         """Set a homebind guard on an idle aim or clear this run's exact guard."""
         self._require_opened()
-        if not isinstance(target, str) or _CHARACTER_NAME.fullmatch(target) is None:
-            raise GuardError("travel guard needs a character name")
-        if type(enabled) is not bool:
-            raise GuardError("travel guard enabled must be boolean")
-        if enabled and expected is not None:
-            raise GuardError("setting a travel guard needs a blank travel aim")
-        if not enabled and (
-            not isinstance(expected, str)
-            or not expected.startswith(_TRAVEL_GUARD_PREFIX)
-            or not len(_TRAVEL_GUARD_PREFIX) < len(expected) <= _TRAVEL_AIM_MAX_CHARS
-        ):
-            raise GuardError("clearing a travel guard needs this run's exact guard")
+        _check_travel_guard_request(target, enabled, expected)
 
         try:
             with contextlib.closing(self._conn.cursor()) as cur:

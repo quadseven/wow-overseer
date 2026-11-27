@@ -551,13 +551,9 @@ class Judge:
                 raise JudgeError(
                     f"act step {i}: waits for unknown observation {cmd['when']!r}"
                 )
-            targets = self._targets(cmd["who"], i)
-            if travel_guard and (
-                targets != [cmd["who"]]
-                or not any(
-                    x["who"] == cmd["who"] for x in self.handoff.get("members", [])
-                )
-            ):
+            who = cmd["who"]
+            targets = self._targets(who, i)
+            if travel_guard and not self._is_named_target(who, targets):
                 raise JudgeError(
                     f"act step {i}: travel_guard needs one named cast member"
                 )
@@ -565,7 +561,7 @@ class Judge:
             if "at" in cmd and at is None:
                 raise JudgeError(f"act step {i}: bad time {cmd['at']!r}")
             row = {
-                "index": i, "who": cmd["who"], "targets": targets, "kind": cmd["kind"],
+                "index": i, "who": who, "targets": targets, "kind": cmd["kind"],
                 "text": cmd["text"], "fired": False,
             }  # fmt: skip
             if travel_guard:
@@ -574,6 +570,11 @@ class Judge:
             self.act_rows.append(row)
             steps.append((row, at))
         return steps
+
+    def _is_named_target(self, who, targets):
+        return targets == [who] and any(
+            member["who"] == who for member in self.handoff.get("members", [])
+        )
 
     def _targets(self, who, i):
         members = self.handoff.get("members") or []
