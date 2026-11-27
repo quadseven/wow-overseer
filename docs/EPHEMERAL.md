@@ -184,7 +184,14 @@ The collector recovers missing local records from the committed ConfigMaps.
 Keep those records after collection so retries can still detect the batch.
 Collection retains staged batch verdicts until all sibling Jobs are gone.
 A stopped first pair can finish removing its surplus Jobs across dispatcher
-restarts. Numeric proofs are published through `report` under its timestamp
+restarts. If a committed first-run Job is absent by exact name and a verified
+sibling still exists, the dispatcher records an INVALID when that run has no
+verdict. This stops new starts for the batch. It removes only verified Jobs
+that are still suspended at their observed UID and resource version, and
+counts the worlds that already started until they finish. A judge result that
+wins the write race is read on the next pass. Recovery requires a committed
+receipt and a surviving verified Job. Numeric proofs are published through
+`report` under its timestamp
 and checkbox rules. After siblings are gone, `collect` only prunes numeric
 results once they are archived locally and the retention window has elapsed.
 

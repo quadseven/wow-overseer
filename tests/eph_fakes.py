@@ -327,10 +327,11 @@ class FakeCluster:
 
     def v_delete(self, ns, rest, text):
         if rest[0] == "--raw":
-            _, api, version, scope, ns, kind, name = rest[1].split("/")
-            assert (api, version, scope, kind) == (
-                "api", "v1", "namespaces", "configmaps"
-            )  # fmt: skip
+            prefix, ns, kind, name = rest[1].rsplit("/", 3)
+            assert (prefix, kind) in {
+                ("/api/v1/namespaces", "configmaps"),
+                ("/apis/batch/v1/namespaces", "jobs"),
+            }
             key = (kind, ns, name)
             current = self.objs.get(key)
             if current is None:

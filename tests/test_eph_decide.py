@@ -236,6 +236,41 @@ class ExactlyThreeTest(unittest.TestCase):
         rec = record(control=1, treatment=1)
         self.assertEqual(decide.decide(rec, {})["outcome"], "pending")
 
+    def test_a_missing_first_job_settles_a_small_decree_before_its_sibling(self):
+        rec = record(control=2, treatment=2)
+        rid = "abc123-c1"
+        missing = {
+            "verdict": "INVALID",
+            "run_id": rid,
+            "arm": "control",
+            "decree_sha256": SHA,
+            "synthesized": True,
+            "missing_job": True,
+        }
+        decision = decide.decide(rec, {rid: missing})
+        self.assertEqual(decision["outcome"], "unclear")
+        self.assertIn("committed first-run Job disappeared", decision["reason"])
+
+        for field, value in (
+            ("verdict", None),
+            ("run_id", "abc123-c2"),
+            ("arm", "treatment"),
+            ("decree_sha256", "0" * 64),
+            ("synthesized", 1),
+            ("missing_job", 1),
+        ):
+            with self.subTest(field=field):
+                result = {**missing, field: value}
+                self.assertEqual(
+                    decide.decide(rec, {rid: result})["outcome"], "pending"
+                )
+
+        later = "abc123-c2"
+        self.assertEqual(
+            decide.decide(rec, {later: {**missing, "run_id": later}})["outcome"],
+            "pending",
+        )
+
     def test_a_three_of_three_decree_still_disproves(self):
         rec = record()
         d = decide.decide(

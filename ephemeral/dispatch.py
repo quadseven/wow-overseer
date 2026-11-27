@@ -180,7 +180,7 @@ def _sealed_configmap_matches(cm, rid, member, namespace):
     )
 
 
-def _sealed_verdict(cm, rid, record):
+def _sealed_result(cm, rid, record):
     if cm is None:
         return None
     labels = cm["metadata"].get("labels") or {}
@@ -201,7 +201,7 @@ def _sealed_verdict(cm, rid, record):
         result.get("run_id"), result.get("arm"), result.get("decree_sha256"),
         result.get("verdict"),
     ) == (rid, arm, record["decree_sha256"], verdict):  # fmt: skip
-        return verdict
+        return result
     return None
 
 
@@ -336,7 +336,9 @@ class Dispatcher:
             key=lambda j: (j["metadata"]["creationTimestamp"], j["metadata"]["name"]),
         )
         self._synthesize(jobs, verdicts, records)
-        jobs = self._early_stop(jobs, verdicts, records, cleanup)
+        for job in cleanup:
+            self._stop_waiting(job)
+        jobs = self._early_stop(jobs, verdicts, records)
         return self._admit(jobs)
 
     def _results(self):
@@ -376,17 +378,19 @@ class Dispatcher:
             record, members = parsed
             if (record["batch"], record["decree_id"]) not in staged_batches:
                 continue
-            verified_jobs = {}
-            for rid, member in members.items():
-                verdicts.pop(rid, None)
-                if verdict := _sealed_verdict(results.get(rid), rid, record):
-                    verdicts[rid] = verdict
-                elif _sealed_inputs(
-                    by_run.get(rid), inputs.get(runids.run_cm_name(rid)), rid,
-                    record, member, self.cfg.namespace,
-                ):  # fmt: skip
-                    verified_jobs[rid] = by_run[rid]
-            if members.keys() <= verdicts.keys() | verified_jobs.keys():
+            verified_jobs, lost_first = self._read_staged_members(
+                record, members, by_run, inputs, results, verdicts
+            )
+            if lost_first:
+                records[record["batch"]] = record
+                cleanup.extend(
+                    job for job in verified_jobs.values() if self._waiting(job)
+                )
+                # Keep terminal Jobs visible to synthesis without starting a peer.
+                ready.update(
+                    {rid: job for rid, job in verified_jobs.items() if finished(job)}
+                )
+            elif members.keys() <= verdicts.keys() | verified_jobs.keys():
                 records[record["batch"]] = record
                 ready.update(verified_jobs)
             elif followers := self._stopped_followers(record, verified_jobs, verdicts):
@@ -397,6 +401,57 @@ class Dispatcher:
         waiting = [job for job in ready.values() if not is_running(job)]
         return waiting + [job for job in staged if is_running(job)], records, cleanup
 
+    def _read_staged_members(self, record, members, by_run, inputs, results, verdicts):
+        verified_jobs, lost_first = {}, False
+        for rid, member in members.items():
+            verdicts.pop(rid, None)
+            if result := _sealed_result(results.get(rid), rid, record):
+                verdicts[rid] = result["verdict"]
+                lost_first |= self._is_lost_first(rid, result)
+            elif _sealed_inputs(
+                by_run.get(rid), inputs.get(runids.run_cm_name(rid)), rid,
+                record, member, self.cfg.namespace,
+            ):  # fmt: skip
+                verified_jobs[rid] = by_run[rid]
+        if verified_jobs:
+            lost_first |= self._record_missing_firsts(record, by_run, results, verdicts)
+        return verified_jobs, lost_first
+
+    @staticmethod
+    def _is_lost_first(rid, result):
+        return (
+            runids.parse_run(rid)[2] == 1
+            and result["verdict"] == "INVALID"
+            and result.get("synthesized") is True
+            and result.get("missing_job") is True
+        )
+
+    def _record_missing_firsts(self, record, by_run, results, verdicts):
+        """An exact post-commit lookup distinguishes loss from an older list."""
+        lost = False
+        for arm in record["runs_wanted"]:
+            rid = runids.run_id(record["batch"], arm, 1)
+            if rid in by_run or rid in results:
+                continue
+            try:
+                current = self.kube.get("jobs", runids.job_name(rid), missing_ok=True)
+            except KubeError as exc:
+                self.log(f"could not confirm missing Job for {rid}: {exc}")
+                continue
+            if current is not None:
+                continue
+            fields = {
+                "run_id": rid, "arm": arm, "decree_sha256": record["decree_sha256"],
+                "missing_job": True,
+            }  # fmt: skip
+            reason = "committed first-run Job disappeared without a result"
+            lost |= self._record_invalid(fields, record["decree_id"], reason, verdicts)
+        return lost
+
+    @staticmethod
+    def _waiting(job):
+        return job["spec"].get("suspend") is True and not finished(job)
+
     def _stopped_followers(self, record, verified_jobs, verdicts):
         """Resume cleanup after a previous tick removed part of a stopped batch."""
         decided, passed = self._first_pair(
@@ -406,9 +461,7 @@ class Dispatcher:
             return []
         return [
             job for rid, job in verified_jobs.items()
-            if runids.parse_run(rid)[2] > 1
-            and job["spec"].get("suspend") is True
-            and not finished(job)
+            if runids.parse_run(rid)[2] > 1 and self._waiting(job)
         ]  # fmt: skip
 
     def _synthesize(self, jobs, verdicts, records):
@@ -419,36 +472,40 @@ class Dispatcher:
                 continue
             reason = f"no result was written: job {done['type']} ({done.get('reason', '')}: {done.get('message', '')})"
             labels = j["metadata"].get("labels", {})
-            arm = labels.get(runids.JOB_LABEL_ARM, "")
-            result = {
-                "verdict": "INVALID", "reasons": [reason], "run_id": rid,
-                "arm": arm, "synthesized": True, "assertions": [], "acts": [],
-            }  # fmt: skip
+            fields = {"run_id": rid, "arm": labels.get(runids.JOB_LABEL_ARM, "")}
             if record := records.get(labels.get(batchseal.STAGED_LABEL)):
-                arm = runids.parse_run(rid)[1]
-                result.update(arm=arm, decree_sha256=record["decree_sha256"])
-            cm = {
-                "apiVersion": "v1", "kind": "ConfigMap",
-                "metadata": {
-                    "name": runids.result_name(rid), "namespace": self.cfg.namespace,
-                    "labels": {
-                        "eph/decree": labels.get(runids.JOB_LABEL_DECREE, ""),
-                        "eph/arm": arm,
-                        "eph/verdict": "INVALID",
-                    },
+                fields.update(
+                    arm=runids.parse_run(rid)[1], decree_sha256=record["decree_sha256"]
+                )
+            self._record_invalid(
+                fields, labels.get(runids.JOB_LABEL_DECREE, ""), reason, verdicts
+            )
+
+    def _record_invalid(self, fields, decree, reason, verdicts):
+        rid = fields["run_id"]
+        result = {
+            **fields, "verdict": "INVALID", "reasons": [reason],
+            "synthesized": True, "assertions": [], "acts": [],
+        }  # fmt: skip
+        cm = {
+            "apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {
+                "name": runids.result_name(rid), "namespace": self.cfg.namespace,
+                "labels": {
+                    "eph/decree": decree, "eph/arm": fields["arm"], "eph/verdict": "INVALID",
                 },
-                "data": {
-                    "verdict": "INVALID",
-                    "result.json": json.dumps(result),
-                },
-            }  # fmt: skip
-            try:
-                self.kube.create(cm)
-            except KubeError as exc:
-                self.log(f"could not record INVALID for {rid}: {exc}")
-                continue
-            verdicts[rid] = "INVALID"
-            self.log(f"{rid}: INVALID, {reason}")
+            },
+            "data": {"verdict": "INVALID", "result.json": json.dumps(result)},
+        }  # fmt: skip
+        try:
+            self.kube.create(cm)
+        except KubeError as exc:
+            # A racing judge can win the create. Read it through the next tick.
+            self.log(f"could not record INVALID for {rid}: {exc}")
+            return False
+        verdicts[rid] = "INVALID"
+        self.log(f"{rid}: INVALID, {reason}")
+        return True
 
     @staticmethod
     def _batches(jobs, verdicts):
@@ -479,22 +536,33 @@ class Dispatcher:
         decided = all(v is not None for v in first.values())
         return decided, decided and all(first[a] == want[a] for a in arms)
 
-    def _early_stop(self, jobs, verdicts, records, cleanup):
+    def _stop_waiting(self, job):
+        meta = job["metadata"]
+        name = meta["name"]
+        if batchseal.STAGED_LABEL in meta["labels"]:
+            try:
+                self.kube.delete_version("jobs", job)
+            except KubeError as exc:
+                self.log(f"{name}: could not remove stopped Job: {exc}")
+                return
+        else:
+            self.kube.delete("jobs", name)
+        rid = runids.run_of_job(job)
+        batch = runids.parse_run(rid)[0]
+        self.log(f"{rid}: removed, the first pair of {batch} stopped the batch")
+
+    def _early_stop(self, jobs, verdicts, records):
         """Drop waiting runs of a batch whose first pair was not control FAIL, treatment PASS."""
         gone, self._held = set(), set()
-        for batch, info in self._batches(jobs + cleanup, verdicts).items():
+        for batch, info in self._batches(jobs, verdicts).items():
             arms = records.get(batch, {}).get("runs_wanted", info["arms"])
             decided, ok = self._first_pair(batch, arms, verdicts)
-            for j, rid, n in info["members"]:
-                waiting = j["spec"].get("suspend") is True and not finished(j)
-                if n == 1 or not waiting or ok:
+            for j, _rid, n in info["members"]:
+                if n == 1 or not self._waiting(j) or ok:
                     continue
                 if decided:
-                    self.kube.delete("jobs", j["metadata"]["name"])
+                    self._stop_waiting(j)
                     gone.add(j["metadata"]["name"])
-                    self.log(
-                        f"{rid}: removed, the first pair of {batch} stopped the batch"
-                    )
                 else:
                     self._held.add(j["metadata"]["name"])
         return [j for j in jobs if j["metadata"]["name"] not in gone]
