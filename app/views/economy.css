@@ -116,9 +116,17 @@
 
 /* ---- guild bank ---- */
 .eco-vault { font-size: var(--fs-3); }
-.eco-btabs { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); }
-.eco-btab { gap: 6px; min-height: 44px; }
-.eco-btab[aria-current="true"] { box-shadow: inset 0 0 0 1px var(--color-accent); }
+.eco-full { display: flex; align-items: center; gap: 10px; }
+.eco-full .eco-bar { max-width: 320px; }
+.eco-empty { border-radius: 6px; background: var(--color-neutral-900); box-shadow: inset 0 0 0 1.5px var(--color-neutral-800); }
+.eco-more { display: flex; align-items: center; justify-content: center; font-size: var(--fs-0); color: var(--color-neutral-400); }
+.eco-bank-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.eco-bank-filter { display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 180px; }
+.eco-bank-filter .input { flex: 1; min-height: 44px; }
+.eco-banklist { display: flex; flex-direction: column; max-width: 640px; }
+.eco-brow { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 0; box-shadow: 0 -1px 0 var(--color-neutral-900); font-size: var(--fs-2); }
+.eco-brow .num { margin-left: auto; }
+.eco-hide { display: none !important; }
 /* The grid fills its row: as many columns of at least 44px as fit, the
    cells square, 4px apart. The quality ring sits inside the cell over the
    icon, and a stack count is a small dark plate so it reads on any icon. */

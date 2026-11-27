@@ -13,7 +13,7 @@
 
 import {
   html, raw, pageHead, sectionHead, tabs, kpi, sparkline, histogram, bindHistogram, notMeasured,
-  state, pendingRead, item, member, memberHref, plural, duration, classVar,
+  state, pendingRead, item, member, memberHref, plural, duration, classVar, gold,
 } from "../ui.js";
 import { peek } from "../api.js";
 import { runCard, bindRunCards, runHref, runState, seatChips } from "./_runs.js";
@@ -53,6 +53,8 @@ function model(ctx) { return guildModel(peek(P.guild(ctx))); }
 const P = {
   guild: (ctx) => "/api/v2/guild?guild=" + slug(ctx),
   roster: () => "/api/v2/roster",
+  teams: (ctx) => "/api/v2/raidteams?guild=" + slug(ctx),
+  bank: (ctx) => "/api/client/guildbank?name=" + encodeURIComponent(family(ctx)),
   series: (ctx) => "/api/v2/series?guild=" + slug(ctx),
   runs: () => "/api/guildruns",
   seats: () => "/api/guildseats",
@@ -71,14 +73,14 @@ const P = {
 };
 
 const TAB_READS = {
-  progress: ["guild", "series", "roster"],
+  progress: ["guild", "series", "roster", "teams", "bank"],
   runs: ["guild", "runs", "ups", "timeline", "seats"],
   chronicle: ["guild", "runs", "chronicle", "loot", "clips", "recap", "council", "chat", "achievements", "journeys", "camera", "operator"],
 };
 
 // Per-device view state that is not worth a URL: the feed's page length and
 // which path rows are open. The feed filter is in the URL (?kind=).
-const view = { kind: "all", shown: FEED_PAGE, open: new Set(), hash: "" };
+const view = { kind: "all", shown: FEED_PAGE, open: new Set(), hash: "", cqBlocked: false };
 
 function n(v) { return Number(v || 0).toLocaleString("en-US"); }
 
@@ -97,7 +99,7 @@ function header(ctx, g) {
 <div class="g-title"><h1>${gname(ctx)}</h1><span class="g-facts">${facts}</span>${pick}</div>
 ${g ? html`<p class="summary g-summary">${summary(ctx, g)}</p>` : ""}
 </header>
-${tabs("Guild views", TABS.map(([k, label]) => ({ label, href: base(ctx) + (k === "progress" ? "" : "/" + k), current: k === ctx.params.tab })))}`;
+${tabs("Guild views", TABS.map(([k, label]) => ({ label, href: base(ctx) + (k === "progress" ? "" : "/" + k), current: k === ctx.params.tab })).concat([{ label: "Guild bank", href: "#/economy/bank?guild=" + key(ctx), current: false }]))}`;
 }
 
 // ---- progress -----------------------------------------------------------------
@@ -105,21 +107,22 @@ ${tabs("Guild views", TABS.map(([k, label]) => ({ label, href: base(ctx) + (k ==
 function kpis(ctx, g) {
   const q = "#/members?guild=" + key(ctx);
   const G = model(ctx);
-  const levels = G.levels();
   const ghosts = G.ghostsNow();
   const cq = g.class_quests;
   // Stuck is the roster's reading (the Members page's), counted for this guild.
+  // The tiles lead with what is wrong right now, then the one all-time
+  // problem (blocked class quests), then progress; every tile names the
+  // window its number covers. The median lives in the header summary.
   const roster = peek(P.roster(ctx));
   const mine = rosterModel(roster).inGuild(g.guild);
   const stuck = mine ? mine.filter((m) => m.stuck).length : null;
-  const stuckSub = mine ? "of " + plural(mine.length, "member") + ", waiting on help" : roster.loading ? "reading the roster" : "the roster read did not answer";
+  const stuckSub = mine ? "right now, of " + plural(g.count, "member") : roster.loading ? "reading the roster" : "the roster read did not answer";
   const tile = (label, v, sub, href, tone) => html`<a class="kpi g-kpi" href="${href}"><span class="k">${label}</span><span class="v"${tone ? raw(' data-gt="' + tone + '"') : ""}>${v}</span><span class="s">${sub}</span></a>`;
   return html`<div class="g-kpis">
-${tile("Gaining XP", g.gaining.length + "/" + g.count, "a new level in the last 24h", q + "&sort=xp")}
-${tile("Median level", levels.length ? G.medianLevel() : notMeasured(), levels.length ? Math.min(...levels) + " to " + Math.max(...levels) : "", q + "&sort=level")}
-${tile("Class quests done", n(cq.done), cq.open + " in progress, " + cq.blocked + " blocked", q)}
 ${tile("Stuck", stuck === null ? notMeasured() : stuck, stuckSub, q + "&stuck=1", stuck ? "warn" : "")}
-${tile("Ghosts now", ghosts, g.deaths.total + " deaths in 24h", q + "&ghost=1", ghosts ? "bad" : "")}
+${tile("Ghosts now", ghosts, "right now", q + "&ghost=1", ghosts ? "bad" : "")}
+${tile("Blocked class quests", n(cq.blocked), cq.open + " open · " + n(cq.done) + " done, all time", "#/guilds/" + key(ctx) + "?cq=blocked", cq.blocked ? "warn" : "")}
+${tile("Gaining XP", g.gaining.length, "in the last 24h, of " + plural(g.count, "member"), q + "&sort=xp")}
 </div>`;
 }
 
@@ -154,6 +157,7 @@ ${histogram(bins, { label: "Members by level, two levels a bar", unit: "member" 
 
 function cqCard(ctx, g) {
   const cq = g.class_quests;
+  const rows = view.cqBlocked ? cq.rows.filter((q) => q.state === "blocked") : cq.rows;
   const row = (q) => {
     const blocked = q.state === "blocked";
     return html`<a class="g-row g-cq" href="${memberHref(q.member, "quests")}">
@@ -161,10 +165,11 @@ function cqCard(ctx, g) {
 <span class="g-cq-body"><span class="g-cq-line"><span><b style="color:${classVar(q.class)}">${q.member}</b> <span class="muted">${q.quest || (q.quest_id ? "quest " + q.quest_id : q.walk_to || notMeasured("quest not recorded on its step"))}</span></span><span class="g-cq-state" data-gt="${blocked ? "warn" : "accent"}">${q.state}</span></span>
 ${blocked ? html`<span class="muted">${q.note}${q.at ? " | " + since(q.at) : ""}</span>` : ""}</span></a>`;
   };
-  const first = cq.rows.slice(0, CQ_SHOWN), rest = cq.rows.slice(CQ_SHOWN);
-  return html`<div class="card g-list">
+  const first = rows.slice(0, CQ_SHOWN), rest = rows.slice(CQ_SHOWN);
+  return html`<div class="card g-list g-cq-card">
 <div class="g-list-head"><span class="g-card-title">Class quests</span><span class="muted">${n(cq.done)} done | ${cq.blocked} blocked | ${cq.open} in progress</span></div>
-${cq.rows.length ? first.map(row) : html`<div class="g-row muted">No class quest is in anybody's log.</div>`}
+<div class="g-cq-chips"><button type="button" class="chip" data-cq="blocked" aria-pressed="${view.cqBlocked ? "true" : "false"}">Blocked only (${cq.blocked})</button><button type="button" class="chip" data-cq="all" aria-pressed="${view.cqBlocked ? "false" : "true"}">All</button></div>
+${rows.length ? first.map(row) : html`<div class="g-row muted">${view.cqBlocked ? "No class quest is blocked." : "No class quest is in anybody's log."}</div>`}
 ${rest.length ? html`<details class="fold g-more"><summary>${plural(rest.length, "more class quest")}</summary>${rest.map(row)}</details>` : ""}
 </div>`;
 }
@@ -178,7 +183,7 @@ function lastWord(d) {
 function dungeonCard(ctx, g) {
   const clears = g.dungeons.reduce((a, d) => a + d.cleared, 0);
   return html`<div class="card g-list">
-<div class="g-list-head"><span class="g-card-title">Dungeons, level order</span><span class="muted">${plural(clears, "clear")}</span></div>
+<div class="g-list-head"><span class="g-card-title">Dungeons, level order</span><span class="muted">${plural(clears, "clear")}, all time</span></div>
 ${g.dungeons.map((d) => {
     const last = lastWord(d);
     return html`<div class="g-row g-dun"><span>${d.place}</span><span class="muted g-lv">${levelsOf(d)}</span><span class="num"${d.cleared ? "" : raw(' data-gt="dim"')}>${d.cleared}x</span><span class="g-last" data-gt="${last.tone}">${last.text}</span></div>`;
@@ -199,11 +204,76 @@ ${!ghosts.length && !killers.length ? html`<div class="g-row muted">Nobody died 
 </div>`;
 }
 
+// ---- readiness ----------------------------------------------------------------
+// The strip the guild page never had: what the Raid page knows about this
+// guild's Molten Core seats (/api/v2/raidteams), said once at the top of
+// Progress. A seat the read leaves open stays open here too.
+
+const ROLE_COUNT_WORD = { tank: "tanks", healer: "healers", dps: "damage" };
+const GAP_WORD = [["tanks", "tank"], ["healers", "healer"], ["damage", "damage"]];
+
+function readiness(ctx, g) {
+  const head = html`<div class="g-card-head"><span class="g-card-title">Raid readiness</span><a class="g-ready-link" href="${"#/raid/mc/" + key(ctx)}">Full raid page</a></div>`;
+  const t = peek(P.teams(ctx));
+  if (!t.data) return html`<div class="card g-card g-ready">${head}${pendingRead(t, 1) || notMeasured("raid readiness is not measured")}</div>`;
+  const groups = t.data.seats || [];
+  const all = groups.flat();
+  if (!all.length) return html`<div class="card g-card g-ready">${head}${notMeasured("raid readiness is not measured")}</div>`;
+  const filled = all.filter((s) => s.name);
+  const open = all.length - filled.length;
+  const formed = groups.filter((grp) => grp.length && grp.every((s) => s.name)).length;
+  const byRole = { tank: 0, healer: 0, dps: 0 };
+  filled.forEach((s) => { if (s.seat in byRole) byRole[s.seat] += 1; });
+  const roleLine = ["tank", "healer", "dps"].map((r) => ROLE_COUNT_WORD[r] + " " + byRole[r]).join(" · ");
+  const gaps = t.data.gaps || {};
+  const gapParts = GAP_WORD.filter(([k]) => gaps[k]).map(([k, w]) => gaps[k] + " " + w + (gaps[k] === 1 ? " seat" : " seats") + " open");
+  const seatsLine = open
+    ? html`${filled.length} of ${all.length} seats filled · ${roleLine}${gapParts.length ? html` · <span data-gt="bad">${gapParts.join(", ")}</span>` : ""}`
+    : html`${all.length} seats, all filled · ${roleLine}`;
+  const levels = model(ctx).levels();
+  const atCap = levels.filter((l) => l >= 60).length;
+  const members = t.data.members || {};
+  let weakest = null;
+  groups.forEach((grp, i) => {
+    const lv = grp.filter((s) => s.name && members[s.name] && members[s.name].level != null).map((s) => members[s.name].level);
+    if (!lv.length) return;
+    const low = Math.min(...lv);
+    if (!weakest || low < weakest.low) weakest = { group: i + 1, low };
+  });
+  return html`<div class="card g-card g-ready">${head}
+<div class="g-ready-row"><span>At cap (level 60)</span><span class="num">${atCap} of ${g.count}</span></div>
+<div class="g-ready-bar" aria-hidden="true"><span style="width:${g.count ? Math.round((100 * atCap) / g.count) : 0}%"></span></div>
+<div class="g-ready-row"><span>Raid groups formed</span><span class="num">${formed} formed · ${plural(open, "seat")} open</span></div>
+<div class="g-ticks" aria-hidden="true">${groups.map((grp) => grp.map((s) => html`<i${s.name ? raw(' class="on"') : ""}></i>`))}</div>
+<div class="g-ready-line">${seatsLine}</div>
+${weakest ? html`<div class="g-ready-row"><span>Weakest group</span><span${weakest.low < 60 ? raw(' data-gt="warn"') : ""}>Group ${weakest.group}, lowest member ${weakest.low}</span></div>` : ""}
+</div>`;
+}
+
+// The vault, summed on the guild's own page: its gold, its fullest tab and
+// its size, with the way into the bank carrying this guild in the URL.
+function bankCard(ctx, g) {
+  const head = html`<div class="g-list-head"><span class="g-card-title">Guild bank, ${g.guild} vault</span></div>`;
+  const link = html`<a href="${"#/economy/bank?guild=" + key(ctx)}">Open the guild bank</a>`;
+  const b = peek(P.bank(ctx));
+  if (!b.data) return html`<div class="card g-list g-bank">${head}${pendingRead(b, 1) || notMeasured("the guild bank is not measured")}</div>`;
+  const bank = b.data;
+  const tabs = (bank.tabs || []).filter(Boolean);
+  if (!tabs.length) return html`<div class="card g-list g-bank">${head}<div class="g-row muted">${bank.note || "The guild has not bought a bank tab yet."}</div><div class="g-row">${link}</div></div>`;
+  const stacks = tabs.reduce((n, t) => n + (t.used || 0), 0);
+  const fullest = tabs.reduce((a, t) => ((t.used || 0) / (t.total || 1) > (a.used || 0) / (a.total || 1) ? t : a), tabs[0]);
+  const copper = Number((bank.money || {}).gold || 0) * 10000 + Number((bank.money || {}).silver || 0) * 100 + Number((bank.money || {}).copper || 0);
+  return html`<div class="card g-list g-bank">${head}
+<div class="g-row"><span class="g-grow">${gold(copper)} · fullest tab: ${fullest.name}, ${fullest.used} of ${fullest.total} · ${plural(stacks, "stack")} in ${plural(tabs.length, "tab")}</span></div>
+<div class="g-row">${link}</div></div>`;
+}
+
 function progress(ctx, g) {
-  return html`${kpis(ctx, g)}
-<div class="g-two">${xpCard(ctx)}${spreadCard(ctx)}</div>
+  return html`${readiness(ctx, g)}${kpis(ctx, g)}
+${deathsCard(ctx, g)}
 <div class="g-two">${cqCard(ctx, g)}${dungeonCard(ctx, g)}</div>
-${deathsCard(ctx, g)}`;
+<div class="g-two">${xpCard(ctx)}${spreadCard(ctx)}</div>
+${bankCard(ctx, g)}`;
 }
 
 // ---- runs ---------------------------------------------------------------------
@@ -247,6 +317,11 @@ function pathRow(ctx, g, d, med, upsRead, byMap) {
   return html`<details class="g-path${hot}" data-path="${d.keyword}"${view.open.has(d.keyword) ? raw(" open") : ""}><summary class="g-path-row" id="${id}"><i class="ph ph-caret-right g-caret" aria-hidden="true"></i>${cells}</summary><div class="g-ups-list">${shared}${ups.map(upRow)}</div></details>`;
 }
 
+// A phone's way down a long tab: one row of buttons, each scrolling its
+// section into view. Desktop keeps the whole tab on one screen and never
+// sees the row (guild.css shows it under the phone breakpoint only).
+const jumpRow = (items) => html`<nav class="g-jump" aria-label="Sections on this tab">${items.map(([id, label]) => html`<button type="button" class="chip" data-jump="${id}">${label}</button>`)}</nav>`;
+
 function runsTab(ctx, g) {
   const gr = peek(P.runs());
   const upsRead = peek(P.ups(ctx));
@@ -263,18 +338,19 @@ function runsTab(ctx, g) {
   const med = model(ctx).medianLevel();
   const byMap = upsByMap(upsRead);
   return html`
-<section class="section">${sectionHead("01", "Groups out now")}${now}</section>
-<section class="section">${sectionHead("02", "How they came back")}${done}</section>
-<section class="section">${sectionHead("03", "What the guild has learned")}
+${jumpRow([["g-sec-out", "Out now"], ["g-sec-seats", "Seats"], ["g-sec-back", "Came back"], ["g-sec-learned", "Learned"], ["g-sec-path", "Path"], ["g-sec-timelines", "Timelines"]])}
+<section class="section" id="g-sec-out">${sectionHead("01", "Groups out now")}${now}</section>
+<section class="section" id="g-sec-seats">${sectionHead("02", "Tanks and healers ready, by dungeon")}${seatsSection(ctx)}</section>
+<section class="section" id="g-sec-back">${sectionHead("03", "How they came back")}${done}</section>
+<section class="section" id="g-sec-learned">${sectionHead("04", "What the guild has learned")}
 ${learned.length ? html`<div class="card g-list g-narrow">${learned.map((d) => html`<div class="g-row g-learn"><span class="g-learn-what"><span class="g-name">${d.place}</span><span class="muted">${lesson(d)}</span></span><span class="muted">${tally(d)}</span><span class="muted g-best">${d.best_seconds ? "best " + duration(d.best_seconds) : "no clear yet"}</span></div>`)}</div>` : state("empty", "Nothing learned yet: no run of " + gname(ctx) + " has gone in.")}
 </section>
-<section class="section">${sectionHead("04", "The path, in level order")}
+<section class="section" id="g-sec-path">${sectionHead("05", "The path, in level order")}
 <p class="muted g-lede">Run in this order: each dungeon opens when the median level of the guild reaches its floor. Open a row to see each drop that beats what ${family(ctx)}'s family wears, who it is for and from which boss.</p>
 ${g.family && g.family !== family(ctx) ? state("stale", "This guild's family reads as " + g.family + "'s here", "The upgrades below are for " + family(ctx) + "'s family.") : ""}
 <div class="card g-list g-pathlist">${g.dungeons.map((d) => pathRow(ctx, g, d, med, upsRead, byMap))}</div>
 </section>
-<section class="section">${sectionHead("05", "Run timelines", tl.data ? tl.data.line : "")}${timelines(ctx, tl)}</section>
-<section class="section">${sectionHead("06", "Tanks and healers ready, by dungeon")}${seatsSection(ctx)}</section>`;
+<section class="section" id="g-sec-timelines">${sectionHead("06", "Run timelines", tl.data ? tl.data.line : "")}${timelines(ctx, tl)}</section>`;
 }
 
 // Carry-ready tanks and healers per door (seatmeter.bench, #784): a door seats
@@ -502,16 +578,17 @@ function chat(ctx) {
 function chronicleTab(ctx) {
   const ls = lootSection(ctx);
   return html`
-<section class="section">${sectionHead("01", "What is happening right now")}${rightNow(ctx)}</section>
-<section class="section">${sectionHead("02", "What they have done", "New since your last visit is tagged")}${feed(ctx)}</section>
+${jumpRow([["g-sec-now", "Now"], ["g-sec-done", "Done"], ["g-sec-loot", "Loot"], ["g-sec-council", "Council"], ["g-sec-sittings", "Sittings"], ["g-sec-chat", "Chat"], ["g-sec-clips", "Clips"], ["g-sec-journeys", "Journeys"]])}
+<section class="section" id="g-sec-now">${sectionHead("01", "What is happening right now")}${rightNow(ctx)}</section>
+<section class="section" id="g-sec-done">${sectionHead("02", "What they have done", "New since your last visit is tagged")}${feed(ctx)}</section>
 <div class="g-two g-two-wide">
-<section class="section">${sectionHead("03", "Notable loot, and where it went")}${ls.loot}</section>
-<section class="section">${sectionHead("04", "The loot council: who got what, and why")}${ls.council}</section>
+<section class="section" id="g-sec-loot">${sectionHead("03", "Notable loot, and where it went")}${ls.loot}</section>
+<section class="section" id="g-sec-council">${sectionHead("04", "The loot council: who got what, and why")}${ls.council}</section>
 </div>
-<section class="section">${sectionHead("05", "The council: last sitting, what it carried, where next")}${sittings(ctx)}</section>
-<section class="section">${sectionHead("06", "Guild chat: asks and answers")}${chat(ctx)}</section>
-<section class="section">${sectionHead("07", "Clips", "Saved moments, newest first")}${clipShelf(peek(P.clips()))}</section>
-<section class="section">${sectionHead("08", "Epic journeys", "Each epic copy: drop, roll, council, hand-overs, ending")}${journeysSection(peek(P.journeys(ctx)), ctx.query.who || "")}</section>`;
+<section class="section" id="g-sec-sittings">${sectionHead("05", "The council: last sitting, what it carried, where next")}${sittings(ctx)}</section>
+<section class="section" id="g-sec-chat">${sectionHead("06", "Guild chat: asks and answers")}${chat(ctx)}</section>
+<section class="section" id="g-sec-clips">${sectionHead("07", "Clips", "Saved moments, newest first")}${clipShelf(peek(P.clips()))}</section>
+<section class="section" id="g-sec-journeys">${sectionHead("08", "Epic journeys", "Each epic copy: drop, roll, council, hand-overs, ending")}${journeysSection(peek(P.journeys(ctx)), ctx.query.who || "")}</section>`;
 }
 
 // ---- the view -------------------------------------------------------------------
@@ -527,6 +604,11 @@ export default {
       view.hash = hashPath;
       view.shown = FEED_PAGE;
       view.kind = FEED_KINDS.some((k) => k[0] === ctx.query.kind) ? ctx.query.kind : "all";
+      view.cqBlocked = ctx.query.cq === "blocked";
+    } else if (ctx.query.cq !== undefined) {
+      // The blocked tile links here from this same page: the path does not
+      // change, but the filter in the URL does.
+      view.cqBlocked = ctx.query.cq === "blocked";
     }
     const g = peek(P.guild(ctx));
     const wait = pendingRead(g, 3);
@@ -540,6 +622,29 @@ export default {
     bindWatch(main);
     bindJourneys(main);
     bindHistogram(main);
+    main.querySelectorAll("[data-jump]").forEach((b) => b.addEventListener("click", () => {
+      const el = main.querySelector("#" + b.getAttribute("data-jump"));
+      if (el) el.scrollIntoView({ block: "start" });
+    }));
+    const redrawCq = () => {
+      const card = main.querySelector(".g-cq-card");
+      const g = peek(P.guild(ctx));
+      if (!card || !g.data) return;
+      const holder = document.createElement("div");
+      holder.innerHTML = cqCard(ctx, g.data).s;
+      card.replaceWith(holder.firstElementChild);
+      bindCq();
+    };
+    const bindCq = () => {
+      main.querySelectorAll("[data-cq]").forEach((b) => b.addEventListener("click", () => {
+        view.cqBlocked = b.getAttribute("data-cq") === "blocked";
+        history.replaceState(null, "", view.hash + (view.cqBlocked ? "?cq=blocked" : ""));
+        redrawCq();
+        const now = main.querySelector('[data-cq="' + (view.cqBlocked ? "blocked" : "all") + '"]');
+        if (now) now.focus({ preventScroll: true });
+      }));
+    };
+    bindCq();
     main.querySelectorAll("details[data-path]").forEach((d) => {
       d.addEventListener("toggle", () => {
         if (d.open) view.open.add(d.getAttribute("data-path"));
