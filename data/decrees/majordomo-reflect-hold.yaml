@@ -2,7 +2,7 @@
 # ten seats. The 40-seat case in the issue is not representable here; the check is the per-seat behaviour.
 # The seats come from overseer_raid_seat, which the bridge writes from an operator order, so the first
 # precondition witnesses them: a world with no seats is INVALID, never a pass.
-# Majordomo Executus is not a creature spawn row (a script summons him once the five bosses are down), so
+# Majordomo Executus is not a creature spawn row (a script summons him after the prerequisite bosses), so
 # the family is placed at Golemagg and the run must reach him. At the encounter, casters hold on the Magic
 # Reflection shield (issue 767) including for an area spell (issue 1659), and no raider dies to reflected
 # damage. The precondition reads the core's credit for Majordomo himself and fails the run as INVALID if the
@@ -40,17 +40,11 @@ observe:
     sql: |
       SELECT COUNT(*) FROM overseer_raid_seat WHERE family IN ('Grug', 'Zug')
     expect: {scalar: ">= 5"}
-  # The boss event row does not name the boss ("1 encounter credited, 2 in all"), so Majordomo is read from the
-  # core's own credited-encounter record, joined to the creature name. The judge accepts this as the credit
-  # evidence for the arranged instance: positive, one read of log_encounter, bounded to this run and map.
+  # The core marks Majordomo DONE in the bound instance when the last add dies and he surrenders.
   - name: majordomo-encounter-credited
     role: precondition
     when: end
-    sql: |
-      SELECT COUNT(*) FROM log_encounter le
-      JOIN acore_world.creature_template t ON t.entry = le.creditEntry
-      WHERE le.map = 409 AND le.time >= @t0 AND le.creditType = 0 AND t.name = 'Majordomo Executus'
-    expect: {scalar: ">= 1"}
+    encounter: {instance: mc, boss: "Majordomo Executus"}
   - name: no-raider-died-to-reflected-damage
     role: check
     when: end
