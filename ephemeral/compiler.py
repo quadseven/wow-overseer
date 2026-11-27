@@ -284,10 +284,13 @@ class Compiler:
             )
 
     def _group(self, spec, by_entry):
+        selectors = spec["members"]
+        if isinstance(selectors, str):
+            selectors = [selectors]
         members = [
             m
             for i, e in enumerate(self.decree["cast"])
-            if e["who"] == spec["members"]
+            if e["who"] in selectors
             for m in by_entry[i]
         ]
         leader = [m for m in members if m.name == spec["leader"]]

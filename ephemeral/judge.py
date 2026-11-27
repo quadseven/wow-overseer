@@ -69,7 +69,7 @@ class QueryTimeout(Exception):
 
 
 class GuardedWorldDb:
-    """The judge's only door to the database: reads, and queued orders."""
+    """The judge's only door to the database: reads and guarded scenario acts."""
 
     def __init__(self, guarded, schema):
         if not isinstance(guarded, guard.GuardedConnection):
@@ -102,6 +102,9 @@ class GuardedWorldDb:
 
     def insert_command(self, target, kind, text):
         return self._g.insert_command(target, kind, text)
+
+    def write_travel_guard(self, target, enabled, *, expected=None):
+        return self._g.write_travel_guard(target, enabled, expected=expected)
 
 
 # -- expectations and rendering --------------------------------------------------
@@ -320,6 +323,7 @@ class Judge:
         self.arm = arm
         self.schema = schema or dbschema.Schema.load()
         self.records = {}
+        self._guard_aims = {}
         self.act_rows = []
 
     # -- entry --
@@ -603,7 +607,8 @@ class Judge:
     def _plan_acts(self, observes):
         steps = []
         for i, cmd in enumerate(acts.act_commands(self.decree)):
-            if cmd["kind"] not in guard.COMMAND_KINDS:
+            travel_guard = cmd["kind"] == acts.TRAVEL_GUARD and "guard_enabled" in cmd
+            if cmd["kind"] not in guard.COMMAND_KINDS and not travel_guard:
                 raise JudgeError(
                     f"act step {i}: command kind {cmd['kind']!r} is not allowed"
                 )
@@ -611,18 +616,30 @@ class Judge:
                 raise JudgeError(
                     f"act step {i}: waits for unknown observation {cmd['when']!r}"
                 )
-            targets = self._targets(cmd["who"], i)
+            who = cmd["who"]
+            targets = self._targets(who, i)
+            if travel_guard and not self._is_named_target(who, targets):
+                raise JudgeError(
+                    f"act step {i}: travel_guard needs one named cast member"
+                )
             at = lint.duration_seconds(cmd["at"]) if "at" in cmd else None
             if "at" in cmd and at is None:
                 raise JudgeError(f"act step {i}: bad time {cmd['at']!r}")
             row = {
-                "index": i, "who": cmd["who"], "targets": targets, "kind": cmd["kind"],
+                "index": i, "who": who, "targets": targets, "kind": cmd["kind"],
                 "text": cmd["text"], "fired": False,
             }  # fmt: skip
+            if travel_guard:
+                row["guard_enabled"] = cmd["guard_enabled"]
             row["at" if "at" in cmd else "when"] = cmd.get("at", cmd.get("when"))
             self.act_rows.append(row)
             steps.append((row, at))
         return steps
+
+    def _is_named_target(self, who, targets):
+        return targets == [who] and any(
+            member["who"] == who for member in self.handoff.get("members", [])
+        )
 
     def _targets(self, who, i):
         members = self.handoff.get("members") or []
@@ -645,10 +662,34 @@ class Judge:
 
     def _fire(self, step, elapsed):
         row, _ = step
-        for name in row["targets"]:
-            self.world.insert_command(name, row["kind"], row["text"])
+        if "guard_enabled" in row:
+            self._fire_travel_guard(row)
+        else:
+            for name in row["targets"]:
+                self.world.insert_command(name, row["kind"], row["text"])
         row["fired"] = True
         row["fired_s"] = int(elapsed)
+
+    def _fire_travel_guard(self, row):
+        name = row["who"]
+        enabled = row["guard_enabled"]
+        expected = self._guard_aims.get(name)
+        if enabled and expected is not None:
+            raise JudgeError(f"{name} already has a guard from this run")
+        if not enabled and expected is None:
+            raise JudgeError(f"{name} has no guard from this run to clear")
+        try:
+            aim = self.world.write_travel_guard(name, enabled, expected=expected)
+        except guard.GuardError as exc:
+            operation = "set" if enabled else "clear"
+            row["error"] = f"could not {operation} travel guard for {name}: {exc}"
+            raise JudgeError(row["error"]) from exc
+        if enabled:
+            self._guard_aims[name] = aim
+        else:
+            del self._guard_aims[name]
+        row["text"] = aim
+        row["fired_at"] = self.world.db_now()
 
     # -- observations --
     def _evaluate(self, name):
