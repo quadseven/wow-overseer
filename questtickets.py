@@ -97,6 +97,12 @@ ALREADY_IN_LOG_NOTE = (
     "quest log at the time. It is a log-state observation, not evidence that "
     "the quest's objectives cannot be completed."
 )
+STALLED_REASON = "its objectives did not move for 2 hours of play"
+STALLED_NOTE = (
+    "The stored reason records one quester's two hours without objective progress. "
+    "The world rows list required objectives and their spawn counts, so it does not "
+    "establish that the quest cannot be finished; they do not record why that attempt stalled."
+)
 TICKET_SQL = (
     "SELECT ticket FROM overseer_quest_ledger "
     "WHERE quest = %s AND ticket IS NOT NULL ORDER BY ticket DESC LIMIT 1"
@@ -256,6 +262,14 @@ def _objectives(row) -> str:
     )
 
 
+def _stall_note_lines(info, rows) -> list:
+    if info is None or not getattr(info, "objectives", ()):
+        return []
+    if not any(str(row.get("reason") or "") == STALLED_REASON for row in rows):
+        return []
+    return ["", STALLED_NOTE]
+
+
 def title(quest: int, info) -> str:
     return "Quest %d is broken: %s" % (
         quest,
@@ -358,6 +372,7 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
             "  - Reason: %s" % reason,
             "  - Last objective counts: %s" % _objectives(counts.get(int(row["guid"]))),
         ]
+    lines += _stall_note_lines(info, rows)
     if (
         scripted_event
         and info is not None
