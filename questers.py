@@ -2949,6 +2949,23 @@ def settled(member, tried):
     return replace(member, quest_log=log_now, quests_done=frozenset(done))
 
 
+def _quester_boat(member, move, crossings, clock, now):
+    """Use the same island boat gate before and after deciding a quest stalled."""
+    if move.spot is None:
+        return None
+    return guildjobs.island_boat_step(
+        member,
+        move,
+        move.spot,
+        crossings,
+        ACTION,
+        CROSS_ACTION,
+        guildjobs.crossing_cooling,
+        clock,
+        now,
+    )
+
+
 def plan(
     cat: Catalogue,
     member,
@@ -2981,6 +2998,26 @@ def plan(
             member.name, None, tuple(found), "%s has no fresh position" % member.name
         )
     move, why, never_held = next_move(cat, member, broken, found, tried, crossings)
+    if move is not None and move.kind == classquest.ABANDON:
+        # AI-REVIEW 2026-11-27 [nemotron-3.5-super-vl] 4714430610 (Elder, PR #3315):
+        # The first held boat pass can reach the stall limit before the boat gate pauses its clock.
+        retry = [
+            b
+            for b in found
+            if b.quest != move.quest or not b.reason.startswith(STALLED)
+        ]
+        if len(retry) != len(found):
+            candidate, note, new_broken = next_move(
+                cat, member, broken, retry, tried, crossings
+            )
+            if candidate is not None and candidate.quest == move.quest:
+                pending = _quester_boat(member, candidate, crossings, clock, now)
+                if (
+                    pending is not None
+                    and pending[0] is None
+                    and clock.played(member.name, move.quest) < STALL_SECONDS
+                ):
+                    found, move, why, never_held = retry, candidate, note, new_broken
     if move is not None and move.kind == classquest.CROSS:
         held = crossing_held(member.name, move, crossings)
         if held:
@@ -2989,17 +3026,7 @@ def plan(
     if move is not None and move.spot is not None:
         # A spot across the island's shore is reached by the boat, or held with
         # a named reason (#2194), as a class quest's is (#2182).
-        island = guildjobs.island_boat_step(
-            member,
-            move,
-            move.spot,
-            crossings,
-            ACTION,
-            CROSS_ACTION,
-            guildjobs.crossing_cooling,
-            clock,
-            now,
-        )
+        island = _quester_boat(member, move, crossings, clock, now)
         if island is not None:
             boat, _said, note = island
             if boat is None:

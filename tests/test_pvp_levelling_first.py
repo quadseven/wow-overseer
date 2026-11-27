@@ -6,7 +6,7 @@ import unittest
 
 import guildjobs
 import pvpgear
-from test_pvp_cohort import filler, run, wanter
+from test_pvp_cohort import ALLIANCE, filler, run, wanter
 
 
 def queued_filler(name="Low", age=5):
@@ -47,6 +47,13 @@ class LevellingFirst(unittest.TestCase):
         self.assertEqual(sum(len(c.fillers) for c in cohorts), 2)
 
     def test_a_member_already_inside_a_battleground_below_the_floor_is_held(self):
+        aim = pvpgear.Aim(
+            "In", "Cave", 45, 1, "x", 100, 0, pvpgear.WSG, faction=ALLIANCE
+        )
+        move = pvpgear.next_move(aim, pvpgear.WSG.map_id, False, ())
+        self.assertTrue(move.holds)
+
+    def test_an_under_40_filler_already_inside_a_battleground_is_held(self):
         aims, moves, _cohorts = run(
             [filler("Low", level=39)], maps={"Low": pvpgear.WSG.map_id}
         )
@@ -69,6 +76,17 @@ class LevellingFirst(unittest.TestCase):
         )
         self.assertIsNone(step)
         self.assertTrue(held)
+
+    def test_a_malformed_snapshot_map_does_not_discard_an_accepted_queue(self):
+        for invalid in ("unreadable", float("inf")):
+            with self.subTest(map_id=invalid):
+                _, moves, _ = run(
+                    [filler("Low", level=39)],
+                    recent=(queued_filler(),),
+                    maps={"Low": invalid},
+                )
+                self.assertEqual(moves["Low"].kind, pvpgear.WAITING)
+                self.assertTrue(moves["Low"].holds)
 
     def test_a_queue_that_ended_does_not_requeue_a_member_below_the_floor(self):
         aims, moves, cohorts = run(

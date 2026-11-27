@@ -187,6 +187,32 @@ class TheHold(unittest.TestCase):
 
         self.assertLess(clock.played("Mirra", 40), questers.STALL_SECONDS)
 
+        first_hold = questers.Clock()
+        almost_stalled = {
+            "Mirra:40": [
+                [questers.STATUS_INCOMPLETE, 0],
+                questers.STALL_SECONDS - 30,
+                0,
+            ]
+        }
+        first_hold.load(almost_stalled)
+        p = questers.plan(
+            cat,
+            member,
+            first_hold,
+            60.0,
+            last_quest=40,
+            crossings=guildjobs.recent_from_rows([boat_refused(30)]),
+        )
+        self.assertEqual(p.broken, ())
+        self.assertIn("no boat step available", p.line)
+        self.assertEqual(first_hold.played("Mirra", 40), questers.STALL_SECONDS - 30)
+
+        clock_without_hold = questers.Clock()
+        clock_without_hold.load(almost_stalled)
+        p = questers.plan(cat, member, clock_without_hold, 60.0, last_quest=40)
+        self.assertEqual([row.quest for row in p.broken], [40])
+
 
 if __name__ == "__main__":
     unittest.main()
