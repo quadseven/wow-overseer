@@ -258,21 +258,35 @@ def _run_bound_problems(bare, maps, alias=None, sole=True):
     return problems
 
 
-def _magmus_done(rows):
-    """Read Iron Hall state from the pinned Blackrock Depths instance save."""
+def _encounter_done(rows, boss):
+    """Read the selected encounter slots from the pinned core's instance save."""
+    map_name, slots = gamedata.INSTANCE_ENCOUNTERS[boss]
     if len(rows) != 1 or len(rows[0]) != 1 or not isinstance(rows[0][0], str):
-        raise JudgeError("expected one Blackrock Depths instance save")
+        raise JudgeError(f"expected one {map_name} instance save")
     save = rows[0][0]
     if not save:
         return False, "instance save is empty"
     fields = save.split()
-    if len(fields) not in (7, 8, 9) or any(
-        not re.fullmatch(r"[0-9]+", f) for f in fields
+    if map_name == "Blackrock Depths":
+        if len(fields) not in (7, 8, 9) or any(
+            not re.fullmatch(r"[0-9]+", f) for f in fields
+        ):
+            raise JudgeError("malformed Blackrock Depths instance save")
+        # The six encounter states come first. Magmus sets TYPE_IRON_HALL.
+        state = fields[slots[0]]
+        return state == "3", f"Iron Hall state={state}"
+
+    # Both supported core pins serialize the MC header one character at a time
+    # and write ten boss states. Unsummoned bosses can remain TO_BE_DECIDED (5).
+    states = fields[2:]
+    if (
+        fields[:2] != ["M", "C"]
+        or len(states) != 10
+        or any(state not in {"0", "1", "2", "3", "4", "5"} for state in states)
     ):
-        raise JudgeError("malformed Blackrock Depths instance save")
-    # At the pinned core, Magmus's death sets TYPE_IRON_HALL to DONE.
-    # The instance writes its six encounter states before the other fields.
-    return fields[5] == "3", f"Iron Hall state={fields[5]}"
+        raise JudgeError("malformed Molten Core instance save")
+    selected = [states[slot] for slot in slots]
+    return "3" in selected, f"{boss} state={' '.join(selected)}"
 
 
 class Judge:
@@ -364,7 +378,7 @@ class Judge:
                 rec = self._evaluate(name)
                 if rec["status"] == "held":
                     return [
-                        f"precondition {name}: Magmus was already complete before the first act"
+                        f"precondition {name}: {observation['encounter']['boss']} was already complete before the first act"
                     ]
                 if rec["status"] != "violated":
                     return [
@@ -436,17 +450,22 @@ class Judge:
                     variables,
                 )
             elif "encounter" in o:
-                alias = lint.magmus_instance(self.decree, o)
-                instance_id = variables.get(alias)
-                if alias is None or type(instance_id) is not int or instance_id <= 0:
+                source = lint.encounter_instance(self.decree, o)
+                if source is None:
                     raise JudgeError(
-                        f"observation {name}: needs a bound Blackrock Depths seed instance"
+                        f"observation {name}: needs a cast-bound seed instance"
+                    )
+                alias, map_id = source
+                instance_id = variables.get(alias)
+                if type(instance_id) is not int or instance_id <= 0:
+                    raise JudgeError(
+                        f"observation {name}: needs a positive instance ID for {alias}"
                     )
                 sql = render_sql(
                     "SELECT data FROM instance WHERE id = @instance_id AND map = @map_id",
                     {
                         "instance_id": instance_id,
-                        "map_id": gamedata.INSTANCE_MAPS["Blackrock Depths"],
+                        "map_id": map_id,
                     },
                 )
             else:
@@ -501,7 +520,7 @@ class Judge:
     def _credit_reasons(self):
         """A run that arranges an instance needs the core's own credited encounter record.
 
-        The evidence is a held Magmus observation of the fresh bound instance,
+        The evidence is a held encounter observation of the fresh bound instance,
         or a held precondition that reads `log_encounter`. The observation must be
         positive and bounded to this run:
         an expectation that holds at zero credits, or a query that could count
@@ -660,12 +679,14 @@ class Judge:
             return rec
         rec["when"] = o["when"]
         rec["sql"] = self.rendered[name]
-        encounter = "encounter" in o
-        rec["expect"] = {"encounter": "Magmus DONE"} if encounter else o["expect"]
+        encounter = o.get("encounter")
+        rec["expect"] = (
+            {"encounter": f"{encounter['boss']} DONE"} if encounter else o["expect"]
+        )
         try:
             rows = self.world.select(rec["sql"])
             held, observed = (
-                _magmus_done(rows)
+                _encounter_done(rows, encounter["boss"])
                 if encounter
                 else expectation_holds(o["expect"], rows)
             )

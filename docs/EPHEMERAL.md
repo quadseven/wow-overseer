@@ -320,12 +320,22 @@ so no row from an earlier run can satisfy it). The observation reads
 alias, or are unqualified when it is the only table. A run with no core encounter
 evidence is INVALID.
 
-For Magmus, declare `encounter: {instance: brd, boss: Magmus}` as an end
-precondition. The named alias must be the decree's single arranged Blackrock
-Depths instance, bound to a member of the cast. The judge reads the Iron Hall
-field in the core's instance save before any act and again at the end. An
-already completed, missing or malformed starting state makes the run INVALID.
-The end precondition holds when the same instance records the transition to DONE.
+Use a typed `encounter` end precondition for the supported bosses in Blackrock
+Depths and Molten Core. Its alias must identify the decree's only arranged
+instance, on the boss's map and bound to a member of the cast. The judge reads
+the same instance save before any act and again at the end. A missing or malformed
+save or a selected encounter that is already DONE before the first act makes
+the run INVALID. The precondition holds when a selected encounter reaches DONE
+in that instance.
+
+- `encounter: {instance: brd, boss: Magmus}` reads the Iron Hall state in Blackrock
+  Depths.
+- `encounter: {instance: mc, boss: "Majordomo Executus"}` requires the core state
+  set when the last add dies and Majordomo surrenders.
+- `encounter: {instance: mc, boss: Ragnaros}` requires the core state set on
+  Ragnaros's death.
+- `encounter: {instance: mc, boss: "Any Molten Core boss"}` accepts any of the ten
+  Molten Core encounters on an instance where all ten began incomplete.
 
 The judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`; without them it prints an INVALID verdict and exits 2,

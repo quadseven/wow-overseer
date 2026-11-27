@@ -1002,10 +1002,10 @@ def _observe_one(lint, path, o, seen, known_var, doc):
     )
     if "encounter" in o:
         lint.ensure(
-            magmus_instance(doc, o) is not None,
+            encounter_instance(doc, o) is not None,
             f"{path}.encounter",
             "schema",
-            "requires an end precondition for Magmus in the only arranged, cast-bound Blackrock Depths instance",
+            "requires an end precondition for a supported boss in the only arranged, cast-bound instance of its map",
         )
         return
     if "online" in o:
@@ -1020,19 +1020,21 @@ def _observe_one(lint, path, o, seen, known_var, doc):
         _observe_log(lint, path, o)
 
 
-def magmus_instance(doc, observation):
-    """The declared instance alias for the supported dungeon credit source."""
+def encounter_instance(doc, observation):
+    """The alias and map ID of the one cast-bound save this selector can read."""
     encounter = observation.get("encounter")
     if (
         not isinstance(encounter, dict)
         or set(encounter) != {"boss", "instance"}
-        or encounter["boss"] != "Magmus"
+        or not isinstance(encounter["boss"], str)
+        or encounter["boss"] not in gamedata.INSTANCE_ENCOUNTERS
         or observation.get("role") != "precondition"
         or observation.get("when") != "end"
         or {"sql", "log", "online", "expect"} & observation.keys()
     ):
         return None
     alias = encounter["instance"]
+    map_name, _ = gamedata.INSTANCE_ENCOUNTERS[encounter["boss"]]
     arrange, cast = doc.get("arrange"), doc.get("cast")
     if (
         not isinstance(alias, str)
@@ -1049,11 +1051,11 @@ def magmus_instance(doc, observation):
     bound = instance.get("bind")
     if (
         instance.get("as") == alias
-        and instance.get("map") == "Blackrock Depths"
+        and instance.get("map") == map_name
         and isinstance(bound, str)
         and any(isinstance(e, dict) and e.get("who") == bound for e in cast)
     ):
-        return alias
+        return alias, gamedata.INSTANCE_MAPS[map_name]
     return None
 
 

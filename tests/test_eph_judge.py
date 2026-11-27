@@ -195,6 +195,120 @@ class MagmusEncounterTest(unittest.TestCase):
                 self.assertFalse(world.commands)
 
 
+class MoltenCoreEncounterTest(unittest.TestCase):
+    @staticmethod
+    def decree(decree_name):
+        path = ROOT / "data" / "decrees" / f"{decree_name}.yaml"
+        decree = loads(path.read_text(encoding="utf-8"))
+        decree["duration"] = "1m"
+        return decree
+
+    def run_with_save(self, decree_name, end, *, start="", boss=None, bound=True):
+        decree = self.decree(decree_name)
+        if boss is not None:
+            credit = next(o for o in decree["observe"] if "encounter" in o)
+            credit["encounter"]["boss"] = boss
+        clock = Clock()
+        world = FakeWorld(clock)
+        world.answer("overseer_raid_seat", [(5,)])
+        world.answer("log_encounter", [(0,)])
+        world.answer("kind = 'boss'", [(1,)])
+        world.answer("kind = 'repair_skipped'", [(0,)])
+        world.answer("FROM overseer_dungeon_run WHERE", [(1,)])
+        world.answer("SELECT COUNT(*) FROM overseer_death", [(0,)])
+        if bound:
+            world.answer(
+                "FROM instance WHERE id = 42 AND map = 409",
+                lambda now: [(end if now >= 10 else start,)],
+            )
+        world.answer("FROM instance WHERE id = 41 AND map = 409", [(end,)])
+        world.answer("FROM instance WHERE id = 42 AND map = 230", [(end,)])
+        log = (
+            "[MC] majordomo: 2 casters holding, magic reflection on Flamewaker\n"
+            "raid run for family 'Grug': lowest durability Ugga 81%; "
+            "0 seat(s) under the 25% floor (before encounter 1)"
+        )
+        handoff = {**HANDOFF, "variables": {**HANDOFF["variables"], "mc": 42}}
+        return run(decree, world, clock, log=log, handoff=handoff), world
+
+    def test_majordomo_surrender_is_observed_in_the_fresh_bound_instance(self):
+        result, world = self.run_with_save(
+            "majordomo-reflect-hold", "M C 5 3 3 3 3 3 3 3 3 5 "
+        )
+        self.assertEqual(result["verdict"], "PASS", result["reasons"])
+        self.assertTrue(world.commands)
+        self.assertFalse(any("log_encounter" in sql for _, sql in world.selects))
+
+    def test_durability_can_prove_credit_from_the_first_boss(self):
+        result, _ = self.run_with_save(
+            "raid-durability-before-each-boss", "M C 3 5 5 5 5 5 5 5 5 5 "
+        )
+        self.assertEqual(result["verdict"], "PASS", result["reasons"])
+
+    def test_ragnaros_proof_requires_ragnaros_to_be_done(self):
+        for state, verdict in ((3, "PASS"), (4, "INVALID"), (5, "INVALID")):
+            with self.subTest(state=state):
+                result, _ = self.run_with_save(
+                    "majordomo-reflect-hold",
+                    f"M C 3 3 3 3 3 3 3 3 3 {state} ",
+                    boss="Ragnaros",
+                )
+                self.assertEqual(result["verdict"], verdict, result["reasons"])
+
+    def test_another_boss_does_not_count_as_majordomo_surrender(self):
+        result, _ = self.run_with_save(
+            "majordomo-reflect-hold", "M C 3 3 3 3 3 3 3 3 1 5 "
+        )
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+
+    def test_lint_refuses_wrong_map_or_unknown_selector(self):
+        for boss in ("Magmus", "Garr", ["Majordomo Executus"]):
+            with self.subTest(boss=boss):
+                decree = self.decree("majordomo-reflect-hold")
+                credit = next(o for o in decree["observe"] if "encounter" in o)
+                credit["encounter"]["boss"] = boss
+                self.assertTrue(
+                    any(
+                        f.level == "error" and ".encounter" in str(f)
+                        for f in lint.lint_document(decree)
+                    )
+                )
+
+    def test_saved_credit_from_the_wrong_instance_or_map_cannot_count(self):
+        result, world = self.run_with_save(
+            "majordomo-reflect-hold", "M C 3 3 3 3 3 3 3 3 3 5 ", bound=False
+        )
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+        self.assertFalse(world.commands)
+        self.assertIn(
+            (0.0, "SELECT data FROM instance WHERE id = 42 AND map = 409"),
+            world.selects,
+        )
+
+    def test_preexisting_credit_invalidates_before_the_roster_act(self):
+        for name, start in (
+            ("majordomo-reflect-hold", "M C 5 3 3 3 3 3 3 3 3 5 "),
+            ("raid-durability-before-each-boss", "M C 3 5 5 5 5 5 5 5 5 5 "),
+        ):
+            with self.subTest(decree=name):
+                result, world = self.run_with_save(name, start, start=start)
+                self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+                self.assertIn("already complete", " ".join(result["reasons"]))
+                self.assertFalse(world.commands)
+
+    def test_malformed_save_cannot_credit_the_raid(self):
+        for end in (
+            "B R 3 3 3 3 3 3 3 3 3 5 ",
+            "M C 3 3 3 3 3 3 3 3 3 ",
+            "M C 3 3 3 3 3 3 3 3 3 5 0 ",
+            "M C 3 3 3 3 3 3 3 3 3 6 ",
+        ):
+            with self.subTest(save=end):
+                result, _ = self.run_with_save("majordomo-reflect-hold", end)
+                self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+                self.assertIn("malformed Molten Core", " ".join(result["reasons"]))
+
+
 class VerdictTest(unittest.TestCase):
     def test_pass_when_every_precondition_and_check_holds(self):
         clock = Clock()
