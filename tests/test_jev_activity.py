@@ -30,7 +30,7 @@ BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 
 ROOMY = {"Zug": 20, "Oz": 20, "Uzza": 20, "Zork": 20, "Zrog": 20}
-# Room to loot, and too little to go fishing with (jev_activity.can_fish).
+# Room to loot, and too little to go fishing with (jev_activity.fishing_members).
 SNUG = {"Zug": 7, "Oz": 8, "Uzza": 9, "Zork": 7, "Zrog": 8}
 HORDE = (
     ("Zug", 20, 0),
@@ -486,6 +486,8 @@ class FakeFamily:
         self.free = dict(free)
         self.job = job
         self.jobs = []
+        self.standing = {}
+        self.job_sources = {}
         self.records = []
         self.calls = []
         self.speak = []
@@ -499,6 +501,8 @@ class FakeFamily:
                 for n, lvl, _ in HORDE
             ],
             "recipes": [],
+            "pole_holders": set(),
+            "fishing": [],
             "deaths": 0,
             "worn": [{"name": n, "worn": 16} for n, _, _ in HORDE],
             "goods": [],
@@ -507,6 +511,8 @@ class FakeFamily:
 
     def insert_job(self, name, mode, source):
         self.jobs.append((name, mode, source))
+        self.standing[name] = mode
+        self.job_sources[name] = source
 
 
 async def _no_history(facts, *_args):
@@ -533,6 +539,8 @@ def _bridge(world, fake_jev, holds=None):
         "log": log,
         "_activity_reads": world.reads,
         "_insert_job": world.insert_job,
+        "_jobs_of": lambda names: {n: world.standing.get(n, world.job) for n in names},
+        "_last_job_source": lambda name: world.job_sources.get(name, ""),
         "_insert_jev_judgment": world.records.append,
         "_insert_speak": world.speak.append,
         "relay": __import__("relay"),

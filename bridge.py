@@ -7298,6 +7298,10 @@ def _aim_family_quest(family: str, quest_id: int, holders: tuple) -> int:
 # names one collation group, and each is bound by the family's own names.
 _ACTIVITY_READS = (
     ("members", "SELECT name, level, class FROM characters WHERE name IN (%s)"),
+    ("fishing",
+     "SELECT c.name, cs.value, cs.max FROM character_skills cs "
+     "JOIN characters c ON c.guid = cs.guid WHERE c.name IN (%s) AND cs.skill = "
+     + str(goals.SKILL_IDS["fishing"])),
     ("recipes",
      "SELECT name FROM overseer_roster WHERE craft_spell <> 0 AND name IN (%s)"),
     # The family's newest death in the last day, by id: a mark that rises
@@ -7345,6 +7349,7 @@ def _activity_reads(names: list, leader: str) -> dict:
     invented from a failed read.
     """
     out = {"free": _fetch_free_slots(names), "members": [], "recipes": [],
+           "pole_holders": _fetch_pole_holders(names), "fishing": [],
            "deaths": 0, "worn": None, "goods": [], "at_town": False}
     marks = ", ".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
@@ -29110,7 +29115,7 @@ class Bridge(discord.Client):
         held = jev_activity.withheld(bool(rows), reads["free"])
         members = jev_activity.members_from_rows(
             names, reads["members"], reads["free"], reads["worn"],
-            reads["goods"], reads["recipes"])
+            reads["goods"], reads["recipes"], reads["pole_holders"], reads["fishing"])
         can_gather, can_train = await self._activity_can(names, reads["free"], own)
         job = str(leader.get("job") or "").strip().lower()
         if jobs.is_farm_job(job):
@@ -29121,8 +29126,7 @@ class Bridge(discord.Client):
                      "the farm ends", campaignqueue._family(key), job)
             return
         now = time.monotonic()
-        if await self._activity_restore_job(key, job, now, names,
-                                            str(leader.get("name") or "")):
+        if await self._activity_restore_job(key, names, now):
             return
         marks = jev_activity.Marks(
             runs_done=runs,
@@ -29138,6 +29142,7 @@ class Bridge(discord.Client):
             family=key or str(leader.get("name") or ""), members=members,
             job=job, queue=campaignqueue.progress_line(rows, runs),
             withheld=held, can_gather=can_gather, can_train=can_train,
+            allow_partial_fishing=own,
             minutes_on_activity=int((now - since) // 60), reason=reason,
             minutes_since_fishing=self._activity_minutes_since_fishing(key, now),
             paused=globals().get("_PACE_QUESTING", {}).get(key, ""),
@@ -29165,7 +29170,8 @@ class Bridge(discord.Client):
                 jev_activity.jev.HEURISTIC: "the heuristic",
             }.get(judgment.acted, "the heuristic")
             await self._carry_out_activity(
-                key, fam, judgment.carried_out, own, job, source
+                key, fam, judgment.carried_out, own, job, source,
+                fishing_names=jev_activity.fishing_members(facts),
             )
 
     async def _activity_can(self, names: list, free: dict, own: bool) -> tuple:
@@ -29196,7 +29202,8 @@ class Bridge(discord.Client):
         return reason, since
 
     async def _carry_out_activity(self, key: str, fam: dict, activity: str,
-                                  own: bool, job: str, source: str = "Jev") -> None:
+                                  own: bool, job: str, source: str = "Jev",
+                                  *, fishing_names=()) -> None:
         """Carry out the selected activity through the paths today's rules use.
 
         NEVER A QUEUE WRITE. The campaign is resumed by ending the interlude
@@ -29212,6 +29219,13 @@ class Bridge(discord.Client):
                      who)
             await self._campaign_queue_once()
             return
+        fishing = activity == jev_activity.FISH
+        targets = names
+        if fishing:
+            standing = await asyncio.to_thread(_jobs_of, fishing_names)
+            targets = [n for n in fishing_names if standing.get(n) != jev_activity.FISH]
+            if not targets:
+                return
         # The ask took time: a run that started meanwhile is not interrupted.
         if await self._mid_run(names):
             log.info("activity: %s went into a run while Jev was asked; %s "
@@ -29229,19 +29243,25 @@ class Bridge(discord.Client):
                      "under job=%s rather than job=%s", who, activity,
                      jobs.TOWN_RUN, jobs.DEFAULT)
             want = ""
-        if want and want != job:
-            for name in names:
+        written = []
+        if want and (want != job or fishing):
+            for name in targets:
                 try:
                     await asyncio.to_thread(_insert_job, name, want,
                                             jev_activity.SOURCE)
                 except Exception:
                     log.exception("activity: job insert failed for %s (mode=%s)",
                                   name, want)
+                else:
+                    written.append(name)
+        if fishing and not written:
+            self._activity_interludes.pop(key, None)
+            return
         await self._drive_activity(key, fam, activity, own)
         minutes = (lease.until - time.monotonic()) / 60.0
         if activity in jev_activity.RESTORE:
-            self._activity_restore[key] = (lease.until, activity, names)
-        if activity == jev_activity.FISH:
+            self._activity_restore[key] = (lease.until, activity, written)
+        if fishing:
             self._activity_fished[key] = time.monotonic()
         log.info("activity: %s: %s chose %s; job=%s for %.0f minutes, then "
                  "today's rules resume", who, source, activity, want or job,
@@ -29272,50 +29292,33 @@ class Bridge(discord.Client):
             log.exception("activity: the %s emote for %s was not written",
                           activity, leader)
 
-    async def _activity_restore_job(self, key: str, job: str, now: float,
-                                    names=(), leader: str = "") -> bool:
-        """Put a family back on the default job when its fishing break ends.
+    async def _activity_restore_job(self, key: str, names: list, now: float) -> bool:
+        """End expired or orphaned fishing breaks for the members still on them.
 
-        Nothing else writes job=fish, so without this a family sent fishing
-        would fish until somebody changed the job by hand. Only while
-        the leader is still on the job the break set: a queue or a person that
-        has moved the family on since wins. True when it wrote the jobs, so
-        the caller asks again next cycle rather than on a stale read.
-
-        A BREAK NO RESTORE OWNS ENDS NOW (#790). The restore lives in memory,
-        so a bridge restart mid break left the family on job=fish for good.
-        A leader on a break's job with no restore held, whose last job order
-        came from this choice, is adopted as a break that is already over; an
-        operator's own order stands.
+        A follower can fish while the leader keeps its job. Read each
+        participant's job and last writer so a new queue or operator order
+        takes precedence. The same reads recover a break after a restart.
         """
-        if key not in self._activity_restore and names and leader:
-            activity = next((a for a in jev_activity.RESTORE
-                             if job == jev_activity.JOB[a]), None)
-            if activity is not None and await asyncio.to_thread(
-                    _last_job_source, leader) == jev_activity.SOURCE:
-                log.info("activity: %s is on job=%s with no %s break in memory "
-                         "(a bridge restart forgets them); it ends now",
-                         campaignqueue._family(key), job, activity)
-                self._activity_restore[key] = (now, activity, list(names))
         held = self._activity_restore.get(key)
-        if held is None or now < held[0]:
+        if held is not None and now < held[0]:
             return False
-        _until, activity, names = held
-        if job != jev_activity.JOB[activity]:
-            # Restored, or moved on by a queue or a person: either way done.
+        activity = jev_activity.FISH
+        candidates = names if held is None else held[2]
+        standing = await asyncio.to_thread(_jobs_of, candidates)
+        fishers = []
+        for name in candidates:
+            if (standing.get(name) == jev_activity.JOB[activity]
+                    and await asyncio.to_thread(_last_job_source, name) == jev_activity.SOURCE):
+                fishers.append(name)
+        if not fishers:
             self._activity_restore.pop(key, None)
             return False
-        # KEPT UNTIL THE LEADER IS SEEN OFF THE BREAK'S JOB, and asked again
-        # after ACTIVITY_RESTORE_RETRY_SECONDS. Measured on wow-dev 2026-09-28:
-        # Zug was offline for the moment the fishing break ended, his row came
-        # back `target not online`, the restore had already been forgotten, and
-        # the leader fished for 37 more minutes while his family quested
-        # without him.
+        # Retry for a member whose default-job row was refused while offline.
         self._activity_restore[key] = (
             now + globals().get("ACTIVITY_RESTORE_RETRY_SECONDS", 120.0),
-            activity, names)
+            activity, fishers)
         back = jev_activity.RESTORE[activity]
-        for name in names:
+        for name in fishers:
             try:
                 await asyncio.to_thread(_insert_job, name, back,
                                         jev_activity.SOURCE)
@@ -35826,7 +35829,10 @@ _SEAT_QUEST_ITEMS_SQL = (
     "JOIN character_inventory ci ON ci.guid = c.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
-    "WHERE it.class = 12 AND c.name IN ({names})"
+    "WHERE it.class = 12 AND c.name IN ({names}) "
+    "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
 )
 _SEAT_QUEST_ROWS_SQL = (
     "SELECT t.ID, t.LogTitle, t.QuestLevel, t.MinLevel, t.AllowableRaces, "
