@@ -255,6 +255,7 @@ class TheHandInWaitsForRetry(unittest.TestCase):
     def test_another_quester_s_refusal_holds_nothing(self):
         tried = [reward_refused(age=2, name="Kellan")]
         self.assertEqual(questers.retryable_reward_refused("Mirra", tried), frozenset())
+        self.assertEqual(questers.turn_in_held("Mirra", tried), frozenset())
 
     def test_the_full_bag_quester_is_sent_to_sell(self):
         self.assertTrue(questers.needs_sale(mirra(free_slots=0), [reward_refused()]))
