@@ -41,7 +41,15 @@ INSTANCE_ENCOUNTERS = {
     "Majordomo Executus": ("Molten Core", (8,)),
     "Ragnaros": ("Molten Core", (9,)),
     "Any Molten Core boss": ("Molten Core", tuple(range(10))),
+    "Any Razorfen Downs boss": ("Razorfen Downs", ()),
 }
+
+# Maps whose instance script keeps no boss states in its save. The core still
+# sets a bit of `instance.completedEncounters` for each DungeonEncounter.dbc
+# credit, so a selector on these maps reads that mask instead of `data`. Which
+# bit is which boss lives only in that client file, so these selectors accept
+# any bit.
+ENCOUNTER_MASK_MAPS = frozenset({"Razorfen Downs"})
 
 # Profession and secondary skill lines a decree may set, to skill ids.
 SKILLS = {
