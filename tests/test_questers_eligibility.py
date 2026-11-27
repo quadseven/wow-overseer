@@ -133,6 +133,50 @@ class AProvidedItemNeedsABagSlot(unittest.TestCase):
         self.assertIn(36, questers.in_reach(cat, full, WESTFALL))
 
 
+class AProvidedObjectiveCanBeTurnedIn(unittest.TestCase):
+    """The ticket snapshot has one RequiredItem that is the quest's StartItem.
+
+    `row` uses the questers.QUESTS_SQL fields; `catalogue` supplies fixture-only
+    giver and ender rows, and the holder models the counters from LOG_SQL.
+    """
+
+    def test_quest_333_can_be_taken_and_handed_in(self):
+        cloth_request = 2724
+        cat = catalogue(
+            [
+                row(
+                    333,
+                    "Harlan Needs a Resupply",
+                    1519,
+                    2,
+                    1,
+                    provided0=cloth_request,
+                    item1=cloth_request,
+                    item_count1=1,
+                )
+            ]
+        )
+        quester = member("Quester A", HUMAN, 2, 1519)
+
+        self.assertIn(333, questers.in_reach(cat, quester, 1519))
+        take_plan = questers.plan(cat, quester, questers.Clock(), 0.0)
+        self.assertEqual(take_plan.broken, ())
+        take = take_plan.move
+        self.assertEqual((take.kind, take.quest), (classquest.TAKE, 333))
+
+        holder = member(
+            "Quester A",
+            HUMAN,
+            2,
+            1519,
+            quest_log={333: questers.STATUS_INCOMPLETE},
+            quest_progress={333: 1},
+            quest_item_objectives={333: {cloth_request: 1}},
+        )
+        turn_in = questers.plan(cat, holder, questers.Clock(), 0.0).move
+        self.assertEqual((turn_in.kind, turn_in.quest), (classquest.TURN_IN, 333))
+
+
 class AQuestNamedAsNextIsAPrerequisite(unittest.TestCase):
     """ObjectMgr: a quest whose NextQuestID names X is one of X's previous
     quests, beside X's own PrevQuestID. Any one rewarded opens X, unless that
