@@ -79,7 +79,7 @@ function zoneRows(C, ppu, px) {
     const city = String(z.city) === "True" || z.city === true;
     const room = n(z.room) || 20;
     const tint = CITY_A[z.label] ? "#b8b49a" : CITY_H[z.label] ? "#c9a488" : mix(z.fill || "#c8b487", "#c9b184", 0.55);
-    const fs = px(city ? 10.5 : Math.max(10, Math.min(13, room * ppu * 0.32)));
+    const fs = px(city ? 12 : Math.max(12, Math.min(13, room * ppu * 0.32)));
     const show = room * ppu >= (city ? 16 : 12);
     return { z, city, room, tint, fs, show, cx: n(z.cx), cy: n(z.cy) };
   });
@@ -95,16 +95,44 @@ function overlaps(placed, b) {
   return placed.some((p) => b[0] < p[2] && b[2] > p[0] && b[1] < p[3] && b[3] > p[1]);
 }
 
-// Greedy label placement: member labels first, then cities, then by room.
-function placeLabels(zones, dots) {
+// Greedy label fitting: member labels first, then cities, then by room.
+// Every label is fitted to the viewBox before it is placed: a zone label
+// shifts until its box is inside, a member label that would run off the
+// right edge flips to end anchored (it ends where it used to start), and
+// a label that cannot fit is dropped. A missing label beats a clipped
+// one, on this page and on the Now minimaps that share this code. The
+// fitting is written onto the rows (anchor, tx, ty, labeled) for
+// labelSvg to read; the return is the set of zone labels shown.
+function fitLabels(zones, dots, vb) {
+  const vx = vb[0], vy = vb[1], right = vx + vb[2], bottom = vy + vb[3];
   const placed = [];
-  dots.filter((d) => d.labeled).forEach((d) => placed.push(box(d.lx, d.ly, d.fs, d.label, false)));
+  dots.filter((d) => d.labeled).forEach((d) => {
+    let b = box(d.lx, d.ly, d.fs, d.label, false);
+    if (b[2] > right) {
+      d.anchor = "end";
+      b = [d.lx - (b[2] - b[0]), b[1], d.lx, b[3]];
+    } else if (b[0] < vx) {
+      d.lx = vx;
+      b = [vx, b[1], vx + (b[2] - b[0]), b[3]];
+    }
+    if (b[0] < vx || b[2] > right || b[1] < vy || b[3] > bottom) { d.labeled = false; return; }
+    placed.push(b);
+  });
   dots.forEach((d) => placed.push([d.x - d.r, d.y - d.r, d.x + d.r, d.y + d.r]));
   const order = zones.filter((z) => z.show).sort((a, b) => (Number(b.city) - Number(a.city)) || (b.room - a.room));
   const shown = new Set();
   order.forEach((z) => {
     const b = box(z.cx, z.cy, z.fs, z.z.label, true);
-    if (!overlaps(placed, b)) { placed.push(b); shown.add(z.z.label); }
+    if (b[2] - b[0] > vb[2] || b[3] - b[1] > vb[3]) return;
+    const dx = b[0] < vx ? vx - b[0] : b[2] > right ? right - b[2] : 0;
+    const dy = b[1] < vy ? vy - b[1] : b[3] > bottom ? bottom - b[3] : 0;
+    const shifted = [b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy];
+    if (!overlaps(placed, shifted)) {
+      z.tx = z.cx + dx;
+      z.ty = z.cy + dy;
+      placed.push(shifted);
+      shown.add(z.z.label);
+    }
   });
   return shown;
 }
@@ -132,18 +160,38 @@ function dotSvg(d, px, linked) {
 
 function labelSvg(zones, shown, dots, px) {
   const zl = zones.filter((z) => shown.has(z.z.label)).map((z) =>
-    `<text x="${f1(z.cx)}" y="${f1(z.cy)}" text-anchor="middle" class="wm-zl${z.city ? " city" : ""}" font-size="${f1(z.fs)}" stroke-width="${f1(px(2.4))}">${esc(z.z.label)}</text>`);
+    `<text x="${f1(z.tx === undefined ? z.cx : z.tx)}" y="${f1(z.ty === undefined ? z.cy : z.ty)}" text-anchor="middle" class="wm-zl${z.city ? " city" : ""}" font-size="${f1(z.fs)}" stroke-width="${f1(px(2.4))}">${esc(z.z.label)}</text>`);
   const dl = dots.filter((d) => d.labeled).map((d) =>
-    `<text x="${f1(d.lx)}" y="${f1(d.ly)}" class="wm-dl" font-size="${f1(d.fs)}" stroke-width="${f1(px(3))}">${esc(d.label)}</text>`);
+    `<text x="${f1(d.lx)}" y="${f1(d.ly)}"${d.anchor === "end" ? ' text-anchor="end"' : ""} class="wm-dl" font-size="${f1(d.fs)}" stroke-width="${f1(px(3))}">${esc(d.label)}</text>`);
   return `<g class="wm-labels" aria-hidden="true">${zl.join("")}${dl.join("")}</g>`;
 }
 
-function svgMarkup(o, vb, ppu) {
+// A cluster of dots too close together to tap apart: one badge with the
+// count, drawn at the members' centre. The badge's index is its place in
+// the draw's cluster list, which the tap handler zooms to.
+function clusterSvg(c, i, px) {
+  const badge = `<circle cx="${f1(c.x)}" cy="${f1(c.y)}" r="${f1(px(13))}" fill="#2a1f0e" stroke="#e8d9b0" stroke-width="${f1(px(1.5))}"></circle>`
+    + `<text x="${f1(c.x)}" y="${f1(c.y)}" text-anchor="middle" dominant-baseline="central" class="wm-cluster-n" font-size="${f1(px(12))}">${c.names.length}</text>`;
+  return `<g class="wm-cluster" data-cluster="${i}" role="button" aria-label="${c.names.length} characters here: ${esc(c.names.join(", "))}"><circle cx="${f1(c.x)}" cy="${f1(c.y)}" r="${f1(px(22))}" fill="transparent"></circle>${badge}</g>`;
+}
+
+function svgMarkup(o, vb, ppu, grouped) {
   const C = o.shape, id = o.key.replace(/[^a-z0-9]/gi, "");
   const px = (v) => v / ppu;
   const zones = zoneRows(C, ppu, px);
-  const dots = dotRows(o.dots, ppu, px);
-  const shown = placeLabels(zones, dots);
+  const rows = dotRows(o.dots, ppu, px);
+  // The full map clusters dots that sit within 44 screen px of each
+  // other; a minimap is a family's own picture and keeps every dot. The
+  // grouping is computed once per draw by the caller and passed in, so
+  // the badges drawn and the tap handler's clusters cannot diverge.
+  let dots = rows, clusters = [];
+  if (!o.compact) {
+    const g = grouped || clusterDots(rows, ppu);
+    const singleNames = new Set(g.singles.map((d) => d.name));
+    dots = rows.filter((r) => singleNames.has(r.name));
+    clusters = g.clusters;
+  }
+  const shown = fitLabels(zones, dots, vb);
   const useFilters = !o.compact;
   const coast = (C.coast || []).map((d) => `<path d="${esc(d)}" fill="none" stroke="#9fd0e0" stroke-opacity=".22" stroke-width="18"${useFilters ? ` filter="url(#wmg${id})"` : ""}></path>`).join("")
     + (C.coast || []).map((d) => `<path d="${esc(d)}" fill="#b49c6c" stroke="#3b2c17" stroke-width="2.4"></path>`).join("");
@@ -154,19 +202,26 @@ function svgMarkup(o, vb, ppu) {
   const zoneGroup = useFilters ? `<g filter="url(#wmt${id})">${zonePaths}</g>` : `<g>${zonePaths}</g>`;
   return `<svg class="wm-svg" viewBox="${vb.map(f1).join(" ")}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="${esc(C.name + " map with " + o.dots.length + " characters marked")}">`
     + defs + coast + zoneGroup + labelSvg(zones, shown, dots, px)
-    + dots.map((d) => dotSvg(d, px, !o.compact)).join("") + `</svg>`;
+    + dots.map((d) => dotSvg(d, px, !o.compact)).join("")
+    + clusters.map((c, i) => clusterSvg(c, i, px)).join("") + `</svg>`;
 }
 
 function chrome(o) {
   const head = `<div class="wm-title"><span class="wm-name">${esc(o.shape.name)}</span><span class="wm-hover" data-hover>${esc(o.summary || "")}</span></div>`;
   if (o.compact) return head;
   return head + `<div class="wm-zoom"><button type="button" class="wm-btn" data-zoom="in" aria-label="Zoom in"><i class="ph ph-plus" aria-hidden="true"></i></button><button type="button" class="wm-btn" data-zoom="out" aria-label="Zoom out"><i class="ph ph-minus" aria-hidden="true"></i></button><button type="button" class="wm-btn" data-zoom="reset" aria-label="Reset view"><i class="ph ph-arrows-in" aria-hidden="true"></i></button></div>`
-    + `<div class="wm-legend" aria-hidden="true"><span><span class="wm-key fam"></span>family, by class colour</span><span><span class="wm-key mate"></span>guildmate</span><span><span class="wm-key fall"></span>zone centre, position not read</span><span>dashed border: contested</span></div>`;
+    + `<div class="wm-legend" aria-hidden="true"><span><span class="wm-key fam"></span>family</span><span><span class="wm-key mate"></span>guildmate</span><span><span class="wm-key fall"></span>position not read</span><span>dashed: contested</span></div>`;
 }
 
 function mapSignature(o, vb, ppu) {
   const dots = (o.dots || []).map((d) => [d.name, f1(d.x), f1(d.y), d.color, d.ghost ? 1 : 0, d.fallback ? 1 : 0]);
   return JSON.stringify([o.key, o.shape && o.shape.name, !!o.compact, vb.map(f1), f1(ppu), o.summary || "", dots]);
+}
+
+// Point a drawn map at a new viewBox: the next draw under this key uses
+// it. The map page's family chips centre on a family this way.
+export function setView(key, shape, vb) {
+  views.set(key, clamp(vb, W * n(shape.aspect)));
 }
 
 // Draw (or redraw) the map into `boxEl`. `o`: {key, shape, dots, compact,
@@ -177,14 +232,19 @@ export function draw(boxEl, o) {
   let vb = views.get(o.key) || o.focus || full;
   const size = () => ({ w: boxEl.clientWidth || 600, h: boxEl.clientHeight || 500 });
   const ppuOf = (v) => Math.min(size().w / v[2], size().h / v[3]);
+  let clustersNow = [];
   const paint = () => {
     const ppu = ppuOf(vb);
+    // The grouping is refreshed even on a signature hit: draw() rebinds
+    // the tap handler on every call, and it reads this list.
+    const grouped = o.compact ? null : clusterDots(o.dots, ppu);
+    clustersNow = grouped ? grouped.clusters : [];
     const sig = mapSignature(o, vb, ppu);
     if (typeof boxEl.getAttribute === "function" && boxEl.getAttribute("data-map-sig") === sig && boxEl.querySelector("svg")) {
       return;
     }
     if (typeof boxEl.setAttribute === "function") boxEl.setAttribute("data-map-sig", sig);
-    boxEl.innerHTML = svgMarkup(o, vb, ppu) + chrome(o);
+    boxEl.innerHTML = svgMarkup(o, vb, ppu, grouped) + chrome(o);
     bindHover(boxEl, o);
   };
   paint();
@@ -202,38 +262,104 @@ export function draw(boxEl, o) {
   };
   boxEl.onclick = (e) => {
     const b = e.target.closest("[data-zoom]");
-    if (!b) return;
-    const z = b.getAttribute("data-zoom");
-    if (z === "in") zoomBy(0.7); else if (z === "out") zoomBy(1.4); else set(full, true);
+    if (b) {
+      const z = b.getAttribute("data-zoom");
+      if (z === "in") zoomBy(0.7); else if (z === "out") zoomBy(1.4); else set(full, true);
+      return;
+    }
+    const cg = e.target.closest("[data-cluster]");
+    if (!cg) return;
+    const c = clustersNow[Number(cg.getAttribute("data-cluster"))];
+    if (!c) return;
+    // Zoom to the members' bounds, with room around them.
+    const span = Math.max(c.x1 - c.x0, (c.y1 - c.y0) * (vb[2] / vb[3]));
+    const w = Math.min(vb[2], Math.max(220, span + 160));
+    const h = w * (vb[3] / vb[2]);
+    set([(c.x0 + c.x1) / 2 - w / 2, (c.y0 + c.y1) / 2 - h / 2, w, h], true);
   };
   boxEl.onwheel = (e) => { e.preventDefault(); zoomBy(e.deltaY > 0 ? 1.15 : 0.87); };
-  bindDrag(boxEl, () => vb, (v) => set(v, false));
+  bindPanZoom(boxEl, () => vb, (v, repaint) => set(v, repaint));
 }
 
 function bindHover(boxEl, o) {
   const line = boxEl.querySelector("[data-hover]");
   const svg = boxEl.querySelector("svg");
   if (!line || !svg) return;
+  // A tapped zone pins its who-is-here line: touch has no hover to hold
+  // it open. Tapping the bare map again lets go.
+  let pinned = null;
+  const show = (name) => { line.textContent = o.whoIn ? o.whoIn(name) : name; };
   svg.addEventListener("pointerover", (e) => {
+    if (pinned) return;
     const p = e.target.closest && e.target.closest("[data-zone]");
-    if (!p) return;
-    const name = p.getAttribute("data-zone");
-    line.textContent = o.whoIn ? o.whoIn(name) : name;
+    if (p) show(p.getAttribute("data-zone"));
   });
-  svg.addEventListener("pointerleave", () => { line.textContent = o.summary || ""; });
+  svg.addEventListener("pointerleave", () => { if (!pinned) line.textContent = o.summary || ""; });
+  svg.addEventListener("click", (e) => {
+    const p = e.target.closest && e.target.closest("[data-zone]");
+    if (p) {
+      pinned = p.getAttribute("data-zone");
+      show(pinned);
+      return;
+    }
+    const onDot = e.target.closest && (e.target.closest(".wm-dot") || e.target.closest("[data-cluster]"));
+    if (!onDot) {
+      pinned = null;
+      line.textContent = o.summary || "";
+    }
+  });
 }
 
-// Drag pans only after 5px of movement, so a tap on a dot still opens it.
-function bindDrag(boxEl, getVb, setVb) {
+// The map point under a client point, in viewBox terms.
+function svgPoint(vb, cx, cy, rect) {
+  const k = vb[2] / rect.width;
+  return [vb[0] + (cx - rect.left) * k, vb[1] + (cy - rect.top) * k];
+}
+
+// The viewBox of width `w` (aspect kept) that puts map point `at` under
+// the client point (cx, cy).
+function anchored(vb, w, at, cx, cy, rect) {
+  const k = w / rect.width;
+  return [at[0] - (cx - rect.left) * k, at[1] - (cy - rect.top) * k, w, w * (vb[3] / vb[2])];
+}
+
+// One pointer pans, two pinch (the zoom stays anchored at the pinch
+// midpoint), and a double tap zooms at the tap point. A pan starts only
+// after 5px of movement, so a tap on a dot still opens it.
+function bindPanZoom(boxEl, getVb, setVb) {
+  const pointers = new Map();
   let drag = null;
+  let pinch = null;
   let dragged = false;
+  let lastTap = null;
+  const svgOf = () => boxEl.querySelector("svg");
   boxEl.onpointerdown = (e) => {
     if (e.target.closest("[data-zoom]")) return;
-    const svg = boxEl.querySelector("svg");
+    const svg = svgOf();
+    if (!svg) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     dragged = false;
-    drag = { x: e.clientX, y: e.clientY, vb: getVb().slice(), w: svg.getBoundingClientRect().width, moved: false, id: e.pointerId, svg };
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      const rect = svg.getBoundingClientRect();
+      const mid = [(a.x + b.x) / 2, (a.y + b.y) / 2];
+      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, vb: getVb().slice(), rect, at: svgPoint(getVb(), mid[0], mid[1], rect) };
+      drag = null;
+    } else if (pointers.size === 1) {
+      drag = { x: e.clientX, y: e.clientY, vb: getVb().slice(), w: svg.getBoundingClientRect().width, moved: false, id: e.pointerId };
+    }
   };
   boxEl.onpointermove = (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      const w = Math.min(W, Math.max(180, pinch.vb[2] * (pinch.d / d)));
+      dragged = true;
+      setVb(anchored(pinch.vb, w, pinch.at, (a.x + b.x) / 2, (a.y + b.y) / 2, pinch.rect), true);
+      return;
+    }
     if (!drag) return;
     if (!drag.moved) {
       if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 5) return;
@@ -242,14 +368,77 @@ function bindDrag(boxEl, getVb, setVb) {
       boxEl.classList.add("dragging");
     }
     const k = drag.vb[2] / drag.w;
-    setVb([drag.vb[0] - (e.clientX - drag.x) * k, drag.vb[1] - (e.clientY - drag.y) * k, drag.vb[2], drag.vb[3]]);
+    setVb([drag.vb[0] - (e.clientX - drag.x) * k, drag.vb[1] - (e.clientY - drag.y) * k, drag.vb[2], drag.vb[3]], false);
   };
-  const end = () => { drag = null; boxEl.classList.remove("dragging"); };
+  const end = (e) => {
+    const wasTap = e.type === "pointerup" && !!drag && !drag.moved && !pinch && pointers.size === 1;
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch = null;
+    if (pointers.size === 1) {
+      // One finger left after a pinch: re-seed the pan from it, already
+      // moved, so lifting it does not read as a tap.
+      const [id, p] = [...pointers.entries()][0];
+      const svg = svgOf();
+      drag = { x: p.x, y: p.y, vb: getVb().slice(), w: svg ? svg.getBoundingClientRect().width : 600, moved: true, id };
+    } else if (pointers.size === 0) {
+      drag = null;
+    }
+    boxEl.classList.remove("dragging");
+    if (!wasTap) return;
+    const now = Date.now();
+    if (lastTap && now - lastTap.t < 350 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 48) {
+      lastTap = null;
+      const svg = svgOf();
+      if (!svg) return;
+      const vb = getVb().slice();
+      const w = Math.max(180, vb[2] * 0.5);
+      if (w >= vb[2]) return;
+      const rect = svg.getBoundingClientRect();
+      dragged = true;
+      setVb(anchored(vb, w, svgPoint(vb, e.clientX, e.clientY, rect), e.clientX, e.clientY, rect), true);
+    } else {
+      lastTap = { t: now, x: e.clientX, y: e.clientY };
+    }
+  };
   boxEl.onpointerup = end;
   boxEl.onpointercancel = end;
   boxEl.addEventListener("click", (e) => {
     if (dragged) { e.preventDefault(); e.stopPropagation(); dragged = false; }
   }, true);
+}
+
+// Group dots that sit within `limitPx` screen px of another dot in the
+// group into one cluster: at full view a dense zone is dozens of dots a
+// few screen px apart, and only the topmost hit circle can be tapped.
+// Returns {singles, clusters}; a cluster carries its members' names, its
+// centre (the mean of its members) and their bounds, so a tap can zoom
+// to exactly those bounds. Pure: the grouping depends only on the dots
+// and the current scale (screen px per viewBox unit).
+export function clusterDots(dots, ppu, limitPx) {
+  const limit = (limitPx || 44) / (ppu || 1);
+  const groups = [];
+  (dots || []).forEach((d) => {
+    let g = groups.find((c) => c.pts.some((p) => Math.hypot(d.x - p[0], d.y - p[1]) <= limit));
+    if (!g) {
+      g = { names: [], pts: [], x0: d.x, y0: d.y, x1: d.x, y1: d.y };
+      groups.push(g);
+    }
+    g.names.push(d.name);
+    g.pts.push([d.x, d.y]);
+    g.x0 = Math.min(g.x0, d.x); g.y0 = Math.min(g.y0, d.y);
+    g.x1 = Math.max(g.x1, d.x); g.y1 = Math.max(g.y1, d.y);
+  });
+  const singles = [], clusters = [];
+  groups.forEach((g) => {
+    if (g.names.length < 2) {
+      singles.push(dots.find((d) => d.name === g.names[0]));
+      return;
+    }
+    const cx = g.pts.reduce((s, p) => s + p[0], 0) / g.pts.length;
+    const cy = g.pts.reduce((s, p) => s + p[1], 0) / g.pts.length;
+    clusters.push({ names: g.names, x: cx, y: cy, x0: g.x0, y0: g.y0, x1: g.x1, y1: g.y1 });
+  });
+  return { singles, clusters };
 }
 
 // The dots for one continent: every member named in `people` (name ->
@@ -258,7 +447,7 @@ export function dotsFor(shape, cont, mapDots, people) {
   return (mapDots || []).filter((d) => d.continent === cont && people.has(d.name)).map((d) => {
     const p = people.get(d.name);
     const xy = place(shape, d);
-    return { name: d.name, x: xy.x, y: xy.y, zone: d.zone, family: p.family, head: p.head, ghost: p.ghost, color: p.ghost ? GHOST : p.family ? p.color : MATE };
+    return { name: d.name, x: xy.x, y: xy.y, zone: d.zone, family: p.family, head: p.head, ghost: p.ghost, instance: !!d.instance, color: p.ghost ? GHOST : p.family ? p.color : MATE };
   });
 }
 
