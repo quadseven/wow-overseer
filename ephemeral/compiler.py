@@ -167,6 +167,8 @@ class Compiler:
                 self._group(spec, by_entry)
             elif kind == "creature":
                 self._creature_dead(spec)
+            elif kind == "raid_seats":
+                self._raid_seats(spec, by_entry)
         self._cast_rows(cast, by_entry)
         return self.plan
 
@@ -282,10 +284,13 @@ class Compiler:
             )
 
     def _group(self, spec, by_entry):
+        selectors = spec["members"]
+        if isinstance(selectors, str):
+            selectors = [selectors]
         members = [
             m
             for i, e in enumerate(self.decree["cast"])
-            if e["who"] == spec["members"]
+            if e["who"] in selectors
             for m in by_entry[i]
         ]
         leader = [m for m in members if m.name == spec["leader"]]
@@ -321,6 +326,30 @@ class Compiler:
                 )
             )
         self.plan.variables["group"] = gid
+
+    def _raid_seats(self, spec, by_entry):
+        members = {
+            entry["who"]: resolved
+            for entry, resolved in zip(self.decree["cast"], by_entry, strict=True)
+        }
+        seats = [
+            (member.name, seat["role"])
+            for seat in spec["seats"]
+            for member in members[seat["who"]]
+        ]
+        if not 1 <= len(seats) <= _MAX_RAID:
+            raise SeedError(f"a raid lineup needs 1 to {_MAX_RAID} seats")
+        if len({name for name, _ in seats}) != len(seats):
+            raise SeedError("a character appears twice in the raid lineup")
+        table = "overseer_raid_seat"
+        scope = {"family": spec["family"], "keyword": spec["keyword"]}
+        self.plan.statements.append(self.b.delete(table, scope))
+        for index, (name, role) in enumerate(seats):
+            self.plan.statements.append(
+                self.b.insert(
+                    table, {**scope, "name": name, "subgroup": index // 5, "role": role}
+                )
+            )
 
     def _creature_dead(self, spec):
         if spec["in"] not in self.instances:

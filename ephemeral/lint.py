@@ -702,6 +702,7 @@ def _anchor_captured(lint, path, v):
 
 def _arrange(lint, doc, whos):
     aliases = set()
+    raid_seats_seen = False
     arrange = doc.get("arrange")
     if arrange is None:
         return aliases
@@ -712,7 +713,9 @@ def _arrange(lint, doc, whos):
         path = f"decree.arrange[{i}]"
         if not isinstance(entry, dict) or len(entry) != 1:
             lint.err(
-                path, "schema", "must be a one-key mapping: instance, group or creature"
+                path,
+                "schema",
+                "must be a one-key mapping: instance, group, creature or raid_seats",
             )
             continue
         kind, v = next(iter(entry.items()))
@@ -724,9 +727,59 @@ def _arrange(lint, doc, whos):
             _arrange_group(lint, f"{path}.group", v, whos)
         elif kind == "creature":
             _arrange_creature(lint, f"{path}.creature", v, aliases)
+        elif kind == "raid_seats":
+            seat_path = f"{path}.raid_seats"
+            lint.ensure(
+                not raid_seats_seen, seat_path, "schema", "may appear only once"
+            )
+            raid_seats_seen = True
+            _arrange_raid_seats(lint, seat_path, v, whos)
         else:
             lint.err(path, "schema", f"unknown arrange kind {kind!r}")
     return aliases
+
+
+def _arrange_raid_seats(lint, path, v, whos):
+    fields = ("family", "keyword", "seats")
+    if not lint.keys(path, v, fields, fields):
+        return
+    family, keyword, seats = (v[k] for k in fields)
+    lint.ensure(
+        isinstance(family, str) and _NAME.fullmatch(family),
+        f"{path}.family",
+        "schema",
+        "must be a family name",
+    )
+    lint.ensure(
+        isinstance(keyword, str) and len(keyword) <= 20 and _ALIAS.fullmatch(keyword),
+        f"{path}.keyword",
+        "schema",
+        "must be a lowercase raid keyword of at most 20 characters",
+    )
+    if not isinstance(seats, list) or not seats:
+        lint.err(f"{path}.seats", "schema", "must be a nonempty list")
+        return
+    seen = set()
+    for i, seat in enumerate(seats):
+        seat_path = f"{path}.seats[{i}]"
+        if lint.keys(seat_path, seat, ("who", "role"), ("who", "role")):
+            who = seat["who"]
+            if isinstance(who, str) and who in whos:
+                lint.ensure(
+                    who not in seen,
+                    f"{seat_path}.who",
+                    "schema",
+                    "duplicate seat selector",
+                )
+                seen.add(who)
+            else:
+                lint.err(f"{seat_path}.who", "schema", "must name a cast entry")
+            lint.ensure(
+                seat["role"] in ("tank", "healer", "dps"),
+                f"{seat_path}.role",
+                "schema",
+                "must be tank, healer or dps",
+            )
 
 
 def _arrange_instance(lint, path, v, whos, aliases):
@@ -764,8 +817,15 @@ def _arrange_instance(lint, path, v, whos, aliases):
 def _arrange_group(lint, path, v, whos):
     if not lint.keys(path, v, ("members", "leader"), ("members", "leader")):
         return
+    members = v["members"]
+    selectors = members if isinstance(members, list) else [members]
     lint.ensure(
-        v["members"] in whos, f"{path}.members", "schema", "must name a cast member"
+        bool(selectors)
+        and all(isinstance(who, str) and who in whos for who in selectors)
+        and len(set(selectors)) == len(selectors),
+        f"{path}.members",
+        "schema",
+        "must name one or more distinct cast entries",
     )
     lint.ensure(
         bool(_NAME.match(str(v["leader"]))),
@@ -830,7 +890,9 @@ def _act(lint, doc, whos, names):
     )
     for i, step in enumerate(act):
         path = f"decree.act[{i}]"
-        if lint.keys(path, step, ("at", "when", "roster", "command"), ()):
+        if lint.keys(
+            path, step, ("at", "when", "roster", "command", "travel_guard"), ()
+        ):
             _act_step(lint, path, step, whos, names, bridge_on)
     _walk_auction(lint, doc, "act", act)
 
@@ -857,15 +919,36 @@ def _act_step(lint, path, step, whos, names, bridge_on):
             "must name an observation in observe",
         )
     lint.ensure(
-        ("roster" in step) != ("command" in step),
+        sum(key in step for key in ("roster", "command", "travel_guard")) == 1,
         path,
         "schema",
-        "needs exactly one of roster or command",
+        "needs exactly one of roster, command or travel_guard",
     )
     if "roster" in step:
         _act_roster(lint, f"{path}.roster", step["roster"], whos)
     if "command" in step:
         _act_command(lint, f"{path}.command", step["command"], whos)
+    if "travel_guard" in step:
+        _act_travel_guard(lint, f"{path}.travel_guard", step["travel_guard"], whos)
+
+
+def _act_travel_guard(lint, path, aim, whos):
+    fields = ("who", "enabled")
+    if not lint.keys(path, aim, fields, fields):
+        return
+    who = aim["who"]
+    lint.ensure(
+        isinstance(who, str) and _NAME.fullmatch(who) and who in whos,
+        f"{path}.who",
+        "schema",
+        "must be a named cast entry",
+    )
+    lint.ensure(
+        isinstance(aim["enabled"], bool),
+        f"{path}.enabled",
+        "schema",
+        "must be true or false",
+    )
 
 
 def _act_roster(lint, path, r, whos):
@@ -970,11 +1053,11 @@ def _observe(lint, doc, whos, aliases):
         if lint.keys(
             path,
             o,
-            ("name", "role", "sql", "log", "expect", "when", "online"),
+            ("name", "role", "sql", "log", "expect", "when", "online", "encounter"),
             ("name", "role"),
         ):
             roles.append(o.get("role"))
-            _observe_one(lint, path, o, seen, known_var)
+            _observe_one(lint, path, o, seen, known_var, doc)
     lint.ensure(
         "precondition" in roles,
         "decree.observe",
@@ -986,7 +1069,7 @@ def _observe(lint, doc, whos, aliases):
     )
 
 
-def _observe_one(lint, path, o, seen, known_var):
+def _observe_one(lint, path, o, seen, known_var, doc):
     name = o.get("name")
     if not isinstance(name, str) or not _KEBAB.match(name):
         lint.err(f"{path}.name", "schema", "must be kebab-case")
@@ -1000,6 +1083,14 @@ def _observe_one(lint, path, o, seen, known_var):
         "schema",
         "must be precondition or check",
     )
+    if "encounter" in o:
+        lint.ensure(
+            encounter_instance(doc, o) is not None,
+            f"{path}.encounter",
+            "schema",
+            "requires an end precondition for a supported boss in the only arranged, cast-bound instance of its map",
+        )
+        return
     if "online" in o:
         _observe_online(lint, path, o)
         return
@@ -1010,6 +1101,50 @@ def _observe_one(lint, path, o, seen, known_var):
         _observe_sql(lint, path, o, known_var)
     if "log" in o:
         _observe_log(lint, path, o)
+
+
+def _encounter_selector(observation):
+    """Read a supported end precondition's instance alias and boss map."""
+    encounter = observation.get("encounter")
+    if (
+        not isinstance(encounter, dict)
+        or set(encounter) != {"boss", "instance"}
+        or not isinstance(encounter["boss"], str)
+        or encounter["boss"] not in gamedata.INSTANCE_ENCOUNTERS
+        or not isinstance(encounter["instance"], str)
+        or observation.get("role") != "precondition"
+        or observation.get("when") != "end"
+        or {"sql", "log", "online", "expect"} & observation.keys()
+    ):
+        return None
+    map_name, _ = gamedata.INSTANCE_ENCOUNTERS[encounter["boss"]]
+    return encounter["instance"], map_name
+
+
+def encounter_instance(doc, observation):
+    """The alias and map ID of the one cast-bound save this selector can read."""
+    selector = _encounter_selector(observation)
+    if selector is None:
+        return None
+    alias, map_name = selector
+    arrange, cast = doc.get("arrange"), doc.get("cast")
+    if not isinstance(arrange, list) or not isinstance(cast, list):
+        return None
+    instances = [
+        e["instance"] for e in arrange if isinstance(e, dict) and "instance" in e
+    ]
+    if len(instances) != 1 or not isinstance(instances[0], dict):
+        return None
+    instance = instances[0]
+    bound = instance.get("bind")
+    if (
+        instance.get("as") == alias
+        and instance.get("map") == map_name
+        and isinstance(bound, str)
+        and any(isinstance(e, dict) and e.get("who") == bound for e in cast)
+    ):
+        return alias, gamedata.INSTANCE_MAPS[map_name]
+    return None
 
 
 def _observe_online(lint, path, o):
@@ -1035,24 +1170,50 @@ def _observe_online(lint, path, o):
 
 def _observe_log(lint, path, o):
     lg = o["log"]
+    scenario = o.get("role") == "precondition"
+    if scenario:
+        lint.ensure(
+            o.get("when") == "end",
+            f"{path}.when",
+            "schema",
+            "a log precondition requires when: end",
+        )
+    else:
+        lint.ensure(
+            "when" not in o, f"{path}.when", "schema", "a log check has no when"
+        )
     lint.ensure(
-        o.get("role") == "check",
-        f"{path}.log",
+        "expect" not in o,
+        f"{path}.expect",
         "schema",
-        "a log assertion is a check, not a precondition",
-    )
-    lint.ensure(
-        "when" not in o, f"{path}.when", "schema", "a log assertion has no when"
+        "put a log expectation inside log.expect",
     )
     if not lint.keys(f"{path}.log", lg, ("pattern", "expect"), ("pattern", "expect")):
         return
-    try:
-        re.compile(lg["pattern"])
-    except (re.error, TypeError) as exc:
-        lint.err(f"{path}.log.pattern", "schema", f"bad regex: {exc}")
+    pattern = lg["pattern"]
+    if not isinstance(pattern, str):
+        lint.err(f"{path}.log.pattern", "schema", "must be a regex string")
+    else:
+        try:
+            regex = re.compile(pattern)
+        except re.error as exc:
+            lint.err(f"{path}.log.pattern", "schema", f"bad regex: {exc}")
+        else:
+            if scenario and (not pattern.strip() or regex.search("") is not None):
+                lint.err(
+                    f"{path}.log.pattern",
+                    "schema",
+                    "a log witness must match nonempty evidence",
+                )
     problem = log_bound_problem(lg["expect"])
     if problem:
         lint.err(f"{path}.log.expect", "schema", problem)
+    elif scenario and log_bound_range(lg["expect"])[0] == 0:
+        lint.err(
+            f"{path}.log.expect",
+            "schema",
+            "a log precondition must require at least one match",
+        )
 
 
 LOG_EXACT_KEYS = ("count", "exactly")

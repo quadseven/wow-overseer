@@ -3,8 +3,10 @@
 # and stands by an Anvil in the pinned world data.
 decree: v1
 id: smith-crafts-with-the-hammer
-proves: 1590
-box: "Live: a later craft event for a worn recipe spell (for example Runed Copper Belt, 2666) is recorded for that smith."
+proves:
+  - repo: quadseven/wow-overseer
+    issue: 1590
+    criterion: "Live: a later craft event for a worn recipe spell (for example Runed Copper Belt, 2666) is recorded for that smith."
 fix: {repo: quadseven/wow-overseer, commit: "d185b0106aca6026e1e724c687c69e436e4d2d15"}
 world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}

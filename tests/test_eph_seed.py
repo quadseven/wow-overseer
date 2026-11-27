@@ -310,6 +310,28 @@ class FakeCursor:
         pass
 
 
+class TravelGuardConn(FakeConn):
+    def __init__(self, rows, update_count=1):
+        super().__init__()
+        self.rows = rows
+        self.update_count = update_count
+        self.queries = []
+
+    def cursor(self):
+        cursor = super().cursor()
+        execute = cursor.execute
+
+        def record(sql, params=()):
+            execute(sql, params)
+            if sql != guard.MARKER_SQL:
+                self.queries.append((sql, params))
+                cursor.rowcount = self.update_count
+
+        cursor.execute = record
+        cursor.fetchall = lambda: self.rows
+        return cursor
+
+
 GOOD_INPUTS = guard.GuardInputs("127.0.0.1", "ephemeral", "grants: enabled")
 
 
@@ -498,6 +520,137 @@ class GuardTest(unittest.TestCase):
         )
         with self.assertRaises(SeedError):
             g.run([evil])
+        self.assertEqual(conn.executed, [])
+
+    def test_travel_guard_binds_only_the_named_enabled_row_and_owned_aim(self):
+        conn = TravelGuardConn([(None, 0, -6513.62, -1183.78, 309.338)])
+        g, _, _ = self.open(conn=conn)
+        aimed = "guard:0:-6513.6,-1183.8,309.3"
+        self.assertEqual(g.write_travel_guard("Grug", True), aimed)
+        self.assertTrue(conn.committed)
+        read, write = conn.queries
+        self.assertIn("JOIN `acore_characters`.`character_homebind`", read[0])
+        self.assertIn("AND r.`enabled` = 1", read[0])
+        self.assertEqual(read[1], ("Grug", "Grug"))
+        self.assertEqual(
+            write,
+            (
+                "UPDATE `acore_characters`.`overseer_roster` SET `travel_npc` = %s "
+                "WHERE `name` = %s AND CAST(`name` AS BINARY) = CAST(%s AS BINARY) "
+                "AND `enabled` = 1 AND CAST(`travel_npc` AS BINARY) <=> CAST(%s AS BINARY)",
+                (aimed, "Grug", "Grug", None),
+            ),
+        )
+
+        conn.rows = [(aimed, None, None, None, None)]
+        conn.committed = False
+        self.assertEqual(g.write_travel_guard("Grug", False, expected=aimed), "")
+        self.assertEqual(conn.queries[-1], (write[0], ("", "Grug", "Grug", aimed)))
+        self.assertTrue(conn.committed)
+
+    def test_travel_guard_fit_uses_whole_yards_for_a_long_aim(self):
+        conn = TravelGuardConn([("", 65535, -98765.4, -98765.4, -98765.4)])
+        g, _, _ = self.open(conn=conn)
+        self.assertEqual(
+            g.write_travel_guard("Grug", True), "guard:65535:-98765,-98765,-98765"
+        )
+
+    def test_travel_guard_refuses_invalid_targets_modes_and_unminted_connections(self):
+        conn = TravelGuardConn([])
+        g, _, _ = self.open(conn=conn)
+        for name, enabled, expected in (
+            ("Grug\n", True, None),
+            ("Grug", 1, None),
+            ("Grug", False, None),
+            ("Grug", False, "vendor"),
+            ("Grug", True, "guard:0:1,2,3"),
+        ):
+            with (
+                self.subTest(name=name, enabled=enabled, expected=expected),
+                self.assertRaises(guard.GuardError),
+            ):
+                g.write_travel_guard(name, enabled, expected=expected)
+        bare = object.__new__(guard.GuardedConnection)
+        with self.assertRaises(guard.GuardError):
+            bare.write_travel_guard("Grug", True)
+        self.assertEqual(conn.queries, [])
+
+    def test_travel_guard_refuses_missing_ambiguous_or_invalid_homebind(self):
+        good = ("", 0, 1.0, 2.0, 3.0)
+        for rows in (
+            [],
+            [good, good],
+            [("", None, None, None, None)],
+            [("", True, 1.0, 2.0, 3.0)],
+            [("", 65536, 1.0, 2.0, 3.0)],
+            [("", 0, float("nan"), 2.0, 3.0)],
+            [("", 0, 1e20, 1e20, 1e20)],
+        ):
+            with self.subTest(rows=rows):
+                conn = TravelGuardConn(rows)
+                g, _, _ = self.open(conn=conn)
+                with self.assertRaises(guard.GuardError):
+                    g.write_travel_guard("Grug", True)
+                self.assertEqual(len(conn.queries), 1)
+                self.assertTrue(conn.rolled_back)
+                self.assertFalse(conn.committed)
+
+    def test_travel_guard_leaves_existing_nonowned_aims_alone(self):
+        for previous in ("innkeeper", "guard:0:1,2,3"):
+            conn = TravelGuardConn([(previous, 0, 1.0, 2.0, 3.0)])
+            g, _, _ = self.open(conn=conn)
+            with self.assertRaisesRegex(guard.GuardError, "blank travel aim"):
+                g.write_travel_guard("Grug", True)
+            with self.assertRaisesRegex(guard.GuardError, "does not match"):
+                g.write_travel_guard("Grug", False, expected="guard:1:1,2,3")
+            self.assertEqual(len(conn.queries), 2)
+            self.assertTrue(conn.rolled_back)
+            self.assertFalse(conn.committed)
+
+    def test_travel_guard_refuses_a_competing_change(self):
+        for previous, enabled, expected in (
+            ("", True, None),
+            ("guard:0:1,2,3", False, "guard:0:1,2,3"),
+        ):
+            with self.subTest(enabled=enabled):
+                conn = TravelGuardConn([(previous, 0, 1.0, 2.0, 3.0)], update_count=0)
+                g, _, _ = self.open(conn=conn)
+                with self.assertRaisesRegex(guard.GuardError, "changed before"):
+                    g.write_travel_guard("Grug", enabled, expected=expected)
+                self.assertEqual(conn.queries[-1][1][-1], previous)
+                self.assertTrue(conn.rolled_back)
+                self.assertFalse(conn.committed)
+
+    def test_travel_guard_rolls_back_if_cursor_close_fails(self):
+        conn = TravelGuardConn([("", 0, 1.0, 2.0, 3.0)])
+        g, _, _ = self.open(conn=conn)
+        cursor = conn.cursor()
+
+        def cannot_close():
+            raise OSError("close failed")
+
+        cursor.close = cannot_close
+        conn.cursor = lambda: cursor
+        with self.assertRaisesRegex(OSError, "close failed"):
+            g.write_travel_guard("Grug", True)
+        self.assertTrue(conn.rolled_back)
+        self.assertFalse(conn.committed)
+
+    def test_travel_guard_does_not_enable_generic_roster_writes(self):
+        with self.assertRaises(SeedError):
+            Builder(SCHEMA).update(
+                "overseer_roster", {"travel_npc": "guard:0:1,2,3"}, {"name": "Grug"}
+            )
+        g, conn, _ = self.open()
+        forbidden = sqlgen.Stmt(
+            "update",
+            "overseer_roster",
+            "UPDATE `acore_characters`.`overseer_roster` SET `travel_npc` = 'guard:0:1,2,3' WHERE `name` = 'Grug'",
+        )
+        with self.assertRaises(SeedError):
+            g.run([forbidden])
+        with self.assertRaises(guard.GuardError):
+            g.query(forbidden.sql)
         self.assertEqual(conn.executed, [])
 
     def test_apply_executes_in_one_commit(self):
@@ -757,6 +910,21 @@ class CompileTest(unittest.TestCase):
             compile_(d)
         self.assertIn("arranges no instance", str(ctx.exception))
 
+    def test_group_can_include_two_individually_seeded_members(self):
+        d = doc()
+        d["cast"] = [{"who": "Grug", "set": {}}, {"who": "Ugga", "set": {}}]
+        d["arrange"] = [{"group": {"leader": "Grug", "members": ["Grug", "Ugga"]}}]
+        plan = compile_(d)
+        members = [
+            s.sql
+            for s in plan.statements
+            if s.table == "group_member" and s.op == "insert"
+        ]
+        expected = f"VALUES ({plan.variables['group']}, "
+        self.assertEqual(len(members), 2)
+        self.assertIn(expected + "1, 0, 0, 0)", members[0])
+        self.assertIn(expected + "2, 0, 0, 0)", members[1])
+
     def test_instance_group_and_bind(self):
         d = doc()
         d["cast"] = [
@@ -804,6 +972,42 @@ class CompileTest(unittest.TestCase):
         ]
         with self.assertRaises(SeedError):
             compile_(d)
+
+    def test_raid_seats_replace_only_the_named_order(self):
+        d = doc()
+        d["cast"] = [{"who": "family:grug", "set": {}}, {"who": "Zork", "set": {}}]
+        d["arrange"] = [{"raid_seats": {
+            "family": "Grug", "keyword": "moltencore", "seats": [
+                {"who": "family:grug", "role": "dps"}, {"who": "Zork", "role": "healer"},
+            ],
+        }}]  # fmt: skip
+        resolver = FakeResolver()
+        resolver.fam["grug"].extend(
+            (i, name, False) for i, name in enumerate(("Bada", "Badu", "Bade"), start=5)
+        )
+        seats = [
+            s
+            for s in compile_(d, resolver).statements
+            if s.table == "overseer_raid_seat"
+        ]
+        self.assertEqual(
+            seats[0].sql,
+            "DELETE FROM `acore_characters`.`overseer_raid_seat` "
+            "WHERE `family` = 'Grug' AND `keyword` = 'moltencore'",
+        )
+        self.assertEqual([s.op for s in seats], ["delete"] + ["insert"] * 6)
+        self.assertTrue(
+            seats[1].sql.endswith("VALUES ('Grug', 'moltencore', 'Grug', 0, 'dps')")
+        )
+        self.assertTrue(
+            seats[-1].sql.endswith("VALUES ('Grug', 'moltencore', 'Zork', 1, 'healer')")
+        )
+        for s in seats:
+            verify_statement(s.sql, SCHEMA)
+
+        resolver.fam["grug"].extend((i, f"Seat{i}", False) for i in range(9, 44))
+        with self.assertRaisesRegex(SeedError, "needs 1 to 40 seats"):
+            compile_(d, resolver)
 
     def test_creature_dead_state_in_arrange(self):
         d = doc()

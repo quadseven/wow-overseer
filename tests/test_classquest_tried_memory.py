@@ -227,16 +227,17 @@ class TheEvidence(unittest.TestCase):
         )
         self.assertEqual(target(plan(older)), 12222)
 
-    def test_a_hunt_that_killed_clears_the_hunt_clock_marks(self):
+    def test_a_kill_without_quest_progress_keeps_the_hunt_clock_marks(self):
         hunts = classquest.Hunts()
         m = who("Aa", **HUNTER)
         hunts.observe(
             "Aa", 1498, 0, classquest.Spawn(12214, 3130, 1, 705.0, -4112.0), 0.0, True
         )
-        self.assertTrue(hunts.get("Aa").tried)
+        tried = hunts.get("Aa").tried
+        self.assertTrue(tried)
         hunts.productive("Aa", 100.0)
-        self.assertEqual(hunts.get("Aa").tried, ())
-        self.assertEqual(hunts.state(m.name, 101.0), ({1498: ()}, frozenset()))
+        self.assertEqual(hunts.get("Aa").since, 0.0)
+        self.assertEqual(hunts.state(m.name, 101.0), ({1498: tried}, frozenset()))
 
 
 @mock.patch.object(classquest, "TRIED_EPOCH", 0)

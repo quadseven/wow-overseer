@@ -1,65 +1,113 @@
-# An operator guard on a follower whose homebind is on another continent walks it out and does not let
-# the quest drive re-aim it into the guarded zone for 30 minutes (mod-overseer issue 163). Ugga is bound
-# at Ratchet and stands in Burning Steppes, the zone the guard names.
-# Fix: mod-overseer pull 362 (the shared hold takes the motion slot).
-# Scope: the final snapshot cannot show a re-entry that happened and ended before the window closed, so the
-# decree also reads every event written for Ugga in the guarded zones after the guard row was applied: a
-# re-entry that does anything leaves one. A re-entry that leaves no row at all stays unseen (a world samples
-# positions only at the end), so the claim is narrowed to re-entry that is recorded.
+# Grug's guard names a safe place on the current map. Ugga's names her bind on
+# another map. The fixed module must route the follower to the leader's guard.
+# After the walk budget, the judge samples Ugga outside the guarded zone while
+# both guards remain set. Clearing a guard and resuming questing is a separate proof.
+# Observation aliases cast0 and cast1 refer to the leader and follower in that order.
+# Both guard acts fire at time zero before the first continuous sample.
 decree: v1
 id: guard-follower-homebound-elsewhere
 proves:
-  - {repo: quadseven/mod-overseer, issue: 163, criterion: "no event is recorded for the follower in the guarded zone after the guard is applied, and it ends outside it, for a follower bound on another map (an unrecorded re-entry is not seen)"}
-fix: {repo: quadseven/mod-overseer, commit: "fcc79f62c9b0d0103e8cd5fb055e9595ada4d2f0"}
+  - {repo: quadseven/mod-overseer, issue: 163, criterion: "the follower walks to the leader's same-map guard and stays outside the dangerous zone at each sample after the walk budget"}
+fix: {repo: quadseven/mod-overseer, commit: "c04592391453cd1acb77b0c25abab26cfe3f777e"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
 duration: 45m
 cast:
+  - who: Grug
+    set: {alive: true, health_pct: 100, homebind: {creature: "Hansel Heavyhands"}, at: {creature: "Hansel Heavyhands"}}
+    ceiling: "position and homebind only"
   - who: Ugga
     set: {alive: true, health_pct: 100, homebind: {creature: "Gazlowe"}, at: {creature: "Franclorn Forgewright"}}
-    ceiling: "nothing granted but position and homebind"
+    ceiling: "position and homebind only"
+arrange:
+  - group: {members: [Grug, Ugga], leader: Grug}
 act:
   - at: 0s
+    travel_guard: {who: Grug, enabled: true}
+  - at: 0s
+    travel_guard: {who: Ugga, enabled: true}
+  - at: 0s
+    roster: {who: Grug, job: "quest"}
+  - at: 0s
     roster: {who: Ugga, job: "quest"}
-  - at: 1m
-    command: {who: Ugga, kind: bot, text: "guard Burning Steppes"}
 observe:
-  - name: ugga-starts-in-the-guarded-zone
+  - name: the-follower-starts-in-the-guarded-zone
     role: precondition
     when: start
     sql: |
-      SELECT COUNT(*) FROM overseer_snapshot WHERE guid = @Ugga AND zone_id IN (46, 25)
+      SELECT COUNT(*) FROM overseer_snapshot s JOIN characters c ON c.guid = s.guid
+      WHERE s.guid = @cast1 AND c.online = 1 AND s.group_leader = @cast0
+        AND s.map_id = 0 AND s.zone_id IN (46, 25)
     expect: {scalar: "= 1"}
-  - name: ugga-is-bound-on-map-1
+  - name: the-leader-starts-at-thorium-point
     role: precondition
     when: start
     sql: |
-      SELECT COUNT(*) FROM character_homebind WHERE guid = @Ugga AND mapId = 1
+      SELECT COUNT(*) FROM overseer_snapshot s JOIN characters c ON c.guid = s.guid
+      JOIN character_homebind h ON h.guid = s.guid
+      WHERE s.guid = @cast0 AND c.online = 1 AND s.map_id = h.mapId AND s.zone_id = 51
+        AND POW(s.pos_x - h.posX, 2) + POW(s.pos_y - h.posY, 2) + POW(s.pos_z - h.posZ, 2) <= 1600
     expect: {scalar: "= 1"}
-  - name: the-guard-row-was-applied
+  - name: the-follower-and-leader-have-the-required-homebinds
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_homebind
+      WHERE (guid = @cast1 AND mapId = 1) OR (guid = @cast0 AND mapId = 0)
+    expect: {scalar: "= 2"}
+  - name: both-are-in-the-leaders-group
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM `groups` g JOIN group_member m ON g.guid = m.guid
+      WHERE g.leaderGuid = @cast0 AND m.memberGuid IN (@cast)
+    expect: {scalar: "= 2"}
+  - name: both-roster-aims-start-blank
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_roster WHERE name IN ('Grug', 'Ugga')
+        AND enabled = 1 AND (travel_npc IS NULL OR travel_npc = '')
+    expect: {scalar: "= 2"}
+  - name: both-operator-guards-remain-set
+    role: precondition
+    when: continuous
+    sql: |
+      SELECT COUNT(*) FROM overseer_roster WHERE enabled = 1 AND (
+        (name = 'Grug' AND travel_npc LIKE 'guard:0:%') OR
+        (name = 'Ugga' AND travel_npc LIKE 'guard:1:%'))
+    expect: {scalar: "= 2"}
+  - name: the-quest-orders-were-applied
     role: precondition
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_command WHERE target_name = 'Ugga' AND kind = 'bot' AND command LIKE 'guard%' AND created_at >= @t0 AND status = 'applied'
-    expect: {scalar: ">= 1"}
-  - name: no-event-in-the-guarded-zone-after-the-guard
-    role: check
+      SELECT COUNT(DISTINCT target_name) FROM overseer_command
+      WHERE target_name IN ('Grug', 'Ugga') AND source = 'eph-judge' AND kind = 'job'
+        AND command = 'quest' AND status = 'applied' AND created_at >= @t0
+    expect: {scalar: "= 2"}
+  - name: both-members-are-still-observable
+    role: precondition
+    when: continuous
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot s JOIN characters c ON c.guid = s.guid
+      WHERE s.guid IN (@cast) AND c.online = 1 AND s.updated_at >= DATE_SUB(NOW(), INTERVAL 30 SECOND)
+        AND (s.guid = @cast0 OR s.group_leader = @cast0)
+    expect: {scalar: "= 2"}
+  - name: a-snapshot-was-written-after-the-walk-budget
+    role: precondition
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_event e JOIN overseer_command c ON c.target_name = e.character_name
-      WHERE e.character_name = 'Ugga' AND e.zone IN (46, 25)
-        AND c.kind = 'bot' AND c.command LIKE 'guard%' AND c.status = 'applied' AND c.created_at >= @t0
-        AND e.last_seen > c.updated_at
-    expect: {scalar: "= 0"}
-  - name: ugga-never-died-in-the-zone
+      SELECT COUNT(*) FROM overseer_snapshot WHERE guid = @cast1
+        AND updated_at >= DATE_ADD(@t0, INTERVAL 30 MINUTE)
+    expect: {scalar: "= 1"}
+  - name: the-follower-stays-at-thorium-point-after-the-walk-budget
     role: check
-    when: end
+    when: continuous
     sql: |
-      SELECT character_name, created_at FROM overseer_death WHERE created_at >= @t0 AND character_name = 'Ugga'
-    expect: {rows: 0}
-  - name: ugga-left-the-zone-and-stayed-out
-    role: check
-    when: end
-    sql: |
-      SELECT COUNT(*) FROM overseer_snapshot WHERE guid = @Ugga AND zone_id IN (46, 25)
-    expect: {scalar: "= 0"}
+      SELECT COUNT(*) FROM overseer_snapshot s
+      JOIN character_homebind h ON h.guid = @cast0
+      WHERE s.guid = @cast1 AND (
+        s.updated_at < DATE_ADD(@t0, INTERVAL 30 MINUTE) OR
+        (s.map_id = h.mapId AND s.zone_id = 51 AND s.health > 0
+        AND POW(s.pos_x - h.posX, 2) + POW(s.pos_y - h.posY, 2) + POW(s.pos_z - h.posZ, 2) <= 1600))
+    expect: {scalar: "= 1"}

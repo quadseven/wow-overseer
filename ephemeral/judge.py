@@ -69,7 +69,7 @@ class QueryTimeout(Exception):
 
 
 class GuardedWorldDb:
-    """The judge's only door to the database: reads, and queued orders."""
+    """The judge's only door to the database: reads and guarded scenario acts."""
 
     def __init__(self, guarded, schema):
         if not isinstance(guarded, guard.GuardedConnection):
@@ -102,6 +102,9 @@ class GuardedWorldDb:
 
     def insert_command(self, target, kind, text):
         return self._g.insert_command(target, kind, text)
+
+    def write_travel_guard(self, target, enabled, *, expected=None):
+        return self._g.write_travel_guard(target, enabled, expected=expected)
 
 
 # -- expectations and rendering --------------------------------------------------
@@ -258,6 +261,37 @@ def _run_bound_problems(bare, maps, alias=None, sole=True):
     return problems
 
 
+def _encounter_done(rows, boss):
+    """Read the selected encounter slots from the pinned core's instance save."""
+    map_name, slots = gamedata.INSTANCE_ENCOUNTERS[boss]
+    if len(rows) != 1 or len(rows[0]) != 1 or not isinstance(rows[0][0], str):
+        raise JudgeError(f"expected one {map_name} instance save")
+    save = rows[0][0]
+    if not save:
+        return False, "instance save is empty"
+    fields = save.split()
+    if map_name == "Blackrock Depths":
+        if len(fields) not in (7, 8, 9) or any(
+            not re.fullmatch(r"[0-9]+", f) for f in fields
+        ):
+            raise JudgeError("malformed Blackrock Depths instance save")
+        # The six encounter states come first. Magmus sets TYPE_IRON_HALL.
+        state = fields[slots[0]]
+        return state == "3", f"Iron Hall state={state}"
+
+    # Both supported core pins serialize the MC header one character at a time
+    # and write ten boss states. Unsummoned bosses can remain TO_BE_DECIDED (5).
+    states = fields[2:]
+    if (
+        fields[:2] != ["M", "C"]
+        or len(states) != 10
+        or any(state not in {"0", "1", "2", "3", "4", "5"} for state in states)
+    ):
+        raise JudgeError("malformed Molten Core instance save")
+    selected = [states[slot] for slot in slots]
+    return "3" in selected, f"{boss} state={' '.join(selected)}"
+
+
 class Judge:
     def __init__(
         self,
@@ -289,6 +323,7 @@ class Judge:
         self.arm = arm
         self.schema = schema or dbschema.Schema.load()
         self.records = {}
+        self._guard_aims = {}
         self.act_rows = []
 
     # -- entry --
@@ -342,6 +377,17 @@ class Judge:
                 self._observe(name, started)
         if any(self._unheld_precondition(r) for r in self.records.values()):
             return self._invalid_reasons()
+        for name, observation in self.observes.items():
+            if "encounter" in observation:
+                rec = self._evaluate(name)
+                if rec["status"] == "held":
+                    return [
+                        f"precondition {name}: {observation['encounter']['boss']} was already complete before the first act"
+                    ]
+                if rec["status"] != "violated":
+                    return [
+                        f"precondition {name}: {self._phrase(rec)} reading starting instance state"
+                    ]
         self._window(steps, duration, started)
         for name, o in self.observes.items():
             if o.get("when") == "end" or "log" in o:
@@ -402,19 +448,36 @@ class Judge:
         for name, o in observes.items():
             if "sql" in o:
                 sql = render_sql(o["sql"], variables)
-                problems = dbschema.check_select(sql, self.schema)
-                if problems:
-                    raise JudgeError(f"observation {name}: " + "; ".join(problems))
-                rendered[name] = sql
             elif o.get("online") == "cast":
                 sql = render_sql(
                     "SELECT guid FROM characters WHERE guid IN (@cast) AND online = 1",
                     variables,
                 )
-                problems = dbschema.check_select(sql, self.schema)
-                if problems:
-                    raise JudgeError(f"observation {name}: " + "; ".join(problems))
-                rendered[name] = sql
+            elif "encounter" in o:
+                source = lint.encounter_instance(self.decree, o)
+                if source is None:
+                    raise JudgeError(
+                        f"observation {name}: needs a cast-bound seed instance"
+                    )
+                alias, map_id = source
+                instance_id = variables.get(alias)
+                if type(instance_id) is not int or instance_id <= 0:
+                    raise JudgeError(
+                        f"observation {name}: needs a positive instance ID for {alias}"
+                    )
+                sql = render_sql(
+                    "SELECT data FROM instance WHERE id = @instance_id AND map = @map_id",
+                    {
+                        "instance_id": instance_id,
+                        "map_id": map_id,
+                    },
+                )
+            else:
+                continue
+            problems = dbschema.check_select(sql, self.schema)
+            if problems:
+                raise JudgeError(f"observation {name}: " + "; ".join(problems))
+            rendered[name] = sql
         return rendered
 
     def _window(self, steps, duration, started):
@@ -461,27 +524,33 @@ class Judge:
     def _credit_reasons(self):
         """A run that arranges an instance needs the core's own credited encounter record.
 
-        The evidence is a held precondition that reads `log_encounter` (the core
-        writes it when an encounter is credited), never a run's own completion
-        flag, and the observation must be POSITIVE and bounded to THIS run:
+        The evidence is a held encounter observation of the fresh bound instance,
+        or a held precondition that reads `log_encounter`. The observation must be
+        positive and bounded to this run:
         an expectation that holds at zero credits, or a query that could count
         an earlier run's credits, proves nothing. A decree that arranges an
         instance without such an observation cannot PASS.
         """
-        maps = {
-            gamedata.INSTANCE_MAPS[step["instance"]["map"]]
+        instances = [
+            step["instance"]
             for step in self.decree.get("arrange") or []
             if "instance" in step
-            and step["instance"].get("map") in gamedata.INSTANCE_MAPS
-        }
-        if not any("instance" in step for step in self.decree.get("arrange") or []):
+        ]
+        if not instances:
             return []
+        maps = {
+            gamedata.INSTANCE_MAPS[instance["map"]]
+            for instance in instances
+            if instance.get("map") in gamedata.INSTANCE_MAPS
+        }
         problems = []
         for name, sql in self.rendered.items():
-            rec = self.records.get(name)
+            rec = self.records.get(name, {})
+            if "encounter" in self.observes[name] and rec.get("status") == "held":
+                return []
             if (CREDIT_DB, CREDIT_TABLE) not in dbschema.tables_read(sql, self.schema):
                 continue
-            if not rec or rec["role"] != "precondition":
+            if rec.get("role") != "precondition":
                 problems.append(
                     f"{name} reads {CREDIT_TABLE} but is not a precondition"
                 )
@@ -497,8 +566,8 @@ class Judge:
         if problems:
             return ["no encounter credit evidence: " + "; ".join(problems)]
         return [
-            "no encounter credit evidence: a precondition reading log_encounter "
-            "must hold before an instance run can pass"
+            "no encounter credit evidence: a bound encounter observation or a "
+            "run-scoped log_encounter precondition must hold"
         ]
 
     def _credit_shape_problems(self, obs, maps, rendered):
@@ -538,7 +607,8 @@ class Judge:
     def _plan_acts(self, observes):
         steps = []
         for i, cmd in enumerate(acts.act_commands(self.decree)):
-            if cmd["kind"] not in guard.COMMAND_KINDS:
+            travel_guard = cmd["kind"] == acts.TRAVEL_GUARD and "guard_enabled" in cmd
+            if cmd["kind"] not in guard.COMMAND_KINDS and not travel_guard:
                 raise JudgeError(
                     f"act step {i}: command kind {cmd['kind']!r} is not allowed"
                 )
@@ -546,18 +616,30 @@ class Judge:
                 raise JudgeError(
                     f"act step {i}: waits for unknown observation {cmd['when']!r}"
                 )
-            targets = self._targets(cmd["who"], i)
+            who = cmd["who"]
+            targets = self._targets(who, i)
+            if travel_guard and not self._is_named_target(who, targets):
+                raise JudgeError(
+                    f"act step {i}: travel_guard needs one named cast member"
+                )
             at = lint.duration_seconds(cmd["at"]) if "at" in cmd else None
             if "at" in cmd and at is None:
                 raise JudgeError(f"act step {i}: bad time {cmd['at']!r}")
             row = {
-                "index": i, "who": cmd["who"], "targets": targets, "kind": cmd["kind"],
+                "index": i, "who": who, "targets": targets, "kind": cmd["kind"],
                 "text": cmd["text"], "fired": False,
             }  # fmt: skip
+            if travel_guard:
+                row["guard_enabled"] = cmd["guard_enabled"]
             row["at" if "at" in cmd else "when"] = cmd.get("at", cmd.get("when"))
             self.act_rows.append(row)
             steps.append((row, at))
         return steps
+
+    def _is_named_target(self, who, targets):
+        return targets == [who] and any(
+            member["who"] == who for member in self.handoff.get("members", [])
+        )
 
     def _targets(self, who, i):
         members = self.handoff.get("members") or []
@@ -580,10 +662,34 @@ class Judge:
 
     def _fire(self, step, elapsed):
         row, _ = step
-        for name in row["targets"]:
-            self.world.insert_command(name, row["kind"], row["text"])
+        if "guard_enabled" in row:
+            self._fire_travel_guard(row)
+        else:
+            for name in row["targets"]:
+                self.world.insert_command(name, row["kind"], row["text"])
         row["fired"] = True
         row["fired_s"] = int(elapsed)
+
+    def _fire_travel_guard(self, row):
+        name = row["who"]
+        enabled = row["guard_enabled"]
+        expected = self._guard_aims.get(name)
+        if enabled and expected is not None:
+            raise JudgeError(f"{name} already has a guard from this run")
+        if not enabled and expected is None:
+            raise JudgeError(f"{name} has no guard from this run to clear")
+        try:
+            aim = self.world.write_travel_guard(name, enabled, expected=expected)
+        except guard.GuardError as exc:
+            operation = "set" if enabled else "clear"
+            row["error"] = f"could not {operation} travel guard for {name}: {exc}"
+            raise JudgeError(row["error"]) from exc
+        if enabled:
+            self._guard_aims[name] = aim
+        else:
+            del self._guard_aims[name]
+        row["text"] = aim
+        row["fired_at"] = self.world.db_now()
 
     # -- observations --
     def _evaluate(self, name):
@@ -595,9 +701,9 @@ class Judge:
         rec = {
             "name": name,
             "role": role,
-            "expect": o["expect"] if "expect" in o else o["log"]["expect"],
         }
         if "log" in o:
+            rec["expect"] = o["log"]["expect"]
             rec["when"] = "log"
             pattern = re.compile(o["log"]["pattern"])
             try:
@@ -618,9 +724,17 @@ class Judge:
             return rec
         rec["when"] = o["when"]
         rec["sql"] = self.rendered[name]
+        encounter = o.get("encounter")
+        rec["expect"] = (
+            {"encounter": f"{encounter['boss']} DONE"} if encounter else o["expect"]
+        )
         try:
             rows = self.world.select(rec["sql"])
-            held, observed = expectation_holds(o["expect"], rows)
+            held, observed = (
+                _encounter_done(rows, encounter["boss"])
+                if encounter
+                else expectation_holds(o["expect"], rows)
+            )
             rec["status"] = "held" if held else "violated"
             rec["observed"] = observed
             rec["sample"] = _sample(rows)
