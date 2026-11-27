@@ -5,6 +5,7 @@ import pathlib
 import sys
 import types
 import unittest
+from datetime import datetime
 from unittest import mock
 
 from _stub_modules import PYMYSQL, stub_modules
@@ -422,6 +423,115 @@ class QuesterBoundRefusalTest(unittest.TestCase):
         store.completed = lambda: [353]
         out = qt.run(store, qt.Client(FakeGitHub()), [])
         self.assertEqual(out["filed"], 0)
+
+
+class Retirement(unittest.TestCase):
+    def test_plan_retires_only_linked_completed_quests_with_refusals(self):
+        refusal = "the quest giver would not give it: not eligible"
+        rows = [
+            dict(row(101, ticket=2001), reason=refusal),
+            dict(row(101, guid=8), reason=refusal),
+            dict(row(102, ticket=2002), reason=refusal),
+            row(102, guid=8, ticket=2002),
+            dict(row(103, ticket=2003), reason=refusal),
+            dict(row(104), reason=refusal),
+            dict(row(105, ticket=qt.FILING), reason=refusal),
+            dict(row(106), reason=refusal),
+        ]
+        todo = qt.plan(
+            rows, ticket_for={104: 2004}, completed={101, 102, 104, 105, 106}
+        )
+        self.assertEqual(todo.retire, ((101, 2001), (104, 2004)))
+        self.assertEqual(todo.copies, ((101, 2001), (104, 2004)))
+        self.assertEqual(todo.stuck, (105,))
+        self.assertEqual(todo.new, ())
+
+    def test_run_closes_at_most_ten_open_tickets_with_completion_evidence(self):
+        store = Store(
+            [
+                dict(
+                    row(q, ticket=2000 + q), reason="the turn-in NPC would not take it"
+                )
+                for q in range(1, 14)
+            ]
+        )
+        store.completed = lambda: range(1, 14)
+        store.completion = lambda quest: (2, datetime(2026, 11, 19, 15, 29))
+        github, log = mock.Mock(), mock.Mock()
+
+        def call(method, path, body=None, ok=(200,)):
+            if method == "GET":
+                if path == "/issues/2001":
+                    return types.SimpleNamespace(status=404)
+                state = "closed" if path == "/issues/2002" else "open"
+                return types.SimpleNamespace(status=200, json=lambda: {"state": state})
+
+        github.call.side_effect = call
+        github.pages.return_value = []
+        done = qt.run(store, qt.Client(github, log), ())
+
+        retired = range(2003, 2013)
+        self.assertEqual(done["retired"], 10)
+        self.assertEqual(done["filed"], 0)
+        self.assertEqual(
+            [c for c in github.call.call_args_list if c.args[0] == "PATCH"],
+            [
+                mock.call(
+                    "PATCH",
+                    f"/issues/{n}",
+                    {"state": "closed", "state_reason": "not_planned"},
+                )
+                for n in retired
+            ],
+        )
+        self.assertEqual(
+            [c.args[0] for c in github.comment.call_args_list], list(retired)
+        )
+        for number, comment in (c.args for c in github.comment.call_args_list):
+            self.assertIn(f"Quest {number - 2000} ", comment)
+            self.assertIn("2 questers", comment)
+            self.assertIn("2026-11-19 15:29:00", comment)
+        self.assertEqual(log.info.call_count, 10)
+        for call in log.info.call_args_list:
+            self.assertTrue(call.args[0].startswith("questtickets: retired"))
+        self.assertEqual([r["ticket"] for r in store.rows], list(range(2001, 2014)))
+
+    def test_retry_after_a_refused_close_does_not_repeat_the_comment(self):
+        store = Store(
+            [dict(row(101, ticket=2001), reason="the quest giver would not give it")]
+        )
+        store.completed = lambda: [101]
+        store.completion = lambda quest: (1, None)
+        github, log = mock.Mock(), mock.Mock()
+        github.pages.return_value = []
+        open_issue = types.SimpleNamespace(status=200, json=lambda: {"state": "open"})
+        github.call.side_effect = [
+            open_issue,
+            RuntimeError("refused"),
+            open_issue,
+            None,
+        ]
+        client = qt.Client(github, log)
+
+        with self.assertRaisesRegex(RuntimeError, "refused"):
+            qt.run(store, client, (), now=5000)
+        self.assertEqual(store.last_pass(), 5000)
+        log.info.assert_not_called()
+        self.assertEqual(github.comment.call_count, 1)
+        comment = github.comment.call_args.args[1]
+        self.assertIn("completed by 1 quester.", comment)
+        self.assertIn("completion time is unknown", comment)
+
+        github.pages.return_value = [{"id": 5001, "body": comment}]
+        store.completion = lambda quest: (2, datetime(2026, 11, 19, 15, 29))
+        github.call.side_effect = [open_issue, None, None]
+        self.assertEqual(qt.run(store, client, (), now=91500)["retired"], 1)
+        self.assertEqual(github.comment.call_count, 1)
+        method, path, update = github.call.call_args_list[-2].args
+        self.assertEqual((method, path), ("PATCH", "/issues/comments/5001"))
+        self.assertIn("2 questers", update["body"])
+        self.assertIn("2026-11-19 15:29:00", update["body"])
+        log.info.assert_called_once()
 
 
 if __name__ == "__main__":
