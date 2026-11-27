@@ -300,7 +300,8 @@ class TheRaidView(unittest.TestCase):
     def test_the_raid_view_reads_the_road_and_draws_it_first(self):
         js = self._read("app/views/raid.js")
         self.assertIn("/api/v2/ragnaros?guild=", js)
-        self.assertLess(js.index("${roadCard("), js.index("${headCard(card)}"))
+        self.assertLess(js.index("${verdictCard("), js.index("${roadCard("))
+        self.assertLess(js.index("${roadCard("), js.index("${lineupSection("))
 
     def test_an_unmeasured_milestone_is_drawn_not_measured_never_zero(self):
         js = self._read("app/views/raid.js")
