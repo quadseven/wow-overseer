@@ -6648,8 +6648,7 @@ def _restore_door_hold_memos(now: float) -> None:
 _DOOR_STEPS_SQL = (
     "SELECT kind, doing, occurrences, UNIX_TIMESTAMP(first_seen) AS first_at, "
     "UNIX_TIMESTAMP(last_seen) AS last_at, UNIX_TIMESTAMP() AS now_at, "
-    "(SELECT UNIX_TIMESTAMP(q.started_at) FROM overseer_dungeon_queue q "
-    "WHERE q.id = %s) AS since_at "
+    "%s AS since_at "
     "FROM overseer_now_step WHERE subject = %s AND kind = 'intent' "
     "AND last_seen > NOW() - INTERVAL 1 HOUR ORDER BY last_seen DESC LIMIT 60"
 )
@@ -6662,16 +6661,30 @@ _COMPLETED_RUNS_SQL = (
 )
 
 
-def _door_wedge_evidence(leader: str, head_id: int) -> tuple:
-    """(the restarts of the leader's walk for queue entry `head_id` in the
+def _door_wedge_evidence(leader: str, run_id: int | None) -> tuple:
+    """(the restarts of the leader's walk for run `run_id` in the
     watch's window, the members' states) for the door wedge. Reads only. An
     intent book or step store this realm cannot answer (1054 or 1146) reads
     as no evidence, so no door is left on a missing table: the same
     degradation as the stall reads above."""
     steps = []
+    since_at = 0
+    if run_id is not None:
+        with _connect() as conn, conn.cursor() as cur:
+            try:
+                cur.execute(
+                    "SELECT UNIX_TIMESTAMP(started_at) AS since_at "
+                    "FROM overseer_dungeon_run WHERE id = %s",
+                    (run_id,))
+                row = cur.fetchone()
+                if row and row.get("since_at") is not None:
+                    since_at = int(row["since_at"])
+            except pymysql.err.MySQLError as exc:
+                if not (exc.args and exc.args[0] in (1054, 1146)):
+                    raise
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(_DOOR_STEPS_SQL, (head_id, leader))
+            cur.execute(_DOOR_STEPS_SQL, (since_at, leader))
             steps = cur.fetchall()
         except pymysql.err.MySQLError as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
@@ -6679,7 +6692,6 @@ def _door_wedge_evidence(leader: str, head_id: int) -> tuple:
     restarts = (0, 0)
     if steps:
         now_at = int(steps[0].get("now_at") or 0) or int(time.time())
-        since_at = int(steps[0].get("since_at") or 0)
         # THE WAY OUT OF A RUN THAT CLEARED ITS DOOR IS NOT THE DOOR REFUSING
         # THE LEADER: walks that began inside a completed run are not counted.
         completed = []
@@ -7008,7 +7020,7 @@ def _door_wedge(head: dict, names: list, leader: str):
     keyword = str(head.get("keyword") or "")
     head_id = int(head.get("id") or 0)
     run_id = _door_open_run_id(leader)
-    restarts, members = _door_wedge_evidence(leader, head_id)
+    restarts, members = _door_wedge_evidence(leader, run_id)
     ages = _door_wedge_ages(leader, members, head_id, run_id)
     # A run that credits a boss is not wedged (#2181): a party one member
     # short clears the dungeon while that member's hold ages. The hold and

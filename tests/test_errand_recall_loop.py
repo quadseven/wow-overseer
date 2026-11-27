@@ -92,7 +92,7 @@ class World:
         self.positions[errand.character]["pos_x"] = 2500
         return True
 
-    def members(self, leader, head_id):
+    def members(self, leader, run_id):
         state = stall.ERRAND_STATE if self.aims.get("Oz") else "following"
         return 0, (jev_family_intent.Member("Oz", state, "0"),)
 

@@ -1567,8 +1567,8 @@ class TheDoorWedgeReads(unittest.TestCase):
                 "DOOR_HOLD_RECOVER_YARDS": 1500,
                 "_jobs_of": jobs_of
                 or (lambda names: {n: "dungeon:maraudon-orange" for n in names}),
-                "_door_wedge_evidence": lambda leader, head_id: (
-                    self.asked.append((leader, head_id))
+                "_door_wedge_evidence": lambda leader, run_id: (
+                    self.asked.append((leader, run_id))
                     or (evidence() if callable(evidence) else evidence)
                 ),
                 "_DOOR_HOLD_SINCE": self.holds,
@@ -1620,10 +1620,11 @@ class TheDoorWedgeReads(unittest.TestCase):
         self.assertIn("restarted %d times" % stall.RESTART_BOUND, got.why)
         self.assertNotIn("before the wedge forms", got.why)
 
-    def test_the_walk_is_counted_for_the_queue_entry_being_judged(self):
+    def test_the_walk_is_counted_for_the_run_being_judged(self):
         judge = self.judge((0, ()), [1000.0])
         judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
-        self.assertEqual([("Zug", 7)], self.asked)
+        # The evidence is now keyed by run_id (12345 from mock), not head_id (7).
+        self.assertEqual([("Zug", 12345)], self.asked)
 
     def test_the_steps_read_bounds_the_walk_by_when_the_run_started(self):
         sql = next(
@@ -1632,7 +1633,9 @@ class TheDoorWedgeReads(unittest.TestCase):
             if isinstance(node, ast.Assign)
             and any(getattr(t, "id", "") == "_DOOR_STEPS_SQL" for t in node.targets)
         )
-        self.assertIn("started_at", sql)
+        # The since_at is now a parameter (run start time), not a subquery on the queue entry.
+        self.assertIn("%s AS since_at", sql)
+        self.assertNotIn("overseer_dungeon_queue", sql)
         self.assertEqual(2, sql.count("%s"))
 
     def test_an_errand_hold_becomes_a_verdict_only_past_its_bound(self):
@@ -1695,7 +1698,7 @@ class TheDoorWedgeReads(unittest.TestCase):
                 "json": json,
                 "DOOR_HOLD_RECOVER_YARDS": 1500,
                 "_jobs_of": lambda names: {n: "dungeon:maraudon-orange" for n in names},
-                "_door_wedge_evidence": lambda leader, head_id: box[0],
+                "_door_wedge_evidence": lambda leader, run_id: box[0],
                 "_DOOR_HOLD_SINCE": {},
                 "_DOOR_HOLD_MEMO_READ_AT": None,
                 "DOOR_HOLD_MEMO_KIND": "door_wedge_hold",
@@ -2374,7 +2377,7 @@ class TheErrandARunWaitsOn(unittest.TestCase):
             "log": types.SimpleNamespace(info=lambda *a, **k: None),
             "time": types.SimpleNamespace(monotonic=lambda: clock[0]),
             "_jobs_of": lambda names: {n: "dungeon:maraudon-orange" for n in names},
-            "_door_wedge_evidence": lambda leader, head_id: (
+            "_door_wedge_evidence": lambda leader, run_id: (
                 0,
                 (self.member("Oz", "on an errand of its own"),)
                 if "Oz" in aims
