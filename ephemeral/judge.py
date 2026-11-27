@@ -552,7 +552,12 @@ class Judge:
                     f"act step {i}: waits for unknown observation {cmd['when']!r}"
                 )
             targets = self._targets(cmd["who"], i)
-            if travel_guard and targets != [cmd["who"]]:
+            if travel_guard and (
+                targets != [cmd["who"]]
+                or not any(
+                    x["who"] == cmd["who"] for x in self.handoff.get("members", [])
+                )
+            ):
                 raise JudgeError(
                     f"act step {i}: travel_guard needs one named cast member"
                 )
@@ -610,7 +615,9 @@ class Judge:
         try:
             aim = self.world.write_travel_guard(name, enabled, expected=expected)
         except guard.GuardError as exc:
-            raise JudgeError(str(exc)) from exc
+            operation = "set" if enabled else "clear"
+            row["error"] = f"could not {operation} travel guard for {name}: {exc}"
+            raise JudgeError(row["error"]) from exc
         if enabled:
             self._guard_aims[name] = aim
         else:

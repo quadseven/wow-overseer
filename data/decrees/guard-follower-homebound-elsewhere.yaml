@@ -3,6 +3,7 @@
 # After the walk budget, the judge samples Ugga outside the guarded zone while
 # both guards remain set. Clearing a guard and resuming questing is a separate proof.
 # Observation aliases cast0 and cast1 refer to the leader and follower in that order.
+# Both guard acts fire at time zero before the first continuous sample.
 decree: v1
 id: guard-follower-homebound-elsewhere
 proves:
@@ -106,7 +107,7 @@ observe:
       SELECT COUNT(*) FROM overseer_snapshot s
       JOIN character_homebind h ON h.guid = @cast0
       WHERE s.guid = @cast1 AND (
-        NOW() < DATE_ADD(@t0, INTERVAL 30 MINUTE) OR
+        s.updated_at < DATE_ADD(@t0, INTERVAL 30 MINUTE) OR
         (s.map_id = h.mapId AND s.zone_id = 51 AND s.health > 0
         AND POW(s.pos_x - h.posX, 2) + POW(s.pos_y - h.posY, 2) + POW(s.pos_z - h.posZ, 2) <= 1600))
     expect: {scalar: "= 1"}

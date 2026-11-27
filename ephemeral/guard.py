@@ -232,13 +232,15 @@ class GuardedConnection:
                     raise GuardError(
                         "travel guard needs exactly one enabled roster row"
                     )
-                previous, *homebind = rows[0]
+                previous, map_id, x, y, z = rows[0]
                 if enabled:
                     if previous not in (None, ""):
                         raise GuardError(
                             "setting a travel guard needs a blank travel aim"
                         )
-                    aim = _homebind_guard(*homebind)
+                    if map_id is None:
+                        raise GuardError("travel guard needs a current homebind")
+                    aim = _homebind_guard(map_id, x, y, z)
                 else:
                     if previous != expected:
                         raise GuardError(
