@@ -90,9 +90,13 @@ class TheLedgerReading(unittest.TestCase):
             _fetch_free_slots=lambda names: {},
             _hunts_open=lambda cur: None,
         ):
-            ledger = bridge._fetch_quester_facts(["Bromli"])[2]
+            facts = bridge._fetch_quester_facts(["Bromli"])
+        ledger = facts[2]
+        reasons = facts[5]
         self.assertEqual(questers.LEDGER_STALLED, ledger[("Bromli", 128)])
         self.assertEqual("broken", ledger[("Bromli", 77)])
+        self.assertEqual(questers.STALLED, reasons[("Bromli", 128)])
+        self.assertEqual(questers.ENDER_MISSING, reasons[("Bromli", 77)])
 
 
 class KnownBroken(unittest.TestCase):
