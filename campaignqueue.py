@@ -73,6 +73,7 @@ CREATE_SQL = (
     " status ENUM('queued','active','done','cancelled') NOT NULL"
     " DEFAULT 'queued',"
     " source VARCHAR(64) NOT NULL DEFAULT '',"
+    " supervisor VARCHAR(64) NOT NULL DEFAULT '',"
     " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
     " started_at TIMESTAMP NULL DEFAULT NULL,"
     " finished_at TIMESTAMP NULL DEFAULT NULL,"
@@ -98,20 +99,20 @@ CANCEL_SQL = (
 
 INSERT_SQL = (
     "INSERT INTO overseer_dungeon_queue "
-    "(family, position, keyword, runs_wanted, source) "
-    "VALUES (%s, %s, %s, %s, %s)"
+    "(family, position, keyword, runs_wanted, source, supervisor) "
+    "VALUES (%s, %s, %s, %s, %s, %s)"
 )
 
 ITEM_INSERT_SQL = (
     "INSERT INTO overseer_dungeon_queue "
-    "(family, position, keyword, runs_wanted, source, goal_item) "
-    "VALUES (%s, %s, %s, %s, %s, %s)"
+    "(family, position, keyword, runs_wanted, source, supervisor, goal_item) "
+    "VALUES (%s, %s, %s, %s, %s, %s, %s)"
 )
 
 FIRST_KILL_INSERT_SQL = (
     "INSERT INTO overseer_dungeon_queue "
-    "(family, position, keyword, runs_wanted, source, first_kill) "
-    "VALUES (%s, %s, %s, %s, %s, 1)"
+    "(family, position, keyword, runs_wanted, source, supervisor, first_kill) "
+    "VALUES (%s, %s, %s, %s, %s, %s, 1)"
 )
 
 # Guarded on the status it moves FROM, so a queue replaced between the read
