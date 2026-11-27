@@ -580,10 +580,7 @@ class Judge:
             )
         who = cmd["who"]
         targets = self._targets(who, i)
-        if payload_field is not None and (
-            targets != [who]
-            or not any(x["who"] == who for x in self.handoff.get("members", []))
-        ):
+        if payload_field is not None and not self._is_named_target(who, targets):
             raise JudgeError(f"act step {i}: {kind} needs one named cast member")
         return targets, payload_field
 
@@ -598,6 +595,11 @@ class Judge:
                 f"act step {i}: by needs a conditional act and a valid time"
             )
         return at, by
+
+    def _is_named_target(self, who, targets):
+        return targets == [who] and any(
+            member["who"] == who for member in self.handoff.get("members", [])
+        )
 
     def _targets(self, who, i):
         members = self.handoff.get("members") or []
