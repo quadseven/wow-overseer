@@ -1,220 +1,156 @@
-"""Test that quest 183 reports the correct reason when boars are not in its zone."""
+"""Quest 183 uses the objective spawns outside its quest zone.
+
+The fixture takes QuestLevel, MinLevel, RequiredNpcOrGo and its count from the
+brief; its 57 spawn coordinates are test-only points in another zone. Its rows
+have the shapes read by questers.QUESTS_SQL,
+classquest.GIVERS_SQL, classquest.SPAWNS_SQL, classquest.STARTERS_SQL and
+questers.ENDERS_SQL. Spawn zones come from the spawn coordinates and
+places.zone_id_at; creature.zoneId is not present in classquest.Spawn.
+"""
 
 import unittest
-from unittest.mock import MagicMock
+from dataclasses import replace
 
-from questers import Broken, Catalogue, Facts, _off_home, _broken_reason, _fields_gone, _chested
+import classquest
+import places
+import questers
+from test_questers import ended, giver, quest, spawn, started, walk
+
+QUEST = 183
+BOAR = 708
+BOAR_SPAWNS = 57
+DUN_MOROGH = 1
+ELWYNN = 12
+DUN_MOROGH_POINT = (-5600.0, -500.0)
+ELWYNN_POINT = (-9500.0, 0.0)
+GIVER = 7108
 
 
-class TestQuest183(unittest.TestCase):
-    """Quest 183: The Boar Hunter"""
-
-    def test_off_home_maps_spawns_on_different_map(self):
-        """_off_home should report spawns that are not on the quest's home map."""
-        facts = Facts(
-            zone=1,
+def boar_world():
+    """A synthetic fixture matching the brief's objective and spawn counts."""
+    row = quest(
+        QUEST,
+        DUN_MOROGH,
+        3,
+        min_level=1,
+        kill=BOAR,
+        count=12,
+        title="The Boar Hunter",
+    )
+    givers = [
+        giver(QUEST, "start", 7183, GIVER, *DUN_MOROGH_POINT),
+        giver(QUEST, "end", 7184, GIVER, *DUN_MOROGH_POINT),
+    ]
+    spawns = [
+        spawn(
+            8000 + index,
+            BOAR,
+            ELWYNN_POINT[0] + index * 4.0,
+            ELWYNN_POINT[1],
             level=3,
-            home_map=0,
-            classes=0,
-            max_level=0,
-            prev=0,
-            giver_named=False,
-            ender_npcs=False,
-            ender_objects=False,
-            object_enders=(),
-            object_unspawned=False,
-            before=(),
-            provided_item=0,
-            chain_next=0,
-            chain_before=(),
-            breadcrumb_for=0,
-            breadcrumbs=(),
-            min_rep=0,
-            max_rep=0,
-            scripted_event=False,
         )
-        # Create a mock quest with spawns on a different map
-        mock_quest = MagicMock(
-            id=183,
-            title="The Boar Hunter",
-            kills=[(708, 12)],  # Kill 12 Small Crag Boar
-            items=[],
-            uses=[],
-            fields=[
-                MagicMock(entry=708, map_id=1, guid=1),  # Spawns on map 1
-                MagicMock(entry=708, map_id=1, guid=2),
-                MagicMock(entry=708, map_id=1, guid=3),
+        for index in range(BOAR_SPAWNS)
+    ]
+    return questers.catalogue(
+        [row],
+        givers,
+        spawns,
+        [],
+        [started(QUEST, GIVER)],
+        [ended(QUEST, GIVER)],
+    )
+
+
+def quester(**values):
+    defaults = {
+        "name": "FixtureQuester",
+        "level": 3,
+        "race": 3,
+        "class_id": 1,
+        "map_id": 0,
+        "x": DUN_MOROGH_POINT[0],
+        "y": DUN_MOROGH_POINT[1],
+        "zone_id": DUN_MOROGH,
+        "online": True,
+    }
+    defaults.update(values)
+    return questers.Member(**defaults)
+
+
+class BoarHunterQuest(unittest.TestCase):
+    def test_quester_can_finish_by_hunting_spawns_outside_quest_zone(self):
+        cat = boar_world()
+        self.assertEqual(places.zone_id_at(0, *DUN_MOROGH_POINT), DUN_MOROGH)
+        self.assertEqual(places.zone_id_at(0, *ELWYNN_POINT), ELWYNN)
+        self.assertEqual(len(cat.quest(QUEST).fields), BOAR_SPAWNS)
+
+        moves, result = walk(quester(), cat)
+
+        self.assertIn((classquest.TAKE, QUEST), moves)
+        self.assertIn((classquest.HUNT, QUEST), moves)
+        self.assertIn((classquest.TURN_IN, QUEST), moves)
+        self.assertIn(QUEST, result.quests_done)
+
+    def test_stall_reason_explains_no_boar_spawn_in_quest_zone(self):
+        cat = boar_world()
+        holder = quester(
+            quest_log={QUEST: questers.STATUS_INCOMPLETE},
+            quest_progress={QUEST: 0},
+        )
+        clock = questers.Clock()
+        broken = []
+        for seconds in range(0, questers.STALL_SECONDS + 1, 600):
+            broken = questers.failures(cat, holder, clock, seconds, last_quest=QUEST)
+
+        self.assertEqual(
+            [entry.ledger_reason for entry in broken],
+            [
+                "%s; its objective creature %d has no spawn in the quest's zone "
+                "(%d total in other zones)" % (questers.STALLED, BOAR, BOAR_SPAWNS)
             ],
-            enders=(),
-            races=0,
-            requirements=MagicMock(),
-            chain_next=MagicMock(),
-            next_quest=MagicMock(),
-            exclusive=MagicMock(),
         )
-        mock_quest.fields = mock_quest.fields
-        mock_quest.uses = []
 
-        # All spawns are on map 1, but home_map is 0, so they're off home
-        out = _off_home(mock_quest, facts)
-        self.assertEqual(len(out), 1)
-        self.assertEqual(out[0], (708, 3))  # 3 spawns reported as off home
-
-    def test_off_home_maps_spawns_on_same_map(self):
-        """_off_home should not report spawns that are on the quest's home map."""
-        facts = Facts(
-            zone=1,
-            level=3,
-            home_map=1,  # Same map as spawns
-            classes=0,
-            max_level=0,
-            prev=0,
-            giver_named=False,
-            ender_npcs=False,
-            ender_objects=False,
-            object_enders=(),
-            object_unspawned=False,
-            before=(),
-            provided_item=0,
-            chain_next=0,
-            chain_before=(),
-            breadcrumb_for=0,
-            breadcrumbs=(),
-            min_rep=0,
-            max_rep=0,
-            scripted_event=False,
+    def test_unknown_spawn_locations_do_not_claim_the_quest_zone_is_empty(self):
+        cat = boar_world()
+        original = cat.quest(QUEST)
+        unknown = replace(original.fields[-1], x=1e9, y=1e9)
+        quest_with_unknown_spawn = replace(
+            original, fields=(*original.fields[:-1], unknown)
         )
-        # Create a mock quest with spawns on the same map
-        mock_quest = MagicMock(
-            id=183,
-            title="The Boar Hunter",
-            kills=[(708, 12)],
-            items=[],
-            uses=[],
-            fields=[
-                MagicMock(entry=708, map_id=1, guid=1),  # Spawns on map 1
-                MagicMock(entry=708, map_id=1, guid=2),
-                MagicMock(entry=708, map_id=1, guid=3),
-            ],
-            enders=(),
-            races=0,
-            requirements=MagicMock(),
-            chain_next=MagicMock(),
-            next_quest=MagicMock(),
-            exclusive=MagicMock(),
+
+        reason = questers._broken_reason(
+            quest_with_unknown_spawn,
+            cat.facts[QUEST],
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
         )
-        mock_quest.fields = mock_quest.fields
-        mock_quest.uses = []
 
-        # All spawns are on map 1, and home_map is also 1
-        out = _off_home(mock_quest, facts)
-        self.assertEqual(len(out), 0)  # No spawns off home
+        self.assertEqual(reason, questers.STALLED)
 
-    def test_fields_gone(self):
-        """_fields_gone should return True when all spawns are marked as gone."""
-        mock_quest = MagicMock(
-            id=183,
-            title="The Boar Hunter",
-            kills=[(708, 12)],
-            items=[],
-            uses=[],
-            fields=[
-                MagicMock(entry=708, map_id=1, guid=1),
-                MagicMock(entry=708, map_id=1, guid=2),
-                MagicMock(entry=708, map_id=1, guid=3),
-            ],
-            enders=(),
-            races=0,
-            requirements=MagicMock(),
-            chain_next=MagicMock(),
-            next_quest=MagicMock(),
-            exclusive=MagicMock(),
+    def test_a_spawn_in_the_quest_zone_suppresses_the_zone_note(self):
+        cat = boar_world()
+        original = cat.quest(QUEST)
+        in_zone = replace(
+            original.fields[0],
+            x=DUN_MOROGH_POINT[0],
+            y=DUN_MOROGH_POINT[1],
         )
-        mock_quest.fields = mock_quest.fields
-        mock_quest.uses = []
-
-        gone = {1, 2, 3}
-        result = _fields_gone(mock_quest, gone)
-        self.assertTrue(result)
-
-    def test_not_fields_gone(self):
-        """_fields_gone should return False when not all spawns are gone."""
-        mock_quest = MagicMock(
-            id=183,
-            title="The Boar Hunter",
-            kills=[(708, 12)],
-            items=[],
-            uses=[],
-            fields=[
-                MagicMock(entry=708, map_id=1, guid=1),
-                MagicMock(entry=708, map_id=1, guid=2),
-                MagicMock(entry=708, map_id=1, guid=3),
-            ],
-            enders=(),
-            races=0,
-            requirements=MagicMock(),
-            chain_next=MagicMock(),
-            next_quest=MagicMock(),
-            exclusive=MagicMock(),
+        quest_with_in_zone_spawn = replace(
+            original, fields=(in_zone, *original.fields[1:])
         )
-        mock_quest.fields = mock_quest.fields
-        mock_quest.uses = []
 
-        gone = {1}
-        result = _fields_gone(mock_quest, gone)
-        self.assertFalse(result)
-
-    def test_chested_quest(self):
-        """_chested should return True for quests with chest objectives."""
-        mock_quest = MagicMock(
-            id=183,
-            title="The Boar Hunter",
-            kills=[(708, 12)],
-            items=[],
-            uses=[
-                MagicMock(
-                    verb="use-gameobject",
-                    item=1,
-                    spots=[MagicMock(guid=1)],
-                )
-            ],
-            fields=[],
-            enders=(),
-            chest=None,
-            races=0,
-            requirements=MagicMock(),
-            chain_next=MagicMock(),
-            next_quest=MagicMock(),
-            exclusive=MagicMock(),
+        reason = questers._broken_reason(
+            quest_with_in_zone_spawn,
+            cat.facts[QUEST],
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
         )
-        mock_quest.fields = mock_quest.fields
-        mock_quest.uses = mock_quest.uses
 
-        result = _chested(mock_quest)
-        self.assertTrue(result)
-
-    def test_no_chest(self):
-        """_chested should return False for quests without chests."""
-        mock_quest = MagicMock(
-            id=183,
-            title="The Boar Hunter",
-            kills=[(708, 12)],
-            items=[],
-            uses=[],
-            fields=[],
-            enders=(),
-            chest=None,
-            races=0,
-            requirements=MagicMock(),
-            chain_next=MagicMock(),
-            next_quest=MagicMock(),
-            exclusive=MagicMock(),
-        )
-        mock_quest.fields = mock_quest.fields
-        mock_quest.uses = []
-
-        result = _chested(mock_quest)
-        self.assertFalse(result)
+        self.assertEqual(reason, questers.STALLED)
 
 
 if __name__ == "__main__":

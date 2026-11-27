@@ -825,8 +825,11 @@ class Broken(unittest.TestCase):
         self.assertEqual(p.broken, ())
         p, _ = self._play(hunting, 120)
         self.assertEqual(
-            [(b.quest, b.reason, b.held) for b in p.broken],
-            [(1, questers.STALLED, True)],
+            [
+                (b.quest, b.reason.startswith(questers.STALLED), b.held)
+                for b in p.broken
+            ],
+            [(1, True, True)],
         )
         self.assertEqual((p.move.kind, p.move.quest), (classquest.ABANDON, 1))
         self.assertIn(questers.STALLED, p.move.said)
@@ -860,7 +863,9 @@ class Broken(unittest.TestCase):
 
         self.assertEqual(
             p.broken[0].reason,
-            "%s; objective route is blocked: %s" % (questers.STALLED, NO_TRANSPORT),
+            "%s; its objective creature 200 has no spawn in the quest's zone "
+            "(1 total in other zones); objective route is blocked: %s"
+            % (questers.STALLED, NO_TRANSPORT),
         )
 
     def test_dusky_crab_cakes_ledger_explains_the_unsupported_cooking_step(self):
@@ -1132,7 +1137,12 @@ class Broken(unittest.TestCase):
         # quest 2 is never found broken and never filed (2026-11-02: a dozen
         # quests a quester had not yet gone after were filed as stalled).
         self._play(mirra(quest_log={1: 3, 2: 3}, quests_done=frozenset({3})), 130)
-        self.assertIn((1, questers.STALLED), self.found)
+        self.assertTrue(
+            any(
+                q == 1 and reason.startswith(questers.STALLED)
+                for q, reason in self.found
+            )
+        )
         self.assertNotIn(2, [q for q, _reason in self.found])
 
     def test_a_quest_it_cannot_hunt_still_stalls_while_it_hunts_another(self):
@@ -2120,7 +2130,12 @@ class VendorOnlyItemQuest(unittest.TestCase):
             {},
             vendor_item=COARSE_THREAD,
         )
-        self.assertEqual(reason, questers.STALLED_UNSOURCED)
+        self.assertEqual(
+            reason,
+            questers.STALLED_UNSOURCED
+            + "; its objective creature 200 has no spawn in the quest's zone "
+            "(1 total in other zones)",
+        )
 
     def test_a_stall_with_a_huntable_objective_and_no_vendor_item_stays_stalled(self):
         cat = thread_world()
@@ -2132,7 +2147,12 @@ class VendorOnlyItemQuest(unittest.TestCase):
             frozenset(),
             {},
         )
-        self.assertEqual(reason, questers.STALLED)
+        self.assertEqual(
+            reason,
+            questers.STALLED
+            + "; its objective creature 200 has no spawn in the quest's zone "
+            "(1 total in other zones)",
+        )
 
 
 if __name__ == "__main__":

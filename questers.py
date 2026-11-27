@@ -80,7 +80,9 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     its log, of the zone it stands in, and has no objective spawn the quester
     could hunt (`_working`): nothing works that one, so its clock is the
     world's, not the quester's. A quest whose objective spawns are on its map
-    but all over its level is waiting for its levels, and its clock waits too;
+    but all over its level is waiting for its levels, and its clock waits too.
+    If all located spawns of an objective are outside the quest's zone, that
+    world fact is added to the stall reason;
   * GIVER_MISSING: a creature is named as its giver, none is spawned, and
     no gameobject or item starts it either;
   * ENDER_MISSING: nothing is named to hand it in to, or the creature named is
@@ -163,6 +165,7 @@ import guildjobs
 import guildlevel
 import guildroute
 import levelroute
+import places
 import questlog
 import vendorsale
 import weaponskill
@@ -267,9 +270,11 @@ OFF_HOME_MAP = (
     "its objective creature %d has no spawn on the quest's map (%d on other maps)"
 )
 # The world rows' fact added to STALLED for an objective creature with spawns
-# but none in the quester's current zone.
-NO_SPAWNS_HERE = (
-    "its objective creature %d has no spawn in this zone (%d total)"
+# but none in the quest's zone. Creature.zoneId is unset on many rows, so the
+# spawn's coordinates are resolved through the zone geometry.
+NO_SPAWNS_IN_QUEST_ZONE = (
+    "its objective creature %d has no spawn in the quest's zone "
+    "(%d total in other zones)"
 )
 STALLED = "its objectives did not move for 2 hours of play"
 NO_OBJECTIVES = "the world rows define no required creature, item, or object objective a quester can work"
@@ -1949,13 +1954,17 @@ def _off_home(quest, facts: Facts) -> list:
     return out
 
 
-def _no_spawns_here(quest, facts: Facts, zone: int) -> list:
-    """(creature entry, spawn count) of each objective creature with spawns,
-    none of them in the quester's current zone (facts.zone)."""
+def _off_quest_zone(quest, facts: Facts) -> list:
+    """(creature entry, spawn count) for objectives with all spawn locations
+    known and outside the quest's zone. Spawn zones come from their coordinates,
+    not creature.zoneId, which is unset on many world rows."""
+    if facts.zone <= 0:
+        return []
     out = []
     for entry, _n in quest.kills:
         spawns = [s for s in quest.fields if s.entry == entry]
-        if spawns and not any(int(s.zone_id) == zone for s in spawns):
+        zones = [places.zone_id_at(s.map_id, s.x, s.y) for s in spawns]
+        if spawns and all(zones) and facts.zone not in zones:
             out.append((entry, len(spawns)))
     return out
 
@@ -2039,15 +2048,6 @@ def _broken_reason(
     complete = _quest_complete(quest, status, progress)
     if missing and not (not complete and facts.object_unspawned):
         return missing
-    # A stall when spawns exist but none are in the quester's current zone.
-    if (
-        not complete
-        and played >= STALL_SECONDS
-        and _fields_gone(quest, gone) is False
-        and facts.zone > 0
-        and _no_spawns_here(quest, facts, facts.zone)
-    ):
-        return "; ".join([STALLED, *[_NO_SPAWNS_HERE % (entry, n) for entry, n in _no_spawns_here(quest, facts, facts.zone)]])
     if not complete and _fields_gone(quest, gone):
         return SOURCE_MISSING
     if quest.id in (final or {}):
@@ -2068,7 +2068,12 @@ def _broken_reason(
     unsourced = bool(vendor_item) or (
         (quest.kills or quest.items) and not quest.fields and not _chested(quest)
     )
-    return STALLED_UNSOURCED if unsourced else STALLED
+    reason = STALLED_UNSOURCED if unsourced else STALLED
+    zone_notes = [
+        NO_SPAWNS_IN_QUEST_ZONE % (entry, count)
+        for entry, count in _off_quest_zone(quest, facts)
+    ]
+    return "; ".join([reason, *zone_notes])
 
 
 def _refused_words(reason, words) -> str:
