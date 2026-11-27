@@ -134,17 +134,11 @@ def _job_quota_usage(job, field):
             init_peak = max(init_peak, sidecars + allocated)
     steady = sidecars + sum(amount(c) for c in spec.get("containers", []))
     total = max(steady, init_peak)
-    if kind == "requests" or total:
-        total += _quota_quantity(field, (spec.get("overhead") or {}).get(resource, 0))
-    return total
-
-
-def job_requests(job):
-    """Return the pod's requested CPU cores and memory bytes."""
-    return (
-        _job_quota_usage(job, "requests.cpu") / 1000,
-        _job_quota_usage(job, "requests.memory"),
-    )
+    # Kubernetes PodRequests always adds overhead. PodLimits only adds it
+    # to an existing nonzero limit, so overhead cannot create a limit.
+    if kind == "limits" and total == 0:
+        return 0
+    return total + _quota_quantity(field, (spec.get("overhead") or {}).get(resource, 0))
 
 
 def _reserve_quota(used_extra, job):
@@ -384,10 +378,7 @@ class Dispatcher:
                     self._held.add(j["metadata"]["name"])
         return [j for j in jobs if j["metadata"]["name"] not in gone]
 
-    def _admit(self, jobs):
-        cfg = self.cfg
-        quota = self._quota()
-        now = self.clock()
+    def _running_reservations(self, jobs, quota, now):
         per_node, reserved, used_extra = {}, {}, dict.fromkeys(quota or (), 0)
         for j in jobs:
             if not is_running(j):
@@ -401,8 +392,16 @@ class Dispatcher:
             if node is None:
                 continue
             per_node[node.name] = per_node.get(node.name, 0) + 1
-            if st.get("startTime") and now - _ts(st["startTime"]) < cfg.settle_seconds:
+            start = st.get("startTime")
+            if start and now - _ts(start) < self.cfg.settle_seconds:
                 reserved[node.name] = reserved.get(node.name, 0) + job_disk(j)
+        return per_node, reserved, used_extra
+
+    def _admit(self, jobs):
+        cfg = self.cfg
+        quota = self._quota()
+        now = self.clock()
+        per_node, reserved, used_extra = self._running_reservations(jobs, quota, now)
         started = []
         for j in jobs:
             if j["spec"].get("suspend") is not True or finished(j):

@@ -172,7 +172,8 @@ class BudgetTest(Base):
         self.assertFalse(self.suspended("222222-c1"))
 
     def test_ordinary_init_overlaps_earlier_sidecars_and_pod_overhead(self):
-        spec = job("aa0010-c1", "control")["spec"]["template"]["spec"]
+        queued = job("aa0010-c1", "control")
+        spec = queued["spec"]["template"]["spec"]
         spec["initContainers"] = [
             {"restartPolicy": "Always", "resources": {"requests": {"cpu": "600m", "memory": "200Mi"}}},
             {"resources": {"requests": {"cpu": "800m", "memory": "700Mi"}}},
@@ -182,9 +183,10 @@ class BudgetTest(Base):
             {"resources": {"requests": {"cpu": "100m", "memory": "100Mi"}}}
         ]
         spec["overhead"] = {"cpu": "50m", "memory": "64Mi"}
-        cpu, memory = dispatch.job_requests({"spec": {"template": {"spec": spec}}})
-        self.assertAlmostEqual(cpu, 1.45)
-        self.assertEqual(memory, 964 * 1024**2)
+        self.assertEqual(dispatch._job_quota_usage(queued, "requests.cpu"), 1450)
+        self.assertEqual(
+            dispatch._job_quota_usage(queued, "requests.memory"), 964 * 1024**2
+        )
 
 
 class StorageQuotaTest(Base):
@@ -242,6 +244,25 @@ class StorageQuotaTest(Base):
         self.add("aa0007-c1", "control")
         self.assertEqual(self.tick(), [])
         self.assertTrue(self.suspended("aa0007-c1"))
+
+    def test_storage_limit_includes_overhead_at_quota_boundary(self):
+        status = self.quota("limits.ephemeral-storage", "4Gi", "321Mi")
+        self.add("aa0013-c1", "control")
+        queued = self.c.of("jobs")[0]
+        queued["spec"]["template"]["spec"]["overhead"] = {"ephemeral-storage": "64Mi"}
+        self.assertEqual(self.tick(), [])
+        status["used"]["limits.ephemeral-storage"] = "320Mi"
+        self.assertEqual(self.tick(), ["aa0013-c1"])
+
+    def test_overhead_does_not_create_a_storage_limit(self):
+        queued = job("aa0014-c1", "control")
+        spec = queued["spec"]["template"]["spec"]
+        spec["overhead"] = {"ephemeral-storage": "64Mi"}
+        for container in spec["initContainers"] + spec["containers"]:
+            del container["resources"]["limits"]
+        self.assertEqual(
+            dispatch._job_quota_usage(queued, "limits.ephemeral-storage"), 0
+        )
 
     def test_namespace_pod_quota_counts_one_for_each_new_world(self):
         self.quota("pods", "2", "1")
