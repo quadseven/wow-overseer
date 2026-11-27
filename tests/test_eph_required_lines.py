@@ -9,28 +9,37 @@ is listed here beside the format string of each call that writes its line, and:
 - the format string must still be in the pinned source, at that level and on
   that logger, so a reworded line turns this file red before it turns a
   proving run red;
-- the logger must reach the one log the judge reads (the file appender that
-  `submit.BASELINE` adds), at a level that keeps the line;
+- the line must reach a log the judge reads, at a level that keeps it: the
+  file appender that `submit.BASELINE` adds for a module or playerbots line,
+  and the bridge sidecar's log (read on a bridge-on decree only, see
+  `judge.log_reader`) for a bridge line;
 - the pattern must match the line as the source formats it, and must not match
   the sibling line the same code writes when the thing did not happen.
 
-The pinned sources are the mod-overseer submodule and the test copies of the
-playerbots patches under patches/. Lines of the bridge, of the core and of the
-dungeon module are not in this repo or not in the log the judge reads; the
-decrees whose criteria rest on them are listed in STILL_NARROWED.
+The pinned sources are the mod-overseer submodule at its pinned commit, the
+test copies of the playerbots patches under patches/, and the bridge
+(bridge.py and the modules it formats with). A bounded check whose line is
+written by none of them (a core line, a dungeon module line, or a module line
+from a commit newer than the pin) is listed in UNPINNABLE with that reason, so
+a new check is either pinned or named there, never silently neither.
+Decrees whose header still says a criterion was narrowed are listed in
+STILL_NARROWED.
 """
 
 import pathlib
 import re
 import unittest
+import tempfile
 from typing import NamedTuple
 
+import flightlearn
 import modsource
 from ephemeral import judge, lint, podpaths, submit
 from ephemeral.miniyaml import loads
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DECREE_DIR = ROOT / "data" / "decrees"
+BRIDGE = ROOT / "bridge.py"
 REFLECT_PATCH = (
     ROOT
     / "patches"
@@ -40,6 +49,14 @@ REFLECT_PATCH = (
 
 # The core's log levels, as the `Logger.<name>` config value counts them.
 LEVELS = {"FATAL": 1, "ERROR": 2, "WARN": 3, "INFO": 4, "DEBUG": 5, "TRACE": 6}
+# The bridge's `log.<method>` calls, by the same names.
+PY_LEVELS = {
+    "critical": "FATAL",
+    "error": "ERROR",
+    "warning": "WARN",
+    "info": "INFO",
+    "debug": "DEBUG",
+}
 
 _LITERAL = r'"(?:[^"\\\n]|\\.)*"'
 _CALL = re.compile(
@@ -62,6 +79,24 @@ def log_calls(text):
     return found
 
 
+_PY_CALL = re.compile(
+    r"\blog\.(" + "|".join(PY_LEVELS) + r")\(\s*((?:" + _LITERAL + r"\s*)+)"
+)
+
+
+def bridge_log_calls(text):
+    """Every (level, logger, format) the bridge logs with a literal format on its `log`.
+
+    `log` is the bridge's one module logger; the test that reads bridge.py
+    checks that it is still `logging.getLogger("wow-overseer")`.
+    """
+    found = set()
+    for m in _PY_CALL.finditer(text):
+        fmt = "".join(s[1:-1] for s in re.findall(_LITERAL, m.group(2)))
+        found.add((PY_LEVELS[m.group(1)], "wow-overseer", fmt))
+    return found
+
+
 def patch_added_text(text):
     """The lines a patch adds, without their leading plus sign."""
     return "\n".join(
@@ -74,13 +109,15 @@ def patch_added_text(text):
 class Line(NamedTuple):
     """One logging call: where it is, what it formats, and sample arguments."""
 
-    source: str  # "module" or "reflect-patch"
+    source: str  # "module", "reflect-patch" or "bridge"
     level: str
     logger: str
     fmt: str
     args: tuple
 
     def rendered(self):
+        if self.source == "bridge":
+            return self.fmt % self.args  # the bridge formats %-style
         holes = _PLACEHOLDER.findall(self.fmt)
         if len(holes) != len(self.args):
             raise AssertionError(
@@ -94,6 +131,10 @@ def module(level, fmt, *args):
     return Line("module", level, "module.overseer", fmt, args)
 
 
+def bridge(level, fmt, *args):
+    return Line("bridge", level, "wow-overseer", fmt, args)
+
+
 class Pin(NamedTuple):
     """The calls that write a check's line, and the sibling lines it must ignore."""
 
@@ -102,6 +143,37 @@ class Pin(NamedTuple):
 
 
 SHIP = "Ship (The Lady Mehley)"
+NOT_READ = "its way across was not read"
+PARTY_SPLIT = (
+    "overseer: '{}' is on map {} and its leader '{}' is on map {} - THE "
+    "PARTY IS SPLIT ACROSS TWO MAPS AND THIS MEMBER IS NOT CROSSING: {}. "
+    "`follow` cannot cross a map and an `at:` aim cannot name a coordinate "
+    "on another one, so following, a catch-up walk, an escort and a WALKED "
+    "dungeon run are blocked for it until it crosses; a run by the dungeon "
+    "finder is not, because the finder takes a family in from wherever each "
+    "member stands (Overseer.DungeonFinder.Default). AN ERRAND IT CAN RUN "
+    "ALONE ON THIS MAP IS NOT BLOCKED EITHER: it may still be sent to an "
+    "innkeeper, a vendor, a repairer or a trainer under its own aim, and "
+    "binding at an innkeeper on its leader's continent is what lets its "
+    "hearthstone bring it back (#241, #274, #289)"
+)
+BARRIER_SATISFIED = (
+    "overseer: dungeon run BARRIER satisfied - all {} roster members "
+    "alive, out of combat and within {:.0f}y of the staging point{}. ENTER "
+    "takes them the last {}y to areatrigger {} and knocks for all of "
+    "them at once, followers first and the leader last"
+)
+BARRIER_HOLDS = "overseer: dungeon run BARRIER holds - {}"
+RUN_OVER = (
+    "overseer: all {} roster members came back out through "
+    "areatrigger {} and are on map {} - the run is over"
+)
+
+
+def flight_report(**errand):
+    """The second argument of the bridge's flight line, as flightlearn writes it."""
+    return flightlearn.report(flightlearn.Errand(**errand))
+
 
 # (decree id, observation name) -> the code that writes the line.
 PINS = {
@@ -433,23 +505,115 @@ PINS = {
             ),
         ),
     ),
+    ("cross-map-party-split-is-reported", "each-follower-reports-the-split"): Pin(
+        writers=(module("ERROR", PARTY_SPLIT, "Ugga", 1, "Zug", 0, NOT_READ),),
+        # The same call about a split the other way round is not this one.
+        ignores=(module("ERROR", PARTY_SPLIT, "Ugga", 0, "Zug", 1, NOT_READ),),
+    ),
+    ("deadmines-early-entrant-barrier", "barrier-names-the-early-entrant"): Pin(
+        writers=(
+            module(
+                "INFO", BARRIER_SATISFIED, 5, "10", " or inside already (Zork)", 4, 78
+            ),
+            # The holds line's text is DungeonRunBarrierHolds: the blockers, then
+            # "inside already, counted as staged: <names>".
+            module(
+                "INFO",
+                BARRIER_HOLDS,
+                "Ugga (24y out); inside already, counted as staged: Zork",
+            ),
+        ),
+        ignores=(
+            # A member inside but dead is a blocker, not staged, and the
+            # pattern wants the name after "inside already".
+            module("INFO", BARRIER_HOLDS, "Zork (dead, inside already)"),
+            module("INFO", BARRIER_SATISFIED, 5, "10", "", 4, 78),
+            module("INFO", BARRIER_HOLDS, "Zork (not seen)"),
+        ),
+    ),
+    (
+        "long-dungeon-exits-count-walking-progress",
+        "maraudon-party-walks-out-through-trigger-3131",
+    ): Pin(
+        writers=(module("INFO", RUN_OVER, 5, 3131, 0),),
+        ignores=(module("INFO", RUN_OVER, 5, 288, 0),),
+    ),
+    (
+        "long-dungeon-exits-count-walking-progress",
+        "uldaman-party-walks-out-through-trigger-288",
+    ): Pin(
+        writers=(module("INFO", RUN_OVER, 5, 288, 0),),
+        ignores=(module("INFO", RUN_OVER, 5, 3131, 0),),
+    ),
+    (
+        "razorfen-downs-exits-and-restarts-together",
+        "all-five-walk-out-through-trigger-444",
+    ): Pin(
+        writers=(module("INFO", RUN_OVER, 5, 444, 0),),
+        ignores=(module("INFO", RUN_OVER, 4, 444, 0),),
+    ),
+    # A bridge line, read by the judge because the decree is bridge-on.
+    ("family-learns-unknown-flight-node", "the-flight-pass-asked-for-node-forty"): Pin(
+        writers=(
+            bridge(
+                "INFO",
+                "flight: leader=%s - %s",
+                "Zug",
+                flight_report(
+                    aim="Bulkrek Ragefist", node=40, node_name="Gadgetzan", yards=2210.0
+                ),
+            ),
+            # A pass whose town slot was held still chose node 40, and the
+            # pattern counts that line too. That the node was learned is the
+            # decree's taximask check, not this one.
+            bridge(
+                "INFO",
+                "flight: leader=%s could not be aimed at the flight master "
+                "teaching taxi node %d this pass, so the family's flight "
+                "network does not grow and the next long trip is another walk",
+                "Zug",
+                40,
+            ),
+        ),
+        ignores=(
+            # A refused errand is logged as its refusal sentence alone, and no
+            # refusal in flightlearn names a taxi node.
+            bridge(
+                "INFO",
+                "flight: leader=%s - %s",
+                "Zug",
+                flight_report(refused="no flight master the family lacks is in reach"),
+            ),
+            bridge(
+                "INFO",
+                "flight: taxi node %d waits for the family's bags - %s",
+                40,
+                "two seats are full",
+            ),
+            bridge(
+                "INFO",
+                "flight: leader=%s - %s",
+                "Zug",
+                flight_report(aim="Bragok", node=41, node_name="Ratchet", yards=900.0),
+            ),
+        ),
+    ),
 }
 
 # Decrees whose header still says a criterion was narrowed for want of a
 # positive log check, and why `at_least` does not restore it from this repo.
 STILL_NARROWED = {
-    # The line is bridge text. The judge reads one file, the worldserver's own
-    # appender, and the bridge does not write to it.
-    "guild-brd-keyed-wing": "bridge log",
-    "raid-order-seats-arrive-at-door": "bridge log",
-    "raid-prep-mail-and-bank-cycle": "bridge log",
+    # The line is bridge text. These decrees are bridge-on, and since #3062 the
+    # judge reads the bridge sidecar's log on a bridge-on decree, so a pattern
+    # pinned to the bridge call can now restore them; that is not done here.
+    "guild-brd-keyed-wing": "bridge line, not yet restored",
+    "raid-order-seats-arrive-at-door": "bridge line, not yet restored",
+    "raid-prep-mail-and-bank-cycle": "bridge line, not yet restored",
     # The line is written by the dungeon module, whose source is not in this repo.
     "blackfathom-gelihast-stranded-rescue": "dungeon module source not here",
     "brd-ale-run-rested-party": "dungeon module source not here",
     "brd-paladin-without-redemption": "dungeon module source not here",
     "deadmines-gunpowder-no-opener": "dungeon module source not here",
-    # The core writes these, its source is not in this repo, and the decree
-    # sends the two loggers to appenders the judge does not read.
     # The orders this decree gives are not the roster errands whose lines name
     # the recipe, so no emitter can be tied to what the decree does.
     "trainer-recipe-and-vendor-manual": "the act does not reach a pinned emitter",
@@ -457,26 +621,72 @@ STILL_NARROWED = {
     "family-boat-crossing": "forbids a line only",
 }
 
-# Bounded log checks that main gained after the pinning above was written and
-# whose emitter is not in a source this file reads (the wording is not in the
-# pinned module source, or the line is written by the core, the bridge or the
-# dungeon module). Each is listed so a new unpinned check is a red test, not a
-# silent one; pin an entry (and delete it here) when its emitter is reachable.
-UNPINNED = {
-    "alliance-brd-campaign-home": "emitter not in the pinned module source",
-    "brd-core-fragment-chest": "emitter not in the pinned module source",
-    "brd-fineous-ironfel-pickup": "dungeon module source not here",
-    "class-trainer-crosses-map-and-learns": "emitter not in the pinned module source",
-    "cross-map-party-split-is-reported": "emitter not in the pinned module source",
-    "cross-map-stranded-member-names-its-way": "emitter not in the pinned module source",
-    "deadmines-early-entrant-barrier": "emitter not in the pinned module source",
-    "fall-death-logger-capture": "core source not here",
-    "family-learns-unknown-flight-node": "emitter not in the pinned module source",
-    "ghost-healer-walk-hold-is-timed": "emitter not in the pinned module source",
-    "long-dungeon-exits-count-walking-progress": "emitter not in the pinned module source",
-    "open-world-tank-avoids-out-of-range-melee": "core source not here",
-    "razorfen-downs-exits-and-restarts-together": "emitter not in the pinned module source",
-    "stratholme-yard-hearth-names-its-reason": "emitter not in the pinned module source",
+
+class Unpinnable(NamedTuple):
+    """Why a bounded check has no emitter this file can read."""
+
+    kind: str  # one of UNPINNABLE_KINDS
+    why: str
+
+
+# Each reason a bounded check cannot be pinned from this repo. A line the
+# bridge writes is not one of them: the bridge's source is here, so it is pinned.
+CORE = "core line"
+DUNGEON_MODULE = "dungeon module line"
+NEWER_MODULE = "module commit newer than the pin"
+# No source here writes it, and the decree does not say which outside one does.
+OUTSIDE = "core or playerbots line"
+UNPINNABLE_KINDS = {CORE, DUNGEON_MODULE, NEWER_MODULE, OUTSIDE}
+
+# Bounded log checks whose line no source in this repo writes. Each is named
+# with its reason so a new unpinned check is a red test, not a silent one. A
+# NEWER_MODULE entry names the mod-overseer commit that added the wording: pin
+# it (and delete it here) when the submodule pin reaches that commit.
+UNPINNABLE = {
+    (
+        "alliance-brd-campaign-home",
+        "alliance-named-home-refusal-was-recorded",
+    ): Unpinnable(NEWER_MODULE, "mod-overseer c85d8a8 (#1401)"),
+    ("brd-core-fragment-chest", "the-run-logged-a-fragment-loot"): Unpinnable(
+        NEWER_MODULE, "mod-overseer 64eb9ea (#1464)"
+    ),
+    (
+        "brd-fineous-ironfel-pickup",
+        "the-module-opened-fineous-corpse-for-ironfel",
+    ): Unpinnable(NEWER_MODULE, "mod-overseer 134f5d5 (#1455)"),
+    (
+        "class-trainer-crosses-map-and-learns",
+        "a-cross-map-class-trainer-walk-was-issued",
+    ): Unpinnable(NEWER_MODULE, "mod-overseer fa16ae7 (#1586)"),
+    (
+        "cross-map-stranded-member-names-its-way",
+        "each-follower-gets-the-bounded-reason-line",
+    ): Unpinnable(NEWER_MODULE, "mod-overseer a68528d (#1369)"),
+    (
+        "ghost-healer-walk-hold-is-timed",
+        "hostile-held-ghost-writes-timed-status",
+    ): Unpinnable(NEWER_MODULE, "mod-overseer 40b1d97 (#1289)"),
+    (
+        "stratholme-yard-hearth-names-its-reason",
+        "the-yard-hearth-line-names-the-yard",
+    ): Unpinnable(NEWER_MODULE, "mod-overseer 1d7ab3e (#1280)"),
+    # The core's entities.player and movement.motionmaster loggers. The decree
+    # sends them to the Console and Server appenders, not to the EphModule file
+    # the judge reads, so as written these checks can never find the line.
+    ("fall-death-logger-capture", "fall-damage-debug-line-is-present"): Unpinnable(
+        CORE, "FALLDAMAGE debug line of the core's entities.player logger"
+    ),
+    ("fall-death-logger-capture", "motionmaster-movefall-line-is-present"): Unpinnable(
+        CORE, "MoveFall line of the core's movement.motionmaster logger"
+    ),
+    (
+        "open-world-tank-avoids-out-of-range-melee",
+        "casting-creature-fight-started",
+    ): Unpinnable(
+        OUTSIDE,
+        "no call in the pinned module, the patches or the bridge writes a line "
+        "naming Azuregos casting",
+    ),
 }
 _NARROWED_WORDS = re.compile(
     r"can only forbid|cannot demand presence|cannot require|is an exact count"
@@ -552,15 +762,36 @@ class LogCallReaderTest(unittest.TestCase):
             module("INFO", "a {} b {}", "x").rendered()
 
 
+def decrees_by_id():
+    return {decree["id"]: decree for _path, decree in shipped_decrees()}
+
+
+# The decrees this change restored: their criteria name the required line again.
+RESTORED = {
+    "aimed-quest-complete-handin",
+    "dungeon-member-leaves-and-rejoins",
+    "gnomeregan-exit-hearth-on-cooldown",
+    "leader-boards-lady-mehley",
+    "majordomo-reflect-hold",
+    "raid-durability-before-each-boss",
+    "raid-straggler-summon-at-stone",
+    "stratholme-exit-yard",
+    "ubrs-ten-seat-run",
+}
+
+
 class RequiredLinesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.checks = bounded_checks()
+        cls.decrees = decrees_by_id()
+        cls.bridge_text = BRIDGE.read_text(encoding="utf-8")
         cls.calls = {
             "module": log_calls(modsource.read(modsource.MODULE, errors="replace")),
             "reflect-patch": log_calls(
                 patch_added_text(REFLECT_PATCH.read_text(encoding="utf-8"))
             ),
+            "bridge": bridge_log_calls(cls.bridge_text),
         }
 
     def lines(self):
@@ -571,15 +802,15 @@ class RequiredLinesTest(unittest.TestCase):
     def test_every_bounded_log_check_is_pinned_to_its_emitter(self):
         self.assertEqual(
             sorted(self.checks),
-            sorted({*PINS, *((d, n) for (d, n) in self.checks if d in UNPINNED)}),
+            sorted({*PINS, *UNPINNABLE}),
             "a log check with at_least or at_most needs an entry in PINS naming "
-            "the call that writes its line (and a stale entry must go)",
+            "the call that writes its line, or in UNPINNABLE naming why no source "
+            "here writes it (and a stale entry must go)",
         )
-        self.assertEqual(
-            sorted(UNPINNED),
-            sorted({d for d, _n in self.checks if d in UNPINNED}),
-            "a stale UNPINNED entry must go",
-        )
+        self.assertFalse(set(PINS) & set(UNPINNABLE), "pinned and unpinnable at once")
+        for key, reason in sorted(UNPINNABLE.items()):
+            self.assertIn(reason.kind, UNPINNABLE_KINDS, key)
+            self.assertTrue(reason.why.strip(), key)
         self.assertTrue(
             any("at_least" in c["expect"] for c in self.checks.values()),
             "no shipped decree requires a log line",
@@ -594,11 +825,25 @@ class RequiredLinesTest(unittest.TestCase):
                 f"on {line.logger}; read the new wording and fix the decree's pattern",
             )
 
-    def test_each_writer_reaches_the_log_the_judge_reads(self):
+    def test_the_bridge_logs_on_one_logger_at_info(self):
+        # bridge_log_calls names every `log.` call wow-overseer, and the level
+        # check below needs the root level the bridge's main sets.
+        self.assertIn('log = logging.getLogger("wow-overseer")', self.bridge_text)
+        self.assertRegex(
+            self.bridge_text, r"logging\.basicConfig\(level=logging\.INFO\b"
+        )
+
+    def test_each_writer_reaches_a_log_the_judge_reads(self):
         appender = "EphModule"
         self.assertIn(podpaths.LOG_NAME, submit.BASELINE[f"Appender.{appender}"])
         for key, pin in sorted(PINS.items()):
             for line in pin.writers:
+                if line.source == "bridge":
+                    # The bridge sidecar's log, which the judge reads on a
+                    # bridge-on decree only; the bridge keeps INFO and above.
+                    self.assertEqual(self.decrees[key[0]]["world"]["bridge"], "on", key)
+                    self.assertGreaterEqual(LEVELS["INFO"], LEVELS[line.level], key)
+                    continue
                 setting = submit.BASELINE.get(f"Logger.{line.logger}")
                 self.assertIsNotNone(
                     setting, f"{key}: no world sets Logger.{line.logger}"
@@ -606,6 +851,35 @@ class RequiredLinesTest(unittest.TestCase):
                 level, _, appenders = setting.partition(",")
                 self.assertIn(appender, appenders.split(), key)
                 self.assertGreaterEqual(int(level), LEVELS[line.level], key)
+
+    def test_a_bridge_line_is_in_what_the_judge_reads_for_its_decree(self):
+        for key, pin in sorted(PINS.items()):
+            bridge_lines = [ln for ln in pin.writers if ln.source == "bridge"]
+            if not bridge_lines:
+                continue
+            decree = self.decrees[key[0]]
+            with tempfile.TemporaryDirectory() as tmp:
+                world_log = pathlib.Path(tmp) / podpaths.LOG_NAME
+                bridge_log = pathlib.Path(tmp) / podpaths.BRIDGE_LOG_NAME
+                world_log.write_text("world started\n", encoding="utf-8")
+                for line in bridge_lines:
+                    bridge_log.write_text(line.rendered() + "\n", encoding="utf-8")
+                    read = judge.log_reader(decree, str(world_log), str(bridge_log))
+                    self.assertIn(line.rendered(), read(), key)
+                    # The same decree with the bridge off reads the world log only.
+                    off = {**decree, "world": {**decree["world"], "bridge": "off"}}
+                    read_off = judge.log_reader(off, str(world_log), str(bridge_log))
+                    self.assertNotIn(line.rendered(), read_off(), key)
+
+    def test_only_the_sent_flight_report_names_a_taxi_node(self):
+        # The flight pin's sibling lines assume a refused errand's sentence
+        # never names a taxi node, so the pattern cannot count a refusal.
+        source = (ROOT / "flightlearn.py").read_text(encoding="utf-8")
+        naming = [s for s in re.findall(_LITERAL, source) if "taxi node" in s]
+        self.assertEqual(
+            naming,
+            ['"sending them to learn taxi node %d (%s), %d yards off, by aiming "'],
+        )
 
     def test_the_pattern_holds_on_the_line_as_logged_and_not_without_it(self):
         for key, pin in sorted(PINS.items()):
@@ -641,10 +915,10 @@ class RequiredLinesTest(unittest.TestCase):
                 )
 
     def test_a_restored_decree_no_longer_says_the_line_is_not_asserted(self):
-        restored = {decree_id for decree_id, _name in PINS} - set(STILL_NARROWED)
-        self.assertEqual(len(restored), 9)
+        self.assertLessEqual(RESTORED, {decree_id for decree_id, _name in PINS})
+        self.assertFalse(RESTORED & set(STILL_NARROWED))
         for path, decree in shipped_decrees():
-            if decree["id"] not in restored:
+            if decree["id"] not in RESTORED:
                 continue
             text = path.read_text(encoding="utf-8")
             self.assertIsNone(_NARROWED_WORDS.search(text), path.name)

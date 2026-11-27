@@ -285,11 +285,17 @@ A check that requires or caps a line (`at_least` or `at_most`) is only as good a
 its pattern: a line no code writes fails every run when required and passes every
 run when capped. `tests/test_eph_required_lines.py` therefore lists each such
 check beside the format string of the call that writes its line, and fails when
-the pinned source no longer logs that wording, when the logger does not reach the
+the pinned source no longer logs that wording, when the logger does not reach a
 log the judge reads, or when the pattern does not match the line as formatted. A
-new bounded check needs an entry there. The judge reads one file, so only a line
-of the module or of the bots can be required: the bridge's own log, and a core
-logger the world does not send to that file, are out of its reach.
+new bounded check needs an entry there. The pinned sources are the mod-overseer
+submodule at its pinned commit, the playerbots patch copies under `patches/` and
+the bridge; a bridge line can be required on a `bridge: on` decree only, since
+only that decree's judge reads the bridge log. A check whose line none of them
+writes (a core line, a dungeon module line, or module wording newer than the
+submodule pin) goes in that file's `UNPINNABLE` list with its reason instead,
+and moves to the pinned list when its emitter can be read here. A core logger
+the world does not send to the module's file appender is out of the judge's
+reach.
 
 Every bound is a whole number, zero or more; lint rejects a negative, missing or
 unknown bound, and a judge handed one anyway reports the check as an error
