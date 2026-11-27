@@ -369,9 +369,10 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
         lines += [
             "",
             "The take was refused because no living creature linked to the quest "
-            "matched within the 20-yard arrival radius at that time. This explains "
-            "the ledger reason, but the stored rows do not distinguish a missing, "
-            "distant, dead, or otherwise unavailable creature.",
+            "matched within the 20-yard arrival radius at that time. The stored "
+            "rows confirm the creature relation, but do not show its live distance, "
+            "phase, or state, so they explain the refusal without identifying why "
+            "the lookup found no giver.",
         ]
     if already_in_log:
         lines += ["", ALREADY_IN_LOG_NOTE]

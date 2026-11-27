@@ -200,8 +200,9 @@ class Filing(unittest.TestCase):
             1,
         )
         self.assertIn(
-            "This explains the ledger reason, but the stored rows do not distinguish "
-            "a missing, distant, dead, or otherwise unavailable creature.",
+            "The stored rows confirm the creature relation, but do not show its "
+            "live distance, phase, or state, so they explain the refusal without "
+            "identifying why the lookup found no giver.",
             text,
         )
         self.assertNotIn(

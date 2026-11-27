@@ -266,8 +266,9 @@ class WorldRows(unittest.TestCase):
             ticket,
         )
         self.assertIn(
-            "This explains the ledger reason, but the stored rows do not distinguish "
-            "a missing, distant, dead, or otherwise unavailable creature.",
+            "The stored rows confirm the creature relation, but do not show its "
+            "live distance, phase, or state, so they explain the refusal without "
+            "identifying why the lookup found no giver.",
             ticket,
         )
 
@@ -334,8 +335,80 @@ class WorldRows(unittest.TestCase):
             ticket,
         )
         self.assertIn(
-            "This explains the ledger reason, but the stored rows do not distinguish "
-            "a missing, distant, dead, or otherwise unavailable creature.",
+            "The stored rows confirm the creature relation, but do not show its "
+            "live distance, phase, or state, so they explain the refusal without "
+            "identifying why the lookup found no giver.",
+            ticket,
+        )
+
+    def test_dead_fields_rows_explain_the_take_refusal_without_guessing_live_state(
+        self,
+    ):
+        # Values come from the ticket's supplied world rows, shaped by
+        # questcatalogue.QUESTS_SQL, ITEM_NAMES_SQL, and DROP_SQL. The ledger
+        # refusal is written by bridge._record_quest_broken and read through
+        # questtickets.BROKEN_SQL; counts use OBJECTIVES_SQL's row shape. The
+        # pinned module checks for a living creature within its 20-yard arrival
+        # radius; this fixture does not invent that creature's live location.
+        row = quest_row(
+            quest=437,
+            title="The Dead Fields",
+            level=14,
+            min_level=10,
+            sort=130,
+            item1=3622,
+            item_count1=1,
+        )
+        catalogue = self.catalogue(
+            row,
+            {
+                qc.ITEM_NAMES_SQL.format(ids="3622"): [
+                    {"entry": 3622, "name": "Essence of Nightlash"}
+                ],
+                qc.DROP_SQL.format(ids="3622"): [{"item": 3622, "entry": 1983}],
+                qc.REWARD_SQL.format(ids="3622"): [],
+                qc.VENDOR_SQL.format(ids="3622"): [],
+            },
+        )
+        reason = qt.NO_GIVER_IN_REACH
+        ticket = qt.body(
+            437,
+            catalogue[0],
+            [
+                {
+                    "quest": 437,
+                    "guid": 7,
+                    "character_name": "Quester A",
+                    "state": "broken",
+                    "reason": reason,
+                    "ticket": None,
+                }
+            ],
+            [
+                {
+                    "guid": 7,
+                    **{"mobcount%d" % i: 0 for i in range(1, 5)},
+                    **{"itemcount%d" % i: 0 for i in range(1, 7)},
+                }
+            ],
+            "",
+        )
+
+        self.assertIn("Zone: Silverpine Forest", ticket)
+        self.assertIn("QuestLevel: 14; MinLevel: 10", ticket)
+        self.assertIn("Required item 3622 x1 (Essence of Nightlash)", ticket)
+        self.assertIn("creature entries 1983", ticket)
+        self.assertIn("Reason: " + reason, ticket)
+        self.assertIn("Last objective counts: all zero", ticket)
+        self.assertIn(
+            "The take was refused because no living creature linked to the quest "
+            "matched within the 20-yard arrival radius at that time.",
+            ticket,
+        )
+        self.assertIn(
+            "The stored rows confirm the creature relation, but do not show its "
+            "live distance, phase, or state, so they explain the refusal without "
+            "identifying why the lookup found no giver.",
             ticket,
         )
 
