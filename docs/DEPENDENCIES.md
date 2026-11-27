@@ -73,6 +73,10 @@ the travel manager, the other raid actions.
   `EnableNewRpgStrategy`, `RpgStatusProbWeight.*`, `AutoDoQuests`,
   `EnableRandomBotTrading`, `EnableGuildTasks`.
 - **Key prefix.** The keys are `Playerbots.*`. Older docs say `AiPlayerbot.*`.
+  Guild broadcast gate: `AiPlayerbot.BroadcastToGuildGlobalChance` (default 30000,
+  max). Dev realm value: `10000` (one third) so grounded guild broadcasts read as
+  occasional news, not a rotation. `AiPlayerbot.BroadcastChanceSuggestSomething`
+  remains at maximum.
 - **Random-bot gate.** Many upstream systems return early unless the bot is a
   random bot. Roster characters use named accounts, so they are not. Check that
   gate first when an upstream feature "does not run" for roster characters.
@@ -95,7 +99,11 @@ auction function is inside a comment block.
 - **mod-ollama-chat.** Keys: `OllamaChat.Enable`, `Provider`, `Url`, `Model`,
   `MaxConcurrentQueries`, `EnableWhisperReplies`, `EnableRandomChatter`,
   `EnableEventChatter`, `EnableRPPersonalities`, `EnableSentimentTracking`,
-  `EnableChatHistory`, `EnableRAG`.
+  `EnableChatHistory`, `EnableRAG`, `DisableForGuild`, `BotReplyChance.Guild`,
+  `PlayerReplyChance.Guild`. Dev realm values: `DisableForGuild = 1` (guild and
+  officer channels lose ollama replies, random chatter and events; party/raid/say
+  keep theirs), `BotReplyChance.Guild = 0` (fallback if guild feels dead without
+  any freeform), `EnableRandomChatter = 1` with per-bot interval 45-180s.
 - **mod-junk-to-gold.** No keys. Grey loot never reaches a bag or the auction house.
 - **mod-ah-bot-plus.** Keys: `AuctionHouseBot.EnableSeller`, `GUIDs`,
   `ItemsPerCycle`, `Buyer.Enabled`, `ListProportion.*`, `AdvancedPricing.*`.
