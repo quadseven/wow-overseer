@@ -964,13 +964,21 @@ class BridgeTest(Base):
 
     def test_the_dispatcher_counts_the_sidecar_requests(self):
         self.submit(BRIDGE_ON, **WITH_BRIDGE)
-        on = dispatch.job_requests(self.jobs_by_arm()["treatment"])
+        on = self.jobs_by_arm()["treatment"]
         for j in self.cluster.of("jobs"):
             self.cluster.objs.pop(("jobs", "wow-ephemeral", j["metadata"]["name"]))
         self.submit(**CONTROL)
-        off = dispatch.job_requests(self.jobs_by_arm()["treatment"])
-        self.assertAlmostEqual(on[0] - off[0], 0.05)
-        self.assertEqual(on[1] - off[1], 192 * 1024**2)
+        off = self.jobs_by_arm()["treatment"]
+        for field, expected in (
+            ("requests.cpu", 50),
+            ("requests.memory", 192 * 1024**2),
+        ):
+            with self.subTest(field=field):
+                self.assertEqual(
+                    dispatch._job_quota_usage(on, field)
+                    - dispatch._job_quota_usage(off, field),
+                    expected,
+                )
 
     def test_the_fidelity_deltas_say_what_the_bridge_is(self):
         rec = self.submit(BRIDGE_ON, **WITH_BRIDGE)

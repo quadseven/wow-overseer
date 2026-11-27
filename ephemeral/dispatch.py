@@ -8,8 +8,8 @@ first. A tick unsuspends a Job only when ALL of these hold:
 - the Job's node is one the config lists, never one it names as off limits, and
   takes the Job's class;
 - the node's world count is under its cap;
-- the namespace quota has room for the Job's requests, counting worlds this
-  tick already started and worlds started but not yet scheduled;
+- the namespace quota has room for the Job's pod count and resources, counting
+  worlds this tick already started and worlds started before a pod exists;
 - the node would still have at least `min_free_percent` free disk after the
   Job's disk and every recently started world's disk are counted. If the node's
   stats cannot be read, the answer is no.
@@ -35,6 +35,13 @@ _MUL = {
     None: 1, "m": 0.001, "Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4,
     "k": 10**3, "M": 10**6, "G": 10**9, "T": 10**12,
 }  # fmt: skip
+_REQUIRED_QUOTA = ("requests.cpu", "requests.memory")
+_OPTIONAL_QUOTA = (
+    "requests.ephemeral-storage",
+    "limits.memory",
+    "limits.ephemeral-storage",
+    "pods",
+)
 RESULT_PREFIX = "eph-result-"
 
 
@@ -52,6 +59,13 @@ def quantity(text):
         raise ValueError(f"not a quantity: {text!r}")
     v = float(m[1]) * _MUL[m[2]]
     return int(v) if v == int(v) and m[2] != "m" else v
+
+
+def _quota_quantity(field, text):
+    parsed = quantity(text)
+    # CPU is measured in millicores at admission. Use integers so an exact
+    # fit such as 100m + 200m = 300m stays an exact fit.
+    return round(parsed * 1000) if field == "requests.cpu" else parsed
 
 
 def _ts(text):
@@ -99,27 +113,37 @@ def job_claim(job):
     return None
 
 
-def job_requests(job):
-    """(cpu cores, memory bytes) the pod will hold: sidecars plus containers, or the largest plain init step."""
+def _job_quota_usage(job, field):
+    """Effective consumption of one pod in a namespace quota dimension."""
+    if field == "pods":
+        return 1
+    kind, resource = field.split(".", 1)
     spec = job["spec"]["template"]["spec"]
 
-    def req(c):
-        r = (c.get("resources") or {}).get("requests") or {}
-        return quantity(r.get("cpu", 0)), quantity(r.get("memory", 0))
+    def amount(container):
+        resources = (container.get("resources") or {}).get(kind) or {}
+        return _quota_quantity(field, resources.get(resource, 0))
 
-    steady = [req(c) for c in spec.get("containers", [])]
-    steady += [
-        req(c)
-        for c in spec.get("initContainers", [])
-        if c.get("restartPolicy") == "Always"
-    ]
-    cpu = sum(c for c, _ in steady)
-    mem = sum(m for _, m in steady)
-    for c in spec.get("initContainers", []):
-        if c.get("restartPolicy") != "Always":
-            ic, im = req(c)
-            cpu, mem = max(cpu, ic), max(mem, im)
-    return cpu, mem
+    sidecars = init_peak = 0
+    for container in spec.get("initContainers", []):
+        allocated = amount(container)
+        if container.get("restartPolicy") == "Always":
+            sidecars += allocated
+        else:
+            # A regular init overlaps only the sidecars that started before it.
+            init_peak = max(init_peak, sidecars + allocated)
+    steady = sidecars + sum(amount(c) for c in spec.get("containers", []))
+    total = max(steady, init_peak)
+    # Kubernetes PodRequests always adds overhead. PodLimits only adds it
+    # to an existing nonzero limit, so overhead cannot create a limit.
+    if kind == "limits" and total == 0:
+        return 0
+    return total + _quota_quantity(field, (spec.get("overhead") or {}).get(resource, 0))
+
+
+def _reserve_quota(used_extra, job):
+    for field in used_extra:
+        used_extra[field] += _job_quota_usage(job, field)
 
 
 def job_disk(job):
@@ -232,11 +256,19 @@ class Dispatcher:
         ) or (items[0] if items else None)
         if q is None:
             return None
-        st = q.get("status", {})
+        status = q.get("status") or {}
+        hard, used = status.get("hard") or {}, status.get("used") or {}
+        configured = (q.get("spec") or {}).get("hard") or {}
+        dimensions = _REQUIRED_QUOTA + tuple(
+            field for field in _OPTIONAL_QUOTA if field in hard or field in configured
+        )
         try:
             return {
-                k: (quantity(st["hard"][k]), quantity(st["used"][k]))
-                for k in ("requests.cpu", "requests.memory")
+                field: (
+                    _quota_quantity(field, hard[field]),
+                    _quota_quantity(field, used[field]),
+                )
+                for field in dimensions
             }
         except (KeyError, ValueError):
             return None
@@ -346,25 +378,30 @@ class Dispatcher:
                     self._held.add(j["metadata"]["name"])
         return [j for j in jobs if j["metadata"]["name"] not in gone]
 
-    def _admit(self, jobs):
-        cfg = self.cfg
-        quota = self._quota()
-        now = self.clock()
-        per_node, reserved, used_extra = {}, {}, [0.0, 0.0]
+    def _running_reservations(self, jobs, quota, now):
+        per_node, reserved, used_extra = {}, {}, dict.fromkeys(quota or (), 0)
         for j in jobs:
             if not is_running(j):
                 continue
+            st = j.get("status") or {}
+            # Quota can charge a new pod before the Job reports it active.
+            # Reserve through that gap so a stale Job never frees quota early.
+            if not st.get("active"):
+                _reserve_quota(used_extra, j)
             node = self.claim_node.get(job_claim(j))
             if node is None:
                 continue
             per_node[node.name] = per_node.get(node.name, 0) + 1
-            st = j.get("status") or {}
-            if not st.get("active"):
-                cpu, mem = job_requests(j)
-                used_extra[0] += cpu
-                used_extra[1] += mem
-            if st.get("startTime") and now - _ts(st["startTime"]) < cfg.settle_seconds:
+            start = st.get("startTime")
+            if start and now - _ts(start) < self.cfg.settle_seconds:
                 reserved[node.name] = reserved.get(node.name, 0) + job_disk(j)
+        return per_node, reserved, used_extra
+
+    def _admit(self, jobs):
+        cfg = self.cfg
+        quota = self._quota()
+        now = self.clock()
+        per_node, reserved, used_extra = self._running_reservations(jobs, quota, now)
         started = []
         for j in jobs:
             if j["spec"].get("suspend") is not True or finished(j):
@@ -378,9 +415,7 @@ class Dispatcher:
                 node = self.claim_node[job_claim(j)].name
                 per_node[node] = per_node.get(node, 0) + 1
                 reserved[node] = reserved.get(node, 0) + job_disk(j)
-                cpu, mem = job_requests(j)
-                used_extra[0] += cpu
-                used_extra[1] += mem
+                _reserve_quota(used_extra, j)
                 started.append(rid)
                 self.log(f"{rid}: started on {node}")
             else:
@@ -402,10 +437,9 @@ class Dispatcher:
             return False, f"node is at its cap of {node.max_worlds}", False
         if quota is None:
             return False, "the namespace quota could not be read", False
-        cpu, mem = job_requests(j)
-        (hc, uc), (hm, um) = quota["requests.cpu"], quota["requests.memory"]
-        if uc + used_extra[0] + cpu > hc or um + used_extra[1] + mem > hm:
-            return False, "the namespace quota has no room", False
+        for field, (hard, used) in quota.items():
+            if used + used_extra[field] + _job_quota_usage(j, field) > hard:
+                return False, f"the namespace quota has no room for {field}", False
         stats = self._node_disk(node.name)
         if stats is None:
             return False, "disk stats unreadable, refusing", False

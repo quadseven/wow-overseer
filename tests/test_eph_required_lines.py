@@ -3,8 +3,8 @@
 Since #2767 a log check can require a line (`at_least`) or cap one (`at_most`).
 A pattern that no code emits makes such a check useless in the worst way: a
 required line that is never written fails every run, and a capped line that is
-never written passes every run. So every bounded log check in a shipped decree
-is listed here beside the format string of each call that writes its line, and:
+never written passes every run. So every bounded log check, and every log precondition (a scenario witness), in a
+shipped decree is listed here beside the format string of each call that writes its line, and:
 
 - the format string must still be in the pinned source, at that level and on
   that logger, so a reworded line turns this file red before it turns a
@@ -17,7 +17,8 @@ is listed here beside the format string of each call that writes its line, and:
   the sibling line the same code writes when the thing did not happen.
 
 The pinned sources are the mod-overseer submodule at its pinned commit, the
-test copies of the playerbots patches under patches/, and the bridge
+immutable raid fix in its history, the test copies of the playerbots patches
+under patches/, and the bridge
 (bridge.py and the modules it formats with). A bounded check whose line is
 written by none of them (a core line, a dungeon module line, or a module line
 from a commit newer than the pin) is listed in UNPINNABLE with that reason, so
@@ -109,7 +110,7 @@ def patch_added_text(text):
 class Line(NamedTuple):
     """One logging call: where it is, what it formats, and sample arguments."""
 
-    source: str  # "module", "reflect-patch" or "bridge"
+    source: str  # "module", "raid-door-fix", "reflect-patch" or "bridge"
     level: str
     logger: str
     fmt: str
@@ -143,6 +144,10 @@ class Pin(NamedTuple):
 
 
 SHIP = "Ship (The Lady Mehley)"
+RAID_DOOR = "raid-under-quorum-at-door"
+# RaidQuorumShortfall in the decree's exact fix produces this with five DPS
+# assembled and the decree's 36-seat, 3-tank, 8-healer floor.
+RAID_SHORTFALL = "5 of 5, short 31 seats, 3 tanks, 8 healers"
 NOT_READ = "its way across was not read"
 PARTY_SPLIT = (
     "overseer: '{}' is on map {} and its leader '{}' is on map {} - THE "
@@ -185,6 +190,39 @@ PINS = {
                 "playerbots",
                 "[MC] majordomo: {} casters holding, magic reflection on {}",
                 (3, "Flamewaker Healer"),
+            ),
+        ),
+    ),
+    (RAID_DOOR, "the-hold-warned-about-the-shortfall"): Pin(
+        writers=(
+            Line(
+                "raid-door-fix",
+                "WARN",
+                "module.overseer",
+                "overseer: raid run for family '{}' holds at the door - {}",
+                ("Grug", RAID_SHORTFALL),
+            ),
+        ),
+    ),
+    (RAID_DOOR, "the-shortfall-was-logged"): Pin(
+        writers=(
+            # AI-REVIEW 2026-11-27 [nemotron-3.5-super-vl] 90f35a03 (Elder, PR #3344):
+            # Verify the dedicated quorum warning in the decree's exact fix.
+            Line(
+                "raid-door-fix",
+                "WARN",
+                "module.overseer",
+                "overseer: raid run for family '{}' ends the order - no quorum at the door ({})",
+                ("Grug", RAID_SHORTFALL),
+            ),
+        ),
+        ignores=(
+            module(
+                "INFO",
+                "overseer: raid run for family '{}' released at {} - {}",
+                "Grug",
+                "ASSEMBLE",
+                "no raid is ordered",
             ),
         ),
     ),
@@ -655,10 +693,6 @@ UNPINNABLE = {
         "the-module-opened-fineous-corpse-for-ironfel",
     ): Unpinnable(NEWER_MODULE, "mod-overseer 134f5d5 (#1455)"),
     (
-        "class-trainer-crosses-map-and-learns",
-        "a-cross-map-class-trainer-walk-was-issued",
-    ): Unpinnable(NEWER_MODULE, "mod-overseer fa16ae7 (#1586)"),
-    (
         "cross-map-stranded-member-names-its-way",
         "each-follower-gets-the-bounded-reason-line",
     ): Unpinnable(NEWER_MODULE, "mod-overseer a68528d (#1369)"),
@@ -700,12 +734,14 @@ def shipped_decrees():
 
 
 def bounded_checks():
-    """(decree id, observation name) -> the log block, for every at_least or at_most."""
+    """Log blocks for bounds that need an emitter, including scenario witnesses."""
     found = {}
     for _path, decree in shipped_decrees():
         for o in decree.get("observe") or []:
             expect = (o.get("log") or {}).get("expect") or {}
-            if any(key in expect for key in lint.LOG_RANGE_KEYS):
+            if ("log" in o and o.get("role") == "precondition") or any(
+                key in expect for key in lint.LOG_RANGE_KEYS
+            ):
                 found[(decree["id"], o["name"])] = o["log"]
     return found
 
@@ -766,7 +802,8 @@ def decrees_by_id():
     return {decree["id"]: decree for _path, decree in shipped_decrees()}
 
 
-# The decrees this change restored: their criteria name the required line again.
+# Decrees whose criteria name a required line: the ones #3010 restored, and
+# one written since with its line required from the start.
 RESTORED = {
     "aimed-quest-complete-handin",
     "dungeon-member-leaves-and-rejoins",
@@ -774,6 +811,8 @@ RESTORED = {
     "leader-boards-lady-mehley",
     "majordomo-reflect-hold",
     "raid-durability-before-each-boss",
+    # Not one of #3010's: written later with its quorum lines required.
+    RAID_DOOR,
     "raid-straggler-summon-at-stone",
     "stratholme-exit-yard",
     "ubrs-ten-seat-run",
@@ -803,7 +842,7 @@ class RequiredLinesTest(unittest.TestCase):
         self.assertEqual(
             sorted(self.checks),
             sorted({*PINS, *UNPINNABLE}),
-            "a log check with at_least or at_most needs an entry in PINS naming "
+            "a log precondition or a check with at_least or at_most needs an entry in PINS naming "
             "the call that writes its line, or in UNPINNABLE naming why no source "
             "here writes it (and a stale entry must go)",
         )
@@ -818,12 +857,31 @@ class RequiredLinesTest(unittest.TestCase):
 
     def test_each_pinned_wording_is_what_the_source_logs(self):
         for key, line in self.lines():
+            if line.source == "raid-door-fix":
+                continue  # checked against the exact fix, not the test checkout
             self.assertIn(
                 (line.level, line.logger, line.fmt),
                 self.calls[line.source],
                 f"{key}: the {line.source} source no longer logs this at {line.level} "
                 f"on {line.logger}; read the new wording and fix the decree's pattern",
             )
+
+    def test_raid_door_warnings_are_emitted_at_hold_and_end(self):
+        raid = loads((DECREE_DIR / f"{RAID_DOOR}.yaml").read_text(encoding="utf-8"))
+        source = modsource.read_revision(raid["fix"]["commit"], modsource.MODULE)
+        before_end, _, after_end = source.partition("if (step.quorumEnds)")
+        _, hold, hold_block = before_end.rpartition(
+            "else if (run.quorumShortSaid != step.shortfall)"
+        )
+        end_block, release, _ = after_end.partition("if (step.release)")
+        self.assertTrue(hold, "the hold warning must use the measured shortfall")
+        self.assertTrue(release, "the quorum-end block no longer precedes raid release")
+        for name, block in (
+            ("the-hold-warned-about-the-shortfall", hold_block),
+            ("the-shortfall-was-logged", end_block),
+        ):
+            (line,) = PINS[(RAID_DOOR, name)].writers
+            self.assertIn((line.level, line.logger, line.fmt), log_calls(block))
 
     def test_the_bridge_logs_on_one_logger_at_info(self):
         # bridge_log_calls names every `log.` call wow-overseer, and the level
