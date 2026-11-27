@@ -194,19 +194,40 @@ class Filing(unittest.TestCase):
         self.assertEqual(text.count("Last objective counts: not in the log now"), 2)
         self.assertEqual(
             text.count(
-                "The take step asks the world for a living creature linked to the quest "
-                "within the 20-yard arrival radius."
+                "The take was refused because no living creature linked to the quest "
+                "matched within the 20-yard arrival radius at that time."
             ),
             1,
         )
         self.assertIn(
-            "The refusal means none matched then; the stored rows do not distinguish "
+            "This explains the ledger reason, but the stored rows do not distinguish "
             "a missing, distant, dead, or otherwise unavailable creature.",
             text,
         )
         self.assertNotIn(
-            "The take step asks the world for a living creature",
+            "The take was refused because no living creature",
             qt.body(218, None, [row(218)], [], ""),
+        )
+
+    def test_already_in_log_take_refusal_is_explained_as_a_point_in_time_read(self):
+        # This stored row shape is selected by questtickets.BROKEN_SQL. The
+        # current questers.LOG_STATE_REFUSALS guard no longer counts this reason
+        # as evidence of a broken take.
+        reason = "the quest giver would not give it: already in the quest log"
+        text = qt.body(
+            222,
+            None,
+            [dict(row(222, name="Quester A"), reason=reason)],
+            [],
+            "",
+        )
+
+        self.assertIn("Reason: " + reason, text)
+        self.assertIn(
+            "The take refusal records that the quest was already in the character's "
+            "quest log at the time. It is a log-state observation, not evidence that "
+            "the quest's objectives cannot be completed.",
+            text,
         )
 
     def test_tickets_default_to_the_open_quest_epic(self):

@@ -365,6 +365,12 @@ body is read.
 - Answers: whether operator actions are on for this deployment.
 - Example: `overseer get /api/v2/operator`
 
+## `GET /api/v2/pre-wedge`
+
+- Query: none
+- Answers: recorded death and restart slope actions in the past 24 hours.
+- Example: `overseer get /api/v2/pre-wedge`
+
 ## `GET /api/v2/production`
 
 - Query: none
