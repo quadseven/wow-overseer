@@ -35728,7 +35728,10 @@ _SEAT_QUEST_ITEMS_SQL = (
     "JOIN character_inventory ci ON ci.guid = c.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
-    "WHERE it.class = 12 AND c.name IN ({names})"
+    "WHERE it.class = 12 AND c.name IN ({names}) "
+    "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
 )
 _SEAT_QUEST_ROWS_SQL = (
     "SELECT t.ID, t.LogTitle, t.QuestLevel, t.MinLevel, t.AllowableRaces, "
@@ -43173,7 +43176,11 @@ TOWN_ERRAND_HEARTBEAT_SECONDS = 900.0
 TOWN_ERRAND_SETTLE_SECONDS = 60.0
 TOWN_ERRAND_VENDOR_YARDS = 250.0
 # family key -> townerrand.State, and family key -> {step: first run}.
-_TOWN_ERRANDS: dict = {}
+# Each errand's end is kept in the memo store (holdclock.py, #3226), so a
+# restart resumes the errand cooldown instead of sending the family to town.
+_TOWN_ERRANDS: dict = holdclock.ErrandEnds(
+    holdclock.TOWN_ERRAND_KIND, lambda k: _memo_read(k),
+    lambda *a: _memo_upsert(*a), lambda *a: _memo_delete(*a), townerrand.State)
 
 def _record_production(names: list, skills: dict) -> None:
     """Keep, per member, when a trade skill last rose (production.py).

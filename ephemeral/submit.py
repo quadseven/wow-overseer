@@ -16,9 +16,10 @@ import json
 import pathlib
 import re
 import time
+from urllib.parse import quote
 
 from . import anchors as anchors_mod
-from . import confmerge, dbschema, imagecommit, lint, podpaths, runids
+from . import confmerge, controlauto, dbschema, imagecommit, lint, podpaths, runids
 from .kube import KubeError
 from .miniyaml import YamlError, loads
 
@@ -166,6 +167,38 @@ def fix_presence(gh, fix, pin):
     status = gh.compare(fix["repo"], commit, pin)
     if status in ("ahead", "identical"):
         return "present"
+    if status == "diverged":
+        repo = fix["repo"]
+        branch = (gh.api(f"repos/{repo}") or {}).get("default_branch")
+        reachable = gh.compare(repo, commit, quote(branch, safe="")) if branch else ""
+        if reachable in ("behind", "diverged"):
+            message = (
+                f"fix.commit {commit} is not on {repo}'s default branch {branch}; "
+                "replace the branch commit with a commit on the default branch"
+            )
+            pulls = (
+                gh.api(
+                    f"repos/{repo}/commits/{commit}/pulls?per_page=100",
+                    missing_ok=True,
+                    paginate=True,
+                )
+                or []
+            )
+            merges = sorted(
+                {
+                    pull["merge_commit_sha"]
+                    for pull in pulls
+                    if pull.get("merged_at")
+                    and _SHA.fullmatch(str(pull.get("merge_commit_sha", "")))
+                }
+            )
+            if merges:
+                message += "; pull merge commit: " + ", ".join(merges)
+            raise SubmitError(message)
+        if reachable not in ("ahead", "identical"):
+            raise SubmitError(
+                f"cannot verify fix.commit {commit} on {repo}'s default branch"
+            )
     if status in ("behind", "diverged"):
         return "absent"
     return "unchecked"
@@ -287,8 +320,113 @@ def default_image_env(cfg, kube):
     return image_env
 
 
+def default_resolves(cfg, kube):
+    """resolves(ref): True when the registry still serves the image by its digest."""
+
+    def resolves(ref):
+        try:
+            host = imagecommit.parse_ref(ref)[0]
+            secret = kube.get("secrets", BRIDGE_PULL_NAME, missing_ok=True)
+            imagecommit.image_env(ref, imagecommit.credentials(secret, host))
+        except imagecommit.RegistryError:
+            return False
+        return True
+
+    return resolves
+
+
+_CONTROL_FLAGS = (
+    "control_worldserver",
+    "control_dbimport",
+    "control_pin",
+    "control_bridge",
+)
+
+
+def _control_auto(gh, decree, args, resolves, deltas):
+    """args with the control images filled from the history file (`--control auto`)."""
+    if args.get("control") != "auto":
+        raise SubmitError("--control takes only auto")
+    given = [f for f in _CONTROL_FLAGS if args.get(f)]
+    if given:
+        raise SubmitError(
+            "--control auto picks the control images itself; drop "
+            + ", ".join("--" + f.replace("_", "-") for f in given)
+        )
+    fix = decree["fix"]
+    if not _SHA.match(str(fix.get("commit", ""))):
+        raise SubmitError("--control auto needs fix.commit as a full commit sha")
+    path = args.get("control_history")
+    if not path:
+        raise SubmitError(
+            "--control auto needs --control-history (the deploy side's list of past image sets)"
+        )
+    try:
+        history = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SubmitError(f"control history {path} is unreadable: {exc}") from exc
+    if not isinstance(history, list) or not all(isinstance(e, dict) for e in history):
+        raise SubmitError("control history must be a JSON list of image sets")
+    bridge_fix = fix["repo"].endswith("/wow-overseer")
+    try:
+        entry = controlauto.pick_control(
+            history, lambda sha: fix_presence(gh, fix, sha), resolves, bridge_fix
+        )
+    except controlauto.AutoError as exc:
+        raise SubmitError(f"--control auto: {exc}") from exc
+    pin = entry["bridge_commit" if bridge_fix else "pin"]
+    filled = {
+        "control_worldserver": entry["worldserver"],
+        "control_dbimport": entry["dbimport"],
+        "control_pin": pin,
+    }
+    if bridge_fix:
+        filled["control_bridge"] = entry["bridge"]  # pick_control checked it resolves
+    elif decree["world"]["bridge"] == "on":
+        bridge = entry.get("bridge")
+        if not (bridge and resolves(bridge)):
+            raise SubmitError(
+                f"--control auto: the chosen set (pin {pin}) has no bridge image that still resolves"
+            )
+        filled["control_bridge"] = bridge
+    deltas.append(
+        f"control arm: chosen by --control auto from the history: pin {pin}, "
+        f"worldserver {entry['worldserver']}"
+    )
+    return {**args, **filled}
+
+
+def default_template_image(cfg, kube):
+    """template(klass): the template image to run, a `:newest` ref resolved to a digest."""
+
+    def template(klass):
+        ref = cfg.template_images[klass]
+        if not imagecommit.is_newest(ref):
+            return ref
+        try:
+            host = ref.split("/", 1)[0]
+            secret_name = cfg.template_pull_secret or BRIDGE_PULL_NAME
+            secret = kube.get("secrets", secret_name, missing_ok=True)
+            return imagecommit.newest_template(
+                ref, klass, imagecommit.credentials(secret, host)
+            )
+        except (
+            imagecommit.RegistryError,
+            KubeError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise SubmitError(
+                f"could not resolve the newest {klass} template: {exc}"
+            ) from exc
+
+    return template
+
+
 def submit(
     cfg, kube, gh, decree_path, args=None, clock=time.time, out=print, image_env=None,
+    template_image=None, resolves=None,
 ):  # fmt: skip
     """Create the suspended Jobs. Returns the submission record (also saved)."""
     args = dict(args or {})
@@ -345,11 +483,15 @@ def submit(
             f"control arm: playerbots keys written as {prefix}.* (the control image predates the rename to Playerbots.*)"
         )
     arms = ["control", "treatment"] if arm_arg == "both" else [arm_arg]
+    if args.get("control") is not None and "control" in arms:
+        resolves = resolves or default_resolves(cfg, kube)
+        args = _control_auto(gh, decree, args, resolves, deltas)
     arm_bridge = {
         arm: _images_for(arm, live_images, args, live_bridge).get("bridge")
         for arm in arms
     }
     image_env = image_env or default_image_env(cfg, kube)
+    template_ref = (template_image or default_template_image(cfg, kube))(klass)
     presence = _presence(cfg, gh, decree, arms, args, pins, arm_bridge, image_env)
 
     batch = hashlib.sha256(f"{sha}:{clock()}".encode()).hexdigest()[:6]
@@ -378,7 +520,7 @@ def submit(
             # database (characters and auth keep the live schema); see docs/EPHEMERAL.md.
             "RESET_WORLD": "1" if arm == "control" else "0",
             "UPDATES_MASK": "4" if arm == "control" else "7",
-            "TOOLS_IMAGE": cfg.tools_image, "TEMPLATE_IMAGE": cfg.template_images[klass],
+            "TOOLS_IMAGE": cfg.tools_image, "TEMPLATE_IMAGE": template_ref,
             "CLIENT_DATA_CLAIM": nodecfg.claim, **classes[klass],
             "BRIDGE_IMAGE": img.get("bridge", BRIDGE_OFF_IMAGE),
         }  # fmt: skip
@@ -401,6 +543,7 @@ def submit(
         "decree_path": str(decree_path), "decree_pr": args.get("decree_pr"),
         "submitted_at": int(clock()), "class": klass, "proves": decree["proves"],
         "box": decree.get("box"),
+        "template_image": template_ref,
         "fix": decree["fix"], "runs_wanted": {a: decree["runs"][a] for a in arms},
         "presence": presence, "fidelity_deltas": deltas, "runs": runs,
     }  # fmt: skip
