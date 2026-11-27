@@ -1,8 +1,8 @@
 """Small fixed game facts the decree format names by word.
 
-These are client-side constants that no database table carries (map names live
-in the client's Map.dbc, skill names in SkillLine.dbc), so they are listed here
-once and shared by lint and the seed compiler.
+Map names live in the client's Map.dbc, skill names in SkillLine.dbc, and the
+boss slots come from the server's instance scripts. List them here once for
+lint, the seed compiler, and the judge.
 """
 
 # Instance map names a decree may use in `arrange: instance:`, to map ids.
@@ -33,6 +33,14 @@ INSTANCE_MAPS = {
     "Ruins of Ahn'Qiraj": 509,
     "Temple of Ahn'Qiraj": 531,
     "Naxxramas": 533,
+}
+
+# Typed encounter selectors use the boss slots written by the pinned core.
+INSTANCE_ENCOUNTERS = {
+    "Magmus": ("Blackrock Depths", (5,)),
+    "Majordomo Executus": ("Molten Core", (8,)),
+    "Ragnaros": ("Molten Core", (9,)),
+    "Any Molten Core boss": ("Molten Core", tuple(range(10))),
 }
 
 # Profession and secondary skill lines a decree may set, to skill ids.
