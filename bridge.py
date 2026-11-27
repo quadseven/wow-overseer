@@ -43271,7 +43271,11 @@ TOWN_ERRAND_HEARTBEAT_SECONDS = 900.0
 TOWN_ERRAND_SETTLE_SECONDS = 60.0
 TOWN_ERRAND_VENDOR_YARDS = 250.0
 # family key -> townerrand.State, and family key -> {step: first run}.
-_TOWN_ERRANDS: dict = {}
+# Each errand's end is kept in the memo store (holdclock.py, #3226), so a
+# restart resumes the errand cooldown instead of sending the family to town.
+_TOWN_ERRANDS: dict = holdclock.ErrandEnds(
+    holdclock.TOWN_ERRAND_KIND, lambda k: _memo_read(k),
+    lambda *a: _memo_upsert(*a), lambda *a: _memo_delete(*a), townerrand.State)
 
 def _record_production(names: list, skills: dict) -> None:
     """Keep, per member, when a trade skill last rose (production.py).
