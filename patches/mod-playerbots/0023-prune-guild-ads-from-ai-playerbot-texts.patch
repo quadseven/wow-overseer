@@ -4,23 +4,30 @@ Date: Thu, 26 Nov 2026 00:00:00 +0000
 Subject: [PATCH] Prune guild advertisements from ai_playerbot_texts
 
 ---
- data/sql/playerbots/updates/2026_11_10_00_ai_playerbot_guild_ads.sql | 10 ++++++++++
- 1 file changed, 10 insertions(+)
+ data/sql/playerbots/updates/2026_11_10_00_ai_playerbot_guild_ads.sql | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
  create mode 100644 data/sql/playerbots/updates/2026_11_10_00_ai_playerbot_guild_ads.sql
 
 diff --git a/data/sql/playerbots/updates/2026_11_10_00_ai_playerbot_guild_ads.sql b/data/sql/playerbots/updates/2026_11_10_00_ai_playerbot_guild_ads.sql
 new file mode 100644
-index 0000000..b335402
+index 0000000..e7d45bb
 --- /dev/null
 +++ b/data/sql/playerbots/updates/2026_11_10_00_ai_playerbot_guild_ads.sql
-@@ -0,0 +1,10 @@
-+-- Prune guild advertisements from generic suggestions (#1640).
-+--
-+-- Bots that already belong to a guild must not advertise for one, and no
-+-- suggest_something line may assert a guild state the speaker may not be in.
-+
+@@ -0,0 +1,17 @@
++-- Prune the four known guild ads from generic suggestions (#1640).
++-- Compare the full utterance, allowing case, spaces and terminal .?! only.
 +DELETE FROM `ai_playerbot_texts`
-+ WHERE `name` = 'suggest_something'
-+   AND (`text` LIKE '%looking for guild%'
-+     OR `text` LIKE '%join a good guild%'
-+     OR `text` LIKE '%looking for a guild%');
++ WHERE HEX(`name`) = HEX('suggest_something')
++   AND EXISTS (
++     SELECT 1
++       FROM (
++         SELECT '%my_role is looking for guild' AS utterance
++         UNION ALL SELECT '%my_role wants to join a good guild'
++         UNION ALL SELECT 'any guilds willing to carry %my_role'
++         UNION ALL SELECT 'any leveling guilds out there'
++       ) AS ads
++      WHERE HEX(LOWER(SUBSTR(TRIM(`ai_playerbot_texts`.`text`), 1, LENGTH(ads.utterance)))) = HEX(ads.utterance)
++        AND LENGTH(TRIM(REPLACE(REPLACE(REPLACE(
++            SUBSTR(TRIM(`ai_playerbot_texts`.`text`), LENGTH(ads.utterance) + 1),
++            '.', ' '), '?', ' '), '!', ' '))) = 0
++   );

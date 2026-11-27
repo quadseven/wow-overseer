@@ -62,7 +62,8 @@ class GuildAdsPatchTest(unittest.TestCase):
         db = sqlite3.connect(":memory:")
         self.addCleanup(db.close)
         db.execute(
-            "CREATE TABLE ai_playerbot_texts (id INTEGER PRIMARY KEY, name TEXT, text TEXT)"
+            "CREATE TABLE ai_playerbot_texts "
+            "(id INTEGER PRIMARY KEY, name TEXT COLLATE NOCASE, text TEXT)"
         )
         db.executemany("INSERT INTO ai_playerbot_texts VALUES (?, ?, ?)", rows)
         return db
@@ -71,19 +72,23 @@ class GuildAdsPatchTest(unittest.TestCase):
         db = self.seed(
             (741, "suggest_something", "%my_role is looking for guild."),
             (743, "suggest_something", "%my_role wants to join a good guild."),
-            (2001, "suggest_something", "Looking for a guild to join."),
-            (2002, "suggest_something", "Let's run a dungeon."),
+            (801, "suggest_something", "any guilds willing to carry %my_role?"),
+            (816, "suggest_something", "any leveling guilds out there?"),
+            (2001, "suggest_something", "  %MY_ROLE IS LOOKING FOR GUILD?!  "),
+            (2002, "suggest_something", "Any leveling guilds out there"),
+            (2003, "suggest_something", "Let's run a dungeon."),
         )
         for _ in range(2):
             db.executescript(self.sql)
             self.assertEqual(
-                [(2002,)], db.execute("SELECT id FROM ai_playerbot_texts").fetchall()
+                [(2003,)], db.execute("SELECT id FROM ai_playerbot_texts").fetchall()
             )
 
     def test_patch_preserves_reused_ids_without_a_matching_class_and_text(self):
         preserved = (
             (741, "suggest_something", "Let's run a dungeon."),
-            (743, "another_class", "Looking for a guild to join."),
+            (743, "another_class", "%my_role wants to join a good guild."),
+            (2001, "SUGGEST_SOMETHING", "any leveling guilds out there?"),
         )
         db = self.seed(*preserved)
         db.executescript(self.sql)
@@ -92,6 +97,30 @@ class GuildAdsPatchTest(unittest.TestCase):
             db.execute(
                 "SELECT id, name, text FROM ai_playerbot_texts ORDER BY id"
             ).fetchall(),
+        )
+
+    def test_patch_preserves_harmless_surrounding_text(self):
+        db = self.seed(
+            (
+                2101,
+                "suggest_something",
+                "Players often join a good guild after leveling.",
+            ),
+            (
+                2102,
+                "suggest_something",
+                "%my_role is looking for guild. That is an old quote.",
+            ),
+            (
+                2103,
+                "suggest_something",
+                "A player said: any leveling guilds out there?",
+            ),
+        )
+        db.executescript(self.sql)
+        self.assertEqual(
+            [(2101,), (2102,), (2103,)],
+            db.execute("SELECT id FROM ai_playerbot_texts ORDER BY id").fetchall(),
         )
 
     def test_series_files_exist_in_order(self):
