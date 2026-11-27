@@ -16,8 +16,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import TextIO
 
 from ephemeral import dbschema
@@ -93,10 +95,23 @@ class AceItem:
     info: dict
 
 
-def build_ace_items(recipients: dict[str, int], item_guid_start: int) -> list[AceItem]:
+@dataclass
+class AuditEntry:
+    """Audit trail entry for one Ace creation."""
+
+    item_id: int
+    item_guid: int
+    mail_id: int
+    recipient: str
+    recipient_guid: int
+    timestamp: str
+    verification_query: str
+
+
+def build_ace_items(recipients: dict[str, int]) -> list[AceItem]:
     """Build the four Ace items with assigned GUIDs."""
     items = []
-    for i, (entry, info) in enumerate(ACE_INFO.items()):
+    for entry, info in ACE_INFO.items():
         recipient_name = info["recipient"]
         recipient_guid = recipients[recipient_name]
         items.append(
@@ -185,13 +200,15 @@ def generate_all_sql(
     recipients: dict[str, int],
     item_guid_start: int = DEFAULT_ITEM_GUID_START,
     mail_id_start: int = DEFAULT_MAIL_ID_START,
-) -> list[str]:
-    """Generate all SQL statements for the four Aces."""
+) -> tuple[list[str], list[AuditEntry]]:
+    """Generate all SQL statements for the four Aces and return audit entries."""
     schema = dbschema.Schema.load()
     builder = Builder(schema)
 
-    aces = build_ace_items(recipients, item_guid_start)
+    aces = build_ace_items(recipients)
     statements = []
+    audit_entries = []
+    timestamp = datetime.now(timezone.utc).isoformat()
 
     for i, ace in enumerate(aces):
         item_guid = item_guid_start + i + 1
@@ -206,7 +223,24 @@ def generate_all_sql(
             generate_mail_items_sql(builder, mail_id, item_guid, ace.recipient.guid)
         )
 
-    return statements
+        # Audit entry
+        audit_entries.append(
+            AuditEntry(
+                item_id=ace.entry,
+                item_guid=item_guid,
+                mail_id=mail_id,
+                recipient=ace.recipient.name,
+                recipient_guid=ace.recipient.guid,
+                timestamp=timestamp,
+                verification_query=(
+                    f"SELECT * FROM item_instance WHERE guid={item_guid}; "
+                    f"SELECT * FROM mail WHERE id={mail_id}; "
+                    f"SELECT * FROM mail_items WHERE mail_id={mail_id};"
+                ),
+            )
+        )
+
+    return statements, audit_entries
 
 
 def write_sql_file(statements: list[str], output: TextIO) -> None:
@@ -220,6 +254,36 @@ def write_sql_file(statements: list[str], output: TextIO) -> None:
         output.write(stmt + ";\n")
 
 
+def write_audit_file(audit_entries: list[AuditEntry], output: TextIO) -> None:
+    """Write audit trail to output file as JSON."""
+    data = [
+        {
+            "item_id": e.item_id,
+            "item_guid": e.item_guid,
+            "mail_id": e.mail_id,
+            "recipient": e.recipient,
+            "recipient_guid": e.recipient_guid,
+            "timestamp": e.timestamp,
+            "verification_query": e.verification_query,
+        }
+        for e in audit_entries
+    ]
+    json.dump(data, output, indent=2)
+    output.write("\n")
+
+
+def print_audit_summary(audit_entries: list[AuditEntry]) -> None:
+    """Print audit trail summary to stderr."""
+    print("\n=== Audit Trail for Ticket #2634 ===", file=sys.stderr)
+    for e in audit_entries:
+        print(
+            f"Ace: {e.item_id} | Item GUID: {e.item_guid} | Mail ID: {e.mail_id} | "
+            f"Recipient: {e.recipient} (GUID: {e.recipient_guid}) | Time: {e.timestamp}",
+            file=sys.stderr,
+        )
+    print("=== End Audit Trail ===\n", file=sys.stderr)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Generate SQL to create and mail four Darkmoon Aces"
@@ -230,6 +294,11 @@ def main() -> int:
         type=argparse.FileType("w"),
         default=sys.stdout,
         help="Output SQL file (default: stdout)",
+    )
+    parser.add_argument(
+        "--audit-output",
+        type=argparse.FileType("w"),
+        help="Output audit trail JSON file",
     )
     parser.add_argument(
         "--item-guid-start",
@@ -272,7 +341,7 @@ def main() -> int:
     }
 
     try:
-        statements = generate_all_sql(
+        statements, audit_entries = generate_all_sql(
             recipients,
             item_guid_start=args.item_guid_start,
             mail_id_start=args.mail_id_start,
@@ -280,9 +349,19 @@ def main() -> int:
     except SeedError as e:
         print(f"ERROR: Invalid SQL generated: {e}", file=sys.stderr)
         return 1
-    except Exception as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+    except KeyError as e:
+        print(f"ERROR: Missing recipient GUID: {e}", file=sys.stderr)
         return 1
+    except OSError as e:
+        print(f"ERROR: Schema load failed: {e}", file=sys.stderr)
+        return 1
+
+    # Always print audit summary to stderr for visibility
+    print_audit_summary(audit_entries)
+
+    if args.audit_output:
+        write_audit_file(audit_entries, args.audit_output)
+        print(f"Wrote audit trail to {args.audit_output.name}", file=sys.stderr)
 
     if args.dry_run:
         write_sql_file(statements, sys.stdout)

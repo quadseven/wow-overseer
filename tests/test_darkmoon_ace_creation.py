@@ -7,18 +7,25 @@ owner exception.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 import unittest
+
+# Add scripts directory to path to import ACE_INFO
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+
+from create_darkmoon_aces import (
+    ACE_INFO,
+    ACE_OF_BEASTS,
+    ACE_OF_WARLORDS,
+    ACE_OF_PORTALS,
+    ACE_OF_ELEMENTALS,
+)
 
 from ephemeral import dbschema
 from ephemeral.sqlgen import Builder, verify_statement
 
 SCHEMA = dbschema.Schema.load()
-
-# Ace item entries from the brief
-ACE_OF_BEASTS = 19227
-ACE_OF_WARLORDS = 19258
-ACE_OF_PORTALS = 19276
-ACE_OF_ELEMENTALS = 19268
 
 # Recipients from the brief
 # Warlords -> Grug (warrior, level 60)
@@ -229,27 +236,44 @@ class DarkmoonAceSQLTest(unittest.TestCase):
     def test_ace_creation_uses_mail_not_inventory(self):
         """The brief specifies mailing items, not direct inventory placement.
 
-        This test documents the expected approach: Aces are created as item_instance
-        rows and delivered via mail/mail_items, not placed directly in
-        character_inventory.
+        This test verifies that the generated SQL uses mail/mail_items tables
+        and does not generate any character_inventory INSERTs.
         """
-        # The approach is verified by the other tests showing valid mail/mail_items INSERTs
-        # No character_inventory INSERTs should be generated for the Ace delivery
-        pass
+        from create_darkmoon_aces import generate_all_sql
+
+        recipients = {
+            "Grug": 10,
+            "Ugga": 20,
+            "Bork": 30,
+            "Grog": 40,
+        }
+        statements, _ = generate_all_sql(recipients)
+        sql_text = " ".join(statements)
+
+        # Verify no character_inventory INSERTs
+        self.assertNotIn("character_inventory", sql_text.lower())
+        # Verify mail and mail_items INSERTs are present
+        self.assertIn("INSERT INTO `acore_characters`.`mail`", sql_text)
+        self.assertIn("INSERT INTO `acore_characters`.`mail_items`", sql_text)
+        # Verify item_instance INSERTs are present (items are created there)
+        self.assertIn("INSERT INTO `acore_characters`.`item_instance`", sql_text)
 
 
 class DarkmoonAceRecipientTest(unittest.TestCase):
     """Test the recipient mapping for the four Aces."""
 
     def test_recipient_mapping(self):
-        """Verify the four Aces go to the correct recipients."""
-        recipients = {
-            ACE_OF_WARLORDS: "Grug",  # Warrior, level 60 -> Heroism
-            ACE_OF_BEASTS: "Ugga",  # Priest, level 60 -> Blue Dragon
-            ACE_OF_ELEMENTALS: "Bork",  # Rogue, level 60 -> Maelstrom
-            ACE_OF_PORTALS: "Grog",  # Paladin, level 60 -> Twisting Nether
+        """Verify the four Aces go to the correct recipients per ACE_INFO."""
+        # Build expected mapping from ACE_INFO (source of truth in the script)
+        expected_recipients = {
+            entry: info["recipient"] for entry, info in ACE_INFO.items()
         }
-        self.assertEqual(len(recipients), 4)
+        # Verify it matches the brief's decision
+        self.assertEqual(expected_recipients[ACE_OF_WARLORDS], "Grug")
+        self.assertEqual(expected_recipients[ACE_OF_BEASTS], "Ugga")
+        self.assertEqual(expected_recipients[ACE_OF_ELEMENTALS], "Bork")
+        self.assertEqual(expected_recipients[ACE_OF_PORTALS], "Grog")
+        self.assertEqual(len(expected_recipients), 4)
         # All recipients are Cave (Alliance) family members
         cave_members = {
             "Grug",
@@ -263,19 +287,16 @@ class DarkmoonAceRecipientTest(unittest.TestCase):
             "Uzza",
             "Oz",
         }
-        for recipient in recipients.values():
+        for recipient in expected_recipients.values():
             self.assertIn(recipient, cave_members)
 
     def test_no_bonkers_recipients(self):
         """Verify no Aces go to Bonkers (Horde) family members."""
-        recipients = {
-            ACE_OF_WARLORDS: "Grug",
-            ACE_OF_BEASTS: "Ugga",
-            ACE_OF_ELEMENTALS: "Bork",
-            ACE_OF_PORTALS: "Grog",
+        expected_recipients = {
+            entry: info["recipient"] for entry, info in ACE_INFO.items()
         }
         bonkers_members = {"Zug", "Zrog", "Uzza", "Oz", "Zork"}
-        for recipient in recipients.values():
+        for recipient in expected_recipients.values():
             self.assertNotIn(recipient, bonkers_members)
 
 
