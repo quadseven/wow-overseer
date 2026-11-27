@@ -22,11 +22,23 @@ GUZZLER = loads(
         encoding="utf-8"
     )
 )
+FOLLOWER_GUARD = loads(
+    (ROOT / "data" / "decrees" / "guard-follower-homebound-elsewhere.yaml").read_text(
+        encoding="utf-8"
+    )
+)
 HANDOFF = {
     "variables": {"brd": 7, "cast": "1, 2", "cast0": 1, "Grug": 1, "Ugga": 2},
     "members": [
         {"cast_index": 0, "who": "family:grug", "guid": 1, "name": "Grug"},
         {"cast_index": 0, "who": "family:grug", "guid": 2, "name": "Ugga"},
+    ],
+}
+NAMED_HANDOFF = {
+    "variables": {**HANDOFF["variables"], "cast1": 2},
+    "members": [
+        {**member, "who": member["name"], "cast_index": index}
+        for index, member in enumerate(HANDOFF["members"])
     ],
 }
 
@@ -886,6 +898,112 @@ class TimeoutTest(unittest.TestCase):
 
 
 class SafetyTest(unittest.TestCase):
+    def test_paired_follower_guard_needs_continuously_observable_actors(self):
+        for reaches_goal, outage, excursion, expected in (
+            (False, False, False, "FAIL"),
+            (True, False, False, "PASS"),
+            (False, True, False, "INVALID"),
+            (True, False, True, "FAIL"),
+        ):
+            with self.subTest(
+                reaches_goal=reaches_goal, outage=outage, excursion=excursion
+            ):
+                clock = Clock()
+                world = FakeWorld(clock)
+                world.write_travel_guard = mock.Mock(
+                    side_effect=["guard:0:1,2,3", "guard:1:4,5,6"]
+                )
+                world.answer("group_member m", [(2,)])
+                world.answer("FROM character_homebind\nWHERE", [(2,)])
+                world.answer(
+                    "travel_npc LIKE",
+                    lambda _, world=world: [(world.write_travel_guard.call_count,)],
+                )
+                world.answer("FROM overseer_roster", [(2,)])
+                world.answer("FROM overseer_command", [(2,)])
+                world.answer(
+                    "DATE_SUB(NOW()",
+                    lambda now, outage=outage: [(1 if outage and now == 1860 else 2,)],
+                )
+                world.answer(
+                    "s.updated_at < DATE_ADD",
+                    lambda now, reaches_goal=reaches_goal, excursion=excursion: [
+                        (
+                            int(
+                                now < 1800
+                                or reaches_goal
+                                and not (excursion and now == 1860)
+                            ),
+                        )
+                    ],
+                )
+                world.answer("overseer_snapshot", [(1,)])
+                result = run(FOLLOWER_GUARD, world, clock, handoff=NAMED_HANDOFF)
+                self.assertEqual(result["verdict"], expected, result["reasons"])
+                if outage:
+                    self.assertIn(
+                        "both-members-are-still-observable", " ".join(result["reasons"])
+                    )
+
+    def test_travel_guard_round_trip_routes_only_a_run_owned_aim(self):
+        d = copy.deepcopy(GUZZLER)
+        d["act"] = [
+            {"at": "0s", "travel_guard": {"who": "Grug", "enabled": True}},
+            {"at": "20s", "travel_guard": {"who": "Grug", "enabled": False}},
+        ]
+        clock = Clock()
+        world = guzzler_world(clock)
+        world.write_travel_guard = mock.Mock(side_effect=["guard:0:1,2,3", ""])
+        r = run(d, world, clock, handoff=NAMED_HANDOFF)
+        self.assertEqual(r["verdict"], "PASS", r["reasons"])
+        self.assertEqual(world.commands, [])
+        self.assertEqual(world.write_travel_guard.call_args_list, [
+            mock.call("Grug", True, expected=None),
+            mock.call("Grug", False, expected="guard:0:1,2,3"),
+        ])  # fmt: skip
+        self.assertEqual([row["fired_s"] for row in r["acts"]], [0, 20])
+        self.assertEqual([row["text"] for row in r["acts"]], ["guard:0:1,2,3", ""])
+        self.assertEqual([row["fired_at"] for row in r["acts"]], [world.db_now()] * 2)
+
+    def test_an_unowned_travel_guard_cannot_be_cleared(self):
+        d = copy.deepcopy(GUZZLER)
+        d["act"] = [{"at": "0s", "travel_guard": {"who": "Grug", "enabled": False}}]
+        clock = Clock()
+        world = guzzler_world(clock)
+        world.write_travel_guard = mock.Mock()
+        r = run(d, world, clock, handoff=NAMED_HANDOFF)
+        self.assertEqual(r["verdict"], "INVALID")
+        self.assertIn("no guard from this run", " ".join(r["reasons"]))
+        world.write_travel_guard.assert_not_called()
+
+    def test_a_conflicting_travel_guard_keeps_the_run_invalid(self):
+        d = copy.deepcopy(GUZZLER)
+        d["act"] = [{"at": "0s", "travel_guard": {"who": "Grug", "enabled": True}}]
+        clock = Clock()
+        world = guzzler_world(clock)
+        world.write_travel_guard = mock.Mock(
+            side_effect=guard.GuardError("aim changed")
+        )
+        r = run(d, world, clock, handoff=NAMED_HANDOFF)
+        self.assertEqual(r["verdict"], "INVALID")
+        self.assertIn("aim changed", " ".join(r["reasons"]))
+        self.assertFalse(r["acts"][0]["fired"])
+        self.assertEqual(
+            r["acts"][0]["error"], "could not set travel guard for Grug: aim changed"
+        )
+        self.assertEqual(world.commands, [])
+
+    def test_direct_judge_refuses_a_guard_for_an_indirectly_seeded_name(self):
+        d = copy.deepcopy(GUZZLER)
+        d["act"] = [{"at": "0s", "travel_guard": {"who": "Grug", "enabled": True}}]
+        clock = Clock()
+        world = guzzler_world(clock)
+        world.write_travel_guard = mock.Mock()
+        r = run(d, world, clock)
+        self.assertEqual(r["verdict"], "INVALID")
+        self.assertIn("needs one named cast member", " ".join(r["reasons"]))
+        world.write_travel_guard.assert_not_called()
+
     def one_check(self, sql):
         d = copy.deepcopy(GUZZLER)
         d["observe"][-1]["sql"] = sql
