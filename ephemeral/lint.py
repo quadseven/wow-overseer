@@ -1020,27 +1020,32 @@ def _observe_one(lint, path, o, seen, known_var, doc):
         _observe_log(lint, path, o)
 
 
-def encounter_instance(doc, observation):
-    """The alias and map ID of the one cast-bound save this selector can read."""
+def _encounter_selector(observation):
+    """Read a supported end precondition's instance alias and boss map."""
     encounter = observation.get("encounter")
     if (
         not isinstance(encounter, dict)
         or set(encounter) != {"boss", "instance"}
         or not isinstance(encounter["boss"], str)
         or encounter["boss"] not in gamedata.INSTANCE_ENCOUNTERS
+        or not isinstance(encounter["instance"], str)
         or observation.get("role") != "precondition"
         or observation.get("when") != "end"
         or {"sql", "log", "online", "expect"} & observation.keys()
     ):
         return None
-    alias = encounter["instance"]
     map_name, _ = gamedata.INSTANCE_ENCOUNTERS[encounter["boss"]]
+    return encounter["instance"], map_name
+
+
+def encounter_instance(doc, observation):
+    """The alias and map ID of the one cast-bound save this selector can read."""
+    selector = _encounter_selector(observation)
+    if selector is None:
+        return None
+    alias, map_name = selector
     arrange, cast = doc.get("arrange"), doc.get("cast")
-    if (
-        not isinstance(alias, str)
-        or not isinstance(arrange, list)
-        or not isinstance(cast, list)
-    ):
+    if not isinstance(arrange, list) or not isinstance(cast, list):
         return None
     instances = [
         e["instance"] for e in arrange if isinstance(e, dict) and "instance" in e

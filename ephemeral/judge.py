@@ -527,22 +527,26 @@ class Judge:
         an earlier run's credits, proves nothing. A decree that arranges an
         instance without such an observation cannot PASS.
         """
-        maps = {
-            gamedata.INSTANCE_MAPS[step["instance"]["map"]]
+        instances = [
+            step["instance"]
             for step in self.decree.get("arrange") or []
             if "instance" in step
-            and step["instance"].get("map") in gamedata.INSTANCE_MAPS
-        }
-        if not any("instance" in step for step in self.decree.get("arrange") or []):
+        ]
+        if not instances:
             return []
+        maps = {
+            gamedata.INSTANCE_MAPS[instance["map"]]
+            for instance in instances
+            if instance.get("map") in gamedata.INSTANCE_MAPS
+        }
         problems = []
         for name, sql in self.rendered.items():
-            rec = self.records.get(name)
-            if "encounter" in self.observes[name] and rec and rec["status"] == "held":
+            rec = self.records.get(name, {})
+            if "encounter" in self.observes[name] and rec.get("status") == "held":
                 return []
             if (CREDIT_DB, CREDIT_TABLE) not in dbschema.tables_read(sql, self.schema):
                 continue
-            if not rec or rec["role"] != "precondition":
+            if rec.get("role") != "precondition":
                 problems.append(
                     f"{name} reads {CREDIT_TABLE} but is not a precondition"
                 )
@@ -558,8 +562,8 @@ class Judge:
         if problems:
             return ["no encounter credit evidence: " + "; ".join(problems)]
         return [
-            "no encounter credit evidence: a precondition reading log_encounter "
-            "must hold before an instance run can pass"
+            "no encounter credit evidence: a bound encounter observation or a "
+            "run-scoped log_encounter precondition must hold"
         ]
 
     def _credit_shape_problems(self, obs, maps, rendered):
