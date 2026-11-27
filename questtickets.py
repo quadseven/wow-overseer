@@ -285,7 +285,9 @@ def _world_rows(info) -> list[str]:
         if item.get("provided"):
             source.append("provided when this quest is accepted")
         if item["droppers"]:
-            source.append("creature entries " + ", ".join(map(str, item["droppers"])))
+            source.append(
+                "dropped by creature entries " + ", ".join(map(str, item["droppers"]))
+            )
         if item["rewards"]:
             source.append("rewarded by quests " + ", ".join(map(str, item["rewards"])))
         if item.get("objects"):
@@ -366,13 +368,21 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
     ):
         lines += ["", SCRIPTED_EVENT_NOTE]
     if no_giver_in_reach:
+        note = (
+            "At that take, the quest command found no live creature giver within "
+            "its 20-yard arrival radius. The stored rows explain the refusal but "
+            "do not identify why the lookup found no giver."
+        )
+        if info is not None and any(
+            item.get("droppers") for item in getattr(info, "items", ())
+        ):
+            note += (
+                " The creature entries listed above are required-item drop "
+                "sources, not evidence of which creature starts the quest."
+            )
         lines += [
             "",
-            "The take was refused because no living creature linked to the quest "
-            "matched within the 20-yard arrival radius at that time. The stored "
-            "rows confirm the creature relation, but do not show its live distance, "
-            "phase, or state, so they explain the refusal without identifying why "
-            "the lookup found no giver.",
+            note,
         ]
     if already_in_log:
         lines += ["", ALREADY_IN_LOG_NOTE]

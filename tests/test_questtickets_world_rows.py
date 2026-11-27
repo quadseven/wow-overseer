@@ -258,17 +258,17 @@ class WorldRows(unittest.TestCase):
 
         self.assertIn("Required item 3110 x12 (Tunnel Rat Ear)", ticket)
         self.assertIn(
-            "creature entries 1172, 1173, 1174, 1175, 1176, 1177, 1202", ticket
-        )
-        self.assertIn(
-            "The take was refused because no living creature linked to the quest "
-            "matched within the 20-yard arrival radius at that time.",
+            "dropped by creature entries 1172, 1173, 1174, 1175, 1176, 1177, 1202",
             ticket,
         )
         self.assertIn(
-            "The stored rows confirm the creature relation, but do not show its "
-            "live distance, phase, or state, so they explain the refusal without "
-            "identifying why the lookup found no giver.",
+            "At that take, the quest command found no live creature giver within "
+            "its 20-yard arrival radius.",
+            ticket,
+        )
+        self.assertIn(
+            "The creature entries listed above are required-item drop sources, "
+            "not evidence of which creature starts the quest.",
             ticket,
         )
 
@@ -330,14 +330,13 @@ class WorldRows(unittest.TestCase):
         self.assertIn("gameobject loot entries 2742", ticket)
         self.assertIn("Zone: Teldrassil", ticket)
         self.assertIn(
-            "The take was refused because no living creature linked to the quest "
-            "matched within the 20-yard arrival radius at that time.",
+            "At that take, the quest command found no live creature giver within "
+            "its 20-yard arrival radius.",
             ticket,
         )
-        self.assertIn(
-            "The stored rows confirm the creature relation, but do not show its "
-            "live distance, phase, or state, so they explain the refusal without "
-            "identifying why the lookup found no giver.",
+        self.assertNotIn(
+            "The creature entries listed above are required-item drop sources, "
+            "not evidence of which creature starts the quest.",
             ticket,
         )
 
@@ -348,8 +347,9 @@ class WorldRows(unittest.TestCase):
         # questcatalogue.QUESTS_SQL, ITEM_NAMES_SQL, and DROP_SQL. The ledger
         # refusal is written by bridge._record_quest_broken and read through
         # questtickets.BROKEN_SQL; counts use OBJECTIVES_SQL's row shape. The
-        # pinned module checks for a living creature within its 20-yard arrival
-        # radius; this fixture does not invent that creature's live location.
+        # mod-overseer/src/mod_overseer.cpp::QuestCreatureInReach checks for a
+        # living creature within its 20-yard arrival radius. This fixture does
+        # not invent that creature's live location.
         row = quest_row(
             quest=437,
             title="The Dead Fields",
@@ -397,20 +397,21 @@ class WorldRows(unittest.TestCase):
         self.assertIn("Zone: Silverpine Forest", ticket)
         self.assertIn("QuestLevel: 14; MinLevel: 10", ticket)
         self.assertIn("Required item 3622 x1 (Essence of Nightlash)", ticket)
-        self.assertIn("creature entries 1983", ticket)
+        self.assertIn("dropped by creature entries 1983", ticket)
         self.assertIn("Reason: " + reason, ticket)
         self.assertIn("Last objective counts: all zero", ticket)
         self.assertIn(
-            "The take was refused because no living creature linked to the quest "
-            "matched within the 20-yard arrival radius at that time.",
+            "At that take, the quest command found no live creature giver within "
+            "its 20-yard arrival radius. The stored rows explain the refusal but "
+            "do not identify why the lookup found no giver.",
             ticket,
         )
         self.assertIn(
-            "The stored rows confirm the creature relation, but do not show its "
-            "live distance, phase, or state, so they explain the refusal without "
-            "identifying why the lookup found no giver.",
+            "The creature entries listed above are required-item drop sources, "
+            "not evidence of which creature starts the quest.",
             ticket,
         )
+        self.assertNotIn("stored rows confirm the creature relation", ticket)
 
 
 if __name__ == "__main__":

@@ -194,16 +194,11 @@ class Filing(unittest.TestCase):
         self.assertEqual(text.count("Last objective counts: not in the log now"), 2)
         self.assertEqual(
             text.count(
-                "The take was refused because no living creature linked to the quest "
-                "matched within the 20-yard arrival radius at that time."
+                "At that take, the quest command found no live creature giver within "
+                "its 20-yard arrival radius. The stored rows explain the refusal "
+                "but do not identify why the lookup found no giver."
             ),
             1,
-        )
-        self.assertIn(
-            "The stored rows confirm the creature relation, but do not show its "
-            "live distance, phase, or state, so they explain the refusal without "
-            "identifying why the lookup found no giver.",
-            text,
         )
         self.assertNotIn(
             "The take was refused because no living creature",
