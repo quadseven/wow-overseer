@@ -490,7 +490,31 @@ digests the registry still serves, fills `--control-worldserver`, `--control-dbi
 `--control-pin` (and `--control-bridge` from the set's `bridge` when the decree turns the bridge on) from it, and records the choice as
 a fidelity delta. It refuses a `TODO` fix commit, an empty or unreadable history, a history
 where every set carries the fix or no set without it still resolves, and explicit
-control image flags, `--control-bridge` included, given beside it. With the bridge on, a chosen set whose `bridge` is missing or no longer resolves is refused. `--control-drop-keys` is still given by hand.
+control image flags, `--control-bridge` included, given beside it. With the bridge on, a
+chosen set whose `bridge` is missing or no longer resolves is refused.
+
+A history entry can carry a `dist_inventory` from its exact worldserver image. It
+records the entry's complete `worldserver` digest reference, `platform: linux/amd64`,
+and `groups`, a mapping from override-group names to the configuration keys in
+each distribution file. An absent module file has no group entry. The inventory
+contains key names only.
+
+Build the inventory from a trusted filesystem export of that digest and platform:
+
+    crane export --platform linux/amd64 "$CONTROL_REF" "$CONTROL_TAR"
+    python3 -m ephemeral.controlconfig --worldserver "$CONTROL_REF" --archive "$CONTROL_TAR"
+
+Store the emitted JSON under `dist_inventory` in the matching history entry.
+The caller pairs the archive with its digest and platform when exporting it.
+The archive reader uses the reference configuration files inside the built image.
+
+For a selected entry with an inventory, `submit` uses the image's playerbots
+prefix and removes unsupported inherited overrides from the control. It refuses
+the submission when a baseline or decree key is unavailable, or when a configured
+module has no matching distribution file. Each drop records the image, group and
+key in the fidelity deltas. An inventory and manual drop or prefix flags cannot
+be combined. History entries without an inventory use the existing manual
+`--control-drop-keys` and `--control-playerbots-prefix` options.
 
 With `world.bridge: "on"` the template's bridge sidecar is kept, at the arm's own
 image: the control arm's is `--control-bridge` (the build before the fix), the
