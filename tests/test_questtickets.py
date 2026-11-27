@@ -209,6 +209,48 @@ class Filing(unittest.TestCase):
             qt.body(218, None, [row(218)], [], ""),
         )
 
+    def test_the_dead_fields_take_refusal_is_explained_from_the_world_rows(self):
+        # Fixture rows follow the ticket's world rows: QuestLevel 14, MinLevel 10,
+        # and required item 3622 (Essence of Nightlash) whose only named source
+        # is creature 1983. The ledger reason is persisted by
+        # bridge._record_quest_broken from questers._giver_failure.
+        info = types.SimpleNamespace(
+            title="The Dead Fields",
+            zone_name="Silverpine Forest",
+            level=14,
+            min_level=10,
+            follows=0,
+            items=(
+                {
+                    "id": 3622,
+                    "count": 1,
+                    "name": "Essence of Nightlash",
+                    "droppers": (1983,),
+                    "rewards": (),
+                    "objects": (),
+                    "vendors": (),
+                },
+            ),
+            objectives=(),
+        )
+        refused = dict(row(437, name="QuestBot"), reason=qt.NO_GIVER_IN_REACH)
+        text = qt.body(437, info, [refused], [], "")
+
+        self.assertIn("QuestLevel: 14; MinLevel: 10", text)
+        self.assertIn("Zone: Silverpine Forest", text)
+        self.assertIn("Required item 3622 x1 (Essence of Nightlash)", text)
+        self.assertIn("creature entries 1983", text)
+        self.assertIn(
+            "The take was refused because no living creature linked to the quest "
+            "matched within the 20-yard arrival radius at that time.",
+            text,
+        )
+        self.assertIn(
+            "This explains the ledger reason, but the stored rows do not distinguish "
+            "a missing, distant, dead, or otherwise unavailable creature.",
+            text,
+        )
+
     def test_already_in_log_take_refusal_is_explained_as_a_point_in_time_read(self):
         # This stored row shape is selected by questtickets.BROKEN_SQL. The
         # current questers.LOG_STATE_REFUSALS guard no longer counts this reason
