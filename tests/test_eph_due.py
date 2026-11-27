@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from ephemeral import __main__ as cli
-from ephemeral import due, ghx, submit
+from ephemeral import batchseal, due, ghx, kube, submit
 
 REPO = "example/repo"
 
@@ -70,15 +70,20 @@ class DueTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.cfg = SimpleNamespace(results_dir=tmp.name, decree_repo=REPO)
+        self.cfg = SimpleNamespace(
+            results_dir=tmp.name, decree_repo=REPO, namespace="proofs"
+        )
 
     def run_due(self, issues, decrees):
         return due.due(FakeGh(issues, decrees), self.cfg)
 
-    def run_submit(self, gh, *args, limit=1, response=None):
+    def run_submit(self, gh, *args, limit=1, response=None, cluster=None):
+        if cluster is None:
+            cluster = mock.Mock()
+            cluster.list.return_value = []
         buf = io.StringIO()
         with (
-            mock.patch.object(cli, "_runner", return_value=(self.cfg, None, gh)),
+            mock.patch.object(cli, "_runner", return_value=(self.cfg, cluster, gh)),
             mock.patch.object(submit, "submit", side_effect=response) as submit_call,
             redirect_stdout(buf),
         ):
@@ -331,6 +336,39 @@ class DueTest(unittest.TestCase):
         )
         self.assertEqual(code, 2)
         self.assertEqual(output, "error: create failed\n")
+        self.assertEqual([call.args[3] for call in calls], ["data/decrees/a.yaml"] * 2)
+
+    def test_reaping_permission_failure_leaves_other_due_candidates_available(self):
+        cluster = mock.Mock()
+        markers = []
+        for number, (did, batch) in enumerate(
+            (("old-one", "abcdef"), ("old-two", "deadbe")), 1
+        ):
+            marker = batchseal.reservation(self.cfg.namespace, {
+                "decree_id": did, "batch": batch,
+            })  # fmt: skip
+            marker["metadata"].update(
+                creationTimestamp="2026-11-20T01:00:00Z",
+                uid=f"uid-{number}",
+                resourceVersion=str(number),
+            )
+            markers.append(marker)
+        cluster.list.return_value = markers
+        cluster.delete_configmap_version.side_effect = [
+            kube.KubeError("Forbidden"),
+            None,
+        ]
+        gh = FakeGh([issue(7, "Proof: decree a")], {"a": decree("a", 7)})
+        with mock.patch.object(due.time, "time", return_value=1795140000):
+            code, output, calls = self.run_submit(gh, cluster=cluster)
+        self.assertEqual(code, 0)
+        self.assertIn(
+            "could not expire staging for old-one batch abcdef: Forbidden", output
+        )
+        self.assertIn("expired staging for old-two batch deadbe", output)
+        self.assertEqual(cluster.delete_configmap_version.call_args_list, [
+            mock.call(marker) for marker in markers
+        ])  # fmt: skip
         self.assertEqual([call.args[3] for call in calls], ["data/decrees/a.yaml"] * 2)
 
     def test_due_argument_errors_are_refused_before_loading_the_runner(self):

@@ -291,15 +291,29 @@ class FakeCluster:
 
     def v_replace(self, ns, rest, text):
         obj = json.loads(text)
-        kind = "leases.coordination.k8s.io"
-        key = (kind, obj["metadata"].get("namespace", ns), obj["metadata"]["name"])
+        kind = {"Lease": "leases.coordination.k8s.io", "ConfigMap": "configmaps"}[
+            obj["kind"]
+        ]
+        meta = obj["metadata"]
+        key = (kind, meta.get("namespace", ns), meta["name"])
         cur = self.objs.get(key)
-        if not cur or cur["metadata"]["resourceVersion"] != obj["metadata"].get(
-            "resourceVersion"
-        ):
+        if cur is None:
+            return 1, "", "NotFound"
+        old = cur["metadata"]
+        if old["resourceVersion"] != meta.get("resourceVersion") or old[
+            "uid"
+        ] != meta.get("uid", old["uid"]):
             return 1, "", "Conflict"
+        if cur.get("immutable") is True and (
+            obj.get("immutable") is not True or obj.get("data") != cur.get("data")
+        ):
+            return 1, "", "Invalid: immutable data"
         self.seq += 1
-        obj["metadata"]["resourceVersion"] = str(self.seq)
+        meta.update(
+            uid=old["uid"],
+            creationTimestamp=old["creationTimestamp"],
+            resourceVersion=str(self.seq),
+        )
         self.objs[key] = obj
         return 0, json.dumps(obj), ""
 
@@ -311,18 +325,44 @@ class FakeCluster:
             o.setdefault("spec", {})[k] = v
         return 0, "", ""
 
-    def v_delete(self, ns, rest, _in):
-        kind, name = rest[0], rest[1]
-        job = self.objs.pop((kind, ns, name), None)
-        if job and kind == "jobs":
-            uid = job["metadata"]["uid"]
-            for key, o in list(self.objs.items()):
-                if any(
-                    r.get("uid") == uid
-                    for r in o["metadata"].get("ownerReferences", [])
-                ):
-                    del self.objs[key]
+    def v_delete(self, ns, rest, text):
+        if rest[0] == "--raw":
+            _, api, version, scope, ns, kind, name = rest[1].split("/")
+            assert (api, version, scope, kind) == (
+                "api", "v1", "namespaces", "configmaps"
+            )  # fmt: skip
+            key = (kind, ns, name)
+            current = self.objs.get(key)
+            if current is None:
+                return 1, "", "NotFound"
+            options = json.loads(text)
+            assert options["propagationPolicy"] == "Background"
+            checks = options["preconditions"]
+            meta = current["metadata"]
+            if checks != {k: meta[k] for k in ("uid", "resourceVersion")}:
+                return 1, "", "Conflict"
+            self._cascade_delete(key)
+            return 0, "{}", ""
+        kind, name = rest[:2]
+        if kind == "jobs":
+            self._cascade_delete((kind, ns, name))
+        else:
+            self.objs.pop((kind, ns, name), None)
         return 0, "", ""
+
+    def _cascade_delete(self, key):
+        obj = self.objs.pop(key, None)
+        if obj is None:
+            return
+        meta = obj["metadata"]
+        descendants = [
+            k for k, candidate in self.objs.items()
+            if k[1] == meta["namespace"]
+            and any(r.get("uid") == meta["uid"]
+                    for r in candidate["metadata"].get("ownerReferences", []))
+        ]  # fmt: skip
+        for descendant in descendants:
+            self._cascade_delete(descendant)
 
 
 class FakeGh:

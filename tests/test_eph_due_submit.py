@@ -158,6 +158,16 @@ class DueSubmitIntegrationTest(fixture.Base):
         self.assertEqual(saved, record)
         for job in worlds:
             rid = runids.run_of_job(job)
+            self.assertEqual(
+                job["metadata"]["ownerReferences"],
+                [{
+                    "apiVersion": "v1",
+                    "kind": "ConfigMap",
+                    "name": marker["metadata"]["name"],
+                    "uid": marker["metadata"]["uid"],
+                    "blockOwnerDeletion": False,
+                }],
+            )  # fmt: skip
             inputs = next(
                 cm for cm in configmaps if cm["metadata"]["labels"]["eph/run"] == rid
             )
@@ -169,12 +179,26 @@ class DueSubmitIntegrationTest(fixture.Base):
                     "input_sha256": batchseal.fingerprint(inputs["data"]),
                 },
             )
-        creates = [
-            json.loads(body)["metadata"]["name"]
+        writes = [
+            ("create" if "create" in args else "replace", json.loads(body))
             for args, body in self.cluster.calls
-            if "create" in args and "--dry-run=client" not in args
+            if ("create" in args or "replace" in args)
+            and "--dry-run=client" not in args
         ]
-        self.assertEqual(creates[-1], batchseal.name(self.decree_id))
+        verb, reservation = writes[0]
+        self.assertEqual(verb, "create")
+        self.assertEqual(
+            batchseal.parse_reservation(reservation, self.cfg.namespace),
+            (self.decree_id, record["batch"]),
+        )
+        verb, committed = writes[-1]
+        self.assertEqual(verb, "replace")
+        self.assertEqual(committed["metadata"]["name"], batchseal.name(self.decree_id))
+        self.assertEqual(committed["metadata"]["uid"], marker["metadata"]["uid"])
+        self.assertNotEqual(
+            committed["metadata"]["resourceVersion"],
+            marker["metadata"]["resourceVersion"],
+        )
 
     def test_failed_input_keeps_partial_stage_inert_and_without_receipt(self):
         original = self.cluster.v_create
@@ -197,7 +221,11 @@ class DueSubmitIntegrationTest(fixture.Base):
         self.assertEqual(len(worlds), 3)
         self.assertTrue(all(job["spec"]["suspend"] for job in worlds))
         self.assertEqual(self.kube.list("jobs", selector=runids.JOB_LABEL_ARM), [])
-        self.assertIsNone(self.marker())
+        self.assertIsNone(batchseal.parse(self.marker(), self.cfg.namespace))
+        self.assertEqual(
+            batchseal.parse_reservation(self.marker(), self.cfg.namespace)[0],
+            self.decree_id,
+        )
         self.assertFalse((pathlib.Path(self.cfg.results_dir) / self.decree_id).exists())
         self.assertEqual(output, [])
 
@@ -222,7 +250,11 @@ class DueSubmitIntegrationTest(fixture.Base):
             ),
         ):
             self.submit_staged()
-        self.assertIsNone(self.marker())
+        self.assertIsNone(batchseal.parse(self.marker(), self.cfg.namespace))
+        self.assertEqual(
+            batchseal.parse_reservation(self.marker(), self.cfg.namespace)[0],
+            self.decree_id,
+        )
 
     def test_numeric_proves_and_box_are_preserved_in_the_receipt(self):
         box = "the family leaves the bar without a patron dying"
@@ -236,18 +268,18 @@ class DueSubmitIntegrationTest(fixture.Base):
         self.assertEqual(batchseal.parse(self.marker(), self.cfg.namespace)[0], record)
 
     def test_lost_marker_response_is_confirmed_by_readback(self):
-        original = self.cluster.v_create
+        original = self.cluster.v_replace
 
         def lose_response(ns, args, body):
             result = original(ns, args, body)
             obj = json.loads(body)
             if obj["metadata"]["name"] == batchseal.name(self.decree_id):
                 self.assertEqual(result[0], 0)
-                return 1, "", "connection lost after create"
+                return 1, "", "connection lost after replace"
             return result
 
         output = []
-        with mock.patch.object(self.cluster, "v_create", side_effect=lose_response):
+        with mock.patch.object(self.cluster, "v_replace", side_effect=lose_response):
             record = self.submit_staged(out=output.append)
         self.assertEqual(batchseal.parse(self.marker(), self.cfg.namespace)[0], record)
         self.assertTrue(
@@ -259,27 +291,26 @@ class DueSubmitIntegrationTest(fixture.Base):
         self.assertEqual(len(self.cluster.of("jobs", "wow-ephemeral")), 6)
 
     def test_ambiguous_marker_never_removes_potentially_committed_runs(self):
-        original_create = self.cluster.v_create
+        original_replace = self.cluster.v_replace
         original_get = self.cluster.v_get
         marker_name = batchseal.name(self.decree_id)
 
         def lose_response(ns, args, body):
-            result = original_create(ns, args, body)
+            result = original_replace(ns, args, body)
             if json.loads(body)["metadata"]["name"] == marker_name:
-                return 1, "", "connection lost after create"
+                self.assertEqual(result[0], 0)
+                return 1, "", "connection lost after replace"
             return result
 
         def lose_readback(ns, args, body):
-            if (
-                marker_name in args
-                and ("configmaps", ns, marker_name) in self.cluster.objs
-            ):
+            current = self.cluster.objs.get(("configmaps", ns, marker_name))
+            if marker_name in args and batchseal.parse(current, ns) is not None:
                 return 1, "", "marker readback unavailable"
             return original_get(ns, args, body)
 
         output = []
         with (
-            mock.patch.object(self.cluster, "v_create", side_effect=lose_response),
+            mock.patch.object(self.cluster, "v_replace", side_effect=lose_response),
             mock.patch.object(self.cluster, "v_get", side_effect=lose_readback),
             self.assertRaisesRegex(
                 submit.SubmitError, "could not confirm batch marker"
@@ -292,27 +323,31 @@ class DueSubmitIntegrationTest(fixture.Base):
         self.assertFalse(any("delete" in args for args, _ in self.cluster.calls))
         self.assertEqual(output, [])
 
-    def test_competing_valid_receipt_cannot_report_this_batch_queued(self):
+    def test_competing_reservation_cannot_stage_jobs(self):
         original = self.cluster.v_create
+        competing_batch = "deadbe"
 
-        def race_marker(ns, args, body):
+        def race_reservation(ns, args, body):
             obj = json.loads(body)
             if obj["metadata"]["name"] != batchseal.name(self.decree_id):
                 return original(ns, args, body)
-            record = json.loads(obj["data"]["batch.json"])
-            record["submitted_at"] += 1
-            obj["data"]["batch.json"] = json.dumps(record)
-            self.assertEqual(original(ns, args, json.dumps(obj))[0], 0)
+            reservation = batchseal.reservation(ns, {
+                "decree_id": self.decree_id, "batch": competing_batch,
+            })  # fmt: skip
+            self.assertEqual(original(ns, args, json.dumps(reservation))[0], 0)
             return 1, "", "AlreadyExists"
 
         output = []
         with (
-            mock.patch.object(self.cluster, "v_create", side_effect=race_marker),
-            self.assertRaisesRegex(submit.SubmitError, "stored receipt differs"),
+            mock.patch.object(self.cluster, "v_create", side_effect=race_reservation),
+            self.assertRaises(submit.SubmitError),
         ):
             self.submit_staged(out=output.append)
-        self.assertIsNotNone(batchseal.parse(self.marker(), self.cfg.namespace))
-        self.assertEqual(len(self.cluster.of("jobs", "wow-ephemeral")), 6)
+        self.assertEqual(
+            batchseal.parse_reservation(self.marker(), self.cfg.namespace),
+            (self.decree_id, competing_batch),
+        )
+        self.assertEqual(self.cluster.of("jobs", "wow-ephemeral"), [])
         self.assertFalse((pathlib.Path(self.cfg.results_dir) / self.decree_id).exists())
         self.assertEqual(output, [])
 

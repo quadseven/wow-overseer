@@ -174,10 +174,12 @@ submission record leaves the slot available for the next decree. The command
 uses the default-branch file bytes for both arms and picks the control with
 `--control auto`. The selected control needs a `dist_inventory` from its
 exact image so preflight can check its overrides. Omit `--dry-run` to stage
-one suspended batch per selected decree. The submitter publishes one
-immutable `eph-due-<decree-id>` ConfigMap after all Jobs and their owned inputs
-exist. That record gates admission and prevents a second automatic commit
-for the same decree. Staged Jobs stay suspended without a matching record.
+one suspended batch per selected decree. The submitter first creates a
+reservation at `eph-due-<decree-id>`. It owns the staged Jobs, which own their
+input ConfigMaps. Once every input is confirmed, the submitter turns that
+same reservation into an immutable receipt using its UID and resource
+version. The receipt gates admission and prevents a second automatic batch
+for the same decree. Staged Jobs stay suspended without a matching receipt.
 The collector recovers missing local records from the committed ConfigMaps.
 Keep those records after collection so retries can still detect the batch.
 Collection retains staged batch verdicts until all sibling Jobs are gone.
@@ -187,12 +189,19 @@ and checkbox rules. After siblings are gone, `collect` only prunes numeric
 results once they are archived locally and the retention window has elapsed.
 
 A submission error after preflight stops the command and returns an error.
-An interrupted submission can leave inert staged Jobs and their inputs for
-operator reconciliation. The path form of `submit` still supports manual
-image, config and single-arm options.
+Each subsequent non-dry-run `submit --due` expires staging reservations at
+least one hour old, even when there are no due proofs. Expiry checks both
+the UID and resource version, so if the receipt was committed just before
+expiry, the delete conflicts and the committed batch survives. Kubernetes
+then removes expired reservations' Jobs and inputs in the background. A
+retry can use the same decree name as soon as its reservation is gone.
+Retain committed receipts. Deleting one also deletes its remaining Jobs.
+The path form of `submit` still supports manual image, config and single-arm
+options.
 
 Deploy the dispatcher and collector that understand committed batches before
-enabling `submit --due` on a schedule.
+enabling `submit --due` on a schedule. The submitter needs permission to
+get, list, create, update and delete ConfigMaps in the ephemeral namespace.
 
 `eph report` posts the named decree's batch result, including each run's UTC
 start time and judge reason lines. It ticks one uniquely matching checkbox only

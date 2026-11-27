@@ -10,9 +10,11 @@ before publishing its admission record.
 import base64
 import pathlib
 import re
+import time
 from dataclasses import dataclass
+from datetime import datetime
 
-from . import ghx, kube, lint, submit
+from . import batchseal, ghx, kube, lint, submit
 from .miniyaml import YamlError, loads
 
 LABEL_WAITING = "awaiting-live-check"
@@ -178,8 +180,47 @@ def _target_blocker(gh, proofs):
     return "" if eligible else "no linked issue is still waiting for this proof"
 
 
+def _reservation_created_at(cm):
+    try:
+        created = datetime.fromisoformat(cm["metadata"]["creationTimestamp"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return created.timestamp() if created.tzinfo is not None else None
+
+
+def _expire_staging(cfg, cluster, out):
+    """Remove old reservations using their observed UID and resource version."""
+    selector = f"{batchseal.COMMIT_LABEL}={batchseal.STAGING}"
+    try:
+        markers = cluster.list("configmaps", selector=selector)
+    except kube.KubeError as exc:
+        out(f"could not read staging reservations: {exc}")
+        return
+    cutoff = time.time() - batchseal.STAGING_TIMEOUT_SECONDS
+    for cm in markers:
+        reservation = batchseal.parse_reservation(cm, cfg.namespace)
+        if reservation is None:
+            continue
+        decree_id, batch = reservation
+        created = _reservation_created_at(cm)
+        label = f"{decree_id} batch {batch}"
+        if created is None:
+            out(f"could not expire staging for {label}: invalid creation timestamp")
+            continue
+        if created > cutoff:
+            continue
+        try:
+            cluster.delete_configmap_version(cm)
+        except kube.KubeError as exc:
+            out(f"could not expire staging for {label}: {exc}")
+            continue
+        out(f"expired staging for {label}")
+
+
 def submit_due(gh, cfg, cluster, limit, args, out=print):
     """Select up to limit distinct unheld proofs that pass preflight."""
+    if not args.get("dry_run"):
+        _expire_staging(cfg, cluster, out)
     by_decree = {}
     for proof in _discover(gh, cfg, None):
         by_decree.setdefault(proof.decree_id, []).append(proof)

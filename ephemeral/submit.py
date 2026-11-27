@@ -5,8 +5,9 @@ Nothing here starts a world. A Job is created with `suspend: true`; only
 holding the decree and the merged config files the pod mounts, owned by its
 Job so the Job's TTL removes both.
 
-Automatic due submissions hide staged Jobs from dispatch until an immutable
-batch marker identifies every Job and input. The marker is the commit point.
+Automatic due submissions place suspended Jobs under a staging reservation.
+Replacing that reservation with an immutable batch marker commits the Jobs
+and their inputs for dispatch.
 
 Refusals (an error, never a quiet downgrade): a decree that does not lint, an
 image other than `follow-dev`, a bridge-on decree whose template has no
@@ -618,11 +619,20 @@ def _check_stage_request(kube, namespace, decree_id, arm):
 
 def _stage_batch(cfg, kube, pending, record, raw, control_files, treatment_files):
     batch, decree_id, sha = (record[k] for k in ("batch", "decree_id", "decree_sha256"))
+    reservation = _reserve_batch(kube, cfg.namespace, record)
+    owner = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "name": reservation["name"],
+        "uid": reservation["uid"],
+        "blockOwnerDeletion": False,
+    }
     members = {}
     for job, rid, arm, realm in pending:
         labels = job["metadata"].setdefault("labels", {})
         labels.pop(runids.JOB_LABEL_ARM, None)
         labels[batchseal.STAGED_LABEL] = batch
+        job["metadata"]["ownerReferences"] = [owner]
         files = control_files if arm == "control" else treatment_files
         try:
             members[rid] = _create_run(
@@ -640,7 +650,7 @@ def _stage_batch(cfg, kube, pending, record, raw, control_files, treatment_files
             )
         except KubeError as exc:
             raise SubmitError(f"could not stage run {rid}: {exc}") from exc
-    _commit_batch(kube, cfg.namespace, record, members)
+    _commit_batch(kube, cfg.namespace, record, members, reservation)
     try:
         batchseal.install_record(cfg.results_dir, record)
     except (OSError, ValueError) as exc:
@@ -649,36 +659,69 @@ def _stage_batch(cfg, kube, pending, record, raw, control_files, treatment_files
         ) from exc
 
 
-def _commit_batch(kube, namespace, record, members):
+def _reserve_batch(kube, namespace, record):
+    requested = batchseal.reservation(namespace, record)
+    marker = requested["metadata"]["name"]
+    try:
+        made = kube.create(requested)
+    except KubeError as exc:
+        # A competing submitter or an interrupted create may own this name.
+        raise SubmitError(f"could not reserve batch marker {marker}: {exc}") from exc
+    if batchseal.parse_reservation(made, namespace) != (
+        record["decree_id"],
+        record["batch"],
+    ):
+        raise SubmitError(f"API did not confirm batch reservation {marker}")
+    uid = _created_uid(made, requested)
+    meta = made["metadata"]
+    revision = meta.get("resourceVersion")
+    if not isinstance(revision, str) or not revision or meta.get("deletionTimestamp"):
+        raise SubmitError(
+            f"API did not confirm a live version of batch reservation {marker}"
+        )
+    return {"name": marker, "uid": uid, "resourceVersion": revision}
+
+
+def _commit_batch(kube, namespace, record, members, reservation):
     manifest = batchseal.manifest(namespace, record, members)
+    manifest["metadata"].update(reservation)
     marker = manifest["metadata"]["name"]
     expected = (record, members)
     if batchseal.parse(manifest, namespace) != expected:
         raise SubmitError(f"batch {record['batch']} could not form a valid marker")
     problem = f"could not confirm batch marker {marker} for batch {record['batch']}"
-    create_error = None
+    replace_error = None
     try:
-        made = kube.create(manifest)
+        made = kube.replace(manifest)
     except KubeError as exc:
-        # The API might have committed the create before the response was lost.
-        create_error = exc
+        # The API might have committed the replacement before the response was lost.
+        replace_error = exc
         made = None
-    if batchseal.parse(made, namespace) == expected:
+    if _confirmed_commit(made, namespace, expected, reservation["uid"]):
         return
     try:
         current = kube.get("configmaps", marker, namespace=namespace, missing_ok=True)
     except KubeError as exc:
         raise SubmitError(f"{problem}: {exc}") from exc
-    observed = batchseal.parse(current, namespace)
-    if observed == expected:
+    if _confirmed_commit(current, namespace, expected, reservation["uid"]):
         return
-    if observed is not None:
+    if batchseal.parse(current, namespace) is not None:
         reason = "stored receipt differs"
+    elif batchseal.parse_reservation(current, namespace) is not None:
+        reason = "reservation was not committed"
     elif current is not None:
         reason = "stored receipt is invalid"
     else:
         reason = "marker is not visible"
-    raise SubmitError(f"{problem} ({reason})") from create_error
+    raise SubmitError(f"{problem} ({reason})") from replace_error
+
+
+def _confirmed_commit(cm, namespace, expected, uid):
+    return (
+        batchseal.parse(cm, namespace) == expected
+        and cm["metadata"].get("uid") == uid
+        and not cm["metadata"].get("deletionTimestamp")
+    )
 
 
 def _config_for(world, base_files, bridge_on=False):
@@ -830,13 +873,15 @@ def _created_uid(actual, requested):
 
 def _staged_job_uid(actual, requested):
     uid = _created_uid(actual, requested)
-    expected = requested["metadata"]["labels"]
-    labels = actual["metadata"].get("labels") or {}
+    expected = requested["metadata"]
+    current = actual["metadata"]
+    labels = current.get("labels") or {}
     if (
         actual.get("kind") != "Job"
         or actual.get("spec", {}).get("suspend") is not True
         or runids.JOB_LABEL_ARM in labels
-        or any(labels.get(k) != v for k, v in expected.items())
+        or any(labels.get(k) != v for k, v in expected["labels"].items())
+        or current.get("ownerReferences") != expected["ownerReferences"]
     ):
         raise SubmitError(
             f"API did not confirm suspended staged Job {requested['metadata']['name']}"

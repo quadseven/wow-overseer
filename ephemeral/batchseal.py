@@ -12,6 +12,8 @@ from . import runids
 STAGED_LABEL = "eph/staged"
 COMMIT_LABEL = "eph/batch-state"
 COMMITTED = "committed"
+STAGING = "staging"
+STAGING_TIMEOUT_SECONDS = 3600
 _DECREE = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
 _BATCH = re.compile(r"[a-f0-9]{6}")
 _SHA256 = re.compile(r"[a-f0-9]{64}")
@@ -45,8 +47,46 @@ def manifest(namespace, record, members):
     }
 
 
+def reservation(namespace, record):
+    """Reserve the commit name and own its Jobs until the receipt is sealed."""
+    decree_id = record["decree_id"]
+    return {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": name(decree_id),
+            "namespace": namespace,
+            "labels": {COMMIT_LABEL: STAGING},
+        },
+        "data": {"decree_id": decree_id, "batch": record["batch"]},
+    }
+
+
 def _matches(pattern, value):
     return isinstance(value, str) and bool(pattern.fullmatch(value))
+
+
+def parse_reservation(cm, namespace):
+    """Identify a canonical mutable reservation before expiring or filling it."""
+    try:
+        meta, data = cm["metadata"], cm["data"]
+        decree_id, batch = data["decree_id"], data["batch"]
+        if (
+            cm["apiVersion"] != "v1"
+            or cm["kind"] != "ConfigMap"
+            or cm.get("immutable", False) is not False
+            or meta.get("deletionTimestamp")
+            or meta["namespace"] != namespace
+            or meta["labels"].get(COMMIT_LABEL) != STAGING
+            or data.keys() != {"decree_id", "batch"}
+            or not _matches(_DECREE, decree_id)
+            or not _matches(_BATCH, batch)
+            or meta["name"] != name(decree_id)
+        ):
+            return None
+    except (AttributeError, KeyError, TypeError):
+        return None
+    return decree_id, batch
 
 
 def _members(record):
@@ -119,6 +159,7 @@ def parse(cm, namespace):
             cm.get("immutable") is not True
             or meta["namespace"] != namespace
             or meta["labels"].get(COMMIT_LABEL) != COMMITTED
+            or meta.get("deletionTimestamp")
         ):
             return None
         record = json.loads(cm["data"]["batch.json"])
