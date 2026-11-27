@@ -73,10 +73,18 @@ class GuildAdsPatchTest(unittest.TestCase):
     def test_patch_deletes_rows_741_and_743(self):
         db = self.seed(
             (741, "suggest_something", "%my_role is looking for guild."),
+            (742, "suggest_something", "Looking for gold."),
             (743, "suggest_something", "%my_role wants to join a good guild."),
         )
         db.executescript(self.sql)
-        self.assertEqual([], db.execute("SELECT id FROM ai_playerbot_texts").fetchall())
+        remaining = db.execute(
+            "SELECT id, name, text FROM ai_playerbot_texts"
+        ).fetchall()
+        self.assertEqual([742], [row[0] for row in remaining])
+        self.assertIn(
+            (742, "suggest_something", "Looking for gold."),
+            remaining,
+        )
 
     def test_patch_audits_suggest_something_guild_ads(self):
         db = self.seed(
