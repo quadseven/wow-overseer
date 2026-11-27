@@ -155,12 +155,12 @@ class ARetryableRewardRefusalIsNotBroken(unittest.TestCase):
             )
             self.assertEqual(p.broken, (), free)
 
-    def test_same_refusals_with_room_count_when_not_retryable(self):
+    def test_same_refusals_count_when_the_module_says_not_retryable(self):
         tried = [
             replace(reward_refused(age=m), retryable=False) for m in (300, 200, 100)
         ]
-        self.assertEqual(questers.refusals("Mirra", tried)[("turnin", 1)][0], 3)
-        for free in (1, 8):
+        for free in (0, 1, 8, None):
+            self.assertEqual(questers.refusals("Mirra", tried)[("turnin", 1)][0], 3)
             p = questers.plan(
                 world(),
                 complete_member(free_slots=free),
@@ -184,7 +184,17 @@ class ARetryableRewardRefusalIsNotBroken(unittest.TestCase):
             )
             for m in (300, 200, 100)
         ]
-        self.assertEqual(questers.refusals("Mirra", tried)[("turnin", 1)][0], 3)
+        for free in (0, 1, 8, None):
+            self.assertEqual(questers.refusals("Mirra", tried)[("turnin", 1)][0], 3)
+            p = questers.plan(
+                world(),
+                complete_member(free_slots=free),
+                questers.Clock(),
+                0.0,
+                tried=tried,
+            )
+            self.assertEqual([b.quest for b in p.broken], [1])
+            self.assertTrue(p.broken[0].reason.startswith(questers.REFUSED_TURN_IN))
 
     def test_a_refused_take_with_the_same_words_is_not_a_reward_refusal(self):
         take = questers.Attempt(
