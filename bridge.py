@@ -6572,13 +6572,12 @@ def _job_story(names: list) -> str:
 #
 # dungeonstall's third shape. The reads are the watch's own evidence: the
 # leader's steps in overseer_now_step (the fold the Watch tab prints) and the
-# member states the module publishes in its intent book. The hold and death
-# clocks are kept here, keyed by the queue entry being judged: a hold timed
-# under one entry must not hang the next entry for the same door.
+# member states the module publishes in its intent book. Hold and death clocks
+# belong to the matching open run, or to the queue entry before a run opens.
 
 # The member-state words the wedge judges are named inside _door_wedge.
 
-# (leader, member) -> (queue head id, monotonic first seen). The same clock is
+# (leader, member) -> (clock id, monotonic first seen). The same clock is
 # stored in overseer_bridge_memo as a wall timestamp so a pod restart cannot
 # start the stand-down bound over.
 _DOOR_HOLD_SINCE: dict = {}
@@ -6596,7 +6595,8 @@ def _door_hold_subject(key: tuple[str, str]) -> str:
 def _door_hold_memo_put(key: tuple[str, str], clock_id: int,
                         since: float, now: float) -> None:
     wall_now = time.time()
-    value = {"clock_id": int(clock_id)}
+    # Keep the stored field readable by a bridge rolled back to queue clocks.
+    value = {"head_id": int(clock_id)}
     args = (
         DOOR_HOLD_MEMO_KIND,
         _door_hold_subject(key),
@@ -6634,7 +6634,9 @@ def _restore_door_hold_memos(now: float) -> None:
             if not isinstance(pair, list) or len(pair) != 2:
                 raise ValueError("memo subject is not a leader/member pair")
             key = (str(pair[0]), str(pair[1]))
-            clock_id = int(value["clock_id"] if "clock_id" in value else value["head_id"])
+            # A legacy memo carries queue evidence only. An open run gets its
+            # own observation window when first seen on this version.
+            clock_id = int(value["head_id"])
             since = min(now, float(since_wall) - offset)
             if now - since > DOOR_HOLD_MEMO_SECONDS:
                 _door_hold_memo_delete(key)
@@ -6795,7 +6797,11 @@ def _door_wedge_ages(leader: str, members, clock_id: int) -> dict:
 # by a member questing on another map, and the run row's own heartbeat is
 # presence, not progress.
 _DOOR_RUN_SQL = (
-    "SELECT id FROM overseer_dungeon_run WHERE leader_name = %s "
+    "SELECT id, portal_keyword FROM overseer_dungeon_run WHERE leader_name = %s "
+    "AND map_id = %s AND ended_at IS NULL ORDER BY id DESC LIMIT 1"
+)
+_DOOR_RUN_LEGACY_SQL = (
+    "SELECT id FROM overseer_dungeon_run WHERE leader_name = %s AND map_id = %s "
     "AND ended_at IS NULL ORDER BY id DESC LIMIT 1"
 )
 # Two reads, not a join: the two tables sit in different collation groups
@@ -6806,20 +6812,44 @@ _DOOR_BOSS_SQL = (
 )
 
 
-def _door_open_run_id(leader: str) -> int | None:
-    """The leader's open run id, or None when there is none. A table this
-    realm cannot answer (1054 or 1146) reads as None."""
+def _door_open_run_id(leader: str, keyword: str) -> int | None:
+    """Find the open run of the door being judged, including alternate entrances."""
+    keyword = keyword.strip().lower()
+    map_id = dungeonpath.PORTAL_MAPS.get(keyword, raidrun.MAPS.get(keyword))
+    if map_id is None:
+        return None
+    args = (leader, map_id)
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(_DOOR_RUN_SQL, (leader,))
+            try:
+                cur.execute(_DOOR_RUN_SQL, args)
+            except pymysql.err.MySQLError as exc:
+                if not (exc.args and exc.args[0] == 1054):
+                    raise
+                cur.execute(_DOOR_RUN_LEGACY_SQL, args)
             runs = cur.fetchall()
-            if not runs:
-                return None
-            return int(runs[0]["id"])
         except pymysql.err.MySQLError as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
                 raise
             return None
+    if not runs:
+        return None
+    run = runs[0]
+    wing = campaignplan.ALTERNATES.get(keyword, keyword)
+    portal = str(run.get("portal_keyword") or "").strip().lower()
+    if portal:
+        if campaignplan.ALTERNATES.get(portal, portal) != wing:
+            return None
+    else:
+        # A map identifies the door only when every entrance is to one wing.
+        wings = {
+            campaignplan.ALTERNATES.get(name, name)
+            for name, value in (*dungeonpath.PORTAL_MAPS.items(), *raidrun.MAPS.items())
+            if value == map_id
+        }
+        if len(wings) != 1:
+            return None
+    return int(run["id"])
 
 
 def _door_run_boss_age(run_id: int) -> int | None:
@@ -6982,11 +7012,13 @@ def _door_wedge(head: dict, names: list, leader: str):
     A corpse outranks a walk, and a walk outranks a hold: the recorded
     reason names the worst thing wrong at the door.
     """
-    if head.get("status") != campaignqueue.ACTIVE:
-        # A different queue phase is not a door hold. The active job may come
-        # back later, so discard clocks only when this queue entry is no longer
-        # active.
-        for key in [k for k in _DOOR_HOLD_SINCE if k[0] == leader]:
+    status = head.get("status")
+    if status != campaignqueue.ACTIVE:
+        # A queued replacement waits to be judged until it starts. Its active
+        # pass will keep the clock only if the same run still owns the door.
+        keep_run_clocks = status == campaignqueue.QUEUED
+        for key in [k for k, stamp in _DOOR_HOLD_SINCE.items()
+                    if k[0] == leader and (not keep_run_clocks or stamp[0] >= 0)]:
             _DOOR_HOLD_SINCE.pop(key, None)
             delete_memo = globals().get("_door_hold_memo_delete")
             if delete_memo is not None:
@@ -6999,7 +7031,7 @@ def _door_wedge(head: dict, names: list, leader: str):
         return None
     keyword = str(head.get("keyword") or "")
     head_id = int(head.get("id") or 0)
-    run_id = _door_open_run_id(leader)
+    run_id = _door_open_run_id(leader, keyword)
     # Both tables assign positive IDs independently. Sign separates their clocks.
     clock_id = -run_id if run_id is not None else head_id
     restarts, members = _door_wedge_evidence(leader, head_id)

@@ -12,6 +12,7 @@ at the end, which is what refuses a NEW aim writer that asks nobody.
 
 import ast
 import asyncio
+from contextlib import nullcontext
 import importlib
 import inspect
 import pathlib
@@ -22,8 +23,10 @@ import unittest.mock
 from test_bag_withheld_stall import _FakeEconomySelf, _run_vendor_once
 
 import bag_pressure
+import campaignplan
 import campaignqueue
 import claims
+import dungeonpath
 import dungeonstall as stall
 import errandgate
 import jev_family_intent
@@ -127,8 +130,8 @@ class World:
             "_ERRAND_RECALLED": self.recalled,
             "_ERRAND_SERVED": {},
             "_current_travel_npc": lambda name: self.aims.get(name, ""),
-            "_door_run_boss_age": lambda leader: None,
-            "_door_open_run_id": lambda leader: 12345,
+            "_door_run_boss_age": lambda run_id: None,
+            "_door_open_run_id": lambda leader, keyword: 12345,
             "_door_wedge_evidence": self.members,
             "_fetch_live_maps": lambda names: {
                 n: self.maps[n] for n in names if n in self.maps
@@ -281,7 +284,7 @@ class ARecallCannotLoop(unittest.TestCase):
     def test_repeated_recalls_reach_the_bound_before_the_run_row_exists(self):
         world = World()
         ns = world.namespace()
-        ns["_door_open_run_id"] = lambda leader: None
+        ns["_door_open_run_id"] = lambda leader, keyword: None
         world.aims["Oz"] = "vendor"
         self.assertIsNone(world.judge(ns))
 
@@ -304,7 +307,7 @@ class ARecallCannotLoop(unittest.TestCase):
         world = World()
         ns = world.namespace()
         run_id = [None]
-        ns["_door_open_run_id"] = lambda leader: run_id[0]
+        ns["_door_open_run_id"] = lambda leader, keyword: run_id[0]
         world.aims["Oz"] = "vendor"
         self.assertIsNone(world.judge(ns))
 
@@ -316,7 +319,7 @@ class ARecallCannotLoop(unittest.TestCase):
     def test_a_new_queue_entry_starts_fresh_before_the_run_row_exists(self):
         world = World()
         ns = world.namespace()
-        ns["_door_open_run_id"] = lambda leader: None
+        ns["_door_open_run_id"] = lambda leader, keyword: None
         world.aims["Oz"] = "vendor"
         self.assertIsNone(world.judge(ns))
 
@@ -324,6 +327,49 @@ class ARecallCannotLoop(unittest.TestCase):
         replacement = dict(HEAD, id=HEAD["id"] + 1)
         self.assertIsNone(ns["_door_wedge"](replacement, ["Zug", "Oz"], "Zug"))
         self.assertEqual([], world.released)
+
+    def test_a_queued_replacement_keeps_the_open_runs_clock(self):
+        world = World()
+        ns = world.namespace()
+        world.aims["Oz"] = "vendor"
+        self.assertIsNone(world.judge(ns))
+
+        world.clock[0] += stall.HOLD_SECONDS - 1
+        judge = ns["_door_wedge"]
+        replacement = dict(HEAD, id=HEAD["id"] + 1, status="queued")
+        self.assertIsNone(judge(replacement, ["Zug", "Oz"], "Zug"))
+        world.clock[0] += 1
+        verdict = judge(dict(replacement, status="active"), ["Zug", "Oz"], "Zug")
+        self.assertIsNotNone(verdict)
+        self.assertIn("Oz", verdict.why)
+
+    def test_a_different_wing_on_the_same_map_starts_fresh(self):
+        world = World()
+        ns = world.namespace()
+        run = {"id": 12345, "portal_keyword": "maraudon-orange"}
+        cursor = types.SimpleNamespace(
+            execute=lambda query, args: None,
+            fetchall=lambda: [run],
+        )
+        connection = types.SimpleNamespace(cursor=lambda: nullcontext(cursor))
+        ns.update(
+            _connect=lambda: nullcontext(connection),
+            _DOOR_RUN_SQL=next(
+                ast.literal_eval(node.value)
+                for node in TREE.body
+                if isinstance(node, ast.Assign)
+                and any(getattr(t, "id", "") == "_DOOR_RUN_SQL" for t in node.targets)
+            ),
+            campaignplan=campaignplan,
+            dungeonpath=dungeonpath,
+        )
+        _load(["_door_open_run_id"], ns)
+        world.aims["Oz"] = "vendor"
+        self.assertIsNone(world.judge(ns))
+
+        world.clock[0] += stall.HOLD_SECONDS
+        other_wing = dict(HEAD, id=HEAD["id"] + 1, keyword="maraudon-purple")
+        self.assertIsNone(ns["_door_wedge"](other_wing, ["Zug", "Oz"], "Zug"))
 
     def test_one_recall_that_takes_does_not_stand_the_run_down(self):
         """The member goes back to the party and stays: no verdict, and the
@@ -347,15 +393,12 @@ class ARecallCannotLoop(unittest.TestCase):
         world = World()
         ns = world.namespace(strict=True)
         key = ("Zug", "Oz", stall.ERRAND_STATE)
-        # Served under run_id 7, recalled at 1000.0 with 600s served.
-        ns["_ERRAND_SERVED"][("Zug", "Oz")] = errandgate.Served(7, 600.0, 1000.0)
-        # Same run_id (7): clock continues from recalled errand.
-        self.assertEqual(400.0, ns["_errand_clock_start"](key, 7, 1060.0))
-        # Different run_id (8): clock resets to now.
-        self.assertEqual(1060.0, ns["_errand_clock_start"](key, 8, 1060.0))
+        ns["_ERRAND_SERVED"][("Zug", "Oz")] = errandgate.Served(-7, 600.0, 1000.0)
+        self.assertEqual(400.0, ns["_errand_clock_start"](key, -7, 1060.0))
+        self.assertEqual(1060.0, ns["_errand_clock_start"](key, -8, 1060.0))
         # Dead state: not an errand, clock starts at now.
         dead = ("Zug", "Oz", "dead")
-        self.assertEqual(1060.0, ns["_errand_clock_start"](dead, 7, 1060.0))
+        self.assertEqual(1060.0, ns["_errand_clock_start"](dead, -7, 1060.0))
 
 
 class NoEconomyAimInsideAnInstance(unittest.TestCase):
