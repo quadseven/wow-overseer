@@ -1509,12 +1509,14 @@ class Clock:
 
     `observe` is told each pass what the quest's objectives read (its status and
     counters) and whether the quester was working it; it answers the seconds of
-    play since they last moved. Its state is plain data (`dump`, `load`), so the
-    bridge keeps it across restarts."""
+    play since they last moved. `pause` excludes a named boat hold. Its state is
+    plain data (`dump`, `load`), so the bridge keeps it across restarts."""
 
     def __init__(self):
         # (name, quest) -> [value, seconds played without a move, last look]
         self._by: dict = {}
+        self._paused: set = set()
+        self._last_added: dict = {}
 
     def observe(self, name, quest, value, now, playing) -> float:
         key = (str(name), int(quest))
@@ -1522,12 +1524,35 @@ class Clock:
         held = self._by.get(key)
         if held is None or held[0] != value:
             self._by[key] = [value, 0.0, float(now)]
+            self._paused.discard(key)
+            self._last_added[key] = (float(now), 0.0)
             return 0.0
         gap = float(now) - float(held[2])
-        if playing and 0 < gap:
-            held[1] += min(gap, PLAY_GAP_SECONDS)
+        was_paused = key in self._paused
+        self._paused.discard(key)
+        added = (
+            min(gap, PLAY_GAP_SECONDS)
+            if playing and not was_paused and gap > 0
+            else 0.0
+        )
+        held[1] += added
         held[2] = float(now)
+        self._last_added[key] = (float(now), added)
         return held[1]
+
+    def pause(self, name, quest, now) -> None:
+        """Exclude a boat hold from the quest's play-time stall clock."""
+        key = (str(name), int(quest))
+        held = self._by.get(key)
+        if held is None:
+            return
+        now = float(now)
+        observed = self._last_added.get(key)
+        if observed is not None and observed[0] == now:
+            held[1] = max(0.0, held[1] - observed[1])
+            self._last_added[key] = (now, 0.0)
+        held[2] = now
+        self._paused.add(key)
 
     def played(self, name, quest) -> float:
         held = self._by.get((str(name), int(quest)))
@@ -1538,15 +1563,22 @@ class Clock:
         keep = {int(q) for q in keep}
         for key in [k for k in self._by if k[0] == name and k[1] not in keep]:
             del self._by[key]
+            self._paused.discard(key)
+            self._last_added.pop(key, None)
 
     def reset(self, name, quest) -> None:
         """Start a fresh no-progress interval for one quest."""
-        self._by.pop((str(name), int(quest)), None)
+        key = (str(name), int(quest))
+        self._by.pop(key, None)
+        self._paused.discard(key)
+        self._last_added.pop(key, None)
 
     def dump(self) -> dict:
         return {"%s:%d" % k: v for k, v in self._by.items()}
 
     def load(self, data) -> None:
+        self._paused.clear()
+        self._last_added.clear()
         for key, held in (data or {}).items():
             name, _, quest = str(key).rpartition(":")
             try:
@@ -2917,6 +2949,23 @@ def settled(member, tried):
     return replace(member, quest_log=log_now, quests_done=frozenset(done))
 
 
+def _quester_boat(member, move, crossings, clock, now):
+    """Use the same island boat gate before and after deciding a quest stalled."""
+    if move.spot is None:
+        return None
+    return guildjobs.island_boat_step(
+        member,
+        move,
+        move.spot,
+        crossings,
+        ACTION,
+        CROSS_ACTION,
+        guildjobs.crossing_cooling,
+        clock,
+        now,
+    )
+
+
 def plan(
     cat: Catalogue,
     member,
@@ -2949,6 +2998,26 @@ def plan(
             member.name, None, tuple(found), "%s has no fresh position" % member.name
         )
     move, why, never_held = next_move(cat, member, broken, found, tried, crossings)
+    if move is not None and move.kind == classquest.ABANDON:
+        # AI-REVIEW 2026-11-27 [nemotron-3.5-super-vl] 4714430610 (Elder, PR #3315):
+        # The first held boat pass can reach the stall limit before the boat gate pauses its clock.
+        retry = [
+            b
+            for b in found
+            if b.quest != move.quest or not b.reason.startswith(STALLED)
+        ]
+        if len(retry) != len(found):
+            candidate, note, new_broken = next_move(
+                cat, member, broken, retry, tried, crossings
+            )
+            if candidate is not None and candidate.quest == move.quest:
+                pending = _quester_boat(member, candidate, crossings, clock, now)
+                if (
+                    pending is not None
+                    and pending[0] is None
+                    and clock.played(member.name, move.quest) < STALL_SECONDS
+                ):
+                    found, move, why, never_held = retry, candidate, note, new_broken
     if move is not None and move.kind == classquest.CROSS:
         held = crossing_held(member.name, move, crossings)
         if held:
@@ -2957,15 +3026,7 @@ def plan(
     if move is not None and move.spot is not None:
         # A spot across the island's shore is reached by the boat, or held with
         # a named reason (#2194), as a class quest's is (#2182).
-        island = guildjobs.island_boat_step(
-            member,
-            move,
-            move.spot,
-            crossings,
-            ACTION,
-            CROSS_ACTION,
-            guildjobs.crossing_cooling,
-        )
+        island = _quester_boat(member, move, crossings, clock, now)
         if island is not None:
             boat, _said, note = island
             if boat is None:

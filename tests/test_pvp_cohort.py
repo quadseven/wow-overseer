@@ -167,8 +167,8 @@ class Fillers(unittest.TestCase):
         self.assertEqual(10, len(queuing(moves)))
         self.assertEqual(["F00", "F01"], sorted(n for n, a in aims.items() if a.filler))
 
-    def test_a_queued_filler_under_level_60_is_released(self):
-        seekers = rows("A", 8, level=35) + rows("F", 2, filler, level=35)
+    def test_a_queued_filler_at_or_above_level_40_is_released_below_60(self):
+        seekers = rows("A", 8, level=45) + rows("F", 2, filler, level=45)
         recent = [recent_row(s.name, "bg-queue wsg", 20) for s in seekers]
         _, moves, _ = run(seekers, recent=recent)
         self.assertNotIn("F00", moves)

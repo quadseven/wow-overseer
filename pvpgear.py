@@ -834,7 +834,8 @@ def next_move(
     `recent` is guildjobs.Recent rows; `crossing` the member's gate for the
     crossing to its vendor (#603), shut when None."""
     bg = aim.battleground
-    if map_id is not None and int(map_id) in BATTLEGROUND_MAPS:
+    map_id = _map_number(map_id)
+    if map_id in BATTLEGROUND_MAPS:
         return Move(
             INSIDE, "%s plays a battleground for honor toward %s" % (aim.name, aim.item)
         )
@@ -954,9 +955,12 @@ def _queued_key(name: str, recent):
 
 # A FILLER IS NEVER A MEMBER STILL LEVELLING (#2178). A filler has no upgrade to
 # win, only a seat to lend, and the queue holds it ahead of its level walk and
-# its supply runs. Under this level the seat is on its class quest and level
-# walk instead.
+# its supply runs. Under this level new filler seats are left to class quests
+# and level walks; preserve only an existing under-40 queue or game hold.
 FILLER_MIN_LEVEL = LEVELLING_FIRST_LEVEL
+# Keep only legacy holds below level 40; the floor's existing behavior at and
+# above 40 remains unchanged.
+FILLER_HOLD_MIN_LEVEL = 40
 
 
 def _filler(s, bg: Battleground, cohort: str = "") -> Aim:
@@ -964,14 +968,43 @@ def _filler(s, bg: Battleground, cohort: str = "") -> Aim:
 
 
 def _hold_fillers(by_name: dict, aims: dict, moves: dict, recent, maps) -> None:
-    """A filler already in a queue is held there like any member (in place)."""
+    """Keep existing queue and battleground holds, including below the floor."""
     for name, s in by_name.items():
-        if int(s.level) < FILLER_MIN_LEVEL:
+        if name in aims:
             continue
-        queued = _queued_key(name, recent) if name not in aims else None
-        if queued is not None:
-            aims[name] = _filler(s, BATTLEGROUNDS[queued[0]])
-            moves[name] = next_move(aims[name], maps.get(name), False, recent)
+        queued = _queued_key(name, recent)
+        level = int(s.level)
+        if level < FILLER_HOLD_MIN_LEVEL:
+            bg = _battleground_at(maps.get(name))
+            waiting = queued is not None and queued[1] < WAITING_MINUTES
+            if bg is None and not waiting:
+                continue
+            if bg is None:
+                bg = BATTLEGROUNDS[queued[0]]
+        elif level < FILLER_MIN_LEVEL:
+            continue
+        elif queued is not None:
+            bg = BATTLEGROUNDS[queued[0]]
+        else:
+            continue
+        aims[name] = _filler(s, bg)
+        moves[name] = next_move(aims[name], maps.get(name), False, recent)
+
+
+def _map_number(map_id) -> int | None:
+    """Normalize the snapshot map without discarding independent queue evidence."""
+    # AI-REVIEW 2026-11-27 [nemotron-3.5-super-vl] 4714430606/4714430622 (Elder, PR #3315):
+    # Map reads can fail while the module's queue acknowledgement still holds.
+    try:
+        return int(map_id)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _battleground_at(map_id):
+    """The battleground on `map_id`, or None when the map is elsewhere."""
+    map_id = _map_number(map_id)
+    return next((bg for bg in BATTLEGROUNDS.values() if bg.map_id == map_id), None)
 
 
 def _group_members(aims: dict, moves: dict, by_name: dict, cooling: set) -> dict:
