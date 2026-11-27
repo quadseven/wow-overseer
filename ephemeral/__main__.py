@@ -1,4 +1,4 @@
-"""`python3 -m ephemeral <lint|acts|seed|judge|submit|dispatch|collect> ...`: the `eph` command line."""
+"""`python3 -m ephemeral <lint|acts|seed|judge|submit|dispatch|collect|due> ...`: the `eph` command line."""
 
 import argparse
 import json
@@ -7,7 +7,7 @@ import pathlib
 import signal
 import sys
 
-from . import acts, anchors as anchors_mod, dbschema, lint
+from . import acts, anchors as anchors_mod, dbschema, due as due_mod, lint
 from .miniyaml import YamlError, loads
 
 
@@ -164,6 +164,13 @@ def _report(args):
     cfg, k, gh = _runner(args)
     reporter = report.Reporter(cfg, k, gh, env=os.environ)
     reporter.run(args.batches, dry_run=args.dry_run)
+    return 0
+
+
+def _due(args):
+    cfg, _k, gh = _runner(args)
+    for repo, n, did in due_mod.due(gh, cfg):
+        print(f"{repo}#{n} {did}")
     return 0
 
 
@@ -324,6 +331,12 @@ def main(argv=None):
         "--dry-run", action="store_true", help="print the comment and proposed box edit"
     )
     rp.set_defaults(func=_guarded(_report))
+    du = sub.add_parser(
+        "due",
+        help="list open awaiting-live-check issues whose Proof line names a runnable decree",
+    )
+    du.add_argument("--config", help=cfg_help)
+    du.set_defaults(func=_guarded(_due))
     args = parser.parse_args(argv)
     return args.func(args)
 
