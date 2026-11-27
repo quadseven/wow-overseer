@@ -317,6 +317,10 @@ STALLED_UNSOURCED = (
     STALLED
     + ", no huntable source supplies what it asks for, and questers cannot buy items from vendors"
 )
+# All objective spawns are elite creatures (rank 1-3) that questers cannot solo.
+ELITE_ONLY = (
+    "all objective spawns are elite creatures; questers cannot form groups to kill them"
+)
 REFUSED_TAKE = "the quest giver would not give it"
 # A required item no creature drops, no chest holds and no take hands over: the
 # quester cannot buy it from a vendor, so the quest cannot be finished (#3149).
@@ -2038,6 +2042,19 @@ def _broken_reason(
         return NO_OBJECTIVES
     if played < STALL_SECONDS or complete:
         return ""
+    # All objective spawns are elite creatures (rank 1-3) that a solo quester
+    # cannot kill. This is a generic world-data fact, not a quest-specific
+    # hardcoding: the creature ranks come from creature_template.rank.
+    if quest.klass == 0 and quest.kills:
+        kill_entries = {e for e, _n in quest.kills}
+        elite_spawns = [
+            s for s in quest.fields if s.entry in kill_entries and 1 <= s.rank <= 3
+        ]
+        all_elite = bool(elite_spawns) and all(
+            1 <= s.rank <= 3 for s in quest.fields if s.entry in kill_entries
+        )
+        if all_elite:
+            return ELITE_ONLY
     # A chest that holds the item is a source: its quest is worked, not unsourced.
     # A vendor-only item is unsourced whatever the quest's other objectives are.
     unsourced = bool(vendor_item) or (
@@ -2575,7 +2592,7 @@ def _short_entries(member, qid: int, quest: classquest.Quest) -> set:
 def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
     """Eligible kill and item-drop fields for one incomplete held quest."""
     targets = _short_entries(member, qid, quest)
-    return classquest.within_level(
+    fields = classquest.within_level(
         member,
         tuple(
             s
@@ -2583,6 +2600,13 @@ def _held_objective_fields(member, qid: int, quest: classquest.Quest) -> tuple:
             if s.entry in targets and not on_other_sides_ground(member, s)
         ),
     )
+    # Questers cannot form groups to kill elite creatures (rank 1-3: elite,
+    # rare elite, boss). Rare creatures (rank 4) are soloable. For non-class
+    # quests (klass == 0), filter out truly elite spawns so the quester does
+    # not stall on objectives it cannot solo.
+    if quest.klass == 0:
+        fields = tuple(s for s in fields if not (1 <= s.rank <= 3))
+    return fields
 
 
 # The module's verb for each move that is one quest row.
