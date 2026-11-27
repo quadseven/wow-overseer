@@ -18,6 +18,8 @@ else:
 
 TARGET_SEATS = 40
 MAX_LEVEL = 60
+FAMILY_WEDGE_SECONDS = 30 * 60
+DAY_SECONDS = 24 * 3600
 # The trades a family crafter's skill is recorded in, as /api/v2/training
 # names them, lower-cased for the log.
 CRAFTER_SKILLS = (
@@ -233,7 +235,7 @@ def append_jsonl(path: Path, record: dict) -> None:
         stream.write("\n")
 
 
-def _previous(path: Path) -> dict | None:
+def _previous_record(path: Path) -> dict | None:
     if not path.exists() or path.stat().st_size == 0:
         return None
     with path.open("rb") as stream:
@@ -248,16 +250,57 @@ def _previous(path: Path) -> dict | None:
         stream.seek(pos + 1)
         line = stream.readline()
     try:
-        record = json.loads(line)
+        return json.loads(line)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"last JSONL record in {path} is invalid") from exc
-    return record.get("level_snapshot")
+
+
+def _record_wedge_episodes(record: dict, previous: dict) -> None:
+    """Count a family once when it enters the sampled over-30-minute set."""
+    snapshot = record["family_wedge_snapshot"]
+    now = record["snapshot_epoch"]
+    if previous and now <= previous["checked_at"]:
+        # A repeated or older API sample cannot move the observation clock back.
+        snapshot = previous
+    else:
+        cutoff = now - DAY_SECONDS
+        episodes = [row for row in previous.get("episodes", []) if row[0] > cutoff]
+        if previous:
+            new_families = set(snapshot["active"]) - set(previous["active"])
+            if new_families:
+                episodes.append([now, len(new_families)])
+        snapshot.update(
+            checked_at=now,
+            observed_since=max(cutoff, previous.get("observed_since", now)),
+            episodes=episodes,
+        )
+    record["family_wedge_snapshot"] = snapshot
+    record["pre_wedge"].update(
+        wedges_formed_anyway_24h=sum(count for _, count in snapshot["episodes"]),
+        wedge_observed_since=_iso(snapshot["observed_since"]),
+    )
+
+
+def _preemptions(root: str) -> dict:
+    try:
+        actions = realm_state_audit.fetch_json(f"{root}/pre-wedge")
+    except RuntimeError as exc:
+        print(f"metric_watcher: pre-wedge action read failed: {exc}", file=sys.stderr)
+        actions = {}
+    death = actions.get("death_slope_asks")
+    restart = actions.get("restart_slope_stand_downs")
+    return {
+        "death_slope_asks": death,
+        "restart_slope_stand_downs": restart,
+        "total": death + restart if death is not None and restart is not None else None,
+    }
 
 
 def collect(api_root: str) -> tuple[dict, dict]:
     """Fetch the established read-only API endpoints and shape metrics."""
     root = api_root.rstrip("/")
     roster = realm_state_audit.fetch_json(f"{root}/roster")
+    preemptions = _preemptions(root)
     raidteams = {
         guild: realm_state_audit.fetch_json(f"{root}/raidteams?guild={guild}")
         for guild in realm_state_audit.GUILDS
@@ -299,7 +342,24 @@ def collect(api_root: str) -> tuple[dict, dict]:
                     file=sys.stderr,
                 )
     report = realm_state_audit.build_report(roster, raidteams, guilds)
-    return build_metrics(report, guilds), report
+    record = build_metrics(report, guilds)
+    cutoff = report["snapshot_epoch"] - FAMILY_WEDGE_SECONDS
+    families = {
+        row["family"]
+        for row in roster.get("members", [])
+        if row.get("family")
+        and row.get("stuck")
+        and row.get("since") is not None
+        and int(row["since"]) < cutoff
+    }
+    record["pre_wedge"] = {
+        "preemptions_24h": preemptions,
+        "family_wedges_over_30m": len(families),
+    }
+    record["family_wedge_snapshot"] = {
+        "active": sorted(crafter_key(key) for key in families)
+    }
+    return record, report
 
 
 def main() -> None:
@@ -322,8 +382,10 @@ def main() -> None:
         )
     try:
         record, report = collect(args.api_root)
+        previous = _previous_record(args.output) or {}
+        _record_wedge_episodes(record, previous.get("family_wedge_snapshot", {}))
         record["level_projection"] = estimate_level_60_date(
-            _previous(args.output), report
+            previous.get("level_snapshot"), report
         )
         record["level_snapshot"] = {
             "snapshot_epoch": report["snapshot_epoch"],
