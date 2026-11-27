@@ -44,9 +44,19 @@ def job(
         },
         "spec": {"suspend": suspend, "template": {"spec": {
             "initContainers": [
-                {"name": "ws", "restartPolicy": "Always", "resources": {"requests": {"cpu": c["WS_CPU_REQUEST"], "memory": c["WS_MEMORY"]}}},
+                {"name": "mysql", "restartPolicy": "Always", "resources": {
+                    "requests": {"ephemeral-storage": c["EPHEMERAL_REQUEST"]},
+                    "limits": {"ephemeral-storage": c["EPHEMERAL_LIMIT"]},
+                }},
+                {"name": "ws", "restartPolicy": "Always", "resources": {
+                    "requests": {"cpu": c["WS_CPU_REQUEST"], "memory": c["WS_MEMORY"], "ephemeral-storage": "64Mi"},
+                    "limits": {"ephemeral-storage": "512Mi"},
+                }},
             ],
-            "containers": [{"name": "judge", "resources": {"requests": {"cpu": "150m", "memory": "256Mi"}}}],
+            "containers": [{"name": "judge", "resources": {
+                "requests": {"cpu": "150m", "memory": "256Mi", "ephemeral-storage": "32Mi"},
+                "limits": {"ephemeral-storage": "128Mi"},
+            }}],
             "volumes": [
                 {"name": "client-data", "persistentVolumeClaim": {"claimName": claim}},
                 {"name": "datadir", "emptyDir": {"sizeLimit": c["DATADIR_LIMIT"]}},
@@ -132,6 +142,16 @@ class BudgetTest(Base):
         self.tick()
         self.assertTrue(self.suspended("eeeee1-c1"))
 
+    def test_cpu_request_fits_exactly_at_the_quota_boundary(self):
+        status = self.c.of("resourcequotas")[0]["status"]
+        status["hard"]["requests.cpu"] = "10100m"
+        status["used"]["requests.cpu"] = "8700m"
+        self.add("eeeee2-c1", "control")
+        queued = self.c.objs[("jobs", "wow-ephemeral", "eph-eeeee2-c1")]
+        spec = queued["spec"]["template"]["spec"]
+        spec["initContainers"][0]["resources"]["requests"]["cpu"] = "250m"
+        self.assertEqual(self.tick(), ["eeeee2-c1"])
+
     def test_started_but_not_yet_scheduled_worlds_count(self):
         for i in range(1, 4):
             self.add(
@@ -150,6 +170,106 @@ class BudgetTest(Base):
         self.add("222222-c1", "control")
         self.tick()
         self.assertFalse(self.suspended("222222-c1"))
+
+    def test_ordinary_init_overlaps_earlier_sidecars_and_pod_overhead(self):
+        queued = job("aa0010-c1", "control")
+        spec = queued["spec"]["template"]["spec"]
+        spec["initContainers"] = [
+            {"restartPolicy": "Always", "resources": {"requests": {"cpu": "600m", "memory": "200Mi"}}},
+            {"resources": {"requests": {"cpu": "800m", "memory": "700Mi"}}},
+            {"restartPolicy": "Always", "resources": {"requests": {"cpu": "300m", "memory": "100Mi"}}},
+        ]  # fmt: skip
+        spec["containers"] = [
+            {"resources": {"requests": {"cpu": "100m", "memory": "100Mi"}}}
+        ]
+        spec["overhead"] = {"cpu": "50m", "memory": "64Mi"}
+        self.assertEqual(dispatch._job_quota_usage(queued, "requests.cpu"), 1450)
+        self.assertEqual(
+            dispatch._job_quota_usage(queued, "requests.memory"), 964 * 1024**2
+        )
+
+
+class StorageQuotaTest(Base):
+    def quota(self, resource, hard, used=None):
+        quota = self.c.of("resourcequotas")[0]
+        status = quota["status"]
+        quota["spec"] = {"hard": {**status["hard"], resource: hard}}
+        if used is not None:
+            status["hard"][resource] = hard
+            status["used"][resource] = used
+        return status
+
+    def test_full_namespace_storage_requests_keep_a_world_suspended(self):
+        self.quota("requests.ephemeral-storage", "12Gi", "12Gi")
+        self.add("aa0001-c1", "control")
+        self.assertEqual(self.tick(), [])
+        self.assertTrue(self.suspended("aa0001-c1"))
+
+    def test_storage_requests_fit_only_when_both_sidecars_and_judge_fit(self):
+        status = self.quota("requests.ephemeral-storage", "12Gi", "10145Mi")
+        self.add("aa0002-c1", "control")
+        self.assertEqual(self.tick(), [])
+        status["used"]["requests.ephemeral-storage"] = "10144Mi"
+        self.assertEqual(self.tick(), ["aa0002-c1"])
+
+    def test_storage_reserves_pending_jobs_and_same_tick_admissions_across_nodes(self):
+        self.quota("requests.ephemeral-storage", "4300Mi", "0")
+        self.add("aa0003-c1", "control", suspend=False)
+        self.add("aa0004-c1", "control", claim="client-data-b", age=2)
+        self.add("aa0005-c1", "control", age=1)
+        self.assertEqual(self.tick(), ["aa0004-c1"])
+        self.assertTrue(self.suspended("aa0005-c1"))
+
+    def test_created_pod_is_already_in_storage_quota_used(self):
+        self.quota("requests.ephemeral-storage", "4288Mi", "2144Mi")
+        self.add("aa0011-c1", "control", suspend=False)
+        self.add("aa0012-c1", "control")
+        self.assertEqual(self.tick(), [])
+        running = self.c.objs[("jobs", "wow-ephemeral", "eph-aa0011-c1")]
+        running["status"]["active"] = 1
+        self.assertEqual(self.tick(), ["aa0012-c1"])
+
+    def test_configured_storage_requests_wait_for_quota_status(self):
+        status = self.quota("requests.ephemeral-storage", "12Gi")
+        self.add("aa0006-c1", "control")
+        self.assertEqual(self.tick(), [])
+        status["hard"]["requests.ephemeral-storage"] = "12Gi"
+        self.assertEqual(self.tick(), [])
+        status["used"]["requests.ephemeral-storage"] = "0"
+        self.assertEqual(self.tick(), ["aa0006-c1"])
+
+    def test_storage_limits_can_block_with_request_headroom(self):
+        self.quota("requests.ephemeral-storage", "12Gi", "0")
+        self.quota("limits.ephemeral-storage", "24Gi", "21Gi")
+        self.add("aa0007-c1", "control")
+        self.assertEqual(self.tick(), [])
+        self.assertTrue(self.suspended("aa0007-c1"))
+
+    def test_storage_limit_includes_overhead_at_quota_boundary(self):
+        status = self.quota("limits.ephemeral-storage", "4Gi", "321Mi")
+        self.add("aa0013-c1", "control")
+        queued = self.c.of("jobs")[0]
+        queued["spec"]["template"]["spec"]["overhead"] = {"ephemeral-storage": "64Mi"}
+        self.assertEqual(self.tick(), [])
+        status["used"]["limits.ephemeral-storage"] = "320Mi"
+        self.assertEqual(self.tick(), ["aa0013-c1"])
+
+    def test_overhead_does_not_create_a_storage_limit(self):
+        queued = job("aa0014-c1", "control")
+        spec = queued["spec"]["template"]["spec"]
+        spec["overhead"] = {"ephemeral-storage": "64Mi"}
+        for container in spec["initContainers"] + spec["containers"]:
+            del container["resources"]["limits"]
+        self.assertEqual(
+            dispatch._job_quota_usage(queued, "limits.ephemeral-storage"), 0
+        )
+
+    def test_namespace_pod_quota_counts_one_for_each_new_world(self):
+        self.quota("pods", "2", "1")
+        self.add("aa0008-c1", "control", age=2)
+        self.add("aa0009-c1", "control", claim="client-data-b", age=1)
+        self.assertEqual(self.tick(), ["aa0008-c1"])
+        self.assertTrue(self.suspended("aa0009-c1"))
 
 
 class DiskTest(Base):

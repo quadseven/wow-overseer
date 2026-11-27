@@ -380,8 +380,13 @@ refuses verification rather than declaring the commit off branch.
 enforced by a Kubernetes Lease. Each pass it unsuspends the oldest queued Job
 that fits: the node is allowed and under its world cap, the namespace quota has
 room, and the node would keep at least 20 percent of its disk free after the
-Job's disk and every recently started world's disk are counted. If the node's
-stats cannot be read it refuses. A small Job may skip a larger one that does not
+Job's disk and every recently started world's disk are counted. The dispatcher
+checks CPU and memory requests, plus pod count, memory limits, and ephemeral
+storage requests and limits when the quota sets them. It reserves quota for
+worlds started in the current pass and worlds whose Jobs have yet to report an
+active pod. A newly admitted pod can count twice until its Job catches up.
+Missing quota status or node disk statistics keep the Job suspended.
+A small Job may skip a larger one that does not
 fit, but nothing skips a head that has waited 30 minutes. Runs after the first
 control and treatment pair start only if the pair was control FAIL then
 treatment PASS; any other first pair stops the batch and removes its waiting
