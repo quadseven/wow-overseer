@@ -1,12 +1,6 @@
-# Ugga's complete aimed quest is handed in at Marshal McBride; her second,
-# incomplete quest is already being worked when a new errand names it. The
-# drive must hand in the first quest, clear its aim, then issue one reset for
-# the second quest rather than silently keeping a stale objective pointer
-# (mod-overseer issue 180).
-# Scope: the quest log and the NPC position are the only seeded facts. The new
-# aim is exercised by the quest job after the hand-in; no level, item or gold
-# is granted. The 35-minute run bounds the issue's 30-minute re-issue count.
-# Fix: mod-overseer commit b4a8d52 (hand-in and new-errand reissue).
+# Ugga hands in her complete aimed quest. Separately, Grug selects a quest
+# from his own log before a new aim names it. The control already has the
+# reissue guard, so the chosen hand-in distinguishes the two arms.
 decree: v1
 id: aimed-quest-complete-handin
 proves:
@@ -16,48 +10,82 @@ world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {
 runs: {control: 3, treatment: 3}
 duration: 35m
 cast:
-  - who: family:zug
-    set: {alive: true, at: {creature: "Marshal McBride"}}
-    ceiling: "nothing granted but position"
   - who: Ugga
-    set: {alive: true, quests: {783: complete, 233: incomplete}, at: {creature: "Marshal McBride"}}
-    ceiling: "two quest states the issue describes; nothing granted but position"
+    set: {alive: true, quests: {783: complete}, at: {creature: "Marshal McBride"}}
+    ceiling: "quest 783 status and turn-in position only"
+  - who: Grug
+    set: {alive: true, quests: {233: incomplete}, at: {creature: "Marshal McBride"}}
+    ceiling: "quest 233 status and position only"
 act:
-  - at: 90s
-    roster: {who: family:zug, job: "quest"}
+  - at: 0s
+    quest_aim: {who: Ugga, quest: 783}
+  - at: 0s
+    roster: {who: Ugga, job: "quest"}
+  - at: 0s
+    roster: {who: Grug, job: "quest"}
+  - when: leader-selected-quest-from-own-log
+    by: 5m
+    quest_aim: {who: Grug, quest: 233}
 observe:
+  - name: actors-are-online-with-idle-aims
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM characters c JOIN overseer_roster r ON r.name = c.name
+      WHERE c.guid IN (@cast) AND c.online = 1 AND r.enabled = 1 AND r.drive_quest = 0
+        AND (r.travel_npc IS NULL OR r.travel_npc = '')
+    expect: {scalar: "= 2"}
   - name: quest-is-complete-at-the-start
     role: precondition
     when: start
     sql: |
-      SELECT COUNT(*) FROM character_queststatus WHERE guid = @Ugga AND quest = 783 AND status = 1
+      SELECT COUNT(*) FROM character_queststatus WHERE guid = @cast0 AND quest = 783 AND status = 1
     expect: {scalar: "= 1"}
-  - name: second-quest-is-already-being-worked
+  - name: complete-quest-is-unrewarded
     role: precondition
     when: start
     sql: |
-      SELECT COUNT(*) FROM character_queststatus WHERE guid = @Ugga AND quest = 233 AND status = 3
-    expect: {scalar: "= 1"}
-  - name: ugga-starts-beside-the-turn-in-npc
+      SELECT COUNT(*) FROM character_queststatus_rewarded WHERE guid = @cast0 AND quest = 783
+    expect: {scalar: "= 0"}
+  - name: leader-holds-the-incomplete-quest
     role: precondition
     when: start
     sql: |
-      SELECT COUNT(*) FROM characters ch JOIN acore_world.creature c ON c.map = ch.map
-      JOIN acore_world.creature_template t ON t.entry = c.id
-      WHERE ch.guid = @Ugga AND t.name = 'Marshal McBride'
-        AND POW(ch.position_x - c.position_x, 2) + POW(ch.position_y - c.position_y, 2) <= 1600
+      SELECT COUNT(*) FROM character_queststatus WHERE guid = @cast1 AND quest = 233 AND status = 3
+    expect: {scalar: "= 1"}
+  - name: ugga-starts-within-hand-in-reach
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot s JOIN acore_world.creature c ON c.map = s.map_id
+      JOIN acore_world.creature_questender e ON e.id = c.id AND e.quest = 783
+      WHERE s.guid = @cast0 AND c.id = 197 AND s.updated_at >= DATE_SUB(NOW(), INTERVAL 30 SECOND)
+        AND POW(s.pos_x - c.position_x, 2) + POW(s.pos_y - c.position_y, 2)
+          + POW(s.pos_z - c.position_z, 2) <= 400
     expect: {scalar: ">= 1"}
+  - name: the-two-quest-jobs-were-applied
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(DISTINCT target_name) FROM overseer_command
+      WHERE target_name IN ('Ugga', 'Grug') AND source = 'eph-judge'
+        AND kind = 'job' AND command = 'quest' AND status = 'applied' AND created_at >= @t0
+    expect: {scalar: "= 2"}
+  - name: leader-selected-quest-from-own-log
+    role: check
+    log: {pattern: "'Grug' now working quest 233 .* picked from its own log", expect: {at_least: 1}}
   - name: quest-was-handed-in
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM character_queststatus_rewarded WHERE guid = @Ugga AND quest = 783
+      SELECT COUNT(*) FROM character_queststatus_rewarded WHERE guid = @cast0 AND quest = 783
     expect: {scalar: "= 1"}
   - name: reward-event-written
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_event WHERE character_name = 'Ugga' AND kind = 'quest_reward' AND first_seen >= @t0 AND first_seen <= DATE_ADD(@t0, INTERVAL 30 MINUTE)
+      SELECT COUNT(*) FROM overseer_event WHERE character_guid = @cast0
+        AND kind = 'quest_reward' AND subject_id = 783 AND first_seen >= @t0
     expect: {scalar: ">= 1"}
   - name: the-complete-quest-was-handed-in-to-its-taker
     role: check
@@ -66,11 +94,11 @@ observe:
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM overseer_roster WHERE name = 'Ugga' AND drive_quest = 783
-    expect: {scalar: "= 0"}
+      SELECT COUNT(*) FROM overseer_roster WHERE name = 'Ugga' AND drive_quest = 0
+    expect: {scalar: "= 1"}
   - name: the-new-errand-reissues-the-quest-already-being-worked
     role: check
-    log: {pattern: "'Ugga' was already on quest 233 .* re-issuing for the new errand", expect: {exactly: 1}}
+    log: {pattern: "'Grug' was already on quest 233 .* re-issuing for the new errand", expect: {exactly: 1}}
   - name: quest-reissues-stay-in-single-figures-over-the-observation
     role: check
-    log: {pattern: "(re-issuing for the new errand|was already on quest)", expect: {at_most: 9}}
+    log: {pattern: "('Grug' was already on quest 233 |'Ugga' was already on quest 783 )", expect: {at_most: 9}}

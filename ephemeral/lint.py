@@ -813,6 +813,8 @@ def _auction(lint, doc, path):
 
 # -- act -----------------------------------------------------------------------
 
+_ACTION_KEYS = ("roster", "command", "travel_guard", "quest_aim")
+
 
 def _observe_names(doc):
     obs = doc.get("observe")
@@ -832,19 +834,14 @@ def _act(lint, doc, whos, names):
     if not isinstance(act, list):
         lint.err("decree.act", "schema", "must be a list")
         return
-    bridge_on = (
-        isinstance(doc.get("world"), dict) and doc["world"].get("bridge") == "on"
-    )
     for i, step in enumerate(act):
         path = f"decree.act[{i}]"
-        if lint.keys(
-            path, step, ("at", "when", "roster", "command", "travel_guard"), ()
-        ):
-            _act_step(lint, path, step, whos, names, bridge_on)
+        if lint.keys(path, step, ("at", "when", "by", *_ACTION_KEYS), ()):
+            _act_step(lint, path, step, whos, names)
     _walk_auction(lint, doc, "act", act)
 
 
-def _act_step(lint, path, step, whos, names, bridge_on):
+def _act_step(lint, path, step, whos, names):
     lint.ensure(
         ("at" in step) != ("when" in step),
         path,
@@ -865,11 +862,18 @@ def _act_step(lint, path, step, whos, names, bridge_on):
             "schema",
             "must name an observation in observe",
         )
+    if "by" in step:
+        lint.ensure(
+            "when" in step and duration_seconds(step["by"]) is not None,
+            f"{path}.by",
+            "schema",
+            "must be a deadline such as 5m on a conditional act",
+        )
     lint.ensure(
-        sum(key in step for key in ("roster", "command", "travel_guard")) == 1,
+        sum(key in step for key in _ACTION_KEYS) == 1,
         path,
         "schema",
-        "needs exactly one of roster, command or travel_guard",
+        "needs exactly one of roster, command, travel_guard or quest_aim",
     )
     if "roster" in step:
         _act_roster(lint, f"{path}.roster", step["roster"], whos)
@@ -877,6 +881,27 @@ def _act_step(lint, path, step, whos, names, bridge_on):
         _act_command(lint, f"{path}.command", step["command"], whos)
     if "travel_guard" in step:
         _act_travel_guard(lint, f"{path}.travel_guard", step["travel_guard"], whos)
+    if "quest_aim" in step:
+        _act_quest_aim(lint, f"{path}.quest_aim", step["quest_aim"], whos)
+
+
+def _act_quest_aim(lint, path, aim, whos):
+    fields = ("who", "quest")
+    if not lint.keys(path, aim, fields, fields):
+        return
+    who, quest = aim["who"], aim["quest"]
+    lint.ensure(
+        isinstance(who, str) and _NAME.fullmatch(who) and who in whos,
+        f"{path}.who",
+        "schema",
+        "must be a named cast entry",
+    )
+    lint.ensure(
+        _is_int(quest) and 0 < quest <= 0xFFFFFFFF,
+        f"{path}.quest",
+        "schema",
+        "must be a positive unsigned quest ID",
+    )
 
 
 def _act_travel_guard(lint, path, aim, whos):

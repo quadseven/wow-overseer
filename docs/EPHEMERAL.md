@@ -229,6 +229,12 @@ failed precondition makes that run INVALID, never a pass.
 
     python3 -m ephemeral judge data/decrees/<name>.yaml --log <worldserver log>
 
+Use `quest_aim: {who: <named cast entry>, quest: <id>}` to aim an actor at a
+quest already in their log. The run stops if that actor has an active aim,
+does not hold the quest, or has already received its reward. The module owns
+the hand-in and aim release. A conditional act can set `by: 5m` to require
+its observation by that time. A missed deadline makes the run INVALID.
+
 Meant to run as the world pod's last step, after the seed. In the pod it needs no
 flags: `seed` and `judge` both default `EPH_VARS_FILE` to `/tmp/eph-vars.json` (the
 volume both containers mount), and the judge reads the worldserver log from

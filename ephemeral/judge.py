@@ -8,9 +8,9 @@ Three verdicts, never two:
   step never fired, a query timed out, the guard refused, the seed handoff is
   missing). INVALID never counts as a pass and never closes anything.
 
-What the judge may write, in total: `overseer_command` rows in the world's own
-database (an operator's order, through `GuardedConnection.insert_command`) and
-one ConfigMap named `eph-result-<run-id>` in its own namespace. Every read goes
+What the judge may write, in total: `overseer_command` rows, typed travel
+guards and typed quest aims in the world's own database, and one ConfigMap
+named `eph-result-<run-id>` in its own namespace. Every read goes
 through the same guard the seed uses (loopback MySQL only, ephemeral namespace,
 one marker row), and every observation is re-checked as a single SELECT against
 the world's live schema before it runs. A job goes in as a command row, never a
@@ -105,6 +105,9 @@ class GuardedWorldDb:
 
     def write_travel_guard(self, target, enabled, *, expected=None):
         return self._g.write_travel_guard(target, enabled, expected=expected)
+
+    def write_quest_aim(self, target, quest):
+        return self._g.write_quest_aim(target, quest)
 
 
 # -- expectations and rendering --------------------------------------------------
@@ -435,7 +438,11 @@ class Judge:
                     self._observe(name, started)
             if elapsed >= duration:
                 return
-            self.sleep(min(self.poll, duration - elapsed))
+            next_deadline = min(
+                (row["by_s"] for row, _at in pending if "by_s" in row),
+                default=duration,
+            )
+            self.sleep(min(self.poll, duration - elapsed, next_deadline - elapsed))
 
     def _invalid_reasons(self):
         why = []
@@ -543,7 +550,9 @@ class Judge:
         steps = []
         for i, cmd in enumerate(acts.act_commands(self.decree)):
             travel_guard = cmd["kind"] == acts.TRAVEL_GUARD and "guard_enabled" in cmd
-            if cmd["kind"] not in guard.COMMAND_KINDS and not travel_guard:
+            quest_aim = cmd["kind"] == acts.QUEST_AIM and "quest_id" in cmd
+            typed = travel_guard or quest_aim
+            if cmd["kind"] not in guard.COMMAND_KINDS and not typed:
                 raise JudgeError(
                     f"act step {i}: command kind {cmd['kind']!r} is not allowed"
                 )
@@ -551,25 +560,33 @@ class Judge:
                 raise JudgeError(
                     f"act step {i}: waits for unknown observation {cmd['when']!r}"
                 )
-            targets = self._targets(cmd["who"], i)
-            if travel_guard and (
-                targets != [cmd["who"]]
-                or not any(
-                    x["who"] == cmd["who"] for x in self.handoff.get("members", [])
-                )
+            who = cmd["who"]
+            targets = self._targets(who, i)
+            if typed and (
+                targets != [who]
+                or not any(x["who"] == who for x in self.handoff.get("members", []))
             ):
                 raise JudgeError(
-                    f"act step {i}: travel_guard needs one named cast member"
+                    f"act step {i}: {cmd['kind']} needs one named cast member"
                 )
             at = lint.duration_seconds(cmd["at"]) if "at" in cmd else None
             if "at" in cmd and at is None:
                 raise JudgeError(f"act step {i}: bad time {cmd['at']!r}")
+            by = lint.duration_seconds(cmd["by"]) if "by" in cmd else None
+            if "by" in cmd and (at is not None or by is None):
+                raise JudgeError(
+                    f"act step {i}: by needs a conditional act and a valid time"
+                )
             row = {
                 "index": i, "who": cmd["who"], "targets": targets, "kind": cmd["kind"],
                 "text": cmd["text"], "fired": False,
             }  # fmt: skip
             if travel_guard:
                 row["guard_enabled"] = cmd["guard_enabled"]
+            if quest_aim:
+                row["quest_id"] = cmd["quest_id"]
+            if by is not None:
+                row["by_s"] = by
             row["at" if "at" in cmd else "when"] = cmd.get("at", cmd.get("when"))
             self.act_rows.append(row)
             steps.append((row, at))
@@ -591,13 +608,25 @@ class Judge:
         row, at = step
         if at is not None:
             return elapsed >= at
-        rec = self._evaluate(row["when"])
-        return rec["status"] == "held"
+        deadline = row.get("by_s")
+        if deadline is None or elapsed <= deadline:
+            if self._evaluate(row["when"])["status"] == "held":
+                return True
+        if deadline is not None and elapsed >= deadline:
+            raise JudgeError(
+                f"act step {row['index']}: {row['when']} did not hold by {deadline}s"
+            )
+        return False
 
     def _fire(self, step, elapsed):
         row, _ = step
         if "guard_enabled" in row:
             self._fire_travel_guard(row)
+        elif "quest_id" in row:
+            try:
+                self.world.write_quest_aim(row["who"], row["quest_id"])
+            except guard.GuardError as exc:
+                raise JudgeError(f"quest aim for {row['who']}: {exc}") from exc
         else:
             for name in row["targets"]:
                 self.world.insert_command(name, row["kind"], row["text"])
