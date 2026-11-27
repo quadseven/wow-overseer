@@ -172,10 +172,11 @@ target is checked again after preflight, including issues outside the scan.
 The command prints each skip reason. A failed preflight, held target or new
 submission record leaves the slot available for the next decree. The command
 uses the default-branch file bytes for both arms and picks the control with
-`--control auto`. Omit `--dry-run` to queue one suspended batch per selected
-decree. A submission error after preflight stops the command and returns an
-error. The path form of `submit` still supports manual image, config and
-single-arm options.
+`--control auto`. The selected control needs a `dist_inventory` from its
+exact image so preflight can check its overrides. Omit `--dry-run` to queue
+one suspended batch per selected decree. A submission error after preflight
+stops the command and returns an error. The path form of `submit` still
+supports manual image, config and single-arm options.
 
 `eph report` posts the named decree's batch result, including each run's UTC
 start time and judge reason lines. It ticks one uniquely matching checkbox only

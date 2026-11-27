@@ -399,6 +399,10 @@ def _control_auto(gh, decree, args, resolves, deltas):
 
 
 def _control_config(args, entry, files, required, deltas):
+    if args.get("require_control_inventory") and "dist_inventory" not in entry:
+        raise SubmitError(
+            "automatic due needs dist_inventory for its selected control image"
+        )
     prefix = args.get("control_playerbots_prefix")
     dropped = args.get("control_drop_keys")
     if "dist_inventory" in entry:

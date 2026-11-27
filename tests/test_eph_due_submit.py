@@ -18,9 +18,18 @@ class DueSubmitIntegrationTest(fixture.Base):
     def setUp(self):
         super().setUp()
         self.history = pathlib.Path(self.tmp.name) / "history.json"
-        self.history.write_text(
-            json.dumps([{"worldserver": OLD_WS, "dbimport": OLD_DB, "pin": OLD}]),
-            encoding="utf-8",
+        self.control_entry = {
+            "worldserver": OLD_WS,
+            "dbimport": OLD_DB,
+            "pin": OLD,
+            "dist_inventory": fixture.ControlAutoTest.inventory(),
+        }
+        self.history.write_text(json.dumps([self.control_entry]), encoding="utf-8")
+        self.cluster.put(
+            "configmaps",
+            "base-realm",
+            "overseer-overrides-h1",
+            {"data": {"overseer.overrides.conf": "Overseer.ObsoleteExample = 1\n"}},
         )
         self.compare(SHA, "ahead")
         self.compare(OLD, "behind")
@@ -103,9 +112,28 @@ class DueSubmitIntegrationTest(fixture.Base):
         worlds = self.cluster.of("jobs", "wow-ephemeral")
         self.assertEqual(len(worlds), 6)
         self.assertTrue(all(job["spec"]["suspend"] for job in worlds))
-        files = [
-            cm["data"]["decree.yaml"].encode()
+        configmaps = [
+            cm
             for cm in self.cluster.of("configmaps", "wow-ephemeral")
             if cm["metadata"].get("labels", {}).get("eph/run")
         ]
-        self.assertEqual(files, [self.raw] * 6)
+        self.assertEqual(
+            [cm["data"]["decree.yaml"].encode() for cm in configmaps], [self.raw] * 6
+        )
+        for cm in configmaps:
+            control = cm["metadata"]["labels"]["eph/arm"] == "control"
+            self.assertEqual(
+                "Overseer.ObsoleteExample" in cm["data"]["overseer.overrides.conf"],
+                not control,
+            )
+
+    def test_due_skips_a_control_without_dist_inventory(self):
+        del self.control_entry["dist_inventory"]
+        self.history.write_text(json.dumps([self.control_entry]), encoding="utf-8")
+        configmaps = self.cluster.of("configmaps", "wow-ephemeral")
+        output = self.run_due_cli()
+        self.assertIn(f"skip {self.decree_id}: ", output)
+        self.assertIn("dist_inventory", output)
+        self.assertEqual(self.cluster.of("jobs", "wow-ephemeral"), [])
+        self.assertEqual(self.cluster.of("configmaps", "wow-ephemeral"), configmaps)
+        self.assertFalse((pathlib.Path(self.cfg.results_dir) / self.decree_id).exists())

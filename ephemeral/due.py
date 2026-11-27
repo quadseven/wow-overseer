@@ -184,7 +184,7 @@ def submit_due(gh, cfg, cluster, limit, args, out=print):
     for proof in _discover(gh, cfg, None):
         by_decree.setdefault(proof.decree_id, []).append(proof)
 
-    options = {**args, "control": "auto"}
+    options = {**args, "control": "auto", "require_control_inventory": True}
     for decree_id, proofs in by_decree.items():
         if limit == 0:
             break
