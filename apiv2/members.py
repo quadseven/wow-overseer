@@ -659,22 +659,26 @@ def _member(name, row, ctx_rows) -> dict:
     char = ctx_rows["chars"].get(name) or {}
     reading = ctx_rows["readings"].get(name) or UNREAD
     snap = ctx_rows["snaps"].get(name) if reading["online"] else None
+    facts = ctx_rows["facts"].get(name)
+    job = ctx_rows["jobs"].get(name)
+    now_at = ctx_rows["now_at"]
     now = nowstatus.compose(
         _presence(reading, snap),
-        ctx_rows["facts"].get(name),
-        ctx_rows["now_at"] or None,
+        facts,
+        now_at or None,
     )
-    if not ctx_rows["jobs"].get(name):
+    if not job:
         now = nowstatus.idle_reading(
             now,
             name in ctx_rows["in_run"],
             _either(char, row, "level"),
             ctx_rows["leveled"].get(name),
-            ctx_rows["now_at"],
+            now_at,
         )
+        now = nowstatus.idle_class_hold(now, facts, now_at)
     out = _identity(name, row, char, ctx_rows["family"])
     out.update(zone=zone_of(snap, char), online=reading["online"], life=reading["life"])
-    out.update(_doing(now, ctx_rows["jobs"].get(name)))
+    out.update(_doing(now, job))
     out["stalled_s"] = now.get("stalled_s")
     return out
 

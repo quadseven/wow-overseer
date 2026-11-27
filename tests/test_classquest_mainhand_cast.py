@@ -10,10 +10,13 @@ focus, and the step that walks to the forge and casts.
 """
 
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 import classquest
 import classuse
 import guildjobs
+import guildroute
 from test_classquest_use import giver, qrow, spawn
 from test_classquest_use_here import EBON_HOLD, FORGE, FORGE_SPAWN, knight
 
@@ -105,13 +108,35 @@ class TheMove(unittest.TestCase):
         self.assertEqual(move.kind, classquest.TURN_IN)
 
 
-class TheStep(unittest.TestCase):
-    def test_the_step_walks_to_the_forge_then_casts(self):
-        m = knight(quest_log={QUEST: 3})
-        move, _ = move_of(m)
-        step = guildjobs._use_step(m, move, guildjobs._class_spot(move), 5000)
+class TheStep(unittest.IsolatedAsyncioTestCase):
+    WALK = "walk-to-spawn gameobject:%d near:8 max:5000" % FORGE_SPAWN["guid"]
+
+    def test_the_step_walks_inside_the_focus_radius_then_casts(self):
+        m = knight(quest_log={QUEST: 3}, x=FORGE_SPAWN["x"] + 13.2, y=FORGE_SPAWN["y"])
+        step, _, _ = guildjobs.class_step(m, runeforging(), [], 5000)
+        self.assertEqual(step.walk.command, self.WALK)
         self.assertEqual(step.rows[0].command, "cast-spell-on-mainhand spell:53343")
-        self.assertIn("gameobject:%d" % FORGE_SPAWN["guid"], step.walk.command)
+
+    def test_a_knight_already_beside_the_forge_casts_without_walking(self):
+        m = knight(quest_log={QUEST: 3}, x=FORGE_SPAWN["x"] + 3, y=FORGE_SPAWN["y"])
+        step, _, _ = guildjobs.class_step(m, runeforging(), [], 5000)
+        self.assertIsNone(step.walk)
+        self.assertEqual(step.rows[0].command, "cast-spell-on-mainhand spell:53343")
+
+    async def test_a_repeat_walk_keeps_the_focus_radius(self):
+        from test_guildsocial_bridge import bridge
+
+        m = knight(quest_log={QUEST: 3})
+        step, _, _ = guildjobs.class_step(m, runeforging(), [], 5000)
+        follow = mock.AsyncMock(
+            return_value=(SimpleNamespace(state=guildroute.ARRIVED), 1)
+        )
+        with mock.patch.object(bridge, "_insert_corps_row", return_value=1) as insert:
+            arrived = await bridge.Bridge._class_rewalk(
+                SimpleNamespace(_follow_guild_walk=follow), step, 5000
+            )
+        self.assertTrue(arrived)
+        self.assertEqual(insert.call_args.args[1].command, self.WALK)
 
     def test_the_cast_row_is_followed_as_a_use_row(self):
         self.assertTrue(classuse.is_use_row("cast-spell-on-mainhand spell:53343"))

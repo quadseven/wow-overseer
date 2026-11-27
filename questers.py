@@ -196,9 +196,11 @@ SELL_FLOOR = 1
 # every pass.
 SELL_COOLDOWN_MINUTES = 20
 # A hunt refused for a full bag gets a longer retry window than a sale. The
-# sale step runs first; if it cannot make room, a three-hour window keeps the
+# sale step runs first; if it cannot make room, a four-hour window keeps the
 # same refusal from recurring every pass while still retrying in bounded time.
-BAG_HUNT_RETRY_MINUTES = 3 * 60
+# Four hours keeps a day under ten asks (24*60/240 = 6), matching the corps
+# collect and shop backoffs (guildcorps.FULL_BAGS_COLLECT_MINUTES).
+BAG_HUNT_RETRY_MINUTES = 4 * 60
 # A quester's crossing row has its own source action (quest takes, hand-ins
 # and hunts are ACTION), so it shares the one crossing clock and the walls of
 # the class quest's and the level step's crossings (guildjobs.CROSS_ACTIONS).
@@ -1958,10 +1960,14 @@ def _off_home(quest, facts: Facts) -> list:
 
 
 def _failed_reason(quest, facts: Facts) -> str:
-    """FAILED, with the world rows' fact about each objective creature whose
-    spawns all stand off the quest's map, so the ledger says where its
-    objective is. The game's own FAILED is kept: this names no cause."""
+    """Keep the game's FAILED status and add facts the world rows support.
+
+    Name objective creatures that only spawn off-map, or explain when the rows
+    provide no required objective or supported use for a quester to work.
+    """
     notes = [OFF_HOME_MAP % (entry, n) for entry, n in _off_home(quest, facts)]
+    if classhunt.wanted(quest) == 0 and not quest.uses:
+        notes.append(NO_OBJECTIVES)
     return "; ".join([FAILED, *notes])
 
 

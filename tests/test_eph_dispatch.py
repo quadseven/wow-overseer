@@ -410,6 +410,124 @@ class SynthesisTest(Base):
         )
 
 
+BAD_IMAGE = "registry.example.com/db@sha256:" + "9" * 64
+
+
+class StuckPullTest(Base):
+    """A started world whose pod never pulls an image gives its slot back."""
+
+    def pod(self, rid, age, reason="ImagePullBackOff", init=True, phase="Pending"):
+        status = {"phase": phase}
+        waiting = {
+            "name": "mysql",
+            "image": BAD_IMAGE,
+            "state": {"waiting": {"reason": reason, "message": "pull refused"}},
+        }
+        status["initContainerStatuses" if init else "containerStatuses"] = [waiting]
+        if reason == "Unschedulable":
+            status = {
+                "phase": "Pending",
+                "conditions": [{"type": "PodScheduled", "status": "False",
+                                "reason": "Unschedulable"}],
+            }  # fmt: skip
+        self.c.put("pods", "wow-ephemeral", f"eph-{rid}-x1y2z", {
+            "metadata": {"labels": {"job-name": f"eph-{rid}", "eph/arm": "control"},
+                         "creationTimestamp": iso(-age)},
+            "status": status,
+        })  # fmt: skip
+
+    def result_of(self, rid):
+        cm = self.c.objs.get(("configmaps", "wow-ephemeral", f"eph-result-{rid}"))
+        return cm and json.loads(cm["data"]["result.json"])
+
+    def test_a_pull_failure_past_the_grace_is_invalid_and_frees_the_node(self):
+        self.add("aaa111-c1", "control", claim="client-data-b", suspend=False,
+                 started=-20 * 60, age=20 * 60)  # fmt: skip
+        self.pod("aaa111-c1", age=20 * 60)
+        self.add("bbb222-c1", "control", claim="client-data-b", age=35 * 60)
+        self.tick()
+        self.assertNotIn(("jobs", "wow-ephemeral", "eph-aaa111-c1"), self.c.objs)
+        res = self.result_of("aaa111-c1")
+        self.assertEqual(res["verdict"], "INVALID")
+        self.assertIn("ImagePullBackOff", res["reasons"][0])
+        self.assertIn(BAD_IMAGE, res["reasons"][0])
+        self.assertIn("mysql", res["reasons"][0])
+        cm = self.c.objs[("configmaps", "wow-ephemeral", "eph-result-aaa111-c1")]
+        self.assertEqual(cm["metadata"]["labels"]["eph/verdict"], "INVALID")
+        self.assertFalse(self.suspended("bbb222-c1"))
+
+    def test_a_main_container_pull_failure_counts_too(self):
+        self.add("aaa112-c1", "control", suspend=False, started=-20 * 60)
+        self.pod("aaa112-c1", age=20 * 60, reason="ErrImagePull", init=False)
+        self.tick()
+        self.assertNotIn(("jobs", "wow-ephemeral", "eph-aaa112-c1"), self.c.objs)
+        self.assertIn("ErrImagePull", self.result_of("aaa112-c1")["reasons"][0])
+
+    def test_a_pull_failure_inside_the_grace_is_left_alone(self):
+        self.add("aaa113-c1", "control", claim="client-data-b", suspend=False,
+                 started=-5 * 60)  # fmt: skip
+        self.pod("aaa113-c1", age=5 * 60)
+        self.add("bbb223-c1", "control", claim="client-data-b")
+        self.tick()
+        self.assertIn(("jobs", "wow-ephemeral", "eph-aaa113-c1"), self.c.objs)
+        self.assertIsNone(self.result_of("aaa113-c1"))
+        self.assertTrue(self.suspended("bbb223-c1"))
+
+    def test_a_pod_pending_for_cpu_is_not_a_pull_failure(self):
+        self.add("aaa114-c1", "control", suspend=False, started=-20 * 60)
+        self.pod("aaa114-c1", age=20 * 60, reason="Unschedulable")
+        self.tick()
+        self.assertIn(("jobs", "wow-ephemeral", "eph-aaa114-c1"), self.c.objs)
+        self.assertIsNone(self.result_of("aaa114-c1"))
+
+    def test_a_pod_still_creating_is_not_a_pull_failure(self):
+        self.add("aaa115-c1", "control", suspend=False, started=-20 * 60)
+        self.pod("aaa115-c1", age=20 * 60, reason="PodInitializing")
+        self.tick()
+        self.assertIn(("jobs", "wow-ephemeral", "eph-aaa115-c1"), self.c.objs)
+
+    def test_a_refused_pod_list_leaves_the_tick_working(self):
+        self.add("aaa116-c1", "control", claim="client-data-b", suspend=False,
+                 started=-20 * 60)  # fmt: skip
+        self.pod("aaa116-c1", age=20 * 60)
+        self.add("bbb226-c1", "control")
+        self.c.fail["pods"] = 1
+        self.tick()
+        self.assertIn(("jobs", "wow-ephemeral", "eph-aaa116-c1"), self.c.objs)
+        self.assertFalse(self.suspended("bbb226-c1"))
+        self.assertTrue(any("pods unreadable" in line for line in self.logs))
+
+    def test_a_suspended_or_finished_job_is_never_judged_by_its_pod(self):
+        self.add("aaa117-c1", "control", suspend=False, finished="Failed")
+        self.result("aaa117-c1", "INVALID")
+        self.pod("aaa117-c1", age=20 * 60)
+        self.tick()
+        self.assertIn(("jobs", "wow-ephemeral", "eph-aaa117-c1"), self.c.objs)
+
+    def test_a_failed_result_write_keeps_the_job_for_the_next_pass(self):
+        self.add("aaa118-c1", "control", suspend=False, started=-20 * 60)
+        self.pod("aaa118-c1", age=20 * 60)
+        self.c.fail["eph-result-aaa118-c1"] = 1
+        self.tick()
+        self.assertIn(("jobs", "wow-ephemeral", "eph-aaa118-c1"), self.c.objs)
+
+    def test_a_stuck_first_control_stops_its_batch_on_the_same_pass(self):
+        self.add("abc777-c1", "control", suspend=False, started=-20 * 60)
+        self.add("abc777-t1", "treatment", suspend=False, finished="Complete")
+        self.result("abc777-t1", "PASS")
+        self.pod("abc777-c1", age=20 * 60)
+        self.add("abc777-c2", "control")
+        self.tick()
+        self.assertNotIn(("jobs", "wow-ephemeral", "eph-abc777-c2"), self.c.objs)
+
+    def test_the_grace_is_a_runner_setting(self):
+        self.cfg.image_pull_grace_seconds = 60
+        self.add("aaa119-c1", "control", suspend=False, started=-5 * 60)
+        self.pod("aaa119-c1", age=5 * 60)
+        self.tick()
+        self.assertNotIn(("jobs", "wow-ephemeral", "eph-aaa119-c1"), self.c.objs)
+
+
 class LeaseTest(Base):
     def test_second_dispatcher_is_refused_while_the_lease_is_live(self):
         a = dispatch.Dispatcher(

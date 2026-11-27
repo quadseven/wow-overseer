@@ -321,6 +321,99 @@ class MoltenCoreEncounterTest(unittest.TestCase):
                 self.assertIn("malformed Molten Core", " ".join(result["reasons"]))
 
 
+class RazorfenDownsEncounterTest(unittest.TestCase):
+    """Razorfen Downs keeps no boss states, so credit is the core's encounter mask."""
+
+    @staticmethod
+    def decree():
+        path = (
+            ROOT
+            / "data"
+            / "decrees"
+            / "razorfen-downs-exits-and-restarts-together.yaml"
+        )
+        decree = loads(path.read_text(encoding="utf-8"))
+        decree["duration"] = "2m"
+        keep = {"exactly-five-family-members-start-inside-rfd", "encounter-credited"}
+        decree["observe"] = [o for o in decree["observe"] if o["name"] in keep] + [
+            {
+                "name": "no-exit-hearth-was-used",
+                "role": "check",
+                "when": "end",
+                "sql": "SELECT id FROM overseer_dungeon_run_event WHERE kind = 'exit_hearth'",
+                "expect": {"rows": 0},
+            }
+        ]
+        return decree
+
+    def run_with_mask(self, mask, *, decree=None):
+        clock = Clock()
+        world = FakeWorld(clock)
+        world.answer("map_id = 129 AND instance_id = 11", [(5,)])
+        world.answer("FROM instance WHERE id = 11 AND map = 129", mask)
+        world.answer("overseer_dungeon_run_event", [])
+        handoff = {**HANDOFF, "variables": {**HANDOFF["variables"], "rfd": 11}}
+        result = run(decree or self.decree(), world, clock, handoff=handoff)
+        return result, world
+
+    def test_the_shipped_decree_lints_clean(self):
+        findings = lint.lint_document(self.decree())
+        self.assertFalse([f for f in findings if f.level == "error"], findings)
+
+    def test_a_credited_bit_in_the_fresh_instance_is_the_evidence(self):
+        result, world = self.run_with_mask(lambda now: [(8 if now >= 10 else 0,)])
+        self.assertEqual(result["verdict"], "PASS", result["reasons"])
+        self.assertEqual(named(result, "encounter-credited")["status"], "held")
+        self.assertIn(
+            (
+                0.0,
+                "SELECT completedEncounters FROM instance WHERE id = 11 AND map = 129",
+            ),
+            world.selects,
+        )
+        self.assertFalse(any("log_encounter" in sql for _, sql in world.selects))
+
+    def test_no_credited_bit_is_invalid(self):
+        result, world = self.run_with_mask([(0,)])
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+        self.assertEqual(named(result, "encounter-credited")["status"], "violated")
+        self.assertTrue(world.commands)
+
+    def test_a_mask_set_before_the_first_act_is_invalid(self):
+        result, world = self.run_with_mask([(1,)])
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+        self.assertIn("already complete", " ".join(result["reasons"]))
+        self.assertFalse(world.commands)
+
+    def test_a_missing_or_malformed_mask_does_not_count(self):
+        for mask in ([], [(None,)], [(-1,)], [(1 << 32,)], [("3 0",)], [(1,), (1,)]):
+            with self.subTest(mask=mask):
+                result, world = self.run_with_mask(mask)
+                self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+                self.assertFalse(world.commands)
+
+    def test_lint_refuses_the_selector_on_another_map(self):
+        decree = self.decree()
+        decree["arrange"] = [
+            {
+                "instance": {
+                    "map": "Blackrock Depths",
+                    "as": "rfd",
+                    "bind": "family:grug",
+                }
+            }
+            if "instance" in step
+            else step
+            for step in decree["arrange"]
+        ]
+        self.assertTrue(
+            any(
+                f.level == "error" and ".encounter" in str(f)
+                for f in lint.lint_document(decree)
+            )
+        )
+
+
 class VerdictTest(unittest.TestCase):
     def test_pass_when_every_precondition_and_check_holds(self):
         clock = Clock()
