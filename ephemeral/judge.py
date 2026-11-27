@@ -8,13 +8,13 @@ Three verdicts, never two:
   step never fired, a query timed out, the guard refused, the seed handoff is
   missing). INVALID never counts as a pass and never closes anything.
 
-What the judge may write, in total: `overseer_command` rows in the world's own
-database (an operator's order, through `GuardedConnection.insert_command`) and
-one ConfigMap named `eph-result-<run-id>` in its own namespace. Every read goes
-through the same guard the seed uses (loopback MySQL only, ephemeral namespace,
-one marker row), and every observation is re-checked as a single SELECT against
-the world's live schema before it runs. A job goes in as a command row, never a
-direct roster write (measured: a roster UPDATE has no effect).
+The judge writes `overseer_command` rows for ordinary acts, at most one tagged
+Molten Core order in the world's campaign queue for a `raid_order` act, and one
+ConfigMap named `eph-result-<run-id>` in its own namespace. Database access goes
+through the seed guard (loopback MySQL, ephemeral namespace, one marker row).
+The guard locks that row before reading the campaign queue and holds the lock
+through the write's commit or rollback. Every observation is re-checked as a
+single SELECT against the world's live schema before it runs.
 
 Seams: `Judge` takes the world, the clock and the log as arguments, so the
 whole verdict logic runs in unit tests with no database and no cluster.

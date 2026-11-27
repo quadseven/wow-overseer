@@ -306,11 +306,14 @@ unknown bound, and a judge handed one anyway reports the check as an error
 a timeout or error is sticky and makes the run INVALID even if a later look
 violates or passes; a violation outranks a later clean look.
 
-What the judge may write, in total: `overseer_command` rows in the world's own
-database (through the same guard as the seed, and never kind `gm`), and one
-ConfigMap, `eph-result-<run-id>`, created in its own namespace. Every
-observation is re-checked as a single SELECT against the live schema before it
-runs. Settings come from the pod environment: the seed's variables plus
+The judge writes `overseer_command` rows for ordinary acts, one tagged Molten
+Core order in the world's campaign queue when the decree has a `raid_order`
+act, and one ConfigMap, `eph-result-<run-id>`, in its own namespace. The guard
+accepts at most one rehearsal order per disposable world, including across
+families. It locks the world's singleton marker row before reading the queue
+and holds the lock through commit or rollback. The guard rejects `gm` commands
+and re-checks every observation as a single SELECT against the live schema.
+Settings come from the pod environment: the seed's variables plus
 `EPH_RUN_ID`, `EPH_ARM` and `EPH_NAMESPACE`. The ConfigMap holds the verdict, the
 reasons, the rendered SQL and observed values per assertion, sample rows and
 matched log lines (cut to fit 256 KB, never the verdict). Exit 0 means a verdict
