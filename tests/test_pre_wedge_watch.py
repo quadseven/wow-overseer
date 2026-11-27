@@ -112,9 +112,11 @@ class PreWedgeWatch(unittest.TestCase):
             },
         ]
 
+        sample = {}
+
         def fetch(url):
             if url.endswith("/roster"):
-                return {"checked_at": checked_at, "members": members}
+                return dict(sample)
             if url.endswith("/pre-wedge"):
                 return {"death_slope_asks": 1, "restart_slope_stand_downs": 2}
             return {}
@@ -139,7 +141,7 @@ class PreWedgeWatch(unittest.TestCase):
                         (9000, stalled),
                         (3600 + 86400, stalled),
                     ):
-                        checked_at = now + elapsed
+                        sample.update(checked_at=now + elapsed, members=members)
                         metric_watcher.main()
             raw = path.read_text(encoding="utf-8")
 
