@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 
 from tools.metric_watcher import (
-    _previous,
+    _previous_record,
     append_jsonl,
     build_metrics,
     collect,
@@ -144,7 +144,7 @@ def test_previous_reads_last_record_when_jsonl_ends_with_newline(tmp_path):
     append_jsonl(path, {"level_snapshot": {"id": "one"}})
     append_jsonl(path, {"level_snapshot": {"id": "two"}})
 
-    assert _previous(path) == {"id": "two"}
+    assert _previous_record(path) == {"level_snapshot": {"id": "two"}}
 
 
 def test_snapshots_record_each_family_crafters_skills_without_names():
