@@ -320,6 +320,9 @@ STALLED_UNSOURCED = (
     STALLED
     + ", no huntable source supplies what it asks for, and questers cannot buy items from vendors"
 )
+STALLED_GAMEOBJECT_SOURCE = (
+    "%s, required item %d has gameobject source entries %s with no spawn row"
+)
 REFUSED_TAKE = "the quest giver would not give it"
 # A required item no creature drops, no chest holds and no take hands over: the
 # quester cannot buy it from a vendor, so the quest cannot be finished (#3149).
@@ -1925,6 +1928,7 @@ def failures(
             object_gone,
             prog,
             _vendor_item(quest, member.quest_item_objectives.get(qid, {})),
+            member.quest_item_objectives.get(qid, {}),
         )
         if reason.startswith(STALLED):
             fields = _held_objective_fields(member, qid, quest)
@@ -1970,6 +1974,7 @@ def _broken_reason(
     object_gone=frozenset(),
     progress=0,
     vendor_item=0,
+    item_progress=None,
 ) -> str:
     """Why a quest the quester holds is broken, "" when it is not (yet). A
     complete quest's objectives cannot move, so stillness never stalls it:
@@ -2045,12 +2050,40 @@ def _broken_reason(
         return NO_OBJECTIVES
     if played < STALL_SECONDS or complete:
         return ""
+    object_source = _unspawned_gameobject_source(quest, item_progress or {})
+    if object_source:
+        item, entries = object_source
+        return STALLED_GAMEOBJECT_SOURCE % (
+            STALLED,
+            item,
+            ", ".join(map(str, entries)),
+        )
     # A chest that holds the item is a source: its quest is worked, not unsourced.
     # A vendor-only item is unsourced whatever the quest's other objectives are.
     unsourced = bool(vendor_item) or (
         (quest.kills or quest.items) and not quest.fields and not _chested(quest)
     )
     return STALLED_UNSOURCED if unsourced else STALLED
+
+
+def _unspawned_gameobject_source(quest, item_progress) -> tuple | None:
+    """The first incomplete required item with a gameobject loot source but
+    no spawn row for any of its source entries, or None when another source is
+    recorded as spawned or the item is already complete."""
+    for item, count in quest.items:
+        if int(item_progress.get(item, 0)) >= count:
+            continue
+        sources = tuple(
+            use
+            for use in quest.uses
+            if use.verb == classquest.USE_OBJECT and use.item == item and use.targets
+        )
+        if not sources or any(use.spots for use in sources):
+            continue
+        entries = tuple(sorted({int(entry) for use in sources for entry in use.targets}))
+        if entries:
+            return int(item), entries
+    return None
 
 
 def _refused_words(reason, words) -> str:

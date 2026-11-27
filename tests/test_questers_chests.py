@@ -127,7 +127,7 @@ class TheCatalogueReadsTheChest(unittest.TestCase):
         self.assertNotIn(WILD_HEARTS, questers.in_reach(cat, member, SILVERPINE))
         self.assertFalse(questers.open_to(cat, member, WILD_HEARTS))
 
-    def test_wild_hearts_ledger_explains_template_rows_without_a_spawn(self):
+    def test_wild_hearts_ledger_names_the_unspawned_gameobject_source(self):
         cat = wild_hearts_world(spawn_droppers=False)
         holder = mirra(
             level=11,
@@ -145,7 +145,8 @@ class TheCatalogueReadsTheChest(unittest.TestCase):
             )
 
         self.assertEqual([b.quest for b in plan.broken], [WILD_HEARTS])
-        self.assertEqual(plan.broken[0].reason, questers.STALLED_UNSOURCED)
+        self.assertIn("gameobject source entries 9003", plan.broken[0].reason)
+        self.assertIn("with no spawn row", plan.broken[0].reason)
 
     def test_wild_hearts_can_take_hunt_and_hand_in_with_spawned_item_sources(self):
         cat = wild_hearts_world(spawn_droppers=True)
