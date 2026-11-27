@@ -248,7 +248,7 @@ def main(argv=None):
         "--due",
         type=int,
         metavar="N",
-        help="preflight the first N distinct due decrees",
+        help="queue up to N distinct due decrees that pass preflight",
     )
     s.add_argument("--config", help=cfg_help)
     s.add_argument(

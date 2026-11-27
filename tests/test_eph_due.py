@@ -237,9 +237,17 @@ class DueTest(unittest.TestCase):
         raw = decree("a", 7, 8).replace(
             f"repo: {REPO}, issue: 8", f"repo: {other}, issue: 8"
         )
-        for scenario in ("held", "claimed-during-preflight", "unreadable"):
-            with self.subTest(scenario=scenario):
-                gh = FakeGh({REPO: [issue(7, "Proof: decree a")]}, {"a": raw})
+        for scenario, flags in (
+            ("held", ()),
+            ("claimed-during-preflight", ()),
+            ("claimed-during-preflight", ("--dry-run",)),
+            ("unreadable", ()),
+        ):
+            with self.subTest(scenario=scenario, flags=flags):
+                gh = FakeGh(
+                    [issue(7, "Proof: decree a"), issue(9, "Proof: decree b")],
+                    {"a": raw, "b": decree("b", 9)},
+                )
                 held = issue(8, "no Proof line", "claim:other-agent")
                 if scenario == "held":
                     gh.current_issues[other, 8] = held
@@ -247,45 +255,71 @@ class DueTest(unittest.TestCase):
                     gh.current_issues[other, 8] = issue(8, "no Proof line")
 
                 def preflight(*args, gh=gh, held=held, **kwargs):
-                    self.assertTrue(args[4]["dry_run"])
-                    gh.current_issues[other, 8] = held
+                    if args[3] == "data/decrees/a.yaml":
+                        self.assertTrue(args[4]["dry_run"])
+                        gh.current_issues[other, 8] = held
 
-                self.assertEqual(due.due(gh, self.cfg), [(REPO, 7, "a")])
-                code, output, calls = self.run_submit(gh, response=preflight)
+                self.assertEqual(
+                    due.due(gh, self.cfg), [(REPO, 7, "a"), (REPO, 9, "b")]
+                )
+                code, output, calls = self.run_submit(gh, *flags, response=preflight)
                 self.assertEqual(code, 0)
                 if scenario == "unreadable":
                     self.assertIn(f"skip a: {other}#8: could not read", output)
                 else:
                     self.assertIn(f"skip a: {other}#8 (claim:other-agent)", output)
-                self.assertEqual(
-                    len(calls), int(scenario == "claimed-during-preflight")
+                expected = (
+                    ["data/decrees/a.yaml"]
+                    if scenario == "claimed-during-preflight"
+                    else []
                 )
+                expected += ["data/decrees/b.yaml"] * (1 if flags else 2)
+                self.assertEqual([call.args[3] for call in calls], expected)
 
-    def test_first_distinct_decrees_preflight_once_and_a_skip_is_not_replaced(self):
-        gh = FakeGh(
-            [
-                issue(7, "Proof: decree a"),
-                issue(8, "Proof: decree a"),
-                issue(9, "Proof: decree b"),
-                issue(10, "Proof: decree c"),
-            ],
-            {"a": decree("a", 7, 8), "b": decree("b", 9), "c": decree("c", 10)},
-        )
-        code, output, calls = self.run_submit(
-            gh, limit=2, response=[None, None, submit.SubmitError("old image is gone")]
-        )
-        self.assertEqual(code, 0)
-        self.assertIn("skip b: old image is gone", output)
-        self.assertEqual(
-            gh.contents_reads.count(f"repos/{REPO}/contents/data/decrees/a.yaml"), 1
-        )
-        self.assertEqual(
-            [
-                (pathlib.Path(call.args[3]).stem, call.args[4]["dry_run"])
-                for call in calls
-            ],
-            [("a", True), ("a", False), ("b", True)],
-        )
+    def test_failed_preflight_does_not_spend_a_distinct_decree_slot(self):
+        issues = [
+            issue(7, "Proof: decree a"),
+            issue(8, "Proof: decree a"),
+            issue(9, "Proof: decree b"),
+            issue(10, "Proof: decree c"),
+            issue(11, "Proof: decree d"),
+        ]
+        decrees = {
+            "a": decree("a", 7, 8),
+            "b": decree("b", 9),
+            "c": decree("c", 10),
+            "d": decree("d", 11),
+        }
+
+        def preflight(_cfg, _kube, _gh, path, options, **kwargs):
+            if path == "data/decrees/b.yaml":
+                self.assertTrue(options["dry_run"])
+                raise submit.SubmitError("old image is gone")
+
+        for flags, expected in (
+            ((), [("a", True), ("a", False), ("b", True), ("c", True), ("c", False)]),
+            (("--dry-run",), [("a", True), ("b", True), ("c", True)]),
+        ):
+            with self.subTest(flags=flags):
+                gh = FakeGh(issues, decrees)
+                code, output, calls = self.run_submit(
+                    gh, *flags, limit=2, response=preflight
+                )
+                self.assertEqual(code, 0)
+                self.assertIn("skip b: old image is gone", output)
+                self.assertEqual(
+                    gh.contents_reads.count(
+                        f"repos/{REPO}/contents/data/decrees/a.yaml"
+                    ),
+                    1,
+                )
+                self.assertEqual(
+                    [
+                        (pathlib.Path(call.args[3]).stem, call.args[4]["dry_run"])
+                        for call in calls
+                    ],
+                    expected,
+                )
 
     def test_real_submission_errors_stop_instead_of_being_reported_as_skips(self):
         gh = FakeGh(

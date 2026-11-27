@@ -55,7 +55,7 @@ def has_submission(results_dir, decree_id):
 
 
 def _load_decree(gh, repo, decree_id):
-    """Raw bytes and declared issue targets from the default branch, if valid."""
+    """Raw bytes and parsed decree from the default branch, if valid."""
     # The Contents API uses the repository's default branch when ref is absent.
     doc = gh.api(
         f"repos/{repo}/contents/data/decrees/{decree_id}.yaml", missing_ok=True
@@ -72,7 +72,7 @@ def _load_decree(gh, repo, decree_id):
         return None
     if not isinstance(decree, dict) or decree.get("id") != decree_id:
         return None
-    return raw, _targets(decree, repo)
+    return raw, decree
 
 
 @dataclass(frozen=True)
@@ -113,9 +113,11 @@ def _discover(gh, cfg, repos):
             decrees[did] = _load_decree(gh, cfg.decree_repo, did)
         if decrees[did] is None:
             continue
-        raw, targets = decrees[did]
-        if (repo.lower(), it["number"]) in targets:
-            yield _Proof(repo, it["number"], did, raw, targets)
+        raw, decree = decrees[did]
+        if proves_issue(decree, repo, it["number"], cfg.decree_repo):
+            yield _Proof(
+                repo, it["number"], did, raw, _targets(decree, cfg.decree_repo)
+            )
 
 
 def due(gh, cfg, repos=None):
@@ -177,21 +179,20 @@ def _target_blocker(gh, proofs):
 
 
 def submit_due(gh, cfg, cluster, limit, args, out=print):
-    """Preflight up to limit distinct unheld proofs and submit the eligible ones."""
+    """Select up to limit distinct unheld proofs that pass preflight."""
     by_decree = {}
     for proof in _discover(gh, cfg, None):
         by_decree.setdefault(proof.decree_id, []).append(proof)
 
+    options = {**args, "control": "auto"}
     for decree_id, proofs in by_decree.items():
         if limit == 0:
             break
         if blocker := _target_blocker(gh, proofs):
             out(f"skip {decree_id}: {blocker}")
             continue
-        limit -= 1
         path = f"data/decrees/{decree_id}.yaml"
         raw = proofs[0].raw
-        options = {**args, "control": "auto"}
         try:
             submit.submit(
                 cfg, cluster, gh, path, {**options, "dry_run": True}, decree_bytes=raw
@@ -199,12 +200,12 @@ def submit_due(gh, cfg, cluster, limit, args, out=print):
         except (submit.SubmitError, kube.KubeError, ghx.GhError) as exc:
             out(f"skip {decree_id}: {exc}")
             continue
-        if options.get("dry_run"):
-            continue
         if blocker := _target_blocker(gh, proofs):
             out(f"skip {decree_id}: {blocker}")
             continue
         if has_submission(cfg.results_dir, decree_id):
             out(f"skip {decree_id}: a submission appeared during preflight")
             continue
-        submit.submit(cfg, cluster, gh, path, options, decree_bytes=raw)
+        if not options.get("dry_run"):
+            submit.submit(cfg, cluster, gh, path, options, decree_bytes=raw)
+        limit -= 1

@@ -166,15 +166,16 @@ repositories in that order when issue timestamps tie. An empty or omitted
 list scans only `decree_repo`, which always supplies the decree file.
 
 Run `python3 -m ephemeral submit --due N --control-history FILE --dry-run` to
-preflight the first N distinct due decrees. A claim or active Loom lane on any
-open issue named in `proves` holds the decree. Every target is checked again
-before queueing, including issues outside the scan.
-The limit counts unheld decrees. A preflight refusal is printed and consumes its
-place in that selection. The command uses the default-branch file bytes for
-both arms and picks the control with `--control auto`. Omit `--dry-run` to queue
-one suspended batch per decree that passes preflight. A submission error after
-preflight stops the command and returns an error. The path form of `submit`
-still supports manual image, config and single-arm options.
+preflight distinct due decrees oldest first until N are ready. A claim or
+active Loom lane on any open issue named in `proves` holds the decree. Every
+target is checked again after preflight, including issues outside the scan.
+The command prints each skip reason. A failed preflight, held target or new
+submission record leaves the slot available for the next decree. The command
+uses the default-branch file bytes for both arms and picks the control with
+`--control auto`. Omit `--dry-run` to queue one suspended batch per selected
+decree. A submission error after preflight stops the command and returns an
+error. The path form of `submit` still supports manual image, config and
+single-arm options.
 
 `eph report` posts the named decree's batch result, including each run's UTC
 start time and judge reason lines. It ticks one uniquely matching checkbox only
