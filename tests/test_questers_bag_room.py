@@ -178,20 +178,21 @@ class AHuntRefusedForBagRoomWaitsOnTheSale(unittest.TestCase):
         again = questers.plan(world(), member, questers.Clock(), 0.0, tried=later)
         self.assertEqual(again.move.kind, classquest.HUNT)
 
-    def test_a_free_slot_releases_the_hold_before_its_retry_window(self):
+    def test_a_free_slot_read_does_not_release_the_hold(self):
         member = mirra(**self.HUNTING, free_slots=2)
         refused = [hunt_bags_full(age=10)]
-        again = questers.plan(world(), member, questers.Clock(), 0.0, tried=refused)
-        self.assertEqual(again.move.kind, classquest.HUNT)
+        held = questers.plan(world(), member, questers.Clock(), 0.0, tried=refused)
+        self.assertIsNone(held.move)
+        self.assertIn("waits for room or", held.line)
 
-    def test_a_second_refusal_with_room_read_holds_the_whole_window(self):
+    def test_a_free_slot_read_cannot_restart_the_refusal_loop(self):
         member = mirra(**self.HUNTING, free_slots=2)
-        twice = [hunt_bags_full(age=3), hunt_bags_full(age=6)]
-        self.assertTrue(questers.bags_full_hunt("Mirra", twice, 2))
-        held = questers.plan(world(), member, questers.Clock(), 0.0, tried=twice)
+        once = [hunt_bags_full(age=3)]
+        self.assertTrue(questers.bags_full_hunt("Mirra", once, 2))
+        held = questers.plan(world(), member, questers.Clock(), 0.0, tried=once)
         self.assertIsNone(held.move)
         old = [hunt_bags_full(age=questers.BAG_HUNT_RETRY_MINUTES + 1)] * 2
-        self.assertFalse(questers.bags_full_hunt("Mirra", old + twice[:1], 2))
+        self.assertTrue(questers.bags_full_hunt("Mirra", old + once, 2))
 
     def test_a_refusal_of_another_kind_holds_nothing(self):
         other = questers.Attempt(
