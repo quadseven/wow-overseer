@@ -47,6 +47,26 @@
   .ro-table, .gt-table { display: block; }
 }
 
+/* ---- triage bar (ticket 3369) ------------------------------------------------------ */
+.ro-triage {
+  position: sticky; top: 44px; z-index: 3; background: var(--color-bg); padding: 8px 0;
+  display: flex; flex-direction: column; gap: 8px; box-shadow: 0 1px 0 var(--color-divider);
+}
+@media (max-width: 759.98px) { .ro-triage { top: calc(var(--header-h) + env(safe-area-inset-top) + 44px); } }
+.ro-summary { margin: 0; font-size: var(--fs-2); color: var(--color-neutral-300); }
+.ro-chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.ro-chips::-webkit-scrollbar { display: none; }
+.ro-chips .chip { min-height: 44px; padding: 0 12px; flex-shrink: 0; white-space: nowrap; }
+.ro-triage .ro-filter { max-width: none; }
+.ro-meta { font-size: var(--fs-2); color: var(--color-neutral-300); }
+.ro-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.ro-blocker { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ro-card { padding-top: 10px; padding-bottom: 10px; }
+.ro-famhead { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; padding: 8px 2px 0; }
+.ro-famname { font-size: var(--fs-3); font-weight: 500; }
+.ro-famblock { display: block; flex-basis: 100%; font-size: var(--fs-2); color: var(--color-neutral-400); }
+.ro-famrow td { background: var(--color-neutral-900); }
+
 /* ---- paperdoll hub ---------------------------------------------------------------- */
 .pd-jump {
   position: sticky; top: 44px; z-index: 3; background: var(--color-bg); padding: 8px 0; display: flex; gap: 6px;
