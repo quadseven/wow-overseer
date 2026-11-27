@@ -545,10 +545,19 @@ class ShippedDecreesTest(unittest.TestCase):
             (ROOT / "data/decrees/smith-without-a-hammer-buys-one.yaml").read_text()
         )
         self.assertEqual(lint.lint_document(d), [])
-        self.assertEqual(d["proves"], 1590)
         self.assertEqual(
-            d["box"],
-            "Live: on the dev realm a job craft smith with no hammer gets exactly one kind buy row for item 5956 in the town errand table, and no second one while it is held.",
+            d["proves"],
+            [
+                {
+                    "repo": "quadseven/wow-overseer",
+                    "issue": 1590,
+                    "criterion": (
+                        "Live: on the dev realm a job craft smith with no hammer gets exactly "
+                        "one kind buy row for item 5956 in the town errand table, and no second "
+                        "one while it is held."
+                    ),
+                }
+            ],
         )
         self.assertEqual(d["duration"], "45m")
         self.assertEqual([c["who"] for c in d["cast"]], ["Zug", "family:zug"])
