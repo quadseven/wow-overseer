@@ -12,7 +12,7 @@ import unittest
 import uuid
 from unittest import mock
 
-from ephemeral import dbschema, guard, judge
+from ephemeral import dbschema, guard, judge, lint
 from ephemeral.miniyaml import loads
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -106,6 +106,207 @@ def run(decree, world, clock, log="", handoff=HANDOFF, poll=10):
 
 def named(result, name):
     return next(a for a in result["assertions"] if a["name"] == name)
+
+
+class MagmusEncounterTest(unittest.TestCase):
+    @staticmethod
+    def decree():
+        decree = copy.deepcopy(GUZZLER)
+        decree["duration"] = "1m"
+        decree["act"] = [
+            {
+                "at": "0s",
+                "roster": {"who": "family:grug", "job": "dungeon:blackrock-depths"},
+            }
+        ]
+        decree["observe"] = [
+            {
+                "name": "magmus-died",
+                "role": "precondition",
+                "when": "end",
+                "encounter": {"instance": "brd", "boss": "Magmus"},
+            },
+            {
+                "name": "no-guardian-deaths",
+                "role": "check",
+                "when": "end",
+                "sql": "SELECT id FROM overseer_death WHERE killer_entry = 8982",
+                "expect": {"rows": 0},
+            },
+        ]
+        return decree
+
+    def run_with_save(self, save):
+        clock = Clock()
+        world = FakeWorld(clock)
+        world.answer("FROM instance WHERE id = 7 AND map = 230", save)
+        decree = self.decree()
+        return run(decree, world, clock), world
+
+    def test_lint_accepts_the_bound_magmus_observer(self):
+        findings = lint.lint_document(self.decree())
+        self.assertFalse([f for f in findings if f.level == "error"], findings)
+
+    def test_lint_refuses_other_encounter_sources(self):
+        for change in (
+            {"encounter": {"boss": "Emperor", "instance": "brd"}},
+            {"encounter": {"boss": "Magmus", "instance": "somewhere_else"}},
+            {"role": "check"},
+            {"when": "start"},
+            {"sql": "SELECT id FROM instance"},
+        ):
+            with self.subTest(change=change):
+                decree = self.decree()
+                decree["observe"][0].update(change)
+                self.assertTrue(
+                    any(
+                        f.level == "error" and ".encounter" in str(f)
+                        for f in lint.lint_document(decree)
+                    )
+                )
+
+    def test_observes_the_fresh_bound_instances_magmus_kill(self):
+        result, world = self.run_with_save(
+            lambda now: [("0 0 0 0 0 3 0 0 0" if now >= 10 else "",)]
+        )
+        self.assertEqual(result["verdict"], "PASS", result["reasons"])
+        self.assertEqual(named(result, "magmus-died")["status"], "held")
+        self.assertTrue(world.commands)
+        self.assertFalse(any("log_encounter" in sql for _, sql in world.selects))
+
+    def test_preexisting_done_state_invalidates_before_any_act(self):
+        result, world = self.run_with_save([("0 0 0 0 0 3 0 0 0",)])
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+        self.assertIn("already complete", " ".join(result["reasons"]))
+        self.assertFalse(world.commands)
+
+    def test_another_encounters_done_state_does_not_count(self):
+        result, _ = self.run_with_save(
+            lambda now: [("0 0 0 0 3 0 0 0 0" if now >= 10 else "",)]
+        )
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+        self.assertEqual(named(result, "magmus-died")["status"], "violated")
+
+    def test_missing_instance_or_invalid_save_does_not_count(self):
+        for save in ([], [("0 0 0 0 0 3 error 0 0",)]):
+            with self.subTest(save=save):
+                result, world = self.run_with_save(save)
+                self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+                self.assertFalse(world.commands)
+
+
+class MoltenCoreEncounterTest(unittest.TestCase):
+    @staticmethod
+    def decree(decree_name):
+        path = ROOT / "data" / "decrees" / f"{decree_name}.yaml"
+        decree = loads(path.read_text(encoding="utf-8"))
+        decree["duration"] = "1m"
+        return decree
+
+    def run_with_save(self, decree_name, end, *, start="", boss=None, bound=True):
+        decree = self.decree(decree_name)
+        if boss is not None:
+            credit = next(o for o in decree["observe"] if "encounter" in o)
+            credit["encounter"]["boss"] = boss
+        clock = Clock()
+        world = FakeWorld(clock)
+        world.answer("overseer_raid_seat", [(5,)])
+        world.answer("log_encounter", [(0,)])
+        world.answer("kind = 'boss'", [(1,)])
+        world.answer("kind = 'repair_skipped'", [(0,)])
+        world.answer("FROM overseer_dungeon_run WHERE", [(1,)])
+        world.answer("SELECT COUNT(*) FROM overseer_death", [(0,)])
+        if bound:
+            world.answer(
+                "FROM instance WHERE id = 42 AND map = 409",
+                lambda now: [(end if now >= 10 else start,)],
+            )
+        world.answer("FROM instance WHERE id = 41 AND map = 409", [(end,)])
+        world.answer("FROM instance WHERE id = 42 AND map = 230", [(end,)])
+        log = (
+            "[MC] majordomo: 2 casters holding, magic reflection on Flamewaker\n"
+            "raid run for family 'Grug': lowest durability Ugga 81%; "
+            "0 seat(s) under the 25% floor (before encounter 1)"
+        )
+        handoff = {**HANDOFF, "variables": {**HANDOFF["variables"], "mc": 42}}
+        return run(decree, world, clock, log=log, handoff=handoff), world
+
+    def test_majordomo_surrender_is_observed_in_the_fresh_bound_instance(self):
+        result, world = self.run_with_save(
+            "majordomo-reflect-hold", "M C 5 3 3 3 3 3 3 3 3 5 "
+        )
+        self.assertEqual(result["verdict"], "PASS", result["reasons"])
+        self.assertTrue(world.commands)
+        self.assertFalse(any("log_encounter" in sql for _, sql in world.selects))
+
+    def test_durability_can_prove_credit_from_the_first_boss(self):
+        result, _ = self.run_with_save(
+            "raid-durability-before-each-boss", "M C 3 5 5 5 5 5 5 5 5 5 "
+        )
+        self.assertEqual(result["verdict"], "PASS", result["reasons"])
+
+    def test_ragnaros_proof_requires_ragnaros_to_be_done(self):
+        for state, verdict in ((3, "PASS"), (4, "INVALID"), (5, "INVALID")):
+            with self.subTest(state=state):
+                result, _ = self.run_with_save(
+                    "majordomo-reflect-hold",
+                    f"M C 3 3 3 3 3 3 3 3 3 {state} ",
+                    boss="Ragnaros",
+                )
+                self.assertEqual(result["verdict"], verdict, result["reasons"])
+
+    def test_another_boss_does_not_count_as_majordomo_surrender(self):
+        result, _ = self.run_with_save(
+            "majordomo-reflect-hold", "M C 3 3 3 3 3 3 3 3 1 5 "
+        )
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+
+    def test_lint_refuses_wrong_map_or_unknown_selector(self):
+        for boss in ("Magmus", "Garr", ["Majordomo Executus"]):
+            with self.subTest(boss=boss):
+                decree = self.decree("majordomo-reflect-hold")
+                credit = next(o for o in decree["observe"] if "encounter" in o)
+                credit["encounter"]["boss"] = boss
+                self.assertTrue(
+                    any(
+                        f.level == "error" and ".encounter" in str(f)
+                        for f in lint.lint_document(decree)
+                    )
+                )
+
+    def test_saved_credit_from_the_wrong_instance_or_map_cannot_count(self):
+        result, world = self.run_with_save(
+            "majordomo-reflect-hold", "M C 3 3 3 3 3 3 3 3 3 5 ", bound=False
+        )
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+        self.assertFalse(world.commands)
+        self.assertIn(
+            (0.0, "SELECT data FROM instance WHERE id = 42 AND map = 409"),
+            world.selects,
+        )
+
+    def test_preexisting_credit_invalidates_before_the_roster_act(self):
+        for name, start in (
+            ("majordomo-reflect-hold", "M C 5 3 3 3 3 3 3 3 3 5 "),
+            ("raid-durability-before-each-boss", "M C 3 5 5 5 5 5 5 5 5 5 "),
+        ):
+            with self.subTest(decree=name):
+                result, world = self.run_with_save(name, start, start=start)
+                self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+                self.assertIn("already complete", " ".join(result["reasons"]))
+                self.assertFalse(world.commands)
+
+    def test_malformed_save_cannot_credit_the_raid(self):
+        for end in (
+            "B R 3 3 3 3 3 3 3 3 3 5 ",
+            "M C 3 3 3 3 3 3 3 3 3 ",
+            "M C 3 3 3 3 3 3 3 3 3 5 0 ",
+            "M C 3 3 3 3 3 3 3 3 3 6 ",
+        ):
+            with self.subTest(save=end):
+                result, _ = self.run_with_save("majordomo-reflect-hold", end)
+                self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+                self.assertIn("malformed Molten Core", " ".join(result["reasons"]))
 
 
 class VerdictTest(unittest.TestCase):
@@ -795,6 +996,26 @@ class LogAssertionTest(unittest.TestCase):
         clock = Clock()
         r = run(self.decree(0), guzzler_world(clock), clock, log="all quiet\n")
         self.assertEqual(r["verdict"], "PASS", r["reasons"])
+
+    def test_an_unwitnessed_scenario_is_invalid_even_when_an_outcome_check_fails(self):
+        d = self.bounded({"at_least": 1})
+        observation = d["observe"][-1]
+        observation.update(name="observed-encounter", role="precondition", when="end")
+        observation["log"]["pattern"] = "the family entered the hall"
+        for log, patrons, verdict in (
+            ("", [("Grim Patron", 5, 1234)], "INVALID"),
+            ("the family entered the hall", [("Grim Patron", 5, 1234)], "FAIL"),
+            ("the family entered the hall", [], "PASS"),
+        ):
+            with self.subTest(log=log, verdict=verdict):
+                clock = Clock()
+                world = guzzler_world(clock, patrons=patrons)
+                result = run(d, world, clock, log=log)
+                self.assertEqual(result["verdict"], verdict, result["reasons"])
+                if verdict == "INVALID":
+                    self.assertIn(
+                        "precondition observed-encounter", result["reasons"][0]
+                    )
 
     def bounded(self, expect):
         d = self.decree(0)

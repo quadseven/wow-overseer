@@ -1,19 +1,29 @@
-# Five seats are intentionally below the default Molten Core quorum. This checks only
-# the under-quorum hold and end path, not the 40-seat entry case.
+# Five seats exercise the Molten Core hold and bounded end path. A separate
+# qualifying lineup is needed to prove the entry case.
 decree: v1
 id: raid-under-quorum-at-door
 proves:
   - {repo: quadseven/mod-overseer, issue: 1457, criterion: "a five-seat Molten Core order ends for want of quorum at the door and emits no ENTER event"}
 fix: {repo: quadseven/mod-overseer, commit: "9d25f1d0a8bcf1bb96984d37273ac3bcff0d6d80"}
-world: {class: lean, image: follow-dev, bridge: "on", random_bots: 0, config: {}}
+world:
+  class: lean
+  image: follow-dev
+  bridge: "off"
+  random_bots: 0
+  config:
+    Overseer.Raid.QuorumSeats: 36
+    Overseer.Raid.QuorumTanks: 3
+    Overseer.Raid.QuorumHealers: 8
+    Overseer.Raid.RepairFloorPct: 0
 runs: {control: 3, treatment: 3}
 duration: 45m
 cast:
   - who: family:grug
-    set: {alive: true, at: {areatrigger: 2886}}
-    ceiling: "position only; nothing granted"
+    set: {alive: true, level: 60, at: {captured: moltencore-raid-staging}}
+    ceiling: "level 60 and position in this throwaway world"
 arrange:
   - group: {members: family:grug, leader: Grug}
+  - raid_seats: {family: Grug, keyword: moltencore, seats: [{who: family:grug, role: dps}]}
 act:
   - at: 0s
     roster: {who: family:grug, job: "raid:moltencore"}
@@ -23,18 +33,57 @@ observe:
     when: start
     sql: |
       SELECT COUNT(*) FROM characters c
-      JOIN acore_world.areatrigger a ON a.entry = 2886
-      WHERE c.guid IN (@cast) AND c.map = a.map
-        AND POW(c.position_x - a.x, 2) + POW(c.position_y - a.y, 2) <= 1600
+      JOIN acore_world.areatrigger_teleport a ON a.ID = 2890
+      WHERE c.guid IN (@cast) AND c.online = 1 AND c.map = a.target_map
+        AND POW(c.position_x - a.target_position_x, 2)
+          + POW(c.position_y - a.target_position_y, 2)
+          + POW(c.position_z - a.target_position_z, 2) <= 1600
     expect: {scalar: "= 5"}
   - name: five-raid-seats-were-written
     role: precondition
-    when: end
+    when: start
     sql: |
       SELECT COUNT(*) FROM overseer_raid_seat
       WHERE family = 'Grug' AND keyword = 'moltencore'
         AND name IN (SELECT name FROM characters WHERE guid IN (@cast))
     expect: {scalar: "= 5"}
+  - name: no-seats-outside-the-cast
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM overseer_raid_seat
+      WHERE family = 'Grug' AND keyword = 'moltencore'
+        AND name NOT IN (SELECT name FROM characters WHERE guid IN (@cast))
+    expect: {scalar: "= 0"}
+  - name: the-raid-job-was-applied
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command
+      WHERE source = 'eph-judge' AND kind = 'job' AND target_name = 'Grug'
+        AND command = 'raid:moltencore' AND status = 'applied' AND created_at >= @t0
+    expect: {scalar: ">= 1"}
+  - name: the-order-reached-a-decision-at-the-door
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_dungeon_run_event
+      WHERE family = 'Grug' AND portal = 'moltencore' AND kind = 'phase'
+        AND created_at >= @t0
+        AND (phase = 'ENTER' OR (phase = 'IDLE' AND detail LIKE '%never reached a quorum at the door%'))
+    expect: {scalar: ">= 1"}
+  # The hold warning names the shortage during the extra wait. The end
+  # warning announces the decision and the IDLE event confirms release.
+  - name: the-hold-warned-about-the-shortfall
+    role: check
+    log:
+      pattern: "raid run for family 'Grug' holds at the door - [0-5] of 5, short [0-9]+ seats, [0-9]+ tanks, [0-9]+ healers"
+      expect: {at_least: 1}
+  - name: the-shortfall-was-logged
+    role: check
+    log:
+      pattern: "raid run for family 'Grug' ends the order - no quorum at the door"
+      expect: {at_least: 1}
   - name: the-order-ends-for-want-of-quorum
     role: check
     when: end
@@ -49,6 +98,6 @@ observe:
     when: end
     sql: |
       SELECT COUNT(*) FROM overseer_dungeon_run_event
-      WHERE family = 'Grug' AND portal = 'moltencore' AND kind = 'enter'
+      WHERE family = 'Grug' AND portal = 'moltencore' AND kind = 'phase' AND phase = 'ENTER'
         AND created_at >= @t0
     expect: {scalar: "= 0"}
