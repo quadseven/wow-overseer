@@ -108,7 +108,7 @@ SQL are checked against a snapshot of the game databases
     runs: {control: 3, treatment: 3}
     duration: 20m
     cast:      # characters in the template, by name, family:<name> or guild:<Guild>:<role>
-    arrange:   # instances, groups, creatures, before the world loads
+    arrange:   # instances, groups, creatures, raid seats, before the world loads
     act:       # after load: roster or command steps, at a time or when an observation holds
     observe:   # preconditions and checks: SQL or a log pattern
 
@@ -194,7 +194,7 @@ elsewhere would not start the tests.
 
     python3 -m ephemeral seed [--dry-run] data/decrees/<name>.yaml
 
-Meant to run inside the world pod before the worldserver starts (no pod runs it yet).
+Runs inside the world pod before the worldserver starts.
 It lints the decree, passes the guard, resolves every name and anchor in the world's own database
 (zero or several matches is INVALID), compiles the statements and applies them
 in one transaction. Settings come from the pod environment, never the decree:
@@ -220,6 +220,14 @@ The guard (`ephemeral/guard.py`) makes the SQL unable to reach anything else:
 Table and column names are checked against the live schema inside the world
 (the snapshot is the fallback for lint and tests). A character named on its own
 in `cast` overrides the same character inside a `family:` entry.
+
+An `arrange` entry `raid_seats` replaces the snapshot's lineup for one `family`
+and raid `keyword` in the disposable world. Its `seats` list names existing
+cast entries with `who` and `role` (`tank`, `healer` or `dps`). Each expanded
+member gets one seat. Groups get up to five seats in order, with a limit of 40
+across the raid. The fixture supplies the lineup before the world loads. Use an
+ordinary `roster` act to start the order. The core evaluates actual character
+roles for the door quorum.
 
 What the seed writes follows how the core stores each thing. Whether the core
 then plays the scenario as intended is shown by the first end-to-end run, and a

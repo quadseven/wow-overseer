@@ -116,6 +116,26 @@ PINS = {
             ),
         ),
     ),
+    ("raid-under-quorum-at-door", "the-shortfall-was-logged"): Pin(
+        writers=(
+            module(
+                "INFO",
+                "overseer: raid run for family '{}' released at {} - {}",
+                "Grug",
+                "ASSEMBLE",
+                "the raid never reached a quorum at the door; the order ends",
+            ),
+        ),
+        ignores=(
+            module(
+                "INFO",
+                "overseer: raid run for family '{}' released at {} - {}",
+                "Grug",
+                "ASSEMBLE",
+                "no raid is ordered",
+            ),
+        ),
+    ),
     (
         "raid-durability-before-each-boss",
         "the-lowest-durability-was-logged-before-an-encounter",
@@ -642,7 +662,7 @@ class RequiredLinesTest(unittest.TestCase):
 
     def test_a_restored_decree_no_longer_says_the_line_is_not_asserted(self):
         restored = {decree_id for decree_id, _name in PINS} - set(STILL_NARROWED)
-        self.assertEqual(len(restored), 9)
+        self.assertEqual(len(restored), 10)
         for path, decree in shipped_decrees():
             if decree["id"] not in restored:
                 continue
