@@ -110,6 +110,28 @@ def _guarded(fn):
 def _submit(args):
     from . import submit
 
+    if args.due is not None:
+        if args.due < 1:
+            raise submit.SubmitError("--due needs a positive count")
+        if not args.control_history:
+            raise submit.SubmitError("--due needs --control-history")
+        if args.arm != "both":
+            raise submit.SubmitError("--due requires both control and treatment")
+        overrides = (
+            "anchors", "control_worldserver", "control_dbimport", "control_playerbots_prefix",
+            "control_drop_keys", "control_pin", "control_bridge", "treatment_pin",
+            "treatment_bridge", "decree_pr",
+        )  # fmt: skip
+        given = [
+            f"--{name.replace('_', '-')}"
+            for name in overrides
+            if getattr(args, name) is not None
+        ]
+        if given:
+            raise submit.SubmitError(
+                "--due cannot be combined with " + ", ".join(given)
+            )
+
     cfg, k, gh = _runner(args)
     opts = {
         "arm": args.arm, "node": args.node, "anchors": args.anchors,
@@ -121,7 +143,10 @@ def _submit(args):
         "control_bridge": args.control_bridge, "treatment_bridge": args.treatment_bridge,
         "decree_pr": args.decree_pr, "dry_run": args.dry_run,
     }  # fmt: skip
-    submit.submit(cfg, k, gh, args.decree, opts)
+    if args.due is None:
+        submit.submit(cfg, k, gh, args.decree, opts)
+    else:
+        due_mod.submit_due(gh, cfg, k, args.due, opts)
     return 0
 
 
@@ -217,7 +242,14 @@ def main(argv=None):
     s = sub.add_parser(
         "submit", help="queue a decree as suspended Jobs; starts nothing"
     )
-    s.add_argument("decree")
+    target = s.add_mutually_exclusive_group(required=True)
+    target.add_argument("decree", nargs="?")
+    target.add_argument(
+        "--due",
+        type=int,
+        metavar="N",
+        help="queue up to N distinct due decrees that pass preflight",
+    )
     s.add_argument("--config", help=cfg_help)
     s.add_argument(
         "--anchors", help="anchors.yaml (default: data/decrees/anchors.yaml)"

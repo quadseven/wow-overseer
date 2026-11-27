@@ -6,7 +6,11 @@ the cluster comes from the kubeconfig the operator already uses.
 """
 
 import json
+import re
 import subprocess
+
+_API_NAME = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?")
+_DELETE_API = {"configmaps": "/api/v1", "jobs": "/apis/batch/v1"}
 
 
 class KubeError(Exception):
@@ -111,4 +115,35 @@ class Kubectl:
     def delete(self, kind, name):
         self._run(
             self._argv("delete", kind, name, "--ignore-not-found=true", "--wait=false")
+        )
+
+    def delete_configmap_version(self, cm):
+        """Cascade deletion only while the observed ConfigMap UID and version match."""
+        self.delete_version("configmaps", cm)
+
+    def delete_version(self, kind, resource):
+        """Delete an observed Job or ConfigMap without touching its replacement."""
+        if kind not in _DELETE_API:
+            raise KubeError(f"conditional deletion is not supported for {kind}")
+        meta = resource["metadata"]
+        ns, name = meta.get("namespace"), meta.get("name")
+        if ns != self.namespace or not all(
+            isinstance(value, str) and _API_NAME.fullmatch(value)
+            for value in (ns, name)
+        ):
+            raise KubeError(f"refusing {kind} deletion with an invalid scope or name")
+        version = {key: meta.get(key) for key in ("uid", "resourceVersion")}
+        if not all(isinstance(value, str) and value for value in version.values()):
+            raise KubeError(f"refusing {kind} deletion without its UID and version")
+        options = {
+            "apiVersion": "v1",
+            "kind": "DeleteOptions",
+            "preconditions": version,
+            "propagationPolicy": "Background",
+        }
+        url = f"{_DELETE_API[kind]}/namespaces/{ns}/{kind}/{name}"
+        self._run(
+            self._argv("delete", "--raw", url, "-f", "-", namespace=""),
+            json.dumps(options),
+            missing_ok=True,
         )

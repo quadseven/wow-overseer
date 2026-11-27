@@ -63,10 +63,27 @@ def wanted_runs(rec):
     return dict(rec["runs_wanted"])
 
 
-def _small(rec, runs):
-    """A decree without exactly 3 runs per arm: evidence only, once every arm's first run is in."""
-    firsts = [v for r, v in runs if r["n"] == 1]
-    if not firsts or any(v is None for v in firsts):
+def _missing_job_result(rec, res, run):
+    got = res.get(run["run_id"]) or {}
+    return (
+        got.get("synthesized") is True
+        and got.get("missing_job") is True
+        and (
+            got.get("run_id"),
+            got.get("arm"),
+            got.get("decree_sha256"),
+            got.get("verdict"),
+        )
+        == (run["run_id"], run["arm"], rec["decree_sha256"], "INVALID")
+    )
+
+
+def _small(rec, res, runs):
+    """A decree without exactly 3 runs per arm usually waits for each first run."""
+    firsts = [(r, v) for r, v in runs if r["n"] == 1]
+    if not firsts or any(v is None for _, v in firsts):
+        if any(_missing_job_result(rec, res, r) for r, _ in firsts):
+            return "unclear", "a committed first-run Job disappeared before a verdict"
         return "pending", "the first run of each arm is still missing"
     return (
         "underpowered",
@@ -119,7 +136,7 @@ def decide(rec, res):
     treat = [v for a, v in verdicts if a == "treatment"]
     ctrl = [v for a, v in verdicts if a == "control"]
     if wanted_runs(rec) != REQUIRED_RUNS:
-        outcome, reason = _small(rec, runs)
+        outcome, reason = _small(rec, res, runs)
     else:
         outcome, reason = _early(pres, treat, ctrl) or _settled(
             rec, pres, treat, ctrl, runs

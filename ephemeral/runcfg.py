@@ -8,6 +8,7 @@ The repository names no host, node, registry or path. An operator copies
 import json
 import os
 import pathlib
+import re
 from dataclasses import dataclass, field
 
 DEFAULT_FIX_PIN_ENV = {
@@ -46,6 +47,7 @@ class Config:
     never_nodes: tuple = ()
     min_free_percent: int = 20
     decree_repo: str = "quadseven/wow-overseer"
+    proof_repos: tuple[str, ...] = ()
     author_login: str = "agent-anthropic-claude-code[bot]"
     fix_pin_env: dict = field(default_factory=lambda: dict(DEFAULT_FIX_PIN_ENV))
     lease_seconds: int = 60
@@ -103,9 +105,19 @@ def from_dict(raw):
     extra = sorted(set(raw) - set(Config.__dataclass_fields__))
     if extra:
         raise ConfigError(f"unknown runner config keys: {', '.join(extra)}")
-    skip = ("nodes", "never_nodes")
+    skip = ("nodes", "never_nodes", "proof_repos")
     cfg = Config(**{k: v for k, v in raw.items() if k not in skip})
     cfg.never_nodes = tuple(raw.get("never_nodes") or ())
+    repos = raw.get("proof_repos", [])
+    if not isinstance(repos, list) or any(
+        not isinstance(repo, str)
+        or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}$)[A-Za-z0-9_.-]+", repo
+        )
+        for repo in repos
+    ):
+        raise ConfigError("proof_repos must be a list of owner/repository names")
+    cfg.proof_repos = tuple(dict.fromkeys(repo.lower() for repo in repos))
     nodes = raw.get("nodes")
     if not isinstance(nodes, dict) or not nodes:
         raise ConfigError("runner config needs a non-empty nodes mapping")

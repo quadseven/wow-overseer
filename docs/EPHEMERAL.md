@@ -161,7 +161,57 @@ its own. `python3 -m ephemeral due` lists the open `awaiting-live-check` issues
 whose Proof line names a decree that is on the default branch, proves that issue
 (either `proves` form), and has no files yet under `<results_dir>/<id>/` (no
 submission record and no result). It prints `owner/name#N <id>` oldest first and
-writes nothing. `submit --due N` is not built yet.
+writes nothing. Set the runner's `proof_repos` list to scan multiple issue
+repositories in that order when issue timestamps tie. An empty or omitted
+list scans only `decree_repo`, which always supplies the decree file.
+
+Run `python3 -m ephemeral submit --due N --control-history FILE --dry-run` to
+preflight distinct due decrees oldest first until N are ready. A claim or
+active Loom lane on any open issue named in `proves` holds the decree. Every
+target is checked again after preflight, including issues outside the scan.
+The command prints each skip reason. A failed preflight, held target or new
+submission record leaves the slot available for the next decree. The command
+uses the default-branch file bytes for both arms and picks the control with
+`--control auto`. The selected control needs a `dist_inventory` from its
+exact image so preflight can check its overrides. Omit `--dry-run` to stage
+one suspended batch per selected decree. The submitter first creates a
+reservation at `eph-due-<decree-id>`. It owns the staged Jobs, which own their
+input ConfigMaps. Once every input is confirmed, the submitter turns that
+same reservation into an immutable receipt using its UID and resource
+version. The receipt gates admission and prevents a second automatic batch
+for the same decree. Staged Jobs stay suspended without a matching receipt.
+The collector recovers missing local records from the committed ConfigMaps.
+Keep those records after collection so retries can still detect the batch.
+Collection retains staged batch verdicts until all sibling Jobs are gone.
+A stopped first pair can finish removing its surplus Jobs across dispatcher
+restarts. If a committed first-run Job is absent by exact name and a verified
+sibling still exists, the dispatcher records an INVALID when that run has no
+verdict. This stops new starts for the batch. It removes only verified Jobs
+that are still suspended at their observed UID and resource version, and
+counts the worlds that already started until they finish. A judge result that
+wins the write race is read on the next pass. Recovery requires a committed
+receipt and a surviving verified Job. Numeric proofs are published through
+`report` under its timestamp
+and checkbox rules. After siblings are gone, `collect` only prunes numeric
+results once they are archived locally and the retention window has elapsed.
+
+A submission error after preflight stops the command and returns an error.
+If staging fails, the command attempts to remove the original reservation.
+Each subsequent non-dry-run `submit --due` also expires staging reservations
+at least one hour old, even when there are no due proofs. This recovers
+staging after a process interruption or a failed cleanup. Both deletions
+check the reservation's UID and resource version. If a receipt was committed
+first, or a new reservation took the name, the delete conflicts and preserves
+it. Kubernetes removes the deleted reservation's Jobs and inputs in the
+background. A retry can use the same decree name after its reservation is gone.
+Retain committed receipts. Deleting one also deletes its remaining Jobs.
+The path form of `submit` still supports manual image, config and single-arm
+options.
+
+Deploy the dispatcher and collector that understand committed batches before
+enabling `submit --due` on a schedule. The submitter needs permission to
+get, list, create, update and delete ConfigMaps in the ephemeral namespace.
+
 `eph report` posts the named decree's batch result, including each run's UTC
 start time and judge reason lines. It ticks one uniquely matching checkbox only
 when every declared control run is `FAIL` and every declared treatment run is

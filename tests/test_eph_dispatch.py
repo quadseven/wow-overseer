@@ -3,9 +3,10 @@
 import json
 import unittest
 from datetime import datetime, timezone
+from unittest import mock
 
 from eph_fakes import CLASSES, FakeCluster, make_cfg
-from ephemeral import dispatch, kube
+from ephemeral import batchseal, dispatch, judge, kube, runids
 
 GIB = 1024**3
 T0 = datetime(2026, 11, 15, 10, 0, 0, tzinfo=timezone.utc).timestamp()
@@ -269,7 +270,366 @@ class EarlyStopTest(Base):
         self.assertNotIn(("jobs", "wow-ephemeral", "eph-abc123-t2"), self.c.objs)
 
 
+class SealedBatchTest(Base):
+    batch = "deadbe"
+    sha = "a" * 64
+
+    def stage(self, rid, **kwargs):
+        batch, arm, _ = runids.parse_run(rid)
+        j = {"kind": "Job", "apiVersion": "batch/v1", **job(rid, arm, **kwargs)}
+        meta = j["metadata"]
+        meta["labels"][batchseal.STAGED_LABEL] = batch
+        if j["spec"]["suspend"]:
+            del meta["labels"][runids.JOB_LABEL_ARM]
+        meta = self.kube.create(j)["metadata"]
+        cm = self.kube.create({
+            "kind": "ConfigMap", "apiVersion": "v1", "immutable": True,
+            "metadata": {
+                "name": runids.run_cm_name(rid), "namespace": self.cfg.namespace,
+                "labels": {runids.JOB_LABEL_REALM: "100"},
+                "ownerReferences": [{
+                    "apiVersion": "batch/v1", "kind": "Job", "name": meta["name"], "uid": meta["uid"],
+                }],
+            },
+            "data": {"decree.yaml": rid},
+        })  # fmt: skip
+        return {
+            "job_uid": meta["uid"], "input_uid": cm["metadata"]["uid"],
+            "input_sha256": batchseal.fingerprint(cm["data"]),
+        }  # fmt: skip
+
+    def seal(self, count=1):
+        arms = ("control", "treatment")
+        runs, members = [], {}
+        for n in range(1, count + 1):
+            for arm in arms:
+                rid = runids.run_id(self.batch, arm, n)
+                members[rid] = self.stage(rid)
+                runs.append(
+                    {
+                        "run_id": rid,
+                        "arm": arm,
+                        "n": n,
+                        "images": {"worldserver": "test"},
+                    }
+                )
+        record = {
+            "batch": self.batch, "decree_id": "d", "decree_sha256": self.sha,
+            "proves": [{"repo": "owner/repo", "issue": 2}],
+            "presence": {arm: {} for arm in arms},
+            "runs_wanted": dict.fromkeys(arms, count), "runs": runs,
+        }  # fmt: skip
+        self.kube.create(batchseal.manifest(self.cfg.namespace, record, members))
+
+    def sealed_result(self, rid, verdict, sha):
+        _, arm, _ = runids.parse_run(rid)
+        self.kube.create(judge.result_configmap({
+            "run_id": rid, "verdict": verdict, "arm": arm,
+            "decree": "d", "decree_sha256": sha,
+        }, self.cfg.namespace))  # fmt: skip
+
+    def missing_result(self, rid):
+        cm = self.kube.get("configmaps", runids.result_name(rid))
+        result = json.loads(cm["data"]["result.json"])
+        _, arm, _ = runids.parse_run(rid)
+        self.assertEqual(cm["metadata"]["labels"]["eph/verdict"], "INVALID")
+        self.assertEqual(cm["data"]["verdict"], "INVALID")
+        self.assertEqual(
+            {key: result[key] for key in (
+                "run_id", "arm", "verdict", "synthesized", "missing_job", "decree_sha256"
+            )},
+            {"run_id": rid, "arm": arm, "verdict": "INVALID", "synthesized": True,
+             "missing_job": True, "decree_sha256": self.sha},
+        )  # fmt: skip
+
+    def test_missing_first_job_records_invalid_and_discards_only_verified_waiters(self):
+        self.seal(count=2)
+        self.kube.delete("jobs", runids.job_name("deadbe-c1"))
+        self.c.objs[("jobs", self.cfg.namespace, "eph-deadbe-c2")]["metadata"][
+            "uid"
+        ] = "replacement-job"
+        waiting = {
+            j["metadata"]["name"]: j["metadata"].copy()
+            for j in self.c.of("jobs", self.cfg.namespace)
+            if j["metadata"]["name"] in ("eph-deadbe-t1", "eph-deadbe-t2")
+        }
+        self.assertEqual(self.tick(), [])
+        self.missing_result("deadbe-c1")
+        self.assertTrue(self.suspended("deadbe-c2"))
+        self.assertEqual(set(waiting), {"eph-deadbe-t1", "eph-deadbe-t2"})
+        self.assertEqual(
+            {
+                args[args.index("--raw") + 1]: json.loads(body)
+                for args, body in self.c.calls
+                if "delete" in args and "--raw" in args
+            },
+            {
+                f"/apis/batch/v1/namespaces/{self.cfg.namespace}/jobs/{name}": {
+                    "apiVersion": "v1", "kind": "DeleteOptions",
+                    "preconditions": {
+                        "uid": metadata["uid"], "resourceVersion": metadata["resourceVersion"],
+                    },
+                    "propagationPolicy": "Background",
+                }
+                for name, metadata in waiting.items()
+            },
+        )  # fmt: skip
+        self.assertEqual(
+            [runids.run_of_job(job) for job in self.c.of("jobs", self.cfg.namespace)],
+            ["deadbe-c2"],
+        )
+
+    def test_missing_first_job_does_not_stop_a_running_peer(self):
+        self.seal(count=2)
+        self.assertCountEqual(self.tick(), ["deadbe-c1", "deadbe-t1"])
+        self.kube.delete("jobs", runids.job_name("deadbe-c1"))
+        self.assertEqual(self.tick(), [])
+        self.missing_result("deadbe-c1")
+        (peer,) = self.c.of("jobs", self.cfg.namespace)
+        self.assertEqual(runids.run_of_job(peer), "deadbe-t1")
+        self.assertFalse(peer["spec"]["suspend"])
+
+    def test_conflicting_cleanup_keeps_the_waiting_job_ineligible_until_retry(self):
+        self.seal(count=2)
+        self.kube.delete("jobs", runids.job_name("deadbe-c1"))
+        name = runids.job_name("deadbe-t1")
+        key = ("jobs", self.cfg.namespace, name)
+        version = self.c.objs[key]["metadata"]["resourceVersion"]
+        delete = self.c.v_delete
+        conflicts = []
+
+        def update_before_delete(ns, args, data):
+            if args[0] == "--raw" and args[1].endswith(f"/jobs/{name}"):
+                self.c.seq += 1
+                self.c.objs[key]["metadata"]["resourceVersion"] = str(self.c.seq)
+                answer = delete(ns, args, data)
+                conflicts.append((json.loads(data)["preconditions"], answer[2]))
+                return answer
+            return delete(ns, args, data)
+
+        with mock.patch.object(self.c, "v_delete", side_effect=update_before_delete):
+            self.assertEqual(self.tick(), [])
+        self.assertEqual(
+            conflicts,
+            [({"uid": self.c.objs[key]["metadata"]["uid"], "resourceVersion": version}, "Conflict")],
+        )  # fmt: skip
+        self.assertTrue(self.suspended("deadbe-t1"))
+        self.assertEqual(self.tick(), [])
+        self.assertEqual(self.c.of("jobs", self.cfg.namespace), [])
+
+    def test_both_missing_first_jobs_record_invalid(self):
+        self.seal(count=2)
+        self.assertCountEqual(self.tick(), ["deadbe-c1", "deadbe-t1"])
+        for rid in ("deadbe-c1", "deadbe-t1"):
+            self.kube.delete("jobs", runids.job_name(rid))
+        self.assertEqual(self.tick(), [])
+        self.missing_result("deadbe-c1")
+        self.missing_result("deadbe-t1")
+        self.assertEqual(self.c.of("jobs", self.cfg.namespace), [])
+
+    def test_exact_get_must_confirm_the_job_is_missing(self):
+        self.seal(count=2)
+        get = self.c.v_get
+        name = runids.job_name("deadbe-c1")
+        for answer in ("present", "Forbidden"):
+            with self.subTest(answer=answer):
+                exact_reads = []
+
+                def hide_from_stage_list(
+                    ns, args, data, *, answer=answer, exact_reads=exact_reads
+                ):
+                    if args[:2] == ["jobs", name]:
+                        exact_reads.append(name)
+                        if answer == "Forbidden":
+                            return 1, "", answer
+                    status, output, err = get(ns, args, data)
+                    if args[0] == "jobs" and args[-2:] == [
+                        "-l",
+                        batchseal.STAGED_LABEL,
+                    ]:
+                        doc = json.loads(output)
+                        doc["items"] = [
+                            j for j in doc["items"] if j["metadata"]["name"] != name
+                        ]
+                        return status, json.dumps(doc), err
+                    return status, output, err
+
+                with mock.patch.object(
+                    self.c, "v_get", side_effect=hide_from_stage_list
+                ):
+                    self.assertEqual(self.tick(), [])
+                self.assertEqual(exact_reads, [name])
+                self.assertIsNone(self.kube.get(
+                    "configmaps", runids.result_name("deadbe-c1"), missing_ok=True
+                ))  # fmt: skip
+                self.assertTrue(all(j["spec"]["suspend"] for j in self.c.of("jobs")))
+                self.assertEqual(len(self.c.of("jobs", self.cfg.namespace)), 4)
+
+    def test_invalid_existing_result_is_preserved_and_does_not_release_waiters(self):
+        self.seal(count=2)
+        rid, sha = "deadbe-c1", "b" * 64
+        self.kube.delete("jobs", runids.job_name(rid))
+        self.sealed_result(rid, "FAIL", sha)
+        name = runids.result_name(rid)
+        original = self.kube.get("configmaps", name)
+        starting_at = len(self.c.calls)
+        self.assertEqual(self.tick(), [])
+        self.assertEqual(self.kube.get("configmaps", name), original)
+        self.assertFalse(any(
+            "create" in args and name in (data or "")
+            for args, data in self.c.calls[starting_at:]
+        ))  # fmt: skip
+        self.assertTrue(all(j["spec"]["suspend"] for j in self.c.of("jobs")))
+        self.assertEqual(len(self.c.of("jobs", self.cfg.namespace)), 3)
+
+    def test_late_real_result_wins_collision_and_releases_followers_next_tick(self):
+        self.seal(count=2)
+        self.assertCountEqual(self.tick(), ["deadbe-c1", "deadbe-t1"])
+        for rid in ("deadbe-c1", "deadbe-t1"):
+            self.kube.delete("jobs", runids.job_name(rid))
+        self.sealed_result("deadbe-t1", "PASS", self.sha)
+        name = runids.result_name("deadbe-c1")
+        create = self.c.v_create
+        real_verdicts = []
+
+        def publish_real_result_before_create(ns, args, data):
+            cm = json.loads(data)
+            if cm["metadata"]["name"] == name and cm["data"]["verdict"] == "INVALID":
+                self.sealed_result("deadbe-c1", "FAIL", self.sha)
+                real_verdicts.append(self.kube.get("configmaps", name))
+            return create(ns, args, data)
+
+        with mock.patch.object(
+            self.c, "v_create", side_effect=publish_real_result_before_create
+        ):
+            self.assertEqual(self.tick(), [])
+        self.assertEqual(real_verdicts, [self.kube.get("configmaps", name)])
+        self.assertTrue(self.suspended("deadbe-c2"))
+        self.assertTrue(self.suspended("deadbe-t2"))
+        self.assertCountEqual(self.tick(), ["deadbe-c2", "deadbe-t2"])
+        self.assertEqual(real_verdicts, [self.kube.get("configmaps", name)])
+
+    def test_partial_staging_is_invisible_to_old_dispatcher_and_cannot_block_legacy(
+        self,
+    ):
+        self.stage("deadbe-c1", age=60 * 60)
+        self.add("beeeee-c1", "control")
+        visible = self.kube.list("jobs", selector=runids.JOB_LABEL_ARM)
+        self.assertEqual([runids.run_of_job(j) for j in visible], ["beeeee-c1"])
+        self.assertEqual(self.tick(), ["beeeee-c1"])
+        self.assertTrue(self.suspended("deadbe-c1"))
+
+    def test_complete_batch_publishes_each_arm_with_its_version_when_started(self):
+        self.seal()
+        expected = {
+            j["metadata"]["name"]: j["metadata"]["resourceVersion"]
+            for j in self.c.of("jobs")
+        }
+        self.assertCountEqual(self.tick(), ["deadbe-c1", "deadbe-t1"])
+        patches = {
+            args[args.index("jobs") + 1]: json.loads(args[args.index("-p") + 1])
+            for args, _ in self.c.calls
+            if "patch" in args and "jobs" in args
+        }
+        self.assertEqual(patches, {
+            f"eph-deadbe-{suffix}": {
+                "spec": {"suspend": False},
+                "metadata": {
+                    "resourceVersion": expected[f"eph-deadbe-{suffix}"],
+                    "labels": {runids.JOB_LABEL_ARM: arm},
+                },
+            }
+            for suffix, arm in (("c1", "control"), ("t1", "treatment"))
+        })  # fmt: skip
+
+    def test_a_missing_or_replaced_member_holds_every_run(self):
+        self.seal()
+        key = ("configmaps", self.cfg.namespace, runids.run_cm_name("deadbe-t1"))
+        cm = self.c.objs.pop(key)
+        self.assertEqual(self.tick(), [])
+        self.c.objs[key] = cm
+        j = self.c.objs[("jobs", self.cfg.namespace, runids.job_name("deadbe-t1"))]
+        owner = cm["metadata"]["ownerReferences"][0]
+        for obj, field, changed in (
+            (cm, "immutable", False),
+            (j["metadata"], "uid", "replacement-job"),
+            (owner, "uid", "other-job"),
+            (cm["metadata"], "uid", "other-input"),
+            (cm["data"], "decree.yaml", "changed bytes"),
+        ):
+            with self.subTest(field=field):
+                original = obj[field]
+                obj[field] = changed
+                self.assertEqual(self.tick(), [])
+                obj[field] = original
+        self.assertCountEqual(self.tick(), ["deadbe-c1", "deadbe-t1"])
+
+    def test_reaped_first_pair_requires_matching_verdicts_to_release_followers(self):
+        self.seal(count=2)
+        self.assertCountEqual(self.tick(), ["deadbe-c1", "deadbe-t1"])
+        for rid in ("deadbe-c1", "deadbe-t1"):
+            self.kube.delete("jobs", runids.job_name(rid))
+        self.sealed_result("deadbe-c1", "FAIL", self.sha)
+        self.sealed_result("deadbe-t1", "PASS", "b" * 64)
+        self.assertEqual(self.tick(), [])
+        self.kube.delete("configmaps", runids.result_name("deadbe-t1"))
+        self.sealed_result("deadbe-t1", "PASS", self.sha)
+        self.assertCountEqual(self.tick(), ["deadbe-c2", "deadbe-t2"])
+
+    def test_restart_continues_removing_verified_followers_of_a_stopped_batch(self):
+        self.seal(count=2)
+        self.assertCountEqual(self.tick(), ["deadbe-c1", "deadbe-t1"])
+        self.sealed_result("deadbe-c1", "FAIL", self.sha)
+        self.kube.delete("jobs", runids.job_name("deadbe-c2"))
+
+        self.assertEqual(self.tick(), [])
+        self.assertTrue(self.suspended("deadbe-t2"))
+        self.sealed_result("deadbe-t1", "PASS", self.sha)
+        self.assertEqual(self.tick(), [])
+        self.assertTrue(self.suspended("deadbe-t2"))
+
+        self.kube.delete("configmaps", runids.result_name("deadbe-t1"))
+        self.sealed_result("deadbe-t1", "FAIL", self.sha)
+        self.assertEqual(self.tick(), [])
+        self.assertIsNone(
+            self.kube.get("jobs", runids.job_name("deadbe-t2"), missing_ok=True)
+        )
+
+    def test_finished_staged_job_without_a_result_is_synthesized_for_its_batch(self):
+        self.seal(count=2)
+        self.assertCountEqual(self.tick(), ["deadbe-c1", "deadbe-t1"])
+        j = self.c.objs[("jobs", self.cfg.namespace, runids.job_name("deadbe-c1"))]
+        j["metadata"]["labels"][runids.JOB_LABEL_ARM] = "control"
+        j["status"]["conditions"] = [{"type": "Failed", "status": "True"}]
+        self.sealed_result("deadbe-t1", "PASS", self.sha)
+        self.assertEqual(self.tick(), [])
+        cm = self.kube.get("configmaps", runids.result_name("deadbe-c1"))
+        result = json.loads(cm["data"]["result.json"])
+        self.assertEqual(
+            (result["arm"], result["decree_sha256"]), ("control", self.sha)
+        )
+        self.assertEqual(result["verdict"], "INVALID")
+        self.assertIsNone(
+            self.kube.get("jobs", runids.job_name("deadbe-t2"), missing_ok=True)
+        )
+
+    def test_running_stage_without_seal_counts_once_even_with_both_labels(self):
+        self.stage("deadbe-c1", suspend=False)
+        for i in range(1, 6):
+            self.add(f"abcde{i}-c1", "control")
+        self.assertEqual(len(self.tick()), 4)
+
+
 class SynthesisTest(Base):
+    def test_legacy_batch_has_no_missing_first_job_recovery_without_a_receipt(self):
+        self.add("abc997-c2", "control")
+        self.add("abc997-t1", "treatment")
+        self.assertEqual(self.tick(), ["abc997-t1"])
+        self.assertTrue(self.suspended("abc997-c2"))
+        self.assertIsNone(self.kube.get(
+            "configmaps", runids.result_name("abc997-c1"), missing_ok=True,
+        ))  # fmt: skip
+
     def test_a_finished_job_without_a_result_becomes_invalid(self):
         self.add("abc999-c1", "control", suspend=False, finished="Failed")
         self.tick()
