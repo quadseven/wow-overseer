@@ -201,10 +201,7 @@ class GuardedConnection:
         self._require_opened()
         if not isinstance(family, str) or _CHARACTER_NAME.fullmatch(family) is None:
             raise GuardError("raid order needs a named family head")
-        for table, required in _RAID_ORDER_COLUMNS.items():
-            columns = self._schema.columns(table, "acore_characters") or ()
-            if not required.issubset(columns):
-                raise GuardError(f"{table} lacks a column required by the raid order")
+        self._require_raid_order_columns()
 
         try:
             cur = self._conn.cursor()
@@ -242,6 +239,12 @@ class GuardedConnection:
             self._rollback_quietly()
             raise
         return order_id
+
+    def _require_raid_order_columns(self) -> None:
+        for table, required in _RAID_ORDER_COLUMNS.items():
+            columns = self._schema.columns(table, "acore_characters") or ()
+            if not required.issubset(columns):
+                raise GuardError(f"{table} lacks a column required by the raid order")
 
     def run(self, statements):
         """Verify every statement, then execute them in one transaction."""
