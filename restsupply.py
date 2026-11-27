@@ -282,3 +282,53 @@ def said(member, buys) -> str:
             ),
         )
     )
+
+
+# The mana floor, in percent, under which a solo seat with no drink is held
+# from pulling. It matches the module's own drink trigger
+# (Playerbots.LowMana, 15 percent): below it a drinking class wants drink, and
+# without drink it cannot recover, so the bridge holds the pull instead. Read
+# on the dev realm: two-thirds of mana-class creature deaths happened at under
+# 10 percent mana, so the floor sits above that cluster and holds pulls before
+# they turn lethal.
+PULL_HOLD_MANA_FLOOR_PCT = 15
+
+
+def pull_hold(class_id, mana_pct, drink, in_group_run) -> bool:
+    """Whether a solo seat should be held from pulling.
+
+    A mana-class seat that carries no drink and whose mana is under the floor
+    is held (stay or rest) until it holds drink or its mana is back at or
+    above the floor. The pinned module has no such pull gate: its
+    `GrindTargetValue` reads neither mana nor health, its drink trigger fires
+    only below `Playerbots.LowMana` and only from drink in the bags, and
+    `ConserveMana` is a spell-use strategy, not a pull gate
+    (mod-overseer/src/mod_overseer.cpp).
+
+    A seat in a group run is never held here: the group's own rest between
+    pulls (the module's guild-run rest,
+    OverseerDecisions::GuildRunHoldNext) handles it, and holding a solo seat
+    there would fight the run.
+
+    `drink` is None when unread; a seat with no readable drink and low mana is
+    held, since it cannot be shown to have anything to drink. `mana_pct` is
+    None when unread; the gate cannot confirm the seat is safe, so with no
+    drink it is held too.
+    """
+    # A group run rests between pulls on its own; never hold one of its seats
+    # here, or the run's own rest and this hold fight each other.
+    if in_group_run:
+        return False
+    # Only drinking classes are at risk of pulling with empty mana and no
+    # drink to recover it.
+    cid = _int(class_id)
+    if cid not in MANA_CLASS_IDS:
+        return False
+    # A seat that holds drink can recover its own mana between pulls.
+    if drink is not None and int(drink) > 0:
+        return False
+    # Mana at or above the floor is safe to pull on; unread mana can't be
+    # shown safe, so with no drink the seat is held until its mana is read.
+    if mana_pct is not None and int(mana_pct) >= PULL_HOLD_MANA_FLOOR_PCT:
+        return False
+    return True
