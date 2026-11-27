@@ -488,10 +488,14 @@ build. `submit` takes the newest entry whose pin lacks the fix (the same ancesto
 above; for a fix in this repository's bridge code, the entry's `bridge_commit`) and whose
 digests the registry still serves, fills `--control-worldserver`, `--control-dbimport` and
 `--control-pin` (and `--control-bridge` from the set's `bridge` when the decree turns the bridge on) from it, and records the choice as
-a fidelity delta. It refuses a `TODO` fix commit, an empty or unreadable history, a history
-where every set carries the fix or no set without it still resolves, and explicit
-control image flags, `--control-bridge` included, given beside it. With the bridge on, a
-chosen set whose `bridge` is missing or no longer resolves is refused.
+a fidelity delta. It refuses a `TODO` fix commit, an empty or unreadable history, and
+explicit control image flags, including `--control-bridge`. Before creating any
+Jobs, [submit](../ephemeral/submit.py) asks [the control selector](../ephemeral/controlauto.py)
+to check the registry. It skips an entry whose worldserver or db-import digest
+does not resolve, and also checks the bridge digest when the fix is in bridge code.
+Submit errors when no entry both lacks the fix and passes those checks. For a
+module fix with the bridge enabled, submit checks the selected entry's bridge
+separately and errors if that digest is missing or no longer resolves.
 
 A history entry can carry a `dist_inventory` from its exact worldserver image. It
 records the entry's complete `worldserver` digest reference, `platform: linux/amd64`,
