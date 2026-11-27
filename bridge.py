@@ -23865,136 +23865,38 @@ class Bridge(discord.Client):
     # every position it judges is a settled one (`_settled_positions`).
 
     # ------------------------------------------ weapon training (#399) --
-    #
-    # `weaponskill` decides; this reads and writes. A member carrying a weapon
-    # its class can learn and it has no skill for, which fills an empty slot or
-    # beats the worn one, walks with the family to a weapon master of its own
-    # side on the leader's map, buys the skill with its own gold
-    # (`train-weapon skill:<id>`), and puts the weapon on once the row reads
-    # applied. Never inside a dungeon run or a town errand.
 
     async def _weapon_skill_loop(self) -> None:
         """Every WEAPON_SKILL_CYCLE_SECONDS, for every family."""
         await self.wait_until_ready()
         await asyncio.sleep(WEAPON_SKILL_CYCLE_SECONDS)
+        weapon_skill = weaponskill.WeaponSkillPass(self)
         while not self.is_closed():
             try:
-                await self._weapon_skill_once()
+                await weapon_skill.run_once()
             except Exception:
                 log.exception("weapon skill: pass failed; retrying next cycle")
-            await self._for_other_families("weapon skill", self._weapon_skill_once)
+            await self._for_other_families("weapon skill", weapon_skill.run_once)
             await asyncio.sleep(WEAPON_SKILL_CYCLE_SECONDS)
 
-    async def _weapon_skill_once(self, cohort=None, _locked=False) -> None:
-        """One family: equip what was trained, train who stands in reach, or
-        walk the leader to the weapon master."""
-        if not _locked and hasattr(self, "_town_errand_locks"):
-            names, _leader = await asyncio.to_thread(_family_of, cohort)
-            if not names:
-                return
-            async with self._town_errand_lock(names):
-                await self._weapon_skill_once(cohort, _locked=True)
-            return
-        names, leader = await asyncio.to_thread(_family_of, cohort)
-        if not names or not leader:
-            return
-        label = _family_label(cohort)
-        await self._weapon_skill_equip(names, label)
-        if await self._mid_run(names):
-            return
-        facts = await asyncio.to_thread(_fetch_gearup_facts, names)
-        needs = weaponskill.needs(
-            facts, await asyncio.to_thread(_fetch_bag_weapons, names))
-        if not needs:
-            return
-        critical = any(
-            need.slot == "mainhand" and need.why == "its mainhand is empty"
-            for need in needs
+    def _weapon_skill_io(self) -> weaponskill.WeaponSkillIO:
+        return weaponskill.WeaponSkillIO(
+            family_of=_family_of,
+            family_label=_family_label,
+            cohort_key=_cohort_key,
+            gear_facts=_fetch_gearup_facts,
+            bag_weapons=_fetch_bag_weapons,
+            positions=_fetch_positions,
+            teams=_fetch_teams,
+            masters=_fetch_weapon_masters,
+            crossings=_fetch_weapon_crossings,
+            errand_state=lambda names: _TOWN_ERRANDS.get(tuple(sorted(names))),
+            train_asked=_weapon_train_asked,
+            insert_train=_insert_weapon_train,
+            trains_applied=_weapon_trains_applied,
+            insert_equip=_insert_weapon_equip,
+            counter_yards=TOWN_COUNTER_YARDS,
         )
-        if _town_errand_active(names):
-            if not critical:
-                return
-            key = tuple(sorted(names))
-            state = _TOWN_ERRANDS.get(key, townerrand.State())
-            if state.phase not in (
-                    townerrand.GO, townerrand.GATHER, townerrand.STEPS):
-                return
-            slot = self._cohort_town_slot(_cohort_key(cohort))
-            if not await self._town_errand_yield_for_weapon(
-                    state, names, leader, slot, label):
-                return
-        positions = await asyncio.to_thread(_fetch_positions, list(names))
-        at = positions.get(leader)
-        if not at:
-            return
-        teams = await asyncio.to_thread(_fetch_teams, [leader])
-        spells = {n.spell for n in needs}
-        masters = await asyncio.to_thread(
-            _fetch_weapon_masters, at, sorted(spells), weaponskill.far_maps(at["map_id"])
-        )
-        master = weaponskill.choose_master(
-            masters, spells, teams.get(leader, ""), int(at["map_id"]), at)
-        said = "; ".join("%s carries %s (%s) and has no skill %d for it" % (
-            n.name, n.item, n.why, n.skill) for n in needs)
-        if not master:
-            far = weaponskill.choose_far_master(
-                masters, spells, teams.get(leader, ""), int(at["map_id"]))
-            if far:
-                need = next(n for n in needs if n.spell in far["spells"])
-                step, note = guildjobs.weapon_cross_step(
-                    SimpleNamespace(name=leader, map_id=int(at["map_id"])),
-                    weaponskill.offer(need, far),
-                    await asyncio.to_thread(_fetch_weapon_crossings, names))
-                if note:
-                    log.info("weapon skill: %s%s", note, label)
-                if step:
-                    await self._class_cross_row(step, step.rows[0])
-                return
-            log.info("weapon skill: %s; no weapon master of the family's side "
-                     "on this map teaches it, so nobody walks%s", said, label)
-            return
-        if await self._weapon_skill_train(needs, master, positions, label):
-            return
-        target = travel.resolve(str(int(master["entry"])))
-        if not target:
-            return
-        aimed = await self._claim_town_slot(
-            WEAPON_SKILL_CLAIMANT, leader, target, urgent=True,
-            cohort=_cohort_key(cohort))
-        log.info("weapon skill: %s; %s is aimed at %s (%d yards) "
-                 "(aim taken=%s)%s", said, leader, master["name"],
-                 int(float(master["yards"])), aimed, label)
-
-    async def _weapon_skill_train(self, needs, master, positions, label) -> int:
-        """Write a train row for each member standing at the master; how many."""
-        written = 0
-        for need in needs:
-            if need.spell not in master["spells"]:
-                continue
-            # The snapshot-to-spawn distance is center-to-center; the core's
-            # trainer interaction check also includes the creature's reach.
-            # Use the existing town radius here and let the worldserver apply
-            # the exact interaction gate before charging or teaching.
-            if not weaponskill.in_reach(
-                    master, positions.get(need.name), TOWN_COUNTER_YARDS):
-                continue
-            if await asyncio.to_thread(_weapon_train_asked, need):
-                continue
-            if await asyncio.to_thread(_insert_weapon_train, need):
-                written += 1
-                log.info("weapon skill: %s buys skill %d at %s with its own "
-                         "gold, to wield %s%s", need.name, need.skill,
-                         master["name"], need.item, label)
-        return written
-
-    async def _weapon_skill_equip(self, names, label) -> None:
-        """Put on each weapon whose skill row reads applied and not yet worn."""
-        for row in await asyncio.to_thread(_weapon_trains_applied, names):
-            if await asyncio.to_thread(_insert_weapon_equip, row):
-                log.info("weapon skill: %s learned skill %s; puts on %s%s",
-                         row["name"], row["skill"],
-                         row.get("item_name")
-                         or "an unnamed item (%s)" % row["entry"], label)
 
     async def _town_errand_loop(self) -> None:
         """Run each family's town errand, every TOWN_ERRAND_CYCLE_SECONDS."""
@@ -45669,7 +45571,7 @@ def _recent_mail_keys(minutes: int) -> set:
 
 # Weapon training (#399): cadence, the town-slot claimant, and its reads.
 WEAPON_SKILL_CYCLE_SECONDS = 300.0
-WEAPON_SKILL_CLAIMANT = "weapon master"
+WEAPON_SKILL_CLAIMANT = weaponskill.WEAPON_SKILL_CLAIMANT
 # A refusal that may pass later (not in reach yet, money) is asked again after
 # this long; the walk that closes the distance runs on the same cycle.
 WEAPON_TRAIN_RETRY_MINUTES = 10
