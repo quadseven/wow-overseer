@@ -8,7 +8,7 @@
 decree: v1
 id: class-trainer-crosses-map-and-learns
 proves:
-  - {repo: quadseven/mod-overseer, issue: 1480, criterion: "a funded level 60 Tauren Druid leaves the Eastern Kingdoms for a Kalimdor class trainer and buys Regrowth rank 9"}
+  - {repo: quadseven/mod-overseer, issue: 1480, criterion: "Live proof (after a roll): a member on a map without its class trainer walks to one and trains."}
 fix: {repo: quadseven/mod-overseer, commit: "fa16ae7af24e7f0f5fb861a08c565f3c22117f21"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -61,6 +61,7 @@ observe:
     expect: {scalar: "= 1"}
   # Both arms must reach the trainer verb. An offline or unprocessed command
   # gives no evidence about whether an eligible trainer can be reached.
+  # The pre-fix DoWalk writes NoClassSpellTrainerOnMap to the row's detail.
   - name: zorks-trainer-command-reached-the-class-trainer-decision
     role: precondition
     when: end
@@ -69,14 +70,18 @@ observe:
       WHERE target_name = 'Zork' AND source = 'eph-judge' AND kind = 'cast'
         AND command = 'walk-to-trainer class' AND created_at >= @t0
         AND (status = 'applied' OR (status = 'error'
-          AND result LIKE '%no trainer of this character%class on this map has a class spell to teach it now%'))
+          AND detail = 'no trainer of this character''s class on this map has a class spell to teach it now'))
     expect: {scalar: "= 1"}
-  - name: zorks-trainer-walk-crosses-for-a-kalimdor-trainer
-    role: check
-    log: {pattern: "class trainer walk [0-9]+ - 'Zork' crosses toward trainer spawn [0-9]+ on map 1", expect: {at_least: 1}}
-  - name: zork-learned-regrowth-rank-nine
+  # Corroborate the crossing with the class trainer walk log. Grade the
+  # completed command's learned spell and map so a missing log cannot fail an arm.
+  - name: zorks-trainer-order-learned-regrowth-rank-nine-on-kalimdor
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM character_spell WHERE guid = @Zork AND spell = 9858
+      SELECT COUNT(*) FROM character_spell s
+      JOIN overseer_command w ON w.target_name = 'Zork' AND w.source = 'eph-judge'
+        AND w.kind = 'cast' AND w.command = 'walk-to-trainer class' AND w.created_at >= @t0
+      WHERE s.guid = @Zork AND s.spell = 9858 AND w.status = 'applied'
+        AND JSON_CONTAINS(w.result, '1', '$.map')
+        AND JSON_CONTAINS(w.result, '9858', '$.taught')
     expect: {scalar: "= 1"}
