@@ -440,9 +440,14 @@ class ARecallCannotLoop(unittest.TestCase):
         )
         cursor.fetchall.return_value = [{"id": 12345}]
         self.assertEqual(12345, ns["_door_open_run_id"]("Zug", "deadmines"))
+        # AI-REVIEW 2026-11-27 [nemotron-3.5-super-vl] 4724337847 (Elder, PR #3316):
+        # Deadmines is map 36. The legacy lookup must keep the original door.
         self.assertEqual(
-            [ns["_DOOR_RUN_SQL"], ns["_DOOR_RUN_LEGACY_SQL"]],
-            [call.args[0] for call in cursor.execute.call_args_list],
+            [
+                unittest.mock.call(ns["_DOOR_RUN_SQL"], ("Zug", 36)),
+                unittest.mock.call(ns["_DOOR_RUN_LEGACY_SQL"], ("Zug", 36)),
+            ],
+            cursor.execute.call_args_list,
         )
 
     def test_a_legacy_schema_without_a_run_table_keeps_the_queue_clock(self):
