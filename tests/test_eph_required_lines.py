@@ -973,10 +973,15 @@ class RequiredLinesTest(unittest.TestCase):
                 )
 
     def test_a_restored_decree_no_longer_says_the_line_is_not_asserted(self):
-        self.assertLessEqual(RESTORED, {decree_id for decree_id, _name in PINS})
+        pinned = {decree_id for decree_id, _name in PINS}
+        self.assertLessEqual(RESTORED, pinned)
         self.assertFalse(RESTORED & set(STILL_NARROWED))
+        # Every decree with a pinned line is read, not only the named ones, so
+        # a decree pinned later cannot keep saying its line is not asserted.
+        checked = pinned - set(STILL_NARROWED)
+        self.assertLessEqual(RESTORED, checked)
         for path, decree in shipped_decrees():
-            if decree["id"] not in RESTORED:
+            if decree["id"] not in checked:
                 continue
             text = path.read_text(encoding="utf-8")
             self.assertIsNone(_NARROWED_WORDS.search(text), path.name)
