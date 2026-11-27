@@ -6827,18 +6827,22 @@ def _door_open_run_id(leader: str, keyword: str) -> int | None:
         return None
     args = (leader, map_id)
     with _connect() as conn, conn.cursor() as cur:
+        # AI-REVIEW 2026-11-27 [nemotron-3.5-super-vl] 4723163393/4723163401/4723163415
+        # (Elder, PR #3316): Only query schema errors use the legacy path.
+        # PyMySQL raises different classes for a missing column and table.
+        # A failed read leaves the clock intact and is logged by the queue pass.
         try:
-            try:
-                cur.execute(_DOOR_RUN_SQL, args)
-            except pymysql.err.MySQLError as exc:
-                if not (exc.args and exc.args[0] in (1054, 1146)):
-                    raise
-                cur.execute(_DOOR_RUN_LEGACY_SQL, args)
-            runs = cur.fetchall()
-        except pymysql.err.MySQLError as exc:
+            cur.execute(_DOOR_RUN_SQL, args)
+        except (pymysql.err.OperationalError, pymysql.err.ProgrammingError) as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
                 raise
-            return None
+            try:
+                cur.execute(_DOOR_RUN_LEGACY_SQL, args)
+            except (pymysql.err.OperationalError, pymysql.err.ProgrammingError) as exc:
+                if not (exc.args and exc.args[0] in (1054, 1146)):
+                    raise
+                return None
+        runs = cur.fetchall()
     if not runs:
         return None
     # AI-REVIEW 2026-11-27 [Codex GPT-6/spec] 2191-run-wing (PR #3316):
@@ -7027,8 +7031,11 @@ def _door_wedge(head: dict, names: list, leader: str):
         # A queued replacement waits to be judged until it starts. Its active
         # pass will keep the clock only if the same run still owns the door.
         keep_run_clocks = status == campaignqueue.QUEUED
-        for key in [k for k, stamp in _DOOR_HOLD_SINCE.items()
-                    if k[0] == leader and (not keep_run_clocks or stamp[0] >= 0)]:
+        obsolete = [
+            key for key, (clock_id, _) in _DOOR_HOLD_SINCE.items()
+            if key[0] == leader and (not keep_run_clocks or clock_id >= 0)
+        ]
+        for key in obsolete:
             _DOOR_HOLD_SINCE.pop(key, None)
             delete_memo = globals().get("_door_hold_memo_delete")
             if delete_memo is not None:

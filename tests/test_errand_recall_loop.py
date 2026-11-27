@@ -20,6 +20,7 @@ import types
 import unittest
 import unittest.mock
 
+from _stub_modules import PYMYSQL as pymysql
 from test_bag_withheld_stall import _FakeEconomySelf, _run_vendor_once
 
 import bag_pressure
@@ -61,6 +62,26 @@ def _load(names, namespace, optional=()):
         compile(ast.Module(body=body, type_ignores=[]), "bridge.py", "exec"), namespace
     )  # noqa: S102 - bridge.py's own source
     return namespace
+
+
+def _door_run_cursor(namespace):
+    cursor = unittest.mock.Mock()
+    connection = types.SimpleNamespace(cursor=lambda: nullcontext(cursor))
+    queries = {"_DOOR_RUN_SQL", "_DOOR_RUN_LEGACY_SQL"}
+    namespace.update(
+        {
+            node.targets[0].id: ast.literal_eval(node.value)
+            for node in TREE.body
+            if isinstance(node, ast.Assign)
+            and getattr(node.targets[0], "id", None) in queries
+        },
+        _connect=lambda: nullcontext(connection),
+        campaignplan=campaignplan,
+        dungeonpath=dungeonpath,
+        pymysql=pymysql,
+    )
+    _load(["_door_open_run_id"], namespace)
+    return cursor
 
 
 class World:
@@ -334,30 +355,15 @@ class ARecallCannotLoop(unittest.TestCase):
     def test_a_different_wing_on_the_same_map_starts_fresh(self):
         world = World()
         ns = world.namespace()
-        selects = []
+        cursor = _door_run_cursor(ns)
 
         def rows():
             # The module records the active portal on the exact run's timeline.
-            portal = "maraudon-orange" if "e.run_id = r.id" in selects[-1] else ""
+            query = cursor.execute.call_args.args[0]
+            portal = "maraudon-orange" if "e.run_id = r.id" in query else ""
             return [{"id": 12345, "portal_keyword": portal}]
 
-        cursor = types.SimpleNamespace(
-            execute=lambda query, args: selects.append(query),
-            fetchall=rows,
-        )
-        connection = types.SimpleNamespace(cursor=lambda: nullcontext(cursor))
-        ns.update(
-            _connect=lambda: nullcontext(connection),
-            _DOOR_RUN_SQL=next(
-                ast.literal_eval(node.value)
-                for node in TREE.body
-                if isinstance(node, ast.Assign)
-                and any(getattr(t, "id", "") == "_DOOR_RUN_SQL" for t in node.targets)
-            ),
-            campaignplan=campaignplan,
-            dungeonpath=dungeonpath,
-        )
-        _load(["_door_open_run_id"], ns)
+        cursor.fetchall.side_effect = rows
         world.aims["Oz"] = "vendor"
         self.assertIsNone(world.judge(ns))
 
@@ -369,6 +375,89 @@ class ARecallCannotLoop(unittest.TestCase):
         self.assertIsNotNone(ns["_door_wedge"](same_wing, ["Zug", "Oz"], "Zug"))
         other_wing = dict(HEAD, id=HEAD["id"] + 1, keyword="maraudon-purple")
         self.assertIsNone(ns["_door_wedge"](other_wing, ["Zug", "Oz"], "Zug"))
+
+    def test_a_run_read_failure_does_not_replace_the_run_clock(self):
+        old_schema = pymysql.err.OperationalError(1054, "no portal column")
+        lost = pymysql.err.OperationalError(2013, "connection lost")
+        fetch_error = pymysql.err.ProgrammingError(1146, "result unavailable")
+        for execute, fetch, expected in (
+            ((lost,), None, lost),
+            ((old_schema, lost), None, lost),
+            ((None,), fetch_error, fetch_error),
+        ):
+            with self.subTest(execute=execute, fetch=fetch):
+                world = World()
+                ns = world.namespace()
+                cursor = _door_run_cursor(ns)
+                cursor.fetchall.return_value = [
+                    {"id": 12345, "portal_keyword": HEAD["keyword"]}
+                ]
+                world.aims["Oz"] = "vendor"
+                self.assertIsNone(world.judge(ns))
+                hold = dict(ns["_DOOR_HOLD_SINCE"])
+
+                cursor.reset_mock()
+                cursor.execute.side_effect = execute
+                cursor.fetchall.side_effect = fetch
+                world.clock[0] += stall.HOLD_SECONDS
+                with self.assertRaises(type(expected)) as failed:
+                    world.judge(ns)
+                self.assertIs(failed.exception, expected)
+                self.assertEqual(len(execute), cursor.execute.call_count)
+                self.assertEqual(hold, ns["_DOOR_HOLD_SINCE"])
+                self.assertEqual([], world.released)
+
+                cursor.execute.side_effect = None
+                cursor.fetchall.side_effect = None
+                self.assertIsNotNone(world.judge(ns))
+
+    def test_the_queue_logs_a_failed_door_read_and_steps_as_before(self):
+        world = World()
+        ns = world.namespace()
+        cursor = _door_run_cursor(ns)
+        cursor.execute.side_effect = pymysql.err.OperationalError(
+            2013, "connection lost"
+        )
+        ns["log"].exception = unittest.mock.Mock()
+        _load(["_queue_holds"], ns)
+
+        async def breaker(key, rows, family):
+            return world.judge(ns)
+
+        me = types.SimpleNamespace(_stall_breaker=breaker)
+        self.assertFalse(asyncio.run(ns["_queue_holds"](me, "zug", [HEAD], {})))
+        self.assertIn(
+            "the queue steps as before", ns["log"].exception.call_args.args[0]
+        )
+        self.assertEqual({}, ns["_DOOR_HOLD_SINCE"])
+
+    def test_a_legacy_run_without_a_timeline_uses_the_one_matching_door(self):
+        ns = World().namespace()
+        cursor = _door_run_cursor(ns)
+        cursor.execute.side_effect = (
+            pymysql.err.OperationalError(1054, "no portal column"),
+            None,
+        )
+        cursor.fetchall.return_value = [{"id": 12345}]
+        self.assertEqual(12345, ns["_door_open_run_id"]("Zug", "deadmines"))
+        self.assertEqual(
+            [ns["_DOOR_RUN_SQL"], ns["_DOOR_RUN_LEGACY_SQL"]],
+            [call.args[0] for call in cursor.execute.call_args_list],
+        )
+
+    def test_a_legacy_schema_without_a_run_table_keeps_the_queue_clock(self):
+        world = World()
+        ns = world.namespace()
+        cursor = _door_run_cursor(ns)
+        missing = pymysql.err.ProgrammingError(1146, "no run table")
+        cursor.execute.side_effect = (missing, missing)
+        world.aims["Oz"] = "vendor"
+        self.assertIsNone(world.judge(ns))
+        self.assertEqual(
+            {("Zug", "Oz"): (HEAD["id"], world.clock[0])},
+            ns["_DOOR_HOLD_SINCE"],
+        )
+        cursor.fetchall.assert_not_called()
 
     def test_one_recall_that_takes_does_not_stand_the_run_down(self):
         """The member goes back to the party and stays: no verdict, and the
