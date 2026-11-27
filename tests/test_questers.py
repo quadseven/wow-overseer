@@ -8,8 +8,10 @@ import classhunt
 import classquest
 import guildjobs
 import questers
+import questledger
 
 ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE, DUSKWOOD = 12, 9, 40, 44, 10
+HILLSBRAD = 267
 HUMAN, ORC = 1, 2
 PRIEST, WARRIOR = 5, 1
 ALLIANCE_MASK, HORDE_MASK = 1101, 690
@@ -2650,3 +2652,99 @@ class ASummonedObjectEnder(unittest.TestCase):
         p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
         self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+class CrownOfWillRows(unittest.TestCase):
+    def test_the_supplied_rows_can_be_hunted_turned_in_and_clear_a_stall(self):
+        # The quest and spawn values are the supplied world facts, shaped as
+        # questers.QUESTS_SQL and classquest.SPAWNS_SQL read them. Giver and
+        # ender rows below are synthetic planner scaffolding; the brief gives
+        # no locations for them. Member and ledger rows follow
+        # questers.LOG_SQL and questledger.LEDGER_SQL/REWARDED_SQL.
+        row = quest(
+            518,
+            HILLSBRAD,
+            39,
+            min_level=34,
+            kill=2254,
+            count=10,
+            title="The Crown of Will",
+        )
+        targets = [
+            spawn(6000 + n, 2254, 1000 + n * 20, 0, level=0, name="Crushridge Mauler")
+            for n in range(15)
+        ]
+        # Creature levels were not included in the brief; zero marks them unknown.
+        cat = world(
+            extra_quests=[row],
+            extra_givers=[
+                giver(518, "start", 9518, 9518, 0, 0),
+                giver(518, "end", 9519, 9519, 0, 0),
+            ],
+            extra_starts=[started(518, 9518)],
+            extra_ends=[ended(518, 9519)],
+            extra_spawns=targets,
+        )
+        self.assertEqual(len(cat.quest(518).fields), 15)
+        self.assertEqual({field.map_id for field in cat.quest(518).fields}, {0})
+
+        member = mirra(level=39, race=ORC, map_id=0, x=0, zone_id=HILLSBRAD)
+        taking = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual((taking.move.kind, taking.move.quest), (classquest.TAKE, 518))
+
+        member = mirra(
+            level=39,
+            race=ORC,
+            map_id=0,
+            x=1000,
+            zone_id=HILLSBRAD,
+            quest_log={518: questers.STATUS_INCOMPLETE},
+            quest_progress={518: 0},
+            quest_objectives={518: {2254: 0}},
+        )
+        hunting = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(
+            (hunting.move.kind, hunting.move.quest, hunting.move.spot.entry),
+            (classquest.HUNT, 518, 2254),
+        )
+        step = questers.step_for(member, hunting.move, 0, cat.quest(518))
+        self.assertEqual(
+            [row.command for row in step.rows],
+            ["hunt-spawn creature:2254 count:10 max:480"],
+        )
+
+        complete = mirra(
+            level=39,
+            race=ORC,
+            map_id=0,
+            x=0,
+            zone_id=HILLSBRAD,
+            quest_log={518: questers.STATUS_INCOMPLETE},
+            quest_progress={518: 10},
+            quest_objectives={518: {2254: 10}},
+        )
+        handing_in = questers.plan(cat, complete, questers.Clock(), 0.0)
+        self.assertEqual(
+            (handing_in.move.kind, handing_in.move.quest), (classquest.TURN_IN, 518)
+        )
+        turnin = questers.step_for(complete, handing_in.move, 0, cat.quest(518))
+        self.assertEqual([row.command for row in turnin.rows], ["turnin quest:518"])
+        self.assertEqual(handing_in.broken, ())
+
+        old = {
+            "quest": 518,
+            "guid": 7,
+            "character_name": "Quester",
+            "state": "broken",
+            "first_taken": None,
+            "finished": None,
+            "reason": questers.STALLED,
+        }
+        (entry,) = questledger.changes(
+            {7: "Quester"},
+            [old],
+            [],
+            [{"guid": 7, "quest": 518}],
+            "now",
+        )
+        self.assertEqual((entry.state, entry.reason), ("completed", ""))
