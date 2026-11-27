@@ -9696,6 +9696,9 @@ class Bridge(discord.Client):
         self._train_walks: dict = {}
         # Members a gear fetch has walking to a meeting mailbox (#2503).
         self._gear_fetch_walks: dict = {}
+        # The gear fetch meetings under way, and when each of today's began.
+        self._gear_fetch_tasks: set = set()
+        self._gear_fetch_starts: list = []
         # WHAT EACH GUILD MASTER WOULD WITHDRAW FOR THE GUILD FUND
         # (guildfund.py), so the guild bank pass walks it to a vault.
         self._fund_wants: dict = {}
@@ -15206,7 +15209,7 @@ class Bridge(discord.Client):
                     self._guild_mail_runs.pop(route.holder, None)
         return written
 
-    async def _gear_routing_once(self) -> None:
+    async def _gear_routing_once(self, fetch: bool = True) -> None:
         """Hand each routed piece to the member who gains most (#2136).
 
         The routing report decides who (gearrouting.plan over gearroutingread's
@@ -15296,6 +15299,9 @@ class Bridge(discord.Client):
         log.info("gear routing: %s", gearroutingexec.summary(result))
         if GEAR_ROUTING_WALKS:
             await self._gear_routing_walks(result, world)
+        # A fetch's own re-run (`fetch` False) plans no further fetch.
+        if GEAR_FETCH and fetch:
+            await self._gear_fetch_pass(result)
 
     async def _gear_routing_freeables(self, names: list, free_slots: dict) -> dict:
         """name -> the grey a full member may give away to make room (#2245).
@@ -15376,6 +15382,119 @@ class Bridge(discord.Client):
             routes, own, family_only=False,
             per_day=GEAR_ROUTING_WALKS_PER_DAY,
             per_pass=GEAR_ROUTING_WALKS_PER_PASS)
+
+    async def _gear_fetch_pass(self, result) -> None:
+        """Bring a waiting route's two guild bots together at a mailbox (#2503).
+
+        Runs after `_gear_routing_walks`, so a holder the mail run already
+        walks is busy here and its letter keeps the first say. gearfetch.plan
+        decides the rest from the routes still waiting apart: a family wearer
+        is left to the mail run (no row), two guild bots off the roster each
+        get the module's `walk-to-spawn gameobject:<spawn> ... stay:` row to
+        one mailbox near the wearer, and every route not fetched is a note.
+        Members another pass has on a walk, families under an operator hold,
+        a fight, an instance, another map and a mailbox inside a death-cell
+        avoid disc are refused there. Only walk rows are written: no travel
+        aim, no town slot, nothing granted.
+        """
+        routes = gearfetch.candidates(result)[:GEAR_FETCH_READS]
+        if not routes:
+            return
+        now = time.monotonic()
+        busy = self._guild_walkers_busy(now)
+        self._gear_fetch_starts = [
+            t for t in getattr(self, "_gear_fetch_starts", [])
+            if now - t < guildroute.DAY_SECONDS
+        ]
+        names = list(dict.fromkeys(n for r in routes for n in (r.holder, r.wearer)))
+        roster_rows = await asyncio.to_thread(_roster_cohort_rows)
+        family_of = {str(r.get("name") or ""): str(r.get("family") or "")
+                     for r in roster_rows}
+        members = gearfetch.members_from(
+            await asyncio.to_thread(_gear_fetch_member_rows, names),
+            roster=set(family_of), family_of=family_of)
+        held = await self._operator_held(
+            {family_of[n] for n in names if family_of.get(n)}, "gearrouting")
+        wearers = list(dict.fromkeys(
+            r.wearer for r in routes
+            if r.wearer in members and not members[r.wearer].roster))
+        mailboxes = gearfetch.mailboxes_from(
+            await asyncio.to_thread(_gear_fetch_mailbox_rows, wearers))
+        discs = gearfetch.disc_tuples(await asyncio.to_thread(_fetch_death_discs))
+        spent = max(len(self._gear_fetch_starts),
+                    (await asyncio.to_thread(_gear_fetch_rows_today)) // 2)
+        plan = gearfetch.plan(
+            routes, members, mailboxes, busy=busy, held_families=held,
+            kept=await asyncio.to_thread(_KEEP.now), discs=discs,
+            running=len(getattr(self, "_gear_fetch_tasks", ())), spent=spent)
+        _log_capped("gear fetch", plan.notes)
+        for fetch in plan.fetches:
+            if fetch.kind == gearfetch.MEET:
+                self._start_gear_fetch(fetch, now)
+
+    def _start_gear_fetch(self, fetch, now: float) -> None:
+        """Hold both members busy, count the fetch and follow it in a task."""
+        for name, _command in fetch.walks:
+            self._gear_fetch_walks[name] = now
+        self._gear_fetch_starts.append(now)
+        log.info("gear fetch: %s", fetch.said)
+        task = asyncio.create_task(self._gear_fetch_meet(fetch))
+        self._gear_fetch_tasks.add(task)
+        task.add_done_callback(self._gear_fetch_tasks.discard)
+
+    async def _gear_fetch_meet(self, fetch) -> bool:
+        """Walk both members to the mailbox; once both stand there, run the
+        routing pass once so the trade is written while they are together.
+        True when that pass ran. Both members are given back at the end."""
+        route = fetch.route
+        try:
+            arrived = await asyncio.wait_for(
+                asyncio.gather(*(self._gear_fetch_walk(fetch, name, command)
+                                 for name, command in fetch.walks)),
+                timeout=gearfetch.MEET_STAY_SECONDS)
+        except asyncio.TimeoutError:
+            arrived = (False,)
+        except Exception:
+            log.exception("gear fetch: following the walks to mailbox %d failed",
+                          fetch.mailbox)
+            arrived = (False,)
+        try:
+            if not all(arrived):
+                log.info("gear fetch: %s and %s did not both reach mailbox %d; "
+                         "%s (item %d) stays with %s", route.holder, route.wearer,
+                         fetch.mailbox, route.item, route.guid, route.holder)
+                return False
+            log.info("gear fetch: %s and %s stand at mailbox %d; the routing pass "
+                     "runs once for %s (item %d)", route.holder, route.wearer,
+                     fetch.mailbox, route.item, route.guid)
+            await self._gear_routing_once(fetch=False)
+            return True
+        except Exception:
+            log.exception("gear fetch: the routing pass after the meeting failed")
+            return False
+        finally:
+            for name, _command in fetch.walks:
+                self._gear_fetch_walks.pop(name, None)
+
+    async def _gear_fetch_walk(self, fetch, name: str, command: str) -> bool:
+        """One member's walk row to the meeting mailbox; True when it arrived."""
+        row = guildcorps.Row("job", command, "", GEAR_FETCH_SOURCE)
+
+        def insert():
+            return _insert_corps_row(name, row)
+
+        row_id = await asyncio.to_thread(insert)
+        if not row_id:
+            log.info("gear fetch: no walk row was written for %s", name)
+            return False
+        answer, row_id = await self._follow_guild_walk(
+            "gear fetch", name, row_id, gearfetch.MEET_YARDS, insert,
+            "mailbox %d" % fetch.mailbox)
+        if answer.state == guildroute.ARRIVED:
+            return True
+        log.info("gear fetch: walk row %d for %s ended without arriving: %s",
+                 row_id, name, answer.said)
+        return False
 
     async def _walk_route_holders(self, waiting: list, family_names: list,
                                   escort=None, family_only: bool = True,
@@ -38382,6 +38501,15 @@ GEAR_ROUTING_ROOM_WAIT_MINUTES = int(os.environ.get(
 GEAR_ROUTING_WALKS = os.environ.get("GEAR_ROUTING_WALKS", "1") != "0"
 GEAR_ROUTING_WALKS_PER_DAY = int(os.environ.get("GEAR_ROUTING_WALKS_PER_DAY", "30"))
 GEAR_ROUTING_WALKS_PER_PASS = int(os.environ.get("GEAR_ROUTING_WALKS_PER_PASS", "2"))
+# A ROUTE BETWEEN TWO GUILD BOTS THE MAIL RUN LEFT WAITING IS FETCHED (#2503):
+# both walk to one mailbox near the wearer by the module's walk-to-spawn row and
+# the routing pass runs once while they stand together, so the trade is written.
+# Off switch: GEAR_FETCH=0. gearfetch.py bounds it per pass, per day and at once.
+GEAR_FETCH = os.environ.get("GEAR_FETCH", "1") != "0"
+# The `source` of a fetch's walk rows, so the day's count reads only those.
+GEAR_FETCH_SOURCE = "gearfetch"
+# The waiting routes one pass reads members and mailboxes for.
+GEAR_FETCH_READS = 8
 # How many notes one pass logs line by line before it summarises the rest.
 GUILD_ROUTE_NOTE_LINES = 5
 
@@ -38584,6 +38712,75 @@ def _route_walks_today() -> int:
                 "WHERE source LIKE %s AND kind = %s "
                 "AND created_at > NOW() - INTERVAL 1 DAY",
                 (MAIL_WALK_SOURCE + ":%", guildroute.MAIL),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return 0
+            raise
+        row = cur.fetchone()
+        return int((row or {}).get("n") or 0)
+
+
+# A gear fetch's members as the planner reads them (#2503): a fresh snapshot
+# row, with whether the character fights or stands inside an instance.
+_GEAR_FETCH_MEMBER_SQL = (
+    "SELECT name, map_id, instance_id, pos_x, pos_y, in_combat FROM overseer_snapshot "
+    "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND"
+)
+# The mailbox spawns nearest one wearer, with the spawn id a walk-to-spawn row
+# names (`_MAILBOXES_SQL` reads the same spawns without it).
+_GEAR_FETCH_BOXES_SQL = (
+    "SELECT g.guid AS spawn, g.map AS map_id, g.position_x AS x, g.position_y AS y, "
+    "(POW(g.position_x - s.pos_x, 2) + POW(g.position_y - s.pos_y, 2)) AS d2 "
+    "FROM overseer_snapshot s "
+    "JOIN acore_world.gameobject g ON g.map = s.map_id "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND gt.type = %s "
+    "ORDER BY d2 LIMIT 8"
+)
+
+
+def _gear_fetch_member_rows(names: list) -> list:
+    """The fresh snapshot rows of `names`; [] when the table cannot be read."""
+    if not names:
+        return []
+    sql = _GEAR_FETCH_MEMBER_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, list(names))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("gear fetch: member positions unavailable")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _gear_fetch_mailbox_rows(wearers: list) -> list:
+    """The mailbox spawns nearest each wearer on its own map; [] unread."""
+    rows = []
+    with _connect() as conn, conn.cursor() as cur:
+        for name in wearers or ():
+            try:
+                cur.execute(_GEAR_FETCH_BOXES_SQL, (name, travel.MAILBOX_GO_TYPE))
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    log.warning("gear fetch: mailbox spawns unavailable")
+                    return []
+                raise
+            rows.extend(dict(row) for row in cur.fetchall())
+    return rows
+
+
+def _gear_fetch_rows_today() -> int:
+    """Gear fetch walk rows the command log holds for the last 24 hours."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM overseer_command "
+                "WHERE source = %s AND created_at > NOW() - INTERVAL 1 DAY",
+                (GEAR_FETCH_SOURCE,),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
