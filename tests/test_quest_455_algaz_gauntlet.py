@@ -130,6 +130,95 @@ class AlgazGauntlet(unittest.TestCase):
         self.assertEqual(updated.state, questledger.COMPLETED)
         self.assertEqual(updated.reason, "")
 
+    def test_full_sequence_from_take_to_turn_in(self):
+        row = quest(
+            455,
+            11,
+            21,
+            min_level=19,
+            kill=2103,
+            count=8,
+            title="The Algaz Gauntlet",
+        )
+        row.update(npc2=2102, npc_count2=6)
+        givers = [
+            giver(455, "start", 4550, 2100, 0, 0, name="Quest giver"),
+            giver(455, "end", 4550, 2100, 0, 0, name="Quest giver"),
+        ]
+        starts = [{"quest": 455, "kind": "creature", "entry": 2100}]
+        ends = [{"quest": 455, "kind": "creature", "entry": 2100}]
+        spawns = [spawn(10000 + i, 2103, 10 + i, 0, level=0) for i in range(17)] + [
+            spawn(20000 + i, 2102, 100 + i, 0, level=0) for i in range(17)
+        ]
+        catalogue = questers.catalogue([row], givers, spawns, [], starts, ends)
+        character = character_row()
+        clock = questers.Clock()
+
+        # Start with no quest in log
+        (member,) = questers.members_from_rows(
+            [character], [quest_log_row(questers.STATUS_INCOMPLETE, 0, 0)], []
+        )
+        # But the quest is not in the log yet - simulate a fresh member
+        member = questers.Member(
+            **{
+                **member.__dict__,
+                "quest_log": {},
+                "quest_progress": {},
+                "quest_objectives": {},
+                "quest_item_objectives": {},
+            }
+        )
+
+        # 1. Take the quest
+        take_move = questers.plan(catalogue, member, clock, 0.0)
+        self.assertEqual(
+            (take_move.move.kind, take_move.move.quest), (classquest.TAKE, 455)
+        )
+
+        # 2. After taking, hunt scouts
+        member_after_take = questers.Member(
+            **{
+                **member.__dict__,
+                "quest_log": {455: questers.STATUS_INCOMPLETE},
+                "quest_progress": {455: 0},
+                "quest_objectives": {455: {2103: 0, 2102: 0}},
+                "quest_item_objectives": {455: {}},
+            }
+        )
+        scout_move = questers.plan(catalogue, member_after_take, clock, 60.0)
+        self.assertEqual(
+            (scout_move.move.kind, scout_move.move.quest, scout_move.move.spot.entry),
+            (classquest.HUNT, 455, 2103),
+        )
+
+        # 3. After 8 scouts, hunt grunts
+        member_after_scouts = questers.Member(
+            **{
+                **member_after_take.__dict__,
+                "quest_progress": {455: 8},
+                "quest_objectives": {455: {2103: 8, 2102: 0}},
+            }
+        )
+        grunt_move = questers.plan(catalogue, member_after_scouts, clock, 600.0)
+        self.assertEqual(
+            (grunt_move.move.kind, grunt_move.move.quest, grunt_move.move.spot.entry),
+            (classquest.HUNT, 455, 2102),
+        )
+
+        # 4. After 6 grunts, turn in
+        member_complete = questers.Member(
+            **{
+                **member_after_scouts.__dict__,
+                "quest_log": {455: questers.STATUS_COMPLETE},
+                "quest_progress": {455: 14},
+                "quest_objectives": {455: {2103: 8, 2102: 6}},
+            }
+        )
+        hand_in = questers.plan(catalogue, member_complete, clock, 1200.0)
+        self.assertEqual(
+            (hand_in.move.kind, hand_in.move.quest), (classquest.TURN_IN, 455)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
