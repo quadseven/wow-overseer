@@ -2506,7 +2506,7 @@ class ASummonedObjectEnder(unittest.TestCase):
         self.assertEqual(
             [row.command for row in step.rows],
             [
-                "hunt-spawn creature:1002 item:1080 count:1 max:%d"
+                "hunt-spawn creature:1002 item:1080 count:5 max:%d"
                 % classhunt.MAX_SECONDS
             ],
         )
