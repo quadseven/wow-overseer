@@ -458,6 +458,9 @@ VIEWER_MAIN_HAND, VIEWER_OFF_HAND = 21, 22
 # Ranged weapons are attached by their own inventory type: a bow is held
 # differently from a gun or a wand, and a relic is not drawn at all.
 VIEWER_RANGED_TYPES = frozenset({15, 25, 26})
+# The one class drawn with its ranged weapon even with a melee weapon
+# worn (#3364): a hunter fights at range, so the rifle is not the spare.
+HUNTER = 3
 VIEWER_SLOTS = {
     "head": 1,
     "shoulders": 3,
@@ -771,6 +774,11 @@ def viewer_model(
     fetch exactly these paths and say nothing when one is missing, so this
     is what lets the page report a piece it could not draw instead of
     leaving a bare-legged character to be read as a character with no legs.
+
+    One held weapon only (#3364): the viewer draws a single weapon in the
+    hands and takes the last one in the list, so when a hand holds a drawn
+    item the ranged pair is dropped from both lists and the hands win.
+    Hunters are the exception (see HUNTER, above).
     """
     race, gender = char_row.get("race"), char_row.get("gender")
     if race not in RACE_ICON_NAMES or gender not in (0, 1):
@@ -797,6 +805,18 @@ def viewer_model(
                     "note": _model_gap_note(slot_name, row.get("item_name"), display),
                 }
             )
+    # ONE HELD WEAPON, AND THE HANDS WIN IT (#3364). The list above is in
+    # doll order, which puts the ranged slot after the hands, and the
+    # viewer takes the last held weapon in it - so any character wearing
+    # both was drawn holding the ranged weapon, a tank in full plate
+    # aiming a rifle. When a hand holds a drawn item the ranged pair is
+    # dropped, from the assets as well as the items: the piece is not the
+    # model's to draw, so its art is not the page's to report missing.
+    if char_row.get("class") != HUNTER and any(
+        slot in (VIEWER_MAIN_HAND, VIEWER_OFF_HAND) for slot, _ in items
+    ):
+        items = [pair for pair in items if pair[0] not in VIEWER_RANGED_TYPES]
+        assets = [asset for asset in assets if asset["slot"] != "ranged"]
     model["items"] = items
     model["assets"] = assets
     return model
