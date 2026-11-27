@@ -62,10 +62,12 @@
 .g-row.ach-row { align-items: flex-start; }
 .ach-row > .ach-medal { margin-top: 1px; }
 .ach-row .ach-line { font-size: var(--fs-2); }
-.ach-row > .g-when, .ach-row > .tag { margin-top: 5px; }
+.ach-row > .tag { margin-top: 5px; }
+.ach-when { font-size: var(--fs-1); }
 
 /* ---- the profile badges ------------------------------------------------------- */
 .ach-card { gap: 10px; }
+.ach-tally { font-size: var(--fs-3); font-weight: 500; color: var(--color-text); }
 .ach-badges {
   display: grid; gap: 8px; margin: 0; padding: 0; list-style: none;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 290px), 1fr));
@@ -115,10 +117,12 @@
 .ach-toast-who { font-size: var(--fs-2); color: var(--color-neutral-300); }
 .ach-toast-who b { font-weight: 500; color: var(--color-text); }
 .ach-toast-main .ach-line { font-size: var(--fs-2); }
+.ach-toast-foot { grid-column: 2; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ach-toast-more {
-  grid-column: 2; display: inline-flex; align-items: center; min-height: 44px; width: max-content;
+  display: inline-flex; align-items: center; min-height: 44px; width: max-content;
   font-size: var(--fs-1); color: var(--color-accent-300); text-underline-offset: 3px;
 }
+.ach-toast-count { font-size: var(--fs-1); color: var(--color-neutral-400); }
 .ach-toast-x {
   grid-column: 3; grid-row: 1; display: inline-grid; place-items: center; width: 44px; height: 44px;
   border: 0; border-radius: var(--radius-md); background: transparent; color: var(--color-neutral-400); cursor: pointer;
