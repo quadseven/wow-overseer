@@ -13,6 +13,7 @@ Pure unit tests against weaponskill and guildjobs.plan, and a read of bridge.py
 for the wiring.
 """
 
+import inspect
 import json
 import pathlib
 import unittest
@@ -455,10 +456,13 @@ class TheIsland(unittest.TestCase):
             weaponskill.ISLANDS[1],
         )
 
-    def test_the_bridge_reads_the_ground_of_every_walker(self):
+    def test_the_pass_and_bridge_read_the_ground_of_every_walker(self):
+        family_pass = inspect.getsource(weaponskill.WeaponSkillPass._run_locked)
         self.assertEqual(
             3,
-            BRIDGE.count('int(at["map_id"]), at)') + BRIDGE.count("int(m.map_id), at)"),
+            BRIDGE.count('int(at["map_id"]), at)')
+            + BRIDGE.count("int(m.map_id), at)")
+            + family_pass.count('int(at["map_id"]), at'),
         )
 
 
@@ -509,17 +513,19 @@ class TheBridgeReadsTheFarMaster(unittest.TestCase):
         self.assertIn("weaponskill.far_maps(", body)
 
     def test_the_family_crosses_when_no_local_master_teaches_the_skill(self):
-        body = BRIDGE.split("async def _weapon_skill_once", 1)[1].split(
-            "\n    async def _weapon_skill_train", 1
-        )[0]
-        expected = (
-            "weaponskill.far_maps(",
-            "weaponskill.choose_far_master(",
-            "guildjobs.weapon_cross_step(",
-            "_fetch_weapon_crossings, names",
-            "self._class_cross_row(",
+        body = inspect.getsource(weaponskill.WeaponSkillPass._run_locked)
+        self.assertIn("far_maps(", body)
+        self.assertIn("choose_far_master(", body)
+        self.assertIn("self._cross_or_report_no_master(", body)
+        crossing = inspect.getsource(
+            weaponskill.WeaponSkillPass._cross_or_report_no_master
         )
-        self.assertTrue(all(part in body for part in expected))
+        expected = (
+            "guildjobs.weapon_cross_step(",
+            "io.crossings, names",
+            "self._bridge._class_cross_row(",
+        )
+        self.assertTrue(all(part in crossing for part in expected))
 
     def test_the_master_read_takes_a_list_of_maps(self):
         sql = BRIDGE.split("_WEAPON_MASTERS_SQL = (", 1)[1].split("\n)", 1)[0]

@@ -6,11 +6,13 @@ warrior carried a Ravenwood Bow with no Bows skill and an empty ranged slot.
 """
 
 import ast
+import asyncio
 import datetime
 import pathlib
 import unittest
 
 import weaponskill as ws
+from townslot import Cohort
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (ROOT / "bridge.py").read_text(encoding="utf-8")
@@ -178,16 +180,101 @@ class LearnedSkillReopensEquipRetries(unittest.TestCase):
         self.assertEqual((), reopened)
 
 
+class WeaponSkillFamily:
+    def __init__(self):
+        self.actions = []
+        self.lock = asyncio.Lock()
+        self.in_run = False
+        self.applied = []
+        self.positions = {
+            "Lead": {"map_id": 0, "pos_x": 100, "pos_y": 100},
+            "Og": {"map_id": 0, "pos_x": 1, "pos_y": 1},
+        }
+        self.io = dict(
+            family_of=lambda cohort: (
+                (list(cohort.names), cohort.leader)
+                if cohort
+                else (["Lead", "Og"], "Lead")
+            ),
+            family_label=lambda cohort: f" for family {cohort.key}" if cohort else "",
+            cohort_key=lambda cohort: cohort.key if cohort else None,
+            gear_facts=lambda names: {"Og": FACTS["Og"]},
+            bag_weapons=lambda names: [BAGS[0]],
+            positions=lambda names: self.positions,
+            teams=lambda names: {"Lead": "alliance"},
+            masters=lambda at, spells, also_maps: MASTERS,
+            crossings=lambda names: (),
+            errand_state=lambda names: None,
+            train_asked=lambda need: False,
+            insert_train=self.train,
+            trains_applied=lambda names: self.applied,
+            insert_equip=self.equip,
+            counter_yards=8,
+        )
+
+    def _weapon_skill_io(self):
+        return ws.WeaponSkillIO(**self.io)
+
+    def _town_errand_lock(self, names):
+        return self.lock
+
+    async def _mid_run(self, names):
+        return self.in_run
+
+    async def _claim_town_slot(self, claimant, leader, aim, *, urgent, cohort):
+        self.actions.append(("walk", claimant, leader, aim, urgent, cohort))
+        return True
+
+    def train(self, need):
+        self.actions.append(("train", need.name, need.train_command, need.entry))
+        return 1
+
+    def equip(self, row):
+        self.actions.append(("equip", row["name"], row["entry"]))
+        return 1
+
+
+class TheWeaponSkillPass(unittest.IsolatedAsyncioTestCase):
+    async def test_equips_what_was_trained_even_when_the_family_is_in_a_run(self):
+        family = WeaponSkillFamily()
+        family.applied = [dict(name="Og", skill="43", entry="11")]
+        family.in_run = True
+
+        await ws.WeaponSkillPass(family).run_once()
+
+        self.assertEqual([("equip", "Og", "11")], family.actions)
+
+    async def test_trains_the_member_already_in_reach_of_the_weapon_master(self):
+        family = WeaponSkillFamily()
+
+        await ws.WeaponSkillPass(family).run_once()
+
+        self.assertEqual([("train", "Og", "train-weapon skill:43", 11)], family.actions)
+
+    async def test_walks_the_cohort_leader_when_the_member_is_out_of_reach(self):
+        family = WeaponSkillFamily()
+        family.positions["Og"] = {"map_id": 0, "pos_x": 100, "pos_y": 100}
+        cohort = Cohort("Other", "Lead", ("Lead", "Og"))
+
+        await ws.WeaponSkillPass(family).run_once(cohort)
+
+        self.assertEqual(
+            [("walk", "weapon master", "Lead", "11867", True, "Other")], family.actions
+        )
+
+
 class TheBridge(unittest.TestCase):
     def test_the_loop_runs_and_defines_its_helpers(self):
         self.assertEqual(1, BRIDGE.count('_Pass("_weapon_skill_loop"),'))
+        self.assertTrue(callable(ws.WeaponSkillPass.run_once))
         names = {
             n.name
             for n in ast.walk(ast.parse(BRIDGE))
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
+        for fn in ("_weapon_skill_once", "_weapon_skill_equip", "_weapon_skill_train"):
+            self.assertNotIn(fn, names)
         for fn in (
-            "_weapon_skill_once",
             "_weapon_skill_changes",
             "_fetch_bag_weapons",
             "_fetch_weapon_masters",

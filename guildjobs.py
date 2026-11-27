@@ -2020,11 +2020,11 @@ UNTAKEN_NEAR = 12.0
 
 def _untaken_asked(m, quest, recent) -> bool:
     """Whether this seat was sent to take this quest inside the cooldown."""
-    word = "take quest:%d" % int(quest)
+    command = "take quest:%d" % int(quest)
     return any(
         r.name == m.name
         and r.action == UNTAKEN_ACTION
-        and word in str(r.command or "")
+        and r.command == command
         and int(r.age_minutes) < UNTAKEN_COOLDOWN_MINUTES
         for r in recent or ()
     )
