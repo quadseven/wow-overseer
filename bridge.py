@@ -22363,6 +22363,26 @@ class Bridge(discord.Client):
             started += 1
         return started
 
+    def _start_run_wipe_escapes(self, candidates):
+        """Issue each available run-wipe member the death-loop hearth step."""
+        started = 0
+        now = time.monotonic()
+        cap = self._guild_walk_cap()
+        for candidate in candidates or ():
+            name = str(candidate.get("name") or "")
+            if (not name or name in self._guild_run_names
+                    or name in self._job_steps):
+                continue
+            step = _run_wipe_escape_step(
+                int(candidate["run"]), name, str(candidate.get("reason") or "run wipe")
+            )
+            self._job_steps[name] = now
+            task = asyncio.create_task(self._run_job_step(step, cap))
+            self._mail_walk_tasks.add(task)
+            task.add_done_callback(self._mail_walk_task_done)
+            started += 1
+        return started
+
     async def _job_fields(self, members, focus=None, busy=()) -> dict:
         """name -> guildjobs.Spot for every natural maintenance member that
         holds herbalism or mining and stands somewhere readable, and every
@@ -26228,10 +26248,14 @@ class Bridge(discord.Client):
         while not self.is_closed():
             try:
                 await asyncio.to_thread(_follow_guild_runs)
+                decisions = await asyncio.to_thread(_read_run_wipe_decisions)
+                await asyncio.to_thread(_write_run_wipe_stepdowns, decisions)
                 active = await asyncio.to_thread(_active_guild_run_names)
                 self._guild_run_names = (
                     set(active) | set(getattr(self, "_guild_social_names", ()))
                     | _class_party_names(self) | _death_party_names(self))
+                escapes = await asyncio.to_thread(_run_wipe_escape_candidates)
+                self._start_run_wipe_escapes(escapes)
                 await asyncio.to_thread(_hearth_stranded_guild_members)
                 # Its own failure does not cost the cycle its runs.
                 try:
@@ -34366,6 +34390,187 @@ def _follow_guild_runs() -> int:
                      seen.get("deaths", 0), seen.get("bosses_done", 0),
                      seen.get("bosses_total", 0), seen.get("seconds_inside", 0))
     return changed
+
+
+def _run_wipe_decisions(runs, death_rows, levels) -> dict:
+    """Run ids whose inside members meet the stuck reader's run-wipe bar."""
+    run_of = _run_wipe_run_of(runs)
+    loops = deathloop.loops(death_rows, levels or {}, slow=True)
+    return deathloop.run_step_downs(deathloop.tag_runs(loops, run_of))
+
+
+def _run_wipe_run_of(runs) -> dict:
+    """Map each inside member to the newest guild run that holds them."""
+    run_of = {}
+    for row in runs or ():
+        run_id = int(row.get("id") or 0)
+        if not run_id:
+            continue
+        for member in guildrun._member_list(row.get("members")):
+            name = str(member.get("name") or "")
+            if name:
+                run_of.setdefault(name, run_id)
+    return run_of
+
+
+def _read_run_wipe_decisions() -> dict:
+    """Judge day-scale death loops among the members of runs still inside."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, members FROM overseer_guild_run "
+            "WHERE state = 'inside' ORDER BY id DESC"
+        )
+        runs = list(cur.fetchall())
+        run_of = _run_wipe_run_of(runs)
+        names = sorted(run_of)
+        if not names:
+            return {}
+        holes = ",".join(["%s"] * len(names))
+        level_rows = _job_read(
+            cur, "run-wipe levels",
+            "SELECT name, level FROM characters WHERE name IN (" + holes + ")",
+            names,
+        )
+        levels = {
+            str(row["name"]): int(row.get("level") or 0)
+            for row in level_rows
+        }
+        death_rows = _job_read(
+            cur, "run-wipe deaths",
+            deathloop.SQL.format(holes=holes),
+            (*names, deathloop.SLOW_READ_SECONDS),
+        )
+    return _run_wipe_decisions(runs, death_rows, levels)
+
+
+def _write_run_wipe_stepdowns(decisions) -> list:
+    """End each still-inside run once, with the run-wipe reason on its row."""
+    written = []
+    if not decisions:
+        return written
+    with _connect() as conn, conn.cursor() as cur:
+        for run_id, decision in sorted(decisions.items()):
+            reason = decision.reason()[:255]
+            cur.execute(
+                "UPDATE overseer_guild_run SET state = 'ended', outcome = 'abandoned', "
+                "why = %s, ended_at = NOW() WHERE id = %s AND state = 'inside'",
+                (reason, int(run_id)),
+            )
+            if cur.rowcount:
+                written.append(decision)
+                log.info("guild runs: run %d stepped down - %s", run_id, reason)
+    return written
+
+
+_RUN_WIPE_PENDING_SQL = (
+    "SELECT id, keyword, members, why FROM overseer_guild_run "
+    "WHERE state = 'ended' AND outcome = 'abandoned' "
+    "AND why LIKE 'run wipe (run %' "
+    "AND ended_at > NOW() - INTERVAL %s SECOND ORDER BY id DESC"
+)
+_RUN_WIPE_ESCAPE_STANDS_SQL = (
+    "SELECT s.name, s.map_id, s.health, s.in_combat, s.group_leader, "
+    "EXISTS (SELECT 1 FROM corpse k WHERE k.guid = s.guid) AS has_corpse "
+    "FROM overseer_snapshot s JOIN characters c ON c.guid = s.guid "
+    "WHERE s.updated_at > NOW() - INTERVAL 60 SECOND AND s.name IN ({holes})"
+)
+_RUN_WIPE_HEARTHS_SQL = (
+    "SELECT target_name AS name, status, "
+    "TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age "
+    "FROM overseer_command WHERE kind = 'hearth' AND source LIKE %s "
+    "AND created_at > NOW() - INTERVAL %s SECOND "
+    "AND target_name IN ({holes}) ORDER BY id DESC"
+)
+
+
+def _active_family_run_names(cur) -> set:
+    """Members of a family instance run that must not be hearth-routed."""
+    try:
+        cur.execute(
+            "SELECT leader_name, members FROM overseer_dungeon_run "
+            "WHERE state = 'active'"
+        )
+    except pymysql.err.MySQLError as exc:
+        if not exc.args or exc.args[0] not in (1054, 1146):
+            raise
+        return set()
+    names = set()
+    for row in cur.fetchall():
+        if row.get("leader_name"):
+            names.add(str(row["leader_name"]))
+        names.update(
+            name.strip() for name in str(row.get("members") or "").split(",")
+            if name.strip()
+        )
+    return names
+
+
+def _run_wipe_escape_candidates() -> list:
+    """Live, safe-to-hearth members of recently stepped-down runs."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_RUN_WIPE_PENDING_SQL, (deathloop.SLOW_READ_SECONDS,))
+        runs = list(cur.fetchall())
+        if not runs:
+            return []
+        run_names = {}
+        for row in runs:
+            door = campaignplan.BY_KEYWORD.get(str(row.get("keyword") or ""))
+            if door is None:
+                continue
+            for member in guildrun._member_list(row.get("members")):
+                name = str(member.get("name") or "")
+                if name:
+                    run_names.setdefault(name, []).append((row, int(door.map_id)))
+        names = sorted(run_names)
+        if not names:
+            return []
+        holes = ",".join(["%s"] * len(names))
+        active = set(_guild_run_state_names(cur, (guildrun.QUEUED, guildrun.INSIDE)))
+        active |= _active_family_run_names(cur)
+        cur.execute(_RUN_WIPE_ESCAPE_STANDS_SQL.format(holes=holes), names)
+        stands = {str(row["name"]): row for row in cur.fetchall()}
+        cur.execute(
+            _RUN_WIPE_HEARTHS_SQL.format(holes=holes),
+            (guildjobs.SOURCE + ":hearth:%", jev_movement.HEARTH_COOLDOWN_SECONDS, *names),
+        )
+        hearths = {}
+        for row in cur.fetchall():
+            hearths.setdefault(str(row.get("name") or ""), row)
+
+    candidates = []
+    used = set()
+    for name, recent_runs in run_names.items():
+        if name in active or name in used:
+            continue
+        stand = stands.get(name)
+        if not stand or not guildrun._alive(stand) or bool(stand.get("in_combat")):
+            continue
+        hearth = hearths.get(name) or {}
+        age = int(hearth.get("age") or 0)
+        if str(hearth.get("status") or "") == "applied" and age < jev_movement.HEARTH_COOLDOWN_SECONDS:
+            continue
+        if hearth and str(hearth.get("status") or "") in orders.PENDING_STATUSES and age < 180:
+            continue
+        for row, map_id in recent_runs:
+            if int(stand.get("map_id") or 0) != map_id:
+                continue
+            candidates.append({
+                "run": int(row["id"]),
+                "name": name,
+                "reason": str(row.get("why") or "run wipe"),
+            })
+            used.add(name)
+            break
+    return candidates
+
+
+def _run_wipe_escape_step(run_id: int, name: str, reason: str):
+    """The same hearth row a death-loop escape uses, leaving the instance."""
+    said = "%s hearths out of run %d: %s" % (name, int(run_id), reason)
+    row = guildcorps.Row(
+        "hearth", "use", "", guildjobs.source_for("hearth", name)
+    )
+    return guildcorps.Step(name, "hearth", 0, said, rows=(row,))
 
 
 # THE SOCIAL LAYER (guildsocial, #568, #569). Bridge-owned state like

@@ -8,9 +8,12 @@ they are still counted, but the cause is the run's and the reader names it:
 "run wipe (run N)", its own kind, its own line in the digest.
 """
 
+import inspect
 import pathlib
 import sys
+import types
 import unittest
+from unittest import mock
 
 from _stub_modules import PYMYSQL, stub_modules
 
@@ -21,6 +24,22 @@ with stub_modules(pymysql=PYMYSQL):
     import deathloop
     import guildrun
     from apiv2 import health, members
+
+
+def _import_bridge():
+    stub = types.ModuleType("discord")
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    stub.Client = Client
+    from _stub_modules import fresh_import
+
+    return fresh_import("bridge", discord=stub, pymysql=PYMYSQL)
+
+
+bridge = _import_bridge()
 
 NOW = 1_800_000_000
 MINUTE = 60
@@ -46,6 +65,7 @@ def five():
 GUILD = [
     {"name": "Grug", "level": 60, "guild": "Cave", "rank": 0},
     {"name": "Clunk", "level": 60, "guild": "Cave", "rank": 3},
+    {"name": "Brann", "level": 60, "guild": "Cave", "rank": 3},
 ]
 
 
@@ -53,6 +73,7 @@ def roster(rows, run_of=None):
     readings = {
         "Grug": {"online": True, "life": "alive", "fresh_at": NOW},
         "Clunk": {"online": True, "life": "alive", "fresh_at": NOW},
+        "Brann": {"online": True, "life": "alive", "fresh_at": NOW},
     }
     return members.build(
         {"Grug": ["Grug"]},
@@ -131,6 +152,152 @@ class RunStepDownDecision(unittest.TestCase):
         found = self.tagged({"Clunk": RUN, "Brann": RUN + 1})
         self.assertEqual(deathloop.run_step_downs(found), {})
         self.assertEqual(deathloop.run_step_downs(None), {})
+
+    def test_threshold_run_is_abandoned_once_and_its_members_get_the_escape(self):
+        rows = []
+        names = ("Clunk", "Brann")
+        for name in names:
+            rows.extend(dict(d, name=name) for d in five())
+        run_rows = [
+            {"id": RUN, "members": "Clunk:tank:warrior:60,Brann:healer:priest:60"}
+        ]
+        decisions = bridge._run_wipe_decisions(run_rows, rows, {n: 60 for n in names})
+        persisted = {"state": "inside", "outcome": "", "why": ""}
+
+        class Cursor:
+            rowcount = 0
+
+            def execute(self, sql, params=()):
+                if "UPDATE overseer_guild_run" not in sql:
+                    raise AssertionError(sql)
+                reason, run_id = params
+                if run_id == RUN and persisted["state"] == "inside":
+                    persisted.update(state="ended", outcome="abandoned", why=reason)
+                    self.rowcount = 1
+                else:
+                    self.rowcount = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        class Connection:
+            def cursor(self):
+                return Cursor()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        with (
+            mock.patch.object(bridge, "_connect", Connection),
+            mock.patch.object(bridge.log, "info") as logged,
+        ):
+            first = bridge._write_run_wipe_stepdowns(decisions)
+            second = bridge._write_run_wipe_stepdowns(decisions)
+
+        self.assertEqual([step.run for step in first], [RUN])
+        self.assertEqual(second, [])
+        self.assertEqual(persisted["state"], "ended")
+        self.assertEqual(persisted["outcome"], "abandoned")
+        self.assertEqual(persisted["why"], first[0].reason())
+        self.assertEqual(logged.call_count, 1)
+        self.assertIn("stepped down", logged.call_args.args[0])
+
+        keyword = next(
+            key
+            for key, door in bridge.campaignplan.BY_KEYWORD.items()
+            if int(door.map_id) == MAP
+        )
+
+        class CandidateCursor:
+            rows = []
+
+            def execute(self, sql, params=()):
+                if "SELECT id, keyword, members, why FROM overseer_guild_run" in sql:
+                    self.rows = [
+                        {
+                            "id": RUN,
+                            "keyword": keyword,
+                            "members": run_rows[0]["members"],
+                            "why": persisted["why"],
+                        }
+                    ]
+                elif "SELECT members FROM overseer_guild_run WHERE state IN" in sql:
+                    self.rows = []
+                elif "SELECT leader_name, members FROM overseer_dungeon_run" in sql:
+                    self.rows = []
+                elif "FROM overseer_snapshot s JOIN characters c" in sql:
+                    self.rows = [
+                        {
+                            "name": name,
+                            "map_id": MAP,
+                            "health": 100,
+                            "in_combat": 0,
+                            "group_leader": 0,
+                            "has_corpse": 0,
+                        }
+                        for name in names
+                    ]
+                elif "FROM overseer_command WHERE kind = 'hearth'" in sql:
+                    self.rows = []
+                else:
+                    raise AssertionError(sql)
+
+            def fetchall(self):
+                return list(self.rows)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        class CandidateConnection:
+            def cursor(self):
+                return CandidateCursor()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        with mock.patch.object(bridge, "_connect", CandidateConnection):
+            candidates = bridge._run_wipe_escape_candidates()
+        self.assertEqual({row["name"] for row in candidates}, set(names))
+        escapes = [
+            bridge._run_wipe_escape_step(row["run"], row["name"], row["reason"])
+            for row in candidates
+        ]
+        self.assertEqual({step.holder for step in escapes}, set(names))
+        for escape in escapes:
+            self.assertEqual(escape.rows[0].kind, "hearth")
+            self.assertEqual(escape.rows[0].command, "use")
+            self.assertEqual(
+                escape.rows[0].source,
+                "guildjobs:hearth:" + escape.holder,
+            )
+
+        active_view = members.stuck_view(roster(rows, {name: RUN for name in names}))
+        self.assertEqual(active_view["digest"]["run_wipes"], len(names))
+        stepped_down_view = members.stuck_view(roster(rows, {}))
+        self.assertEqual(stepped_down_view["digest"]["run_wipes"], 0)
+        self.assertEqual(
+            {row["kind"] for row in stepped_down_view["members"]}, {"death-loop"}
+        )
+        quiet_rows = [
+            dict(row, age=row["age"] + deathloop.QUIET_SECONDS + 1) for row in rows
+        ]
+        quiet_view = members.stuck_view(roster(quiet_rows, {}))
+        self.assertEqual(quiet_view["digest"]["count"], 0)
+
+        loop_source = inspect.getsource(bridge.Bridge._guild_run_loop)
+        self.assertIn("self._start_run_wipe_escapes(escapes)", loop_source)
 
 
 class TheStuckReaderNamesTheWipe(unittest.TestCase):
