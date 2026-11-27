@@ -114,6 +114,19 @@ class RunStepDownDecision(unittest.TestCase):
             deathloop.run_step_downs(self.tagged({"Clunk": 0, "Brann": 0})), {}
         )
 
+    def test_a_run_that_clears_is_untouched_on_the_next_pass(self):
+        runs = {"Clunk": RUN, "Brann": RUN}
+        self.assertEqual(list(deathloop.run_step_downs(self.tagged(runs))), [RUN])
+        # Next pass: the run cleared, so only one member still has the deaths
+        # of a loop and the other has none in the window.
+        rows = [dict(d, name="Clunk") for d in five()]
+        found = deathloop.tag_runs(deathloop.loops(rows, {n: 60 for n in runs}), runs)
+        self.assertEqual(list(found), ["Clunk"])
+        self.assertEqual(deathloop.run_step_downs(found), {})
+        # And once no member dies at all, nothing is grouped.
+        cleared = deathloop.tag_runs(deathloop.loops([], {n: 60 for n in runs}), runs)
+        self.assertEqual(deathloop.run_step_downs(cleared), {})
+
     def test_two_runs_are_judged_apart(self):
         found = self.tagged({"Clunk": RUN, "Brann": RUN + 1})
         self.assertEqual(deathloop.run_step_downs(found), {})
