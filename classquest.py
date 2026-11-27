@@ -1398,7 +1398,9 @@ def _mainhand_cast(qid, aims):
     if not foci:
         return None
     object_spawns = aims[3]
-    spots = tuple(s for g in foci for s in object_spawns.get(g, ()))
+    # The core requires a Runeforge within 10 yards. Finish at eight yards
+    # to leave room for movement between arrival and the cast.
+    spots = tuple(replace(s, near=8) for g in foci for s in object_spawns.get(g, ()))
     return Use(CAST_MAINHAND, 0, 1, foci, spots, spell=MAINHAND_CASTS[qid][0])
 
 
