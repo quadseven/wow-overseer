@@ -23467,7 +23467,8 @@ class Bridge(discord.Client):
         vendor, bank or guild-bank passes.
         """
         await self.wait_until_ready()
-        cycle = float(os.environ.get("GUILD_JOBS_CYCLE_SECONDS", "900"))
+        cycle = float(os.environ.get("GUILD_JOBS_CYCLE_SECONDS",
+                                     str(nowstatus.GUILD_JOBS_DEFAULT_CYCLE_SECONDS)))
         await asyncio.sleep(min(cycle, 420.0))
         while not self.is_closed():
             try:
