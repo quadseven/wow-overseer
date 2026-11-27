@@ -1,9 +1,17 @@
+# The archived finder run had one distant head and four members near their
+# common inn. Use unique outdoor spawns and keep the five-member family group.
+# Require a ready hearthstone already held by the head. This short check ends at
+# the saved return points and leaves the after-exit criterion pending.
+# Corroborate the registered run with the named DUNGEON FINDER queue and inside
+# log lines in both arms. Only a far return point should grade a control FAIL.
+# The roll 114 control predates Overseer.Raid.RequireHeadClient. Omit that
+# baseline key only for that control. The family dungeon finder does not read it.
 decree: v1
 id: family-finder-entry-points-at-inn
 proves:
   - repo: quadseven/mod-overseer
     issue: 1510
-    criterion: "Check that a scattered family's recorded dungeon entry points are within one thousand yards of its common inn."
+    criterion: "The BRD finder takes a family with one distant head inside and records all five return points within 1,000 yards of their inn."
 fix: {repo: quadseven/mod-overseer, commit: 5e44a0bc4b86d3476a82ef5d66fba645de9f13d2}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -13,45 +21,111 @@ cast:
     set:
       alive: true
       at_each:
-        - {areatrigger: 1466}
-        - {areatrigger: 257}
-        - {areatrigger: 78}
-        - {areatrigger: 614}
-        - {areatrigger: 2886}
+        - {creature: "Duke Nicholas Zverenhoff"}
+        - {creature: "Innkeeper Allison"}
+        - {creature: "Stephanie Turner"}
+        - {creature: "Topper McNabb"}
+        - {creature: "Harlan Bagley"}
       homebind: {creature: "Innkeeper Allison"}
+    ceiling: "Positions and a common homebind only"
 arrange:
   - group: {members: family:grug, leader: Grug}
 act:
-  - at: 90s
+  - at: 0s
     roster: {who: family:grug, job: "dungeon:blackrock-depths"}
 observe:
-  - name: every-member-has-the-common-inn-bind
+  - name: five-online-members-ready-outside
     role: precondition
     when: start
-    sql: "SELECT COUNT(*) FROM character_homebind WHERE guid IN (@cast)"
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot s JOIN characters c ON c.guid = s.guid
+      WHERE s.guid IN (@cast) AND c.online = 1 AND s.map_id = 0 AND s.health > 0 AND s.in_combat = 0
     expect: {scalar: "= 5"}
-  - name: family-starts-scattered-from-its-inn
+  - name: only-the-head-starts-far-from-the-inn
     role: precondition
     when: start
     sql: |
       SELECT COUNT(*) FROM characters ch
       JOIN character_homebind hb ON hb.guid = ch.guid
-      WHERE ch.guid IN (@cast)
-        AND ch.map = hb.mapId
-        AND POW(ch.position_x - hb.posX, 2) + POW(ch.position_y - hb.posY, 2) <= 1000000
-    expect: {scalar: "= 0"}
-  - name: no-old-entry-point-is-already-near-the-inn
+      JOIN acore_world.creature c ON c.map = hb.mapId
+      JOIN acore_world.creature_template t ON t.entry = c.id
+      WHERE ch.guid IN (@cast) AND ch.map = hb.mapId AND t.name = 'Innkeeper Allison'
+        AND POW(hb.posX - c.position_x, 2) + POW(hb.posY - c.position_y, 2) <= 1600
+        AND ((ch.guid = @cast0 AND ch.name = 'Grug'
+          AND POW(ch.position_x - hb.posX, 2) + POW(ch.position_y - hb.posY, 2) > 1000000)
+          OR (ch.guid <> @cast0 AND POW(ch.position_x - hb.posX, 2) + POW(ch.position_y - hb.posY, 2) <= 1000000))
+    expect: {scalar: "= 5"}
+  - name: the-head-carries-a-hearthstone
     role: precondition
     when: start
     sql: |
-      SELECT COUNT(*) FROM character_entry_point ep
-      JOIN character_homebind hb ON hb.guid = ep.guid
-      WHERE ep.guid IN (@cast)
-        AND ep.joinMapId = hb.mapId
-        AND POW(ep.joinX - hb.posX, 2) + POW(ep.joinY - hb.posY, 2) <= 1000000
+      SELECT COUNT(*) FROM character_inventory b JOIN item_instance i ON b.item = i.guid
+      WHERE b.guid = @cast0 AND i.itemEntry = 6948
+        AND ((b.bag = 0 AND b.slot BETWEEN 23 AND 38) OR b.bag IN (
+          SELECT e.item FROM character_inventory e WHERE e.guid = @cast0 AND e.bag = 0 AND e.slot BETWEEN 19 AND 22
+        ))
+    expect: {scalar: ">= 1"}
+  - name: the-head-can-use-the-hearthstone
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM character_spell_cooldown WHERE guid = @cast0
+        AND (spell = 8690 OR item = 6948) AND time > UNIX_TIMESTAMP(@t0)
     expect: {scalar: "= 0"}
+  - name: neither-endpoint-is-already-saved-for-the-head
+    role: precondition
+    when: start
+    # Entry-point rows have no timestamp. Rule out a restored row that already
+    # matches either endpoint, then require one of those endpoints after entry.
+    sql: |
+      SELECT COUNT(*) FROM character_entry_point ep JOIN acore_world.creature c ON ep.joinMapId = c.map
+      JOIN acore_world.creature_template t ON t.entry = c.id
+      WHERE ep.guid = @cast0 AND t.name IN ('Innkeeper Allison', 'Duke Nicholas Zverenhoff')
+        AND POW(ep.joinX - c.position_x, 2) + POW(ep.joinY - c.position_y, 2) <= 1000000
+    expect: {scalar: "= 0"}
+  - name: the-cast-has-no-existing-brd-finder-group
+    role: precondition
+    when: start
+    sql: |
+      SELECT COUNT(*) FROM group_member gm JOIN lfg_data l ON l.guid = gm.guid
+      WHERE gm.memberGuid IN (@cast) AND (l.dungeon & 16777215) IN (30, 276)
+    expect: {scalar: "= 0"}
+  - name: the-brd-order-read-back-for-all-five
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(DISTINCT target_name) FROM overseer_command WHERE kind = 'job'
+        AND command = 'dungeon:blackrock-depths' AND status IN ('applied', 'unchanged') AND created_at >= @t0
+        AND HEX(target_name) IN (SELECT HEX(name) FROM characters WHERE guid IN (@cast))
+    expect: {scalar: "= 5"}
+  - name: all-five-joined-one-brd-finder-group
+    role: precondition
+    when: end
+    # Finder states 5 and 6 mean in a dungeon or finished. Rows 30 and 276
+    # are the BRD wings. The stored entry uses the high byte for its type.
+    sql: |
+      SELECT COUNT(DISTINCT gm.memberGuid) FROM group_member gm JOIN lfg_data l ON l.guid = gm.guid
+      WHERE gm.memberGuid IN (@cast) AND (l.dungeon & 16777215) IN (30, 276) AND l.state IN (5, 6)
+      GROUP BY gm.guid
+    expect: {scalar: "= 5"}
+  - name: all-five-are-observed-inside-brd
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_snapshot
+      WHERE guid IN (@cast) AND map_id = 230 AND updated_at >= @t0
+    expect: {scalar: "= 5"}
+  - name: the-head-has-a-new-saved-entry-point
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM character_entry_point ep JOIN acore_world.creature c ON ep.joinMapId = c.map
+      JOIN acore_world.creature_template t ON t.entry = c.id
+      WHERE ep.guid = @cast0 AND t.name IN ('Innkeeper Allison', 'Duke Nicholas Zverenhoff')
+        AND POW(ep.joinX - c.position_x, 2) + POW(ep.joinY - c.position_y, 2) <= 1000000
+    expect: {scalar: "= 1"}
   - name: every-family-member-has-a-recorded-entry-point
-    role: check
+    role: precondition
     when: end
     sql: "SELECT COUNT(*) FROM character_entry_point WHERE guid IN (@cast)"
     expect: {scalar: "= 5"}

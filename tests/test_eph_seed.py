@@ -805,6 +805,42 @@ class CompileTest(unittest.TestCase):
         with self.assertRaises(SeedError):
             compile_(d)
 
+    def test_raid_seats_replace_only_the_named_order(self):
+        d = doc()
+        d["cast"] = [{"who": "family:grug", "set": {}}, {"who": "Zork", "set": {}}]
+        d["arrange"] = [{"raid_seats": {
+            "family": "Grug", "keyword": "moltencore", "seats": [
+                {"who": "family:grug", "role": "dps"}, {"who": "Zork", "role": "healer"},
+            ],
+        }}]  # fmt: skip
+        resolver = FakeResolver()
+        resolver.fam["grug"].extend(
+            (i, name, False) for i, name in enumerate(("Bada", "Badu", "Bade"), start=5)
+        )
+        seats = [
+            s
+            for s in compile_(d, resolver).statements
+            if s.table == "overseer_raid_seat"
+        ]
+        self.assertEqual(
+            seats[0].sql,
+            "DELETE FROM `acore_characters`.`overseer_raid_seat` "
+            "WHERE `family` = 'Grug' AND `keyword` = 'moltencore'",
+        )
+        self.assertEqual([s.op for s in seats], ["delete"] + ["insert"] * 6)
+        self.assertTrue(
+            seats[1].sql.endswith("VALUES ('Grug', 'moltencore', 'Grug', 0, 'dps')")
+        )
+        self.assertTrue(
+            seats[-1].sql.endswith("VALUES ('Grug', 'moltencore', 'Zork', 1, 'healer')")
+        )
+        for s in seats:
+            verify_statement(s.sql, SCHEMA)
+
+        resolver.fam["grug"].extend((i, f"Seat{i}", False) for i in range(9, 44))
+        with self.assertRaisesRegex(SeedError, "needs 1 to 40 seats"):
+            compile_(d, resolver)
+
     def test_creature_dead_state_in_arrange(self):
         d = doc()
         d["cast"][0]["set"] = {}
