@@ -278,6 +278,53 @@ class ARecallCannotLoop(unittest.TestCase):
         self.assertEqual([], ns["_recall_door_errands"]("Zug", ages, 7))
         self.assertEqual([], world.released)
 
+    def test_repeated_recalls_reach_the_bound_before_the_run_row_exists(self):
+        world = World()
+        ns = world.namespace()
+        ns["_door_open_run_id"] = lambda leader: None
+        world.aims["Oz"] = "vendor"
+        self.assertIsNone(world.judge(ns))
+
+        verdict = None
+        for _ in range(stall.HOLD_SECONDS // 60):
+            world.clock[0] += 60
+            before = len(world.released)
+            verdict = world.judge(ns)
+            if verdict is not None:
+                break
+            if len(world.released) > before:
+                world.judge(ns)
+                world.aims["Oz"] = "banker"
+
+        self.assertIsNotNone(verdict)
+        self.assertIn("Oz", verdict.why)
+        self.assertGreaterEqual(len(world.released), 2)
+
+    def test_a_run_does_not_inherit_a_queue_clock_with_the_same_number(self):
+        world = World()
+        ns = world.namespace()
+        run_id = [None]
+        ns["_door_open_run_id"] = lambda leader: run_id[0]
+        world.aims["Oz"] = "vendor"
+        self.assertIsNone(world.judge(ns))
+
+        world.clock[0] += stall.HOLD_SECONDS
+        run_id[0] = HEAD["id"]
+        self.assertIsNone(world.judge(ns))
+        self.assertEqual([], world.released)
+
+    def test_a_new_queue_entry_starts_fresh_before_the_run_row_exists(self):
+        world = World()
+        ns = world.namespace()
+        ns["_door_open_run_id"] = lambda leader: None
+        world.aims["Oz"] = "vendor"
+        self.assertIsNone(world.judge(ns))
+
+        world.clock[0] += stall.HOLD_SECONDS
+        replacement = dict(HEAD, id=HEAD["id"] + 1)
+        self.assertIsNone(ns["_door_wedge"](replacement, ["Zug", "Oz"], "Zug"))
+        self.assertEqual([], world.released)
+
     def test_one_recall_that_takes_does_not_stand_the_run_down(self):
         """The member goes back to the party and stays: no verdict, and the
         errand it takes once the cooldown is over starts a clock of its own."""
