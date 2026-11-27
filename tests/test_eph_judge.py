@@ -12,7 +12,7 @@ import unittest
 import uuid
 from unittest import mock
 
-from ephemeral import dbschema, guard, judge
+from ephemeral import dbschema, guard, judge, lint
 from ephemeral.miniyaml import loads
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -106,6 +106,93 @@ def run(decree, world, clock, log="", handoff=HANDOFF, poll=10):
 
 def named(result, name):
     return next(a for a in result["assertions"] if a["name"] == name)
+
+
+class MagmusEncounterTest(unittest.TestCase):
+    @staticmethod
+    def decree():
+        decree = copy.deepcopy(GUZZLER)
+        decree["duration"] = "1m"
+        decree["act"] = [
+            {
+                "at": "0s",
+                "roster": {"who": "family:grug", "job": "dungeon:blackrock-depths"},
+            }
+        ]
+        decree["observe"] = [
+            {
+                "name": "magmus-died",
+                "role": "precondition",
+                "when": "end",
+                "encounter": {"instance": "brd", "boss": "Magmus"},
+            },
+            {
+                "name": "no-guardian-deaths",
+                "role": "check",
+                "when": "end",
+                "sql": "SELECT id FROM overseer_death WHERE killer_entry = 8982",
+                "expect": {"rows": 0},
+            },
+        ]
+        return decree
+
+    def run_with_save(self, save):
+        clock = Clock()
+        world = FakeWorld(clock)
+        world.answer("FROM instance WHERE id = 7 AND map = 230", save)
+        decree = self.decree()
+        return run(decree, world, clock), world
+
+    def test_lint_accepts_the_bound_magmus_observer(self):
+        findings = lint.lint_document(self.decree())
+        self.assertFalse([f for f in findings if f.level == "error"], findings)
+
+    def test_lint_refuses_other_encounter_sources(self):
+        for change in (
+            {"encounter": {"boss": "Emperor", "instance": "brd"}},
+            {"encounter": {"boss": "Magmus", "instance": "somewhere_else"}},
+            {"role": "check"},
+            {"when": "start"},
+            {"sql": "SELECT id FROM instance"},
+        ):
+            with self.subTest(change=change):
+                decree = self.decree()
+                decree["observe"][0].update(change)
+                self.assertTrue(
+                    any(
+                        f.level == "error" and ".encounter" in str(f)
+                        for f in lint.lint_document(decree)
+                    )
+                )
+
+    def test_observes_the_fresh_bound_instances_magmus_kill(self):
+        result, world = self.run_with_save(
+            lambda now: [("0 0 0 0 0 3 0 0 0" if now >= 10 else "",)]
+        )
+        self.assertEqual(result["verdict"], "PASS", result["reasons"])
+        self.assertEqual(named(result, "magmus-died")["status"], "held")
+        self.assertTrue(world.commands)
+        self.assertFalse(any("log_encounter" in sql for _, sql in world.selects))
+
+    def test_preexisting_done_state_invalidates_before_any_act(self):
+        result, world = self.run_with_save([("0 0 0 0 0 3 0 0 0",)])
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+        self.assertIn("already complete", " ".join(result["reasons"]))
+        self.assertFalse(world.commands)
+
+    def test_another_encounters_done_state_does_not_count(self):
+        result, _ = self.run_with_save(
+            lambda now: [("0 0 0 0 3 0 0 0 0" if now >= 10 else "",)]
+        )
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+        self.assertEqual(named(result, "magmus-died")["status"], "violated")
+
+    def test_missing_instance_or_invalid_save_does_not_count(self):
+        for save in ([], [("0 0 0 0 0 3 error 0 0",)]):
+            with self.subTest(save=save):
+                result, world = self.run_with_save(save)
+                self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+                self.assertFalse(world.commands)
 
 
 class VerdictTest(unittest.TestCase):

@@ -970,11 +970,11 @@ def _observe(lint, doc, whos, aliases):
         if lint.keys(
             path,
             o,
-            ("name", "role", "sql", "log", "expect", "when", "online"),
+            ("name", "role", "sql", "log", "expect", "when", "online", "encounter"),
             ("name", "role"),
         ):
             roles.append(o.get("role"))
-            _observe_one(lint, path, o, seen, known_var)
+            _observe_one(lint, path, o, seen, known_var, doc)
     lint.ensure(
         "precondition" in roles,
         "decree.observe",
@@ -986,7 +986,7 @@ def _observe(lint, doc, whos, aliases):
     )
 
 
-def _observe_one(lint, path, o, seen, known_var):
+def _observe_one(lint, path, o, seen, known_var, doc):
     name = o.get("name")
     if not isinstance(name, str) or not _KEBAB.match(name):
         lint.err(f"{path}.name", "schema", "must be kebab-case")
@@ -1000,6 +1000,14 @@ def _observe_one(lint, path, o, seen, known_var):
         "schema",
         "must be precondition or check",
     )
+    if "encounter" in o:
+        lint.ensure(
+            magmus_instance(doc, o) is not None,
+            f"{path}.encounter",
+            "schema",
+            "requires an end precondition for Magmus in the only arranged, cast-bound Blackrock Depths instance",
+        )
+        return
     if "online" in o:
         _observe_online(lint, path, o)
         return
@@ -1010,6 +1018,43 @@ def _observe_one(lint, path, o, seen, known_var):
         _observe_sql(lint, path, o, known_var)
     if "log" in o:
         _observe_log(lint, path, o)
+
+
+def magmus_instance(doc, observation):
+    """The declared instance alias for the supported dungeon credit source."""
+    encounter = observation.get("encounter")
+    if (
+        not isinstance(encounter, dict)
+        or set(encounter) != {"boss", "instance"}
+        or encounter["boss"] != "Magmus"
+        or observation.get("role") != "precondition"
+        or observation.get("when") != "end"
+        or {"sql", "log", "online", "expect"} & observation.keys()
+    ):
+        return None
+    alias = encounter["instance"]
+    arrange, cast = doc.get("arrange"), doc.get("cast")
+    if (
+        not isinstance(alias, str)
+        or not isinstance(arrange, list)
+        or not isinstance(cast, list)
+    ):
+        return None
+    instances = [
+        e["instance"] for e in arrange if isinstance(e, dict) and "instance" in e
+    ]
+    if len(instances) != 1 or not isinstance(instances[0], dict):
+        return None
+    instance = instances[0]
+    bound = instance.get("bind")
+    if (
+        instance.get("as") == alias
+        and instance.get("map") == "Blackrock Depths"
+        and isinstance(bound, str)
+        and any(isinstance(e, dict) and e.get("who") == bound for e in cast)
+    ):
+        return alias
+    return None
 
 
 def _observe_online(lint, path, o):

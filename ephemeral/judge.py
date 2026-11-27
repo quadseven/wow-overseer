@@ -258,6 +258,23 @@ def _run_bound_problems(bare, maps, alias=None, sole=True):
     return problems
 
 
+def _magmus_done(rows):
+    """Read Iron Hall state from the pinned Blackrock Depths instance save."""
+    if len(rows) != 1 or len(rows[0]) != 1 or not isinstance(rows[0][0], str):
+        raise JudgeError("expected one Blackrock Depths instance save")
+    save = rows[0][0]
+    if not save:
+        return False, "instance save is empty"
+    fields = save.split()
+    if len(fields) not in (7, 8, 9) or any(
+        not re.fullmatch(r"[0-9]+", f) for f in fields
+    ):
+        raise JudgeError("malformed Blackrock Depths instance save")
+    # At the pinned core, Magmus's death sets TYPE_IRON_HALL to DONE.
+    # The instance writes its six encounter states before the other fields.
+    return fields[5] == "3", f"Iron Hall state={fields[5]}"
+
+
 class Judge:
     def __init__(
         self,
@@ -342,6 +359,17 @@ class Judge:
                 self._observe(name, started)
         if any(self._unheld_precondition(r) for r in self.records.values()):
             return self._invalid_reasons()
+        for name, observation in self.observes.items():
+            if "encounter" in observation:
+                rec = self._evaluate(name)
+                if rec["status"] == "held":
+                    return [
+                        f"precondition {name}: Magmus was already complete before the first act"
+                    ]
+                if rec["status"] != "violated":
+                    return [
+                        f"precondition {name}: {self._phrase(rec)} reading starting instance state"
+                    ]
         self._window(steps, duration, started)
         for name, o in self.observes.items():
             if o.get("when") == "end" or "log" in o:
@@ -402,19 +430,31 @@ class Judge:
         for name, o in observes.items():
             if "sql" in o:
                 sql = render_sql(o["sql"], variables)
-                problems = dbschema.check_select(sql, self.schema)
-                if problems:
-                    raise JudgeError(f"observation {name}: " + "; ".join(problems))
-                rendered[name] = sql
             elif o.get("online") == "cast":
                 sql = render_sql(
                     "SELECT guid FROM characters WHERE guid IN (@cast) AND online = 1",
                     variables,
                 )
-                problems = dbschema.check_select(sql, self.schema)
-                if problems:
-                    raise JudgeError(f"observation {name}: " + "; ".join(problems))
-                rendered[name] = sql
+            elif "encounter" in o:
+                alias = lint.magmus_instance(self.decree, o)
+                instance_id = variables.get(alias)
+                if alias is None or type(instance_id) is not int or instance_id <= 0:
+                    raise JudgeError(
+                        f"observation {name}: needs a bound Blackrock Depths seed instance"
+                    )
+                sql = render_sql(
+                    "SELECT data FROM instance WHERE id = @instance_id AND map = @map_id",
+                    {
+                        "instance_id": instance_id,
+                        "map_id": gamedata.INSTANCE_MAPS["Blackrock Depths"],
+                    },
+                )
+            else:
+                continue
+            problems = dbschema.check_select(sql, self.schema)
+            if problems:
+                raise JudgeError(f"observation {name}: " + "; ".join(problems))
+            rendered[name] = sql
         return rendered
 
     def _window(self, steps, duration, started):
@@ -461,9 +501,9 @@ class Judge:
     def _credit_reasons(self):
         """A run that arranges an instance needs the core's own credited encounter record.
 
-        The evidence is a held precondition that reads `log_encounter` (the core
-        writes it when an encounter is credited), never a run's own completion
-        flag, and the observation must be POSITIVE and bounded to THIS run:
+        The evidence is a held Magmus observation of the fresh bound instance,
+        or a held precondition that reads `log_encounter`. The observation must be
+        positive and bounded to this run:
         an expectation that holds at zero credits, or a query that could count
         an earlier run's credits, proves nothing. A decree that arranges an
         instance without such an observation cannot PASS.
@@ -479,6 +519,8 @@ class Judge:
         problems = []
         for name, sql in self.rendered.items():
             rec = self.records.get(name)
+            if "encounter" in self.observes[name] and rec and rec["status"] == "held":
+                return []
             if (CREDIT_DB, CREDIT_TABLE) not in dbschema.tables_read(sql, self.schema):
                 continue
             if not rec or rec["role"] != "precondition":
@@ -595,9 +637,9 @@ class Judge:
         rec = {
             "name": name,
             "role": role,
-            "expect": o["expect"] if "expect" in o else o["log"]["expect"],
         }
         if "log" in o:
+            rec["expect"] = o["log"]["expect"]
             rec["when"] = "log"
             pattern = re.compile(o["log"]["pattern"])
             try:
@@ -618,9 +660,15 @@ class Judge:
             return rec
         rec["when"] = o["when"]
         rec["sql"] = self.rendered[name]
+        encounter = "encounter" in o
+        rec["expect"] = {"encounter": "Magmus DONE"} if encounter else o["expect"]
         try:
             rows = self.world.select(rec["sql"])
-            held, observed = expectation_holds(o["expect"], rows)
+            held, observed = (
+                _magmus_done(rows)
+                if encounter
+                else expectation_holds(o["expect"], rows)
+            )
             rec["status"] = "held" if held else "violated"
             rec["observed"] = observed
             rec["sample"] = _sample(rows)
