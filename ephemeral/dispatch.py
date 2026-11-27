@@ -133,32 +133,46 @@ def job_disk(job):
 
 
 def _sealed_inputs(job, cm, rid, record, member, namespace):
-    if job is None or cm is None or cm.get("immutable") is not True:
-        return False
-    job_meta, input_meta = job["metadata"], cm["metadata"]
-    labels = job_meta.get("labels") or {}
+    return (
+        job is not None
+        and cm is not None
+        and _sealed_job_matches(job, rid, record, member["job_uid"], namespace)
+        and _sealed_configmap_matches(cm, rid, member, namespace)
+    )
+
+
+def _sealed_job_matches(job, rid, record, uid, namespace):
+    meta = job["metadata"]
+    labels = meta.get("labels") or {}
     arm = labels.get(runids.JOB_LABEL_ARM)
     expected_arm = runids.parse_run(rid)[1]
     if arm is not None and (job["spec"].get("suspend") or arm != expected_arm):
         return False
+    return (
+        meta.get("uid") == uid
+        and bool(meta.get("resourceVersion"))
+        and meta.get("namespace") == namespace
+        and not meta.get("deletionTimestamp")
+        and labels.get(batchseal.STAGED_LABEL) == record["batch"]
+        and labels.get(runids.JOB_LABEL_DECREE) == record["decree_id"]
+    )
+
+
+def _sealed_configmap_matches(cm, rid, member, namespace):
+    meta = cm["metadata"]
     if (
-        job_meta.get("uid") != member["job_uid"]
-        or input_meta.get("uid") != member["input_uid"]
-        or not job_meta.get("resourceVersion")
-        or job_meta.get("namespace") != namespace
-        or input_meta.get("namespace") != namespace
-        or job_meta.get("deletionTimestamp")
-        or input_meta.get("deletionTimestamp")
-        or labels.get(batchseal.STAGED_LABEL) != record["batch"]
-        or labels.get(runids.JOB_LABEL_DECREE) != record["decree_id"]
-        or input_meta.get("name") != runids.run_cm_name(rid)
+        cm.get("immutable") is not True
+        or meta.get("uid") != member["input_uid"]
+        or meta.get("namespace") != namespace
+        or meta.get("deletionTimestamp")
+        or meta.get("name") != runids.run_cm_name(rid)
     ):
         return False
     expected_owner = {
         "apiVersion": "batch/v1", "kind": "Job", "name": runids.job_name(rid),
         "uid": member["job_uid"],
     }  # fmt: skip
-    owners = input_meta.get("ownerReferences") or []
+    owners = meta.get("ownerReferences") or []
     return (
         len(owners) == 1
         and expected_owner.items() <= owners[0].items()
