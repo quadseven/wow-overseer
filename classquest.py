@@ -2941,12 +2941,11 @@ class Hunts:
         return REROLL
 
     def productive(self, name, now) -> None:
-        """A hunt that killed is reachable ground: forget the packs it tried
-        and any hold-off, and restart its stall clock."""
+        """Kill-only evidence can restart the clock before the first reroll.
+        Keep tried packs and hold-offs until quest progress or the existing
+        expiry rule changes them."""
         hunt = self._by.get(name)
-        if hunt is not None and (hunt.tried or hunt.until is not None):
-            self._by[name] = Hunt(hunt.quest, hunt.progress, now)
-        elif hunt is not None:
+        if hunt is not None and not hunt.tried and hunt.until is None:
             self._by[name] = replace(hunt, since=now)
 
     def give_up(self, name, quest, now) -> None:
