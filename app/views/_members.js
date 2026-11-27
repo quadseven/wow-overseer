@@ -111,11 +111,16 @@ function slotColumn(keys, slots) {
 
 function tags(m) {
   const g = m.gear || {};
-  const out = [html`<span class="tag tag-neutral">Average item level ${g.average_item_level ?? "not measured"}</span>`,
-    html`<span class="tag tag-neutral">Slots worn ${g.worn ?? "?"} of ${g.slots ?? 17}</span>`];
+  const out = [];
+  // The weakest tag leads (#3372), and it follows the server's verdict:
+  // armory.weakest_payload flags the slot against the one threshold
+  // (WEAKEST_FLAG), where this page used to keep a second number of its
+  // own and the two disagreed.
+  if (m.weakest && m.weakest.flagged) out.push(html`<span class="tag tag-warn">Weakest slot ${m.weakest.said}</span>`);
+  out.push(html`<span class="tag tag-neutral">Average item level ${g.average_item_level ?? "not measured"}</span>`,
+    html`<span class="tag tag-neutral">Slots worn ${g.worn ?? "?"} of ${g.slots ?? 17}</span>`);
   const empty = (g.empty_slots || []).length;
   if (empty) out.push(html`<span class="tag tag-warn">Empty ${empty}</span>`);
-  if (m.weakest && m.weakest.shortfall > 12) out.push(html`<span class="tag tag-warn">Weakest slot ${m.weakest.said}</span>`);
   return out;
 }
 
@@ -181,7 +186,14 @@ function bonusScore(b) {
   return typeof v === "number" && isFinite(v) && v > 0 ? v : 0;
 }
 
-export const UP_FILTERS = [["all", "All 17"], ["now", "Upgrade now"], ["up", "Below pre-raid"], ["best", "At or near best"]];
+// The All label counts the slots of the member on the page (#3372): it is
+// built from the slot count the caller hands in, and claims no number when
+// it is handed none, where it used to print a fixed 17 for everyone.
+export function upFilters(slotCount) {
+  const all = slotCount === null || slotCount === undefined ? "All slots" : "All " + slotCount;
+  return [["all", all], ["now", "Upgrade now"], ["up", "Below pre-raid"], ["best", "At or near best"]];
+}
+export const UP_FILTERS = upFilters(null);
 export const UP_SORTS = [["slot", "Slot order"], ["now", "Biggest gain now"], ["gain", "Biggest pre-raid gain"]];
 
 export function upSlots(data, filter, sort) {
@@ -236,12 +248,13 @@ export function upgradesHead(data, picker) {
   const spec = data.spec || {};
   return html`<div class="row up-top"><div class="up-who"><span class="mb-kick">${spec.tree ? spec.tree + " " + (data.class || "") + (spec.assumed ? " (assumed)" : "") : notMeasured("spec not measured")}</span><span class="mb-b">${data.name} | level ${data.level ?? "?"} ${data.class || ""}</span></div>${picker || ""}</div>
 <div class="up-tiles"><div class="card up-tile hi"><span class="v num">${data.now_count ?? "?"} / ${(data.slots || []).length}</span><span class="k">slots with an upgrade at level ${data.level ?? "?"}</span></div><div class="card up-tile"><span class="v num">${ready.slots_ready ?? "?"} / ${ready.slots_scored ?? "?"}</span><span class="k">slots at or near pre-raid best</span></div><div class="card up-tile"><span class="v num">${pct === null ? notMeasured() : pct + "%"}</span><span class="k">pre-raid ready</span></div><div class="card up-tile"><span class="v num ok">+${Math.round(gain)}</span><span class="k">score to gain from pre-raid targets</span></div></div>
+<p class="up-line mb-s">${data.now_count ?? "?"} of ${plural((data.slots || []).length, "slot")} ${(data.slots || []).length === 1 ? "has" : "have"} an upgrade at this level · ${ready.slots_ready ?? "?"} of ${ready.slots_scored ?? "?"} at or near pre-raid best · ${pct === null ? "pre-raid ready not measured" : pct + "% pre-raid ready"} · +${Math.round(gain)} score to gain from pre-raid targets</p>
 <div class="up-meter"><span class="muted">${ready.line || ""}</span><div class="mb-bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct || 0}" aria-label="${ready.line || "pre-raid ready"}"><span style="width:${pct || 0}%"></span></div></div>`;
 }
 
-export function upgradesControls(filter, sort) {
+export function upgradesControls(filter, sort, slotCount) {
   const btns = (list, cur, key) => list.map(([k, label]) => html`<button type="button" data-up-${raw(key)}="${k}" aria-pressed="${cur === k ? "true" : "false"}">${label}</button>`);
-  return html`<div class="row up-controls"><span class="mb-kick">Slot by slot</span><div class="seg" role="group" aria-label="Filter slots">${btns(UP_FILTERS, filter, "filter")}</div><div class="seg" role="group" aria-label="Sort slots">${btns(UP_SORTS, sort, "sort")}</div></div>`;
+  return html`<div class="row up-controls"><span class="mb-kick">Slot by slot</span><div class="seg" role="group" aria-label="Filter slots">${btns(upFilters(slotCount), filter, "filter")}</div><div class="seg" role="group" aria-label="Sort slots">${btns(UP_SORTS, sort, "sort")}</div></div>`;
 }
 
 export function upgradesFoot(data) {
@@ -249,15 +262,21 @@ export function upgradesFoot(data) {
 }
 
 // Bind the filter and sort buttons: the choice goes into the URL query and
-// the slot list is redrawn in place.
+// the slot list is redrawn in place. A choice the page opened on without
+// naming it in the query (the member page opens on Upgrade now on a phone,
+// #3372) is read off the pressed button, so sorting does not lose it.
 export function bindUpgrades(root, data) {
   const region = root.querySelector("[data-region=upslots]");
   if (!region) return;
+  const pressed = (key) => {
+    const b = root.querySelector("[data-up-" + key + "][aria-pressed='true']");
+    return b ? b.getAttribute("data-up-" + key) : null;
+  };
   root.querySelectorAll("[data-up-filter], [data-up-sort]").forEach((b) => {
     b.addEventListener("click", () => {
       const f = b.getAttribute("data-up-filter"), s = b.getAttribute("data-up-sort");
       const q = setQuery(f ? { filter: f === "all" ? "" : f } : { usort: s === "slot" ? "" : s });
-      const filter = q.filter || "all", sort = q.usort || "slot";
+      const filter = f || q.filter || pressed("filter") || "all", sort = s || q.usort || pressed("sort") || "slot";
       root.querySelectorAll("[data-up-filter]").forEach((x) => x.setAttribute("aria-pressed", String(x.getAttribute("data-up-filter") === filter)));
       root.querySelectorAll("[data-up-sort]").forEach((x) => x.setAttribute("aria-pressed", String(x.getAttribute("data-up-sort") === sort)));
       region.innerHTML = upgradesBody(data, filter, sort).s;
