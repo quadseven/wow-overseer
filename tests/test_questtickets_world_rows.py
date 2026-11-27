@@ -271,6 +271,56 @@ class WorldRows(unittest.TestCase):
             ticket,
         )
 
+    def test_rethban_ore_rows_show_the_ore_can_still_be_gathered(self):
+        # Quest 347, Rethban Ore: QuestLevel 24, MinLevel 20, follows 345, and
+        # requires Rethban Ore (2798) x5. The world rows name creature entry 580
+        # and gameobject loot entries 2054, 2055 as sources, so the ore can still
+        # be gathered and a quester can finish the quest; the stalled ledger row
+        # says how one quester's play went, not that the quest lacks a source.
+        row = quest_row(
+            quest=347,
+            title="Rethban Ore",
+            level=24,
+            min_level=20,
+            sort=1,
+            follows=345,
+            item1=2798,
+            item_count1=5,
+        )
+        catalogue = self.catalogue(
+            row,
+            {
+                qc.ITEM_NAMES_SQL.format(ids="2798"): [
+                    {"entry": 2798, "name": "Rethban Ore"}
+                ],
+                qc.DROP_SQL.format(ids="2798"): [
+                    {"item": 2798, "entry": 580},
+                ],
+                qc.OBJECT_LOOT_SQL.format(ids="2798"): [
+                    {"item": 2798, "entry": 2054},
+                    {"item": 2798, "entry": 2055},
+                ],
+            },
+        )
+        rows = [
+            {
+                "quest": 347,
+                "guid": 7,
+                "character_name": "Bromli",
+                "state": "broken",
+                "reason": questers.STALLED,
+            },
+        ]
+        text = qt.body(347, catalogue[0], rows, [], "")
+
+        self.assertIn("QuestLevel: 24; MinLevel: 20", text)
+        self.assertIn("Previous quest: 345", text)
+        self.assertIn("Required item 2798 x5 (Rethban Ore)", text)
+        self.assertIn("creature entries 580", text)
+        self.assertIn("gameobject loot entries 2054, 2055", text)
+        self.assertNotIn("no source in the world rows", text)
+        self.assertIn("Reason: " + questers.STALLED, text)
+
     def test_relics_of_wakening_rows_explain_the_take_refusal(self):
         row = quest_row(
             quest=483,
