@@ -408,6 +408,12 @@ fit, but nothing skips a head that has waited 30 minutes. Runs after the first
 control and treatment pair start only if the pair was control FAIL then
 treatment PASS; any other first pair stops the batch and removes its waiting
 Jobs. A finished Job with no result gets an INVALID result recorded for it.
+A started Job whose pod has waited on an image pull failure (`ErrImagePull`,
+`ImagePullBackOff`, `InvalidImageName`, `ErrImageNeverPull`) for longer than the
+runner setting `image_pull_grace_seconds` (default 600) gets an INVALID result
+naming the container and image, and is deleted, so its node slot and quota come
+back on the same pass instead of at the Job's deadline. This reads the
+namespace's pods; if they cannot be read, the pass goes on without the check.
 
 Each dispatcher also takes a local owner lock (`~/.ephemeral/dispatch.lock`, or
 `EPH_LOCK`) recording the owner, pid and start time; the cluster Lease holder
