@@ -1803,6 +1803,39 @@ def _chested(quest) -> bool:
     )
 
 
+def _chest_spots_for_item(item, quest) -> tuple:
+    """The chest spawns that hold `item`, in catalogue order."""
+    return tuple(
+        spot
+        for use in quest.uses
+        if use.verb == classquest.USE_OBJECT and use.item == item
+        for spot in use.spots
+    )
+
+
+def _spots_are_instance_only(member, spots) -> bool:
+    """True when every spot sits in a classic instance map and not on the
+    quester's own map."""
+    return all(
+        int(spot.map_id) in classic.CLASSIC_INSTANCE_MAPS
+        and not (member.map_id is not None and int(spot.map_id) == int(member.map_id))
+        for spot in spots
+    )
+
+
+def _item_is_instance_only_chest(member, item, quest) -> bool:
+    """True when `item` comes only from chests that all sit in classic
+    instance maps outside the quester's routes."""
+    if item in quest.droppable or item in quest.provided or item in quest.held:
+        return False
+    spots = _chest_spots_for_item(item, quest)
+    if not spots:
+        return False
+    if any(use.item == item and use.verb != classquest.USE_OBJECT for use in quest.uses):
+        return False
+    return _spots_are_instance_only(member, spots)
+
+
 def _only_instance_chest_source(member, qid: int, quest) -> bool:
     """Whether each unfinished item objective has chest spawns only in classic
     instance maps outside the quester's routes."""
@@ -1814,31 +1847,9 @@ def _only_instance_chest_source(member, qid: int, quest) -> bool:
     ]
     if not missing:
         return False
-    for item in missing:
-        if item in quest.droppable or item in quest.provided or item in quest.held:
-            return False
-        spots = [
-            spot
-            for use in quest.uses
-            if use.verb == classquest.USE_OBJECT and use.item == item
-            for spot in use.spots
-        ]
-        if (
-            not spots
-            or any(
-                use.item == item and use.verb != classquest.USE_OBJECT
-                for use in quest.uses
-            )
-            or any(
-                int(spot.map_id) not in classic.CLASSIC_INSTANCE_MAPS
-                or (
-                    member.map_id is not None and int(spot.map_id) == int(member.map_id)
-                )
-                for spot in spots
-            )
-        ):
-            return False
-    return True
+    return all(
+        _item_is_instance_only_chest(member, item, quest) for item in missing
+    )
 
 
 def explain_instance_stalls(cat, member, held) -> dict:
