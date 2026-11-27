@@ -997,7 +997,7 @@ class Quest:
     # (creature entry, count) to kill, and (item entry, count) to collect.
     kills: tuple = ()
     items: tuple = ()
-    # A required gameobject (a negative RequiredNpcOrGo), which no verb uses.
+    # A required gameobject objective (a negative RequiredNpcOrGo).
     objects: tuple = ()
     starters: tuple = ()
     enders: tuple = ()

@@ -44,10 +44,10 @@ WHAT A QUESTER DOES NEXT (`next_move`), one move a pass, in this order:
   2. hand in a complete quest, the nearest turn-in NPC first;
   3. take a quest in reach while the log has a free slot (questlog.LOG_SLOTS),
      the nearest quest giver first;
-  4. work a quest it holds: open the nearest chest that holds an item it still
-     lacks (`chest_spots`, the module's `use-gameobject` row), or walk to the
-     nearest objective spawn at most
-     classquest.OVERLEVEL_MAX levels over it and hunt its creature there with
+   4. work a quest it holds: open the nearest chest that holds an item it still
+      lacks, use the nearest gameobject a short objective names, or walk to the
+      nearest objective spawn at most
+      classquest.OVERLEVEL_MAX levels over it and hunt its creature there with
      the module's `hunt-spawn` row, as a class hunt does (`step_for`);
   5. with nothing left in reach, go to the next zone (`next_zone`): the zone
      whose band (levelroute.bands, the catalogue's own levels) is lowest of the
@@ -367,15 +367,15 @@ KILLING_HUNT = "killing"
 NO_CREATURE_IN_REACH = "no living creature of the entry within reach"
 FRUITLESS_HUNTS = 3
 FRUITLESS_MINUTES = 120
-# A chest use the module read back as `unchanged` (the cast went off and
+# A gameobject use the module read back as `unchanged` (the cast went off and
 # nothing reached the quest log) was written again every pass: eight rows in
 # forty-five minutes for one quester at one chest, each a walk back to it.
-# CHEST_UNCHANGED_USES such rows inside CHEST_UNCHANGED_MINUTES, with no use
-# that took since, leave that chest for that long, after which it is tried
-# once more. A quest with no other way to its item then runs its stall clock,
-# as a quest nobody can work does.
-CHEST_UNCHANGED_USES = 3
-CHEST_UNCHANGED_MINUTES = 90
+# OBJECT_UNCHANGED_USES such rows inside OBJECT_UNCHANGED_MINUTES, with no use
+# that took since, leave that gameobject for that long, after which it is tried
+# once more. A quest with no other way to its objective then runs its stall
+# clock, as a quest nobody can work does.
+OBJECT_UNCHANGED_USES = 3
+OBJECT_UNCHANGED_MINUTES = 90
 _USE_ROW = re.compile(r"^use-gameobject (\d+)\s*$")
 # A hand-in the world refused FAILS_BEFORE_BROKEN times is held this long after
 # its last refusal before it is tried once more, the hold doubling with each
@@ -630,16 +630,16 @@ def members_from_rows(rows, log_rows, rewarded_rows, reputation_rows=None) -> li
 
 
 def _logs_by_guid(log_rows, rewarded_rows) -> tuple:
-    """Status, total, creature and item objective progress, and rewards by guid."""
+    """Status, total, objective and item counters, and rewards by guid."""
     log_by, progress_by, objectives_by, item_objectives_by, done_by = {}, {}, {}, {}, {}
     for r in log_rows or ():
         guid, qid = _int(r.get("guid")), _int(r.get("quest"))
         log_by.setdefault(guid, {})[qid] = _int(r.get("status"))
         progress_by.setdefault(guid, {})[qid] = _int(r.get("progress"))
         objectives = {
-            _int(r.get("npc%d" % i)): _int(r.get("mobcount%d" % i))
+            abs(_int(r.get("npc%d" % i))): _int(r.get("mobcount%d" % i))
             for i in range(1, 5)
-            if _int(r.get("npc%d" % i)) > 0
+            if _int(r.get("npc%d" % i))
         }
         objectives_by.setdefault(guid, {})[qid] = objectives
         item_objectives = {
@@ -754,8 +754,8 @@ class Facts:
 
 @dataclass(frozen=True)
 class ObjectSpawn(classquest.Spawn):
-    """A gameobject's spawn a quest is handed in at: its walk is a walk to a
-    gameobject spawn, not a creature's (#1594)."""
+    """A gameobject spawn a quest uses or is handed in at: its walk is a walk
+    to a gameobject spawn, not a creature's (#1594)."""
 
 
 @dataclass(frozen=True)
@@ -802,8 +802,9 @@ def catalogue(
     giver is spawned on a classic continent, or is one of the starting lands.
 
     `chest_rows` (classquest.CHEST_SQL's) and `object_rows` (OBJECT_SPAWNS_SQL's)
-    name the chests that hold a required item no creature drops and where they
-    stand: each such quest carries a USE_OBJECT use (`chest_spots`).
+    name the chests that hold a required item no creature drops, the gameobjects
+    a negative RequiredNpcOrGo names, and where they stand: each such quest
+    carries a USE_OBJECT use (`object_spots`).
     """
     rows = list(quest_rows or ())
     book = classquest.build(
@@ -1224,12 +1225,12 @@ def fruitless_entries(name, tried) -> frozenset:
     return frozenset(e for e, n in empty.items() if n >= FRUITLESS_HUNTS)
 
 
-def unchanged_chest_spawns(cat: Catalogue, name, tried) -> frozenset:
-    """The gameobject spawn ids of the chests this quester leaves for now:
-    CHEST_UNCHANGED_USES of its `use-gameobject` rows at one entry ended
-    `unchanged` inside CHEST_UNCHANGED_MINUTES, with no use of the entry that
+def unchanged_object_spawns(cat: Catalogue, name, tried) -> frozenset:
+    """The gameobject spawn ids this quester leaves for now:
+    OBJECT_UNCHANGED_USES of its `use-gameobject` rows at one entry ended
+    `unchanged` inside OBJECT_UNCHANGED_MINUTES, with no use of the entry that
     went through since. A use refused before the cast (moving, too far, held)
-    says nothing about the chest and does not count."""
+    says nothing about the gameobject and does not count."""
     newest_taken = {}
     for a in tried or ():
         if a.name == name and a.use_entry and a.status in _WENT:
@@ -1240,18 +1241,19 @@ def unchanged_chest_spawns(cat: Catalogue, name, tried) -> frozenset:
     for a in tried or ():
         if a.name != name or not a.use_entry or a.status != UNCHANGED:
             continue
-        if a.age_minutes < CHEST_UNCHANGED_MINUTES and a.age_minutes < newest_taken.get(
-            a.use_entry, 10**9
+        if (
+            a.age_minutes < OBJECT_UNCHANGED_MINUTES
+            and a.age_minutes < newest_taken.get(a.use_entry, 10**9)
         ):
             empty[a.use_entry] = empty.get(a.use_entry, 0) + 1
-    entries = {e for e, n in empty.items() if n >= CHEST_UNCHANGED_USES}
+    entries = {e for e, n in empty.items() if n >= OBJECT_UNCHANGED_USES}
     if not entries:
         return frozenset()
     return frozenset(
         spot.guid
         for quest in cat.book.quests.values()
         for use in quest.uses
-        if use.verb == classquest.USE_OBJECT and use.item
+        if use.verb == classquest.USE_OBJECT
         for spot in use.spots
         if int(spot.entry) in entries
     )
@@ -1259,9 +1261,9 @@ def unchanged_chest_spawns(cat: Catalogue, name, tried) -> frozenset:
 
 def object_spawns_left(cat: Catalogue, name, tried) -> frozenset:
     """The gameobject spawn ids this quester leaves for now: the ones
-    `left_spawns` names, and the chests that opened nothing
-    (`unchanged_chest_spawns`)."""
-    return left_spawns(name, tried, OBJECT_KIND) | unchanged_chest_spawns(
+    `left_spawns` names, and the gameobjects that used nothing
+    (`unchanged_object_spawns`)."""
+    return left_spawns(name, tried, OBJECT_KIND) | unchanged_object_spawns(
         cat, name, tried
     )
 
@@ -1620,7 +1622,11 @@ def open_to(cat: Catalogue, member, quest_id, broken=frozenset()) -> bool:
         return False
     if facts.provided_item and member.free_slots is not None and member.free_slots < 1:
         return False
-    if (quest.kills or quest.items) and not quest.fields and not _chested(quest):
+    if (
+        (quest.kills or quest.items or quest.objects)
+        and not quest.fields
+        and not _object_sourced(quest)
+    ):
         return False
     return not _exclusive_closed(cat, member, quest)
 
@@ -1729,8 +1735,8 @@ def _unhuntable(
     (`_hunt`'s own choice: a solo field within its level, on its map, not one
     it leaves for now, or on a map `_hunt` crosses to: the other classic
     continent, or the starting isles its side's boat reaches, which
-    classquest.cross_map knows and far_map does not) and no chest to open
-    for an item of it (`chest_spots`).
+    classquest.cross_map knows and far_map does not) and no gameobject to use
+    for a short item or object objective (`object_spots`).
 
     A quest whose objective spawns stand on the quester's map but every one
     over its level is not unhuntable: it waits for the quester's levels, so
@@ -1742,7 +1748,7 @@ def _unhuntable(
     quest = cat.quest(qid)
     if quest is None:
         return True
-    if _nearest_chest(member, qid, quest, object_left) is not None:
+    if _nearest_object(member, qid, quest, object_left) is not None:
         return False
     solo = _solo_targets(member, qid, quest, idle)
     fields = classquest.within_level(member, solo)
@@ -1772,7 +1778,7 @@ def _awaiting_levels(cat, member, qid, left, object_left, idle) -> bool:
     level, but one that stands on its map just over it: the quest waits for
     the quester's levels, so no clock runs for it (`_unhuntable`)."""
     quest = cat.quest(qid)
-    if quest is None or _nearest_chest(member, qid, quest, object_left) is not None:
+    if quest is None or _nearest_object(member, qid, quest, object_left) is not None:
         return False
     solo = _solo_targets(member, qid, quest, idle)
     fields = classquest.within_level(member, solo)
@@ -1788,31 +1794,39 @@ def _over_level(spawns, within) -> tuple:
     return tuple(s for s in spawns if s.guid not in kept)
 
 
-def _chested(quest) -> bool:
-    """True when a spawned chest holds an item the quest asks for."""
-    return any(
-        u.verb == classquest.USE_OBJECT and u.item and u.spots for u in quest.uses
-    )
+def _object_sourced(quest) -> bool:
+    """True when a spawned gameobject supplies an item or objective."""
+    return any(u.verb == classquest.USE_OBJECT and u.spots for u in quest.uses)
 
 
-def chest_spots(member, qid: int, quest: classquest.Quest) -> tuple:
-    """(Use, gameobject spawn) of every chest that holds an item of the quest the
-    quester has not yet got in full: its own counter for that item is short.
+def object_spots(member, qid: int, quest: classquest.Quest) -> tuple:
+    """(Use, gameobject spawn) of each spawned gameobject that supplies a short
+    item or gameobject objective of the quest.
 
-    AN ITEM ONLY A CHEST HOLDS WAS NEVER WORKED (2026-11-15). Furlbrow's Pocket
+    An item only a chest holds was never worked (2026-11-15). Furlbrow's Pocket
     Watch (quest 64) is looted from a wardrobe, the Hinterlands Honey Ripple (77)
-    from a supply crate and each Fragment of Uncovering the Past (299) from a
-    buried relic: no creature drops any of them, so the quest had no objective
+    from a supply crate and each Fragment of Uncovering the Past (299) from relics
+    and loose soil: no creature drops any of them, so the quest had no objective
     spawn to hunt and every quester that took one stood still for two hours and
-    filed it broken. The class quests already click a chest for such an item
-    (`use-gameobject`, classquest.USE_OBJECT); the questers now do the same."""
-    progress = member.quest_item_objectives.get(qid, {})
+    filed it broken. A negative RequiredNpcOrGo is the same kind of work: the
+    class quests already click its gameobject (`use-gameobject`,
+    classquest.USE_OBJECT); the questers now do the same."""
+    item_progress = member.quest_item_objectives.get(qid, {})
+    objective_progress = member.quest_objectives.get(qid, {})
     wanted = dict(quest.items)
+    short_objects = {
+        entry
+        for entry, count in quest.objects
+        if int(objective_progress.get(entry, 0)) < count
+    }
     out = []
     for use in quest.uses:
-        if use.verb != classquest.USE_OBJECT or not use.item:
+        if use.verb != classquest.USE_OBJECT:
             continue
-        if int(progress.get(use.item, 0)) >= wanted.get(use.item, use.count):
+        if use.item:
+            if int(item_progress.get(use.item, 0)) >= wanted.get(use.item, use.count):
+                continue
+        elif not any(entry in short_objects for entry in use.targets):
             continue
         out.extend((use, _object_spawn(s)) for s in use.spots)
     return tuple(out)
@@ -1828,11 +1842,11 @@ def _object_spawn(spot) -> ObjectSpawn:
     )
 
 
-def _nearest_chest(member, qid, quest, object_left=frozenset()):
-    """(Use, spawn) of the nearest chest the quester can walk to, or None."""
+def _nearest_object(member, qid, quest, object_left=frozenset()):
+    """(Use, spawn) of the nearest gameobject the quester can walk to, or None."""
     here = [
         (use, spot)
-        for use, spot in chest_spots(member, qid, quest)
+        for use, spot in object_spots(member, qid, quest)
         if spot.guid not in object_left
         and member.placed
         and int(spot.map_id) == int(member.map_id)
@@ -2038,10 +2052,13 @@ def _broken_reason(
         return NO_OBJECTIVES
     if played < STALL_SECONDS or complete:
         return ""
-    # A chest that holds the item is a source: its quest is worked, not unsourced.
-    # A vendor-only item is unsourced whatever the quest's other objectives are.
+    # A gameobject that supplies the item or objective is a source: its quest
+    # is worked, not unsourced. A vendor-only item is unsourced whatever the
+    # quest's other objectives are.
     unsourced = bool(vendor_item) or (
-        (quest.kills or quest.items) and not quest.fields and not _chested(quest)
+        (quest.kills or quest.items or quest.objects)
+        and not quest.fields
+        and not _object_sourced(quest)
     )
     return STALLED_UNSOURCED if unsourced else STALLED
 
@@ -2431,18 +2448,18 @@ def _hunt(
 ):
     """The hunt at the nearest objective spawn within the quester's level of
     an incomplete quest it holds, or a crossing to one on the other classic
-    continent. A nearby hunt always takes priority over a crossing. A chest
-    that holds an item it still lacks is a USE move at the chest, and the
-    nearest of the hunts and the chests is the move."""
+    continent. A nearby hunt always takes priority over a crossing. A spawned
+    gameobject that supplies a short item or object objective is a USE move,
+    and the nearest of the hunts and the gameobjects is the move."""
     hunts = []
     crossings = []
-    chests = []
+    objects = []
     for qid, quest in _held(cat, member, STATUS_INCOMPLETE, skip):
         if _quest_complete(quest, STATUS_INCOMPLETE, member.quest_progress.get(qid, 0)):
             continue
-        chest = _nearest_chest(member, qid, quest, object_left)
-        if chest is not None:
-            chests.append((_yards(member, chest[1]), qid, quest, chest))
+        gameobject = _nearest_object(member, qid, quest, object_left)
+        if gameobject is not None:
+            objects.append((_yards(member, gameobject[1]), qid, quest, gameobject))
         fields = tuple(
             spot
             for spot in _held_objective_fields(member, qid, quest)
@@ -2461,13 +2478,14 @@ def _hunt(
         to_map = classquest.cross_map(member, fields)
         if to_map >= 0:
             crossings.append((qid, quest, to_map))
-    if chests and (
-        not hunts or min(chests, key=_by_yards)[0] <= min(hunts, key=_by_yards)[0]
+    if objects and (
+        not hunts or min(objects, key=_by_yards)[0] <= min(hunts, key=_by_yards)[0]
     ):
-        _d, _q, quest, (use, spot) = min(chests, key=_by_yards)
-        said = "%s opens %s for %s" % (
+        _d, _q, quest, (use, spot) = min(objects, key=_by_yards)
+        said = "%s %s %s for %s" % (
             member.name,
-            spot.name or "a chest",
+            "opens" if use.item else "uses",
+            spot.name or ("a chest" if use.item else "its objective"),
             quest.title,
         )
         move = _move(classquest.USE, member, quest, spot, said)
@@ -2525,7 +2543,7 @@ def stalled_holds_with_actionable_objectives(
         )
         if (
             _nearest(member, fields, left) is not None
-            or _nearest_chest(member, qid, quest, object_left) is not None
+            or _nearest_object(member, qid, quest, object_left) is not None
         ):
             retry.add(qid)
             continue
@@ -2608,8 +2626,9 @@ def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
     source = guildjobs.source_for(ACTION, member.name)
     walk = _walk_row(member, move, cap)
     if move.kind == classquest.USE:
-        # A chest: the walk to it, then the module's `use-gameobject` row, which
-        # opens it with the spell its lock names (the bridge follows the answer).
+        # A gameobject: the walk to it, then the module's `use-gameobject` row,
+        # which opens a chest or uses an objective with the spell its lock names
+        # (the bridge follows the answer).
         row = guildcorps.Row(
             "quest", classquest.use_command(move.use, move.spot), "", source
         )
