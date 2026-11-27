@@ -333,7 +333,7 @@ alias, or are unqualified when it is the only table. A run with no core encounte
 evidence is INVALID.
 
 Use a typed `encounter` end precondition for the supported bosses in Blackrock
-Depths and Molten Core. Its alias must identify the decree's only arranged
+Depths, Molten Core and Razorfen Downs. Its alias must identify the decree's only arranged
 instance, on the boss's map and bound to a member of the cast. The judge reads
 the same instance save before any act and again at the end. A missing or malformed
 save or a selected encounter that is already DONE before the first act makes
@@ -348,6 +348,11 @@ in that instance.
   Ragnaros's death.
 - `encounter: {instance: mc, boss: "Any Molten Core boss"}` accepts any of the ten
   Molten Core encounters on an instance where all ten began incomplete.
+- `encounter: {instance: rfd, boss: "Any Razorfen Downs boss"}` reads the
+  instance's `completedEncounters` mask instead of its save, because the Razorfen
+  Downs instance script keeps no boss states. The core sets one bit of that mask
+  per DungeonEncounter.dbc credit, and which bit is which boss is not known here,
+  so any bit counts. The mask must start at zero.
 
 The judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`; without them it prints an INVALID verdict and exits 2,
