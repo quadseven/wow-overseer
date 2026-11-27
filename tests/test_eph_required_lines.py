@@ -14,8 +14,9 @@ is listed here beside the format string of each call that writes its line, and:
 - the pattern must match the line as the source formats it, and must not match
   the sibling line the same code writes when the thing did not happen.
 
-The pinned sources are the mod-overseer submodule and the test copies of the
-playerbots patches under patches/. Lines of the bridge, of the core and of the
+The pinned sources are the mod-overseer submodule, the immutable raid fix in
+its history, and the test copies of the playerbots patches under patches/.
+Lines of the bridge, of the core and of the
 dungeon module are not in this repo or not in the log the judge reads; the
 decrees whose criteria rest on them are listed in STILL_NARROWED.
 """
@@ -74,7 +75,7 @@ def patch_added_text(text):
 class Line(NamedTuple):
     """One logging call: where it is, what it formats, and sample arguments."""
 
-    source: str  # "module" or "reflect-patch"
+    source: str  # "module", "raid-door-fix", or "reflect-patch"
     level: str
     logger: str
     fmt: str
@@ -102,6 +103,7 @@ class Pin(NamedTuple):
 
 
 SHIP = "Ship (The Lady Mehley)"
+RAID_DOOR = "raid-under-quorum-at-door"
 
 # (decree id, observation name) -> the code that writes the line.
 PINS = {
@@ -116,14 +118,16 @@ PINS = {
             ),
         ),
     ),
-    ("raid-under-quorum-at-door", "the-shortfall-was-logged"): Pin(
+    (RAID_DOOR, "the-shortfall-was-logged"): Pin(
         writers=(
-            module(
-                "INFO",
-                "overseer: raid run for family '{}' released at {} - {}",
-                "Grug",
-                "ASSEMBLE",
-                "the raid never reached a quorum at the door; the order ends",
+            # AI-REVIEW 2026-11-27 [nemotron-3.5-super-vl] 90f35a03 (Elder, PR #3344):
+            # Verify the dedicated quorum warning in the decree's exact fix.
+            Line(
+                "raid-door-fix",
+                "WARN",
+                "module.overseer",
+                "overseer: raid run for family '{}' ends the order - no quorum at the door ({})",
+                ("Grug", "5 of 5, short 31 seats, 3 tanks, 8 healers"),
             ),
         ),
         ignores=(
@@ -607,12 +611,23 @@ class RequiredLinesTest(unittest.TestCase):
 
     def test_each_pinned_wording_is_what_the_source_logs(self):
         for key, line in self.lines():
+            if line.source == "raid-door-fix":
+                continue  # checked against the exact fix, not the test checkout
             self.assertIn(
                 (line.level, line.logger, line.fmt),
                 self.calls[line.source],
                 f"{key}: the {line.source} source no longer logs this at {line.level} "
                 f"on {line.logger}; read the new wording and fix the decree's pattern",
             )
+
+    def test_raid_door_warning_is_emitted_by_the_quorum_end_decision(self):
+        raid = loads((DECREE_DIR / f"{RAID_DOOR}.yaml").read_text(encoding="utf-8"))
+        source = modsource.read_revision(raid["fix"]["commit"], modsource.MODULE)
+        after_quorum_end = source.partition("if (step.quorumEnds)")[2]
+        block, release, _ = after_quorum_end.partition("if (step.release)")
+        self.assertTrue(release, "the quorum-end block no longer precedes raid release")
+        (line,) = PINS[(RAID_DOOR, "the-shortfall-was-logged")].writers
+        self.assertIn((line.level, line.logger, line.fmt), log_calls(block))
 
     def test_each_writer_reaches_the_log_the_judge_reads(self):
         appender = "EphModule"

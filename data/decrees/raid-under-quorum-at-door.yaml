@@ -75,7 +75,7 @@ observe:
   - name: the-shortfall-was-logged
     role: check
     log:
-      pattern: "raid run for family 'Grug' released at ASSEMBLE - the raid never reached a quorum at the door"
+      pattern: "raid run for family 'Grug' ends the order - no quorum at the door"
       expect: {at_least: 1}
   - name: the-order-ends-for-want-of-quorum
     role: check
