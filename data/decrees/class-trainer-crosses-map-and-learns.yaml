@@ -1,56 +1,87 @@
-# A level 60 Druid cannot find a class trainer on the Eastern Kingdom map. Its
-# highest Regrowth rank is removed in the throwaway world, then the family runs
-# the quest drive so the training stop walks it to a trainer on another map.
-# The start check requires a funded Druid; otherwise the scenario is INVALID.
-# Scope: this checks the Regrowth rank and the cross-map class trainer walk, not
-# all classes or all travel routes.
+# Zork is a Tauren Druid in the Bonkers lineup. Booty Bay has a neutral sailing
+# route to Ratchet and the Kalimdor Druid trainers include Turak Runetotem.
+# Trainer 33 sells Regrowth rank 9 (9858) at level 60, requiring rank 8 (9857).
+# The spell is removed on this copy so the trainer can sell it; Zork's level,
+# prior ranks and purse come from the snapshot. The bridge stays off so only
+# the ordinary trainer command below can start this walk.
 # Fix: mod-overseer PR 1586.
 decree: v1
 id: class-trainer-crosses-map-and-learns
 proves:
-  - {repo: quadseven/mod-overseer, issue: 1480, criterion: "a funded level 60 Druid on a map without its class trainer crosses to another map, reaches a Druid trainer and learns Regrowth rank 10"}
+  - {repo: quadseven/mod-overseer, issue: 1480, criterion: "Live proof (after a roll): a member on a map without its class trainer walks to one and trains."}
 fix: {repo: quadseven/mod-overseer, commit: "fa16ae7af24e7f0f5fb861a08c565f3c22117f21"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
 duration: 3h
 cast:
-  - who: family:grug
-    set: {alive: true, at: {areatrigger: 1466}, spells_remove: [26980]}
-    ceiling: "only Regrowth rank 10 is removed; no levels, items, gold or gear granted"
-  - who: family:zug
-    set: {alive: true, at: {areatrigger: 1466}, spells_remove: [26980]}
-    ceiling: "only Regrowth rank 10 is removed; no levels, items, gold or gear granted"
-arrange:
-  - group: {members: family:grug, leader: Grug}
-  - group: {members: family:zug, leader: Zug}
+  - who: Zork
+    set: {alive: true, at: {creature: "Wharfmaster Lozgil"}, spells_remove: [9858]}
+    ceiling: "position and removal of Regrowth rank 9 only; no level, gold, gear or spell granted"
 act:
   - at: 0s
-    roster: {who: family:grug, job: "quest"}
-  - at: 0s
-    roster: {who: family:zug, job: "quest"}
+    command: {who: Zork, kind: cast, text: "walk-to-trainer class"}
 observe:
-  - name: a-funded-level-60-druid-is-present
+  - name: zork-is-online
+    role: precondition
+    when: start
+    online: cast
+  - name: zork-starts-at-the-booty-bay-dock
     role: precondition
     when: start
     sql: |
-      SELECT COUNT(*) FROM overseer_snapshot s JOIN characters c ON c.guid = s.guid
-      WHERE s.guid IN (@cast) AND s.map_id = 0 AND c.class = 11 AND c.level >= 60
-        AND c.money >= (SELECT MAX(MoneyCost) FROM acore_world.trainer_spell WHERE SpellId = 26980)
-        AND EXISTS (SELECT 1 FROM character_spell cs WHERE cs.guid = c.guid AND cs.spell = 9858)
-    expect: {scalar: ">= 1"}
-  - name: the-target-rank-starts-missing
+      SELECT COUNT(*) FROM overseer_snapshot s
+      JOIN acore_world.creature dock ON dock.guid = 184 AND dock.map = s.map_id
+      WHERE s.guid = @Zork AND s.map_id = 0 AND s.health > 0 AND s.in_combat = 0
+        AND s.updated_at >= DATE_SUB(@t0, INTERVAL 30 SECOND)
+        AND POW(s.pos_x - dock.position_x, 2) + POW(s.pos_y - dock.position_y, 2) <= 900
+    expect: {scalar: "= 1"}
+  # Earlier class ranks are bought first. Require enough existing gold to cover
+  # all unknown eligible ranks at list price so they cannot crowd out rank 9.
+  - name: zork-can-afford-the-target-rank-and-knows-its-prerequisite
     role: precondition
     when: start
     sql: |
-      SELECT COUNT(*) FROM character_spell WHERE guid IN (@cast) AND spell = 26980
-    expect: {scalar: "= 0"}
-  - name: a-cross-map-class-trainer-walk-was-issued
-    role: check
-    log: {pattern: "class trainer walk .* crosses toward trainer spawn .* on map 1", expect: {at_least: 1}}
-  - name: a-druid-learned-regrowth-rank-10
+      SELECT COUNT(*) FROM characters c
+      JOIN acore_world.trainer_spell t ON t.TrainerId = 33 AND t.SpellId = 9858
+      WHERE c.guid = @Zork AND c.race = 6 AND c.class = 11
+        AND c.level >= t.ReqLevel
+        AND EXISTS (
+          SELECT 1 FROM character_spell prior WHERE prior.guid = c.guid AND prior.spell = t.ReqAbility1
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM character_spell known WHERE known.guid = c.guid AND known.spell = t.SpellId
+        )
+        AND c.money >= (
+          SELECT SUM(due.MoneyCost) FROM acore_world.trainer_spell due
+          WHERE due.TrainerId = t.TrainerId AND due.ReqLevel <= c.level
+            AND NOT EXISTS (
+              SELECT 1 FROM character_spell learned WHERE learned.guid = c.guid AND learned.spell = due.SpellId
+            )
+        )
+    expect: {scalar: "= 1"}
+  # Both arms must reach the trainer verb. An offline or unprocessed command
+  # gives no evidence about whether an eligible trainer can be reached.
+  # The pre-fix DoWalk writes NoClassSpellTrainerOnMap to the row's detail.
+  - name: zorks-trainer-command-reached-the-class-trainer-decision
+    role: precondition
+    when: end
+    sql: |
+      SELECT COUNT(*) FROM overseer_command
+      WHERE target_name = 'Zork' AND source = 'eph-judge' AND kind = 'cast'
+        AND command = 'walk-to-trainer class' AND created_at >= @t0
+        AND (status = 'applied' OR (status = 'error'
+          AND detail = 'no trainer of this character''s class on this map has a class spell to teach it now'))
+    expect: {scalar: "= 1"}
+  # Corroborate the crossing with the class trainer walk log. Grade the
+  # completed command's learned spell and map so a missing log cannot fail an arm.
+  - name: zorks-trainer-order-learned-regrowth-rank-nine-on-kalimdor
     role: check
     when: end
     sql: |
-      SELECT COUNT(*) FROM character_spell cs JOIN characters c ON c.guid = cs.guid
-      WHERE cs.guid IN (@cast) AND c.class = 11 AND cs.spell = 26980
-    expect: {scalar: ">= 1"}
+      SELECT COUNT(*) FROM character_spell s
+      JOIN overseer_command w ON w.target_name = 'Zork' AND w.source = 'eph-judge'
+        AND w.kind = 'cast' AND w.command = 'walk-to-trainer class' AND w.created_at >= @t0
+      WHERE s.guid = @Zork AND s.spell = 9858 AND w.status = 'applied'
+        AND JSON_CONTAINS(w.result, '1', '$.map')
+        AND JSON_CONTAINS(w.result, '9858', '$.taught')
+    expect: {scalar: "= 1"}
