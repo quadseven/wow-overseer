@@ -87,6 +87,10 @@ class Dropped(unittest.TestCase):
         self.assertEqual(controlauto.dropped_keys(None, "A = 1\n"), ["A"])
         self.assertEqual(controlauto.dropped_keys("A = 1\n", None), [])
 
+    def test_dist_keys_follow_seed_conf_single_comment_grammar(self):
+        dist = "  A = 0\n # B = 0\n // C = 0\n ## D = 0\n # E is documented\n"
+        self.assertEqual(controlauto.dist_keys(dist), {"A", "B"})
+
 
 if __name__ == "__main__":
     unittest.main()
