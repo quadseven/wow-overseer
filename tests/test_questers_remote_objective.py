@@ -303,3 +303,128 @@ class HeldQuestOnTheIslesRoute(unittest.TestCase):
             [(b.quest, b.reason) for b in plan.broken],
             [(182, questers.STALLED)],
         )
+
+
+class Quest222WorgenInTheWoods(unittest.TestCase):
+    def _catalogue(self):
+        worgen = quest(
+            222,
+            DUSKWOOD,
+            31,
+            min_level=23,
+            prev=221,
+            title="Worgen in the Woods",
+        )
+        worgen.update(npc1=206, npc_count1=8, npc2=920, npc_count2=8)
+        spawns = [
+            spawn(
+                12000 + i,
+                206,
+                5000.0 + i * 10,
+                0.0,
+                level=31,
+                map_id=0,
+                name="Nightbane Vile Fang",
+            )
+            for i in range(21)
+        ] + [
+            spawn(
+                12100 + i,
+                920,
+                6000.0 + i * 10,
+                0.0,
+                level=31,
+                map_id=0,
+                name="Nightbane Tainted One",
+            )
+            for i in range(14)
+        ]
+        # Synthetic giver and ender rows mirror questers.GIVERS_SQL,
+        # questers.STARTERS_SQL, and questers.ENDERS_SQL; their live locations
+        # are not in the brief and are not asserted here.
+        return questers.catalogue(
+            [worgen],
+            [
+                giver(222, "start", 8002, 802, 0, 0),
+                giver(222, "end", 8002, 802, 400, 0),
+            ],
+            spawns,
+            [],
+            [{"quest": 222, "kind": "creature", "entry": 802}],
+            [{"quest": 222, "kind": "creature", "entry": 802}],
+        )
+
+    def test_quester_hunts_both_objectives_and_can_hand_in_quest_222(self):
+        # The quest and counters mirror questers.QUESTS_SQL and questers.LOG_SQL;
+        # creature rows mirror classquest.SPAWNS_SQL. The brief gives 21 and 14
+        # total spawns but no spawn maps or coordinates, so this fixture uses
+        # synthetic same-map placements to prove both objective entries are
+        # pursued without claiming those placements are live world facts.
+        cat = self._catalogue()
+        self.assertEqual(cat.facts[222].prev, 221)
+        self.assertEqual(cat.quest(222).kills, ((206, 8), (920, 8)))
+        self.assertEqual(
+            [
+                sum(s.entry == entry for s in cat.quest(222).fields)
+                for entry in (206, 920)
+            ],
+            [21, 14],
+        )
+        member = mirra(
+            name="Quester A",
+            level=31,
+            map_id=0,
+            zone_id=DUSKWOOD,
+            x=0.0,
+            y=0.0,
+            quest_log={222: questers.STATUS_INCOMPLETE},
+            quest_progress={222: 0},
+            quest_objectives={222: {206: 0, 920: 0}},
+        )
+        clock = questers.Clock()
+        hunted = {206: 0, 920: 0}
+
+        for _ in range(16):
+            move = questers.plan(cat, member, clock, 0.0).move
+            self.assertEqual((move.kind, move.quest), (classquest.HUNT, 222))
+            entry = move.spot.entry
+            self.assertIn(entry, hunted)
+            hunted[entry] += 1
+            objectives = dict(member.quest_objectives[222])
+            objectives[entry] += 1
+            member = questers.Member(
+                **{
+                    **member.__dict__,
+                    "quest_objectives": {222: objectives},
+                    "quest_progress": {222: sum(objectives.values())},
+                }
+            )
+
+        move = questers.plan(cat, member, clock, 0.0).move
+        self.assertEqual(hunted, {206: 8, 920: 8})
+        self.assertEqual((move.kind, move.quest), (classquest.TURN_IN, 222))
+
+    def test_already_in_log_refusals_do_not_break_quest_222_or_block_a_new_take(self):
+        cat = self._catalogue()
+        member = mirra(
+            name="Quester A",
+            level=31,
+            map_id=0,
+            zone_id=DUSKWOOD,
+            quests_done=frozenset({221}),
+        )
+        tried = [
+            questers.Attempt(
+                "Quester A",
+                "take quest:222",
+                "error",
+                reason="already in the quest log",
+                age_minutes=minute,
+            )
+            for minute in (20, 10, 1)
+        ]
+
+        plan = questers.plan(cat, member, questers.Clock(), 0.0, tried=tried)
+
+        self.assertEqual(plan.broken, ())
+        self.assertEqual((plan.move.kind, plan.move.quest), (classquest.TAKE, 222))

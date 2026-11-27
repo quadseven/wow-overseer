@@ -91,6 +91,12 @@ SCRIPTED_EVENT_NOTE = (
 # QuestErrandRefusal. The module uses different reasons for an object
 # starter and for a quest without a starter relation.
 NO_GIVER_IN_REACH = "the quest giver would not give it: no giver of that quest in reach"
+ALREADY_IN_LOG_REFUSAL = "already in the quest log"
+ALREADY_IN_LOG_NOTE = (
+    "The take refusal records that the quest was already in the character's "
+    "quest log at the time. It is a log-state observation, not evidence that "
+    "the quest's objectives cannot be completed."
+)
 TICKET_SQL = (
     "SELECT ticket FROM overseer_quest_ledger "
     "WHERE quest = %s AND ticket IS NOT NULL ORDER BY ticket DESC LIMIT 1"
@@ -339,11 +345,13 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
     ]
     lines.extend(_world_rows(info))
     no_giver_in_reach = False
+    already_in_log = False
     scripted_event = False
     for row in rows:
         name = str(row.get("character_name") or "")
-        reason = row.get("reason") or "no reason recorded"
+        reason = str(row.get("reason") or "no reason recorded")
         no_giver_in_reach |= reason == NO_GIVER_IN_REACH
+        already_in_log |= reason.endswith(": " + ALREADY_IN_LOG_REFUSAL)
         scripted_event |= reason == SCRIPTED_EVENT_REASON
         lines += [
             "- Quester: %s (%s)" % (name, party_of(name)),
@@ -365,6 +373,8 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
             "the stored rows do not distinguish a missing, distant, dead, or otherwise "
             "unavailable creature.",
         ]
+    if already_in_log:
+        lines += ["", ALREADY_IN_LOG_NOTE]
     lines += [
         "",
         "## Acceptance criteria",
