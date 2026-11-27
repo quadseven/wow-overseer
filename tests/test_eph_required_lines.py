@@ -489,12 +489,14 @@ def shipped_decrees():
 
 
 def bounded_checks():
-    """(decree id, observation name) -> the log block, for every at_least or at_most."""
+    """Log blocks for bounds that need an emitter, including scenario witnesses."""
     found = {}
     for _path, decree in shipped_decrees():
         for o in decree.get("observe") or []:
             expect = (o.get("log") or {}).get("expect") or {}
-            if any(key in expect for key in lint.LOG_RANGE_KEYS):
+            if ("log" in o and o.get("role") == "precondition") or any(
+                key in expect for key in lint.LOG_RANGE_KEYS
+            ):
                 found[(decree["id"], o["name"])] = o["log"]
     return found
 
@@ -571,7 +573,7 @@ class RequiredLinesTest(unittest.TestCase):
         self.assertEqual(
             sorted(self.checks),
             sorted({*PINS, *((d, n) for (d, n) in self.checks if d in UNPINNED)}),
-            "a log check with at_least or at_most needs an entry in PINS naming "
+            "a log precondition or a check with at_least or at_most needs an entry in PINS naming "
             "the call that writes its line (and a stale entry must go)",
         )
         self.assertEqual(

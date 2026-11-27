@@ -1087,24 +1087,50 @@ def _observe_online(lint, path, o):
 
 def _observe_log(lint, path, o):
     lg = o["log"]
+    scenario = o.get("role") == "precondition"
+    if scenario:
+        lint.ensure(
+            o.get("when") == "end",
+            f"{path}.when",
+            "schema",
+            "a log precondition requires when: end",
+        )
+    else:
+        lint.ensure(
+            "when" not in o, f"{path}.when", "schema", "a log check has no when"
+        )
     lint.ensure(
-        o.get("role") == "check",
-        f"{path}.log",
+        "expect" not in o,
+        f"{path}.expect",
         "schema",
-        "a log assertion is a check, not a precondition",
-    )
-    lint.ensure(
-        "when" not in o, f"{path}.when", "schema", "a log assertion has no when"
+        "put a log expectation inside log.expect",
     )
     if not lint.keys(f"{path}.log", lg, ("pattern", "expect"), ("pattern", "expect")):
         return
-    try:
-        re.compile(lg["pattern"])
-    except (re.error, TypeError) as exc:
-        lint.err(f"{path}.log.pattern", "schema", f"bad regex: {exc}")
+    pattern = lg["pattern"]
+    if not isinstance(pattern, str):
+        lint.err(f"{path}.log.pattern", "schema", "must be a regex string")
+    else:
+        try:
+            regex = re.compile(pattern)
+        except re.error as exc:
+            lint.err(f"{path}.log.pattern", "schema", f"bad regex: {exc}")
+        else:
+            if scenario and (not pattern.strip() or regex.search("") is not None):
+                lint.err(
+                    f"{path}.log.pattern",
+                    "schema",
+                    "a log witness must match nonempty evidence",
+                )
     problem = log_bound_problem(lg["expect"])
     if problem:
         lint.err(f"{path}.log.expect", "schema", problem)
+    elif scenario and log_bound_range(lg["expect"])[0] == 0:
+        lint.err(
+            f"{path}.log.expect",
+            "schema",
+            "a log precondition must require at least one match",
+        )
 
 
 LOG_EXACT_KEYS = ("count", "exactly")

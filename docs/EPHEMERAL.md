@@ -277,19 +277,23 @@ bound on that count:
 - `{count: N}` or `{exactly: N}`: exactly N matching lines. `{count: 0}` forbids
   a line. Either key stands alone.
 - `{at_least: N}`: N or more matching lines, with N at least 1. This requires a
-  line: no match in the run's log is a violated check.
+  matching line in the run's log.
 - `{at_most: N}`: N or fewer matching lines.
 - `{at_least: N, at_most: M}`: a range, with N no greater than M.
 
-A check that requires or caps a line (`at_least` or `at_most`) is only as good as
-its pattern: a line no code writes fails every run when required and passes every
-run when capped. `tests/test_eph_required_lines.py` therefore lists each such
-check beside the format string of the call that writes its line, and fails when
-the pinned source no longer logs that wording, when the logger does not reach the
-log the judge reads, or when the pattern does not match the line as formatted. A
-new bounded check needs an entry there. The judge reads one file, so only a line
-of the module or of the bots can be required: the bridge's own log, and a core
-logger the world does not send to that file, are out of its reach.
+Use `role: precondition` and `when: end` for a log line that establishes the
+scenario happened in both arms. Its bound must require a positive match and
+its pattern must require nonempty text.
+An absent witness makes the arm INVALID even if an outcome check fails.
+Use `role: check` without `when` for logs that measure the outcome.
+
+A log precondition or a check that requires or caps a line (`at_least` or
+`at_most`) needs a pattern that the pinned build actually emits.
+`tests/test_eph_required_lines.py` lists these observations beside the format
+strings of their emitters. The guard fails if the pinned source changes the
+format, the emitter misses the logs that the judge reads, or the pattern misses
+the formatted line. A new witness or bounded check needs an entry there. The
+judge reads the worldserver log and, for `bridge: on`, the bridge sidecar log.
 
 Every bound is a whole number, zero or more; lint rejects a negative, missing or
 unknown bound, and a judge handed one anyway reports the check as an error
