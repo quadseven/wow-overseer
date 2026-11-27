@@ -36,8 +36,7 @@ GRANTS_ENABLED = "grants: enabled"
 MARKER_TABLE = "ephemeral_world"
 MARKER_SQL = "SELECT COUNT(*) FROM `acore_characters`.`ephemeral_world`"
 
-# The judge's one write: an operator's order, as the bridge writes it. A fixed
-# statement with bound parameters, so nothing in a decree can reshape it.
+# Queue a worldserver command as the bridge writes it, using bound parameters.
 COMMAND_TABLE = "overseer_command"
 COMMAND_COLUMNS = ("target_name", "command", "kind", "source")
 COMMAND_SQL = (
@@ -48,6 +47,32 @@ COMMAND_SOURCE = "eph-judge"
 COMMAND_KINDS = tuple(k for k in gamedata.COMMAND_KINDS if k != "gm")
 # The semicolon is the playerbots `go x;y` separator; the row is bound as a parameter, never spliced.
 _SAFE_COMMAND_TEXT = re.compile(r"^[A-Za-z0-9 _.,:;\-]{1,250}$")
+_CHARACTER_NAME = re.compile(r"[A-Z][a-z]{1,11}")
+RAID_ORDER_SOURCE = "eph-raid-order"
+_RAID_ORDER_COLUMNS = {
+    "overseer_roster": {"name", "family", "enabled", "lead"},
+    "overseer_dungeon_queue": {
+        "id", "family", "position", "keyword", "runs_wanted", "status", "source",
+    },
+}  # fmt: skip
+_RAID_ORDER_MARKER_LOCK = (
+    "SELECT 1 FROM `acore_characters`.`ephemeral_world` FOR UPDATE"
+)
+_RAID_ORDER_HEAD_LOCK = (
+    "SELECT `name`, `family` FROM `acore_characters`.`overseer_roster` "
+    "WHERE `enabled` = 1 AND TRIM(`family`) = %s "
+    "AND (`name` = %s OR `lead` = 1) FOR UPDATE"
+)
+_RAID_ORDER_CONFLICT = (
+    "SELECT `id` FROM `acore_characters`.`overseer_dungeon_queue` "
+    "WHERE (`family` = %s AND `status` IN ('queued', 'active')) "
+    "OR `source` = %s LIMIT 1 FOR UPDATE"
+)
+_RAID_ORDER_INSERT = (
+    "INSERT INTO `acore_characters`.`overseer_dungeon_queue` "
+    "(`family`, `position`, `keyword`, `runs_wanted`, `status`, `source`) "
+    "VALUES (%s, 1, %s, 1, 'queued', %s)"
+)
 
 
 class GuardError(SeedError):
@@ -145,11 +170,11 @@ class GuardedConnection:
             cur.close()
 
     def insert_command(self, target, kind, text, source=COMMAND_SOURCE):
-        """Queue one operator order (an overseer_command row); the judge's only write.
+        """Queue one operator order as an overseer_command row.
 
         Never kind `gm` (bot sessions ignore it), only a kind the live schema
         and the module know, and only plain text, so a decree cannot smuggle
-        anything else through the one path that writes.
+        anything else through this command path.
         """
         self._require_opened()
         if kind not in COMMAND_KINDS:
@@ -170,6 +195,53 @@ class GuardedConnection:
             raise
         finally:
             cur.close()
+
+    def enqueue_molten_core_order(self, family: str) -> int:
+        """Submit one default Molten Core order to the disposable bridge queue."""
+        self._require_opened()
+        if not isinstance(family, str) or _CHARACTER_NAME.fullmatch(family) is None:
+            raise GuardError("raid order needs a named family head")
+        for table, required in _RAID_ORDER_COLUMNS.items():
+            columns = self._schema.columns(table, "acore_characters") or ()
+            if not required.issubset(columns):
+                raise GuardError(f"{table} lacks a column required by the raid order")
+
+        try:
+            cur = self._conn.cursor()
+            try:
+                # All rehearsal orders share the marker lock, even across families.
+                cur.execute(_RAID_ORDER_MARKER_LOCK)
+                if len(cur.fetchall()) != 1:
+                    raise GuardError(
+                        "raid order needs exactly one ephemeral marker row"
+                    )
+                cur.execute(_RAID_ORDER_HEAD_LOCK, (family, family))
+                heads = cur.fetchall()
+                if len(heads) != 1 or heads[0] != (family, family):
+                    raise GuardError("raid order needs one enabled self-family head")
+                cur.execute(_RAID_ORDER_CONFLICT, (family, RAID_ORDER_SOURCE))
+                if cur.fetchone() is not None:
+                    raise GuardError(
+                        "raid order needs no pending family or prior rehearsal order"
+                    )
+                cur.execute(
+                    _RAID_ORDER_INSERT, (family, "moltencore", RAID_ORDER_SOURCE)
+                )
+                order_id = cur.lastrowid
+                if cur.rowcount != 1 or type(order_id) is not int or order_id <= 0:
+                    raise GuardError(
+                        "raid order did not insert exactly one row with an ID"
+                    )
+            except Exception:
+                with contextlib.suppress(Exception):
+                    cur.close()
+                raise
+            cur.close()
+            self._conn.commit()
+        except Exception:
+            self._rollback_quietly()
+            raise
+        return order_id
 
     def run(self, statements):
         """Verify every statement, then execute them in one transaction."""

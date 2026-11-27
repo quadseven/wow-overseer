@@ -4,6 +4,7 @@ import copy
 import pathlib
 import re
 import unittest
+from unittest.mock import Mock
 
 from ephemeral import anchors as anchors_mod
 from ephemeral import dbschema, guard, lint, resolve, sqlgen
@@ -456,6 +457,8 @@ class GuardTest(unittest.TestCase):
             guard.apply_plan(compile_(doc()), bare)
         with self.assertRaises(guard.GuardError):
             bare.query("SELECT 1")
+        with self.assertRaises(guard.GuardError):
+            bare.enqueue_molten_core_order("Grug")
         self.assertEqual(bare._conn.executed, [])
 
     def test_the_minting_token_is_not_reachable_from_the_class(self):
@@ -498,6 +501,127 @@ class GuardTest(unittest.TestCase):
         )
         with self.assertRaises(SeedError):
             g.run([evil])
+        self.assertEqual(conn.executed, [])
+
+    def raid_order_connection(self, heads=(("Grug", "Grug"),), conflict=None):
+        guarded, conn, _ = self.open()
+        cur = Mock(rowcount=1, lastrowid=42)
+        cur.fetchall.side_effect = [[(1,)], list(heads)]
+        cur.fetchone.return_value = conflict
+        conn.cursor = Mock(return_value=cur)
+        return guarded, conn, cur
+
+    def test_raid_order_locks_then_inserts_only_the_default_queue_entry(self):
+        guarded, conn, cur = self.raid_order_connection()
+        calls = Mock()
+        calls.attach_mock(cur.close, "close")
+        calls.attach_mock(Mock(wraps=conn.commit), "commit")
+        conn.commit = calls.commit
+
+        self.assertEqual(guarded.enqueue_molten_core_order("Grug"), 42)
+
+        marker, head, conflict, insert = [c.args for c in cur.execute.call_args_list]
+        self.assertIn("`ephemeral_world` FOR UPDATE", marker[0])
+        self.assertIn("`overseer_roster`", head[0])
+        self.assertIn("`enabled` = 1", head[0])
+        self.assertTrue(head[0].endswith("FOR UPDATE"))
+        self.assertEqual(head[1], ("Grug", "Grug"))
+        self.assertIn(
+            "(`family` = %s AND `status` IN ('queued', 'active'))", conflict[0]
+        )
+        self.assertIn("OR `source` = %s", conflict[0])
+        self.assertTrue(conflict[0].endswith("FOR UPDATE"))
+        self.assertEqual(conflict[1], ("Grug", "eph-raid-order"))
+        self.assertEqual(
+            insert,
+            (
+                "INSERT INTO `acore_characters`.`overseer_dungeon_queue` "
+                "(`family`, `position`, `keyword`, `runs_wanted`, `status`, `source`) "
+                "VALUES (%s, 1, %s, 1, 'queued', %s)",
+                ("Grug", "moltencore", "eph-raid-order"),
+            ),
+        )
+        self.assertEqual([c[0] for c in calls.mock_calls], ["close", "commit"])
+        self.assertTrue(conn.committed)
+
+    def test_raid_order_refuses_invalid_names_and_missing_columns_before_sql(self):
+        guarded, conn, _ = self.raid_order_connection()
+        for family in ("", "grug", "Grug\n", "family:grug", "cast[0]", "G'ug", None):
+            with self.subTest(family=family), self.assertRaises(guard.GuardError):
+                guarded.enqueue_molten_core_order(family)
+        for table, missing in (
+            ("overseer_roster", "lead"),
+            ("overseer_dungeon_queue", "source"),
+        ):
+            with self.subTest(table=table, column=missing):
+                tables = copy.deepcopy(SCHEMA.tables)
+                tables["acore_characters"][table].remove(missing)
+                guarded.use_schema(dbschema.Schema(tables))
+                with self.assertRaisesRegex(guard.GuardError, table):
+                    guarded.enqueue_molten_core_order("Grug")
+        conn.cursor.assert_not_called()
+
+    def test_raid_order_refuses_missing_or_ambiguous_exact_family_head(self):
+        for heads in (
+            (),
+            (("Grug", ""),),
+            (("Grug", "grug"),),
+            (("Ugga", "Grug"),),
+            (("Grug", "Grug"), ("Ugga", "Grug")),
+        ):
+            with self.subTest(heads=heads):
+                guarded, conn, cur = self.raid_order_connection(heads=heads)
+                with self.assertRaisesRegex(guard.GuardError, "family head"):
+                    guarded.enqueue_molten_core_order("Grug")
+                self.assertEqual(cur.execute.call_count, 2)
+                self.assertTrue(conn.rolled_back)
+                self.assertFalse(conn.committed)
+
+    def test_raid_order_rolls_back_when_prior_order_is_found(self):
+        guarded, conn, cur = self.raid_order_connection(conflict=(11,))
+        with self.assertRaisesRegex(guard.GuardError, "prior"):
+            guarded.enqueue_molten_core_order("Grug")
+        self.assertEqual(cur.execute.call_count, 3)
+        self.assertTrue(conn.rolled_back)
+        self.assertFalse(conn.committed)
+
+    def test_raid_order_rolls_back_when_marker_is_no_longer_unique(self):
+        guarded, conn, cur = self.raid_order_connection()
+        cur.fetchall.side_effect = [[(1,), (1,)]]
+        with self.assertRaisesRegex(guard.GuardError, "marker"):
+            guarded.enqueue_molten_core_order("Grug")
+        cur.execute.assert_called_once()
+        self.assertTrue(conn.rolled_back)
+        self.assertFalse(conn.committed)
+
+    def test_raid_order_rolls_back_if_insert_or_cursor_close_fails(self):
+        for rowcount, order_id in ((0, 42), (1, 0)):
+            with self.subTest(rowcount=rowcount, order_id=order_id):
+                guarded, conn, cur = self.raid_order_connection()
+                cur.rowcount = rowcount
+                cur.lastrowid = order_id
+                with self.assertRaisesRegex(guard.GuardError, "insert"):
+                    guarded.enqueue_molten_core_order("Grug")
+                self.assertTrue(conn.rolled_back)
+                self.assertFalse(conn.committed)
+        guarded, conn, cur = self.raid_order_connection()
+        cur.close.side_effect = OSError("close failed")
+        with self.assertRaisesRegex(OSError, "close failed"):
+            guarded.enqueue_molten_core_order("Grug")
+        self.assertTrue(conn.rolled_back)
+        self.assertFalse(conn.committed)
+
+    def test_raid_order_stays_unavailable_through_the_generic_seed_writer(self):
+        guarded, conn, _ = self.open()
+        stmt = sqlgen.Stmt(
+            "insert",
+            "overseer_dungeon_queue",
+            "INSERT INTO `acore_characters`.`overseer_dungeon_queue` "
+            "(`family`, `position`, `keyword`, `runs_wanted`, `source`) "
+            "VALUES ('Grug', 1, 'moltencore', 1, 'eph-raid-order')",
+        )
+        with self.assertRaises(SeedError):
+            guarded.run([stmt])
         self.assertEqual(conn.executed, [])
 
     def test_apply_executes_in_one_commit(self):

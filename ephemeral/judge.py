@@ -103,6 +103,9 @@ class GuardedWorldDb:
     def insert_command(self, target, kind, text):
         return self._g.insert_command(target, kind, text)
 
+    def enqueue_molten_core_order(self, family):
+        return self._g.enqueue_molten_core_order(family)
+
 
 # -- expectations and rendering --------------------------------------------------
 
@@ -538,7 +541,7 @@ class Judge:
     def _plan_acts(self, observes):
         steps = []
         for i, cmd in enumerate(acts.act_commands(self.decree)):
-            if cmd["kind"] not in guard.COMMAND_KINDS:
+            if not cmd.get(acts.RAID_ORDER) and cmd["kind"] not in guard.COMMAND_KINDS:
                 raise JudgeError(
                     f"act step {i}: command kind {cmd['kind']!r} is not allowed"
                 )
@@ -546,7 +549,7 @@ class Judge:
                 raise JudgeError(
                     f"act step {i}: waits for unknown observation {cmd['when']!r}"
                 )
-            targets = self._targets(cmd["who"], i)
+            targets = self._act_targets(cmd, i)
             at = lint.duration_seconds(cmd["at"]) if "at" in cmd else None
             if "at" in cmd and at is None:
                 raise JudgeError(f"act step {i}: bad time {cmd['at']!r}")
@@ -558,6 +561,17 @@ class Judge:
             self.act_rows.append(row)
             steps.append((row, at))
         return steps
+
+    def _act_targets(self, cmd, i):
+        if cmd.get(acts.RAID_ORDER):
+            family = cmd["who"]
+            members = self.handoff.get("members") or []
+            if self.decree.get("world", {}).get("bridge") != "on":
+                raise JudgeError(f"act step {i}: raid order needs the headless bridge")
+            if [m["name"] for m in members if m["who"] == family] != [family]:
+                raise JudgeError(f"act step {i}: raid order needs one named cast head")
+            return [family]
+        return self._targets(cmd["who"], i)
 
     def _targets(self, who, i):
         members = self.handoff.get("members") or []
@@ -580,8 +594,11 @@ class Judge:
 
     def _fire(self, step, elapsed):
         row, _ = step
-        for name in row["targets"]:
-            self.world.insert_command(name, row["kind"], row["text"])
+        if row["kind"] == acts.RAID_ORDER:
+            self.world.enqueue_molten_core_order(row["targets"][0])
+        else:
+            for name in row["targets"]:
+                self.world.insert_command(name, row["kind"], row["text"])
         row["fired"] = True
         row["fired_s"] = int(elapsed)
 

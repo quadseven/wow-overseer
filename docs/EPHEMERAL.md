@@ -109,7 +109,7 @@ SQL are checked against a snapshot of the game databases
     duration: 20m
     cast:      # characters in the template, by name, family:<name> or guild:<Guild>:<role>
     arrange:   # instances, groups, creatures, before the world loads
-    act:       # after load: roster or command steps, at a time or when an observation holds
+    act:       # after load: roster, command or raid_order steps
     observe:   # preconditions and checks: SQL or a log pattern
 
 ## Rules lint enforces
@@ -143,6 +143,11 @@ SQL are checked against a snapshot of the game databases
   `overseer_command` row. Measured on a hand-made world, such a row was applied
   within seconds with no bridge, while a direct update of `overseer_roster`
   showed no effect. `ephemeral/acts.py` turns the timeline into those rows.
+- `raid_order: {family: Grug}` uses the headless bridge's campaign queue in a
+  bridge-on world. The family head must be named explicitly in the cast and
+  resolve to the enabled head in the disposable roster. One act per decree may
+  queue one ordinary Molten Core run. The guard refuses a family with a
+  pending order or a world with a prior rehearsal order.
 - Observation SQL is one read-only SELECT. Every table and column must exist, a
   derived table (`FROM (SELECT ...)`) is not supported, and a database qualifier
   must lead to a table and column (`db.table.column`).

@@ -3,9 +3,11 @@
 Measured behaviour decides the shape: a job written as an `overseer_command`
 row (kind `job`) is applied by the module within seconds with no bridge, while
 a direct UPDATE of `overseer_roster.job` showed no effect. So a `roster` step
-is shorthand for a command of kind `job`; nothing in a decree ever compiles to
-a write to `overseer_roster`.
+is shorthand for a command of kind `job`. A typed raid order goes to the
+bridge's campaign queue to exercise its eligibility checks.
 """
+
+RAID_ORDER = "raid_order"
 
 
 def act_commands(decree):
@@ -20,6 +22,17 @@ def act_commands(decree):
         if "roster" in step:
             r = step["roster"]
             out.append({**when, "who": r["who"], "kind": "job", "text": r["job"]})
+        elif RAID_ORDER in step:
+            family = step[RAID_ORDER]["family"]
+            out.append(
+                {
+                    **when,
+                    "who": family,
+                    "kind": RAID_ORDER,
+                    "text": "moltencore",
+                    RAID_ORDER: True,
+                }
+            )
         else:
             c = step["command"]
             out.append({**when, "who": c["who"], "kind": c["kind"], "text": c["text"]})

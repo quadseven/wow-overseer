@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 
 from . import anchors as anchors_mod
+from .acts import RAID_ORDER
 from . import dbschema, gamedata
 from .miniyaml import YamlError, loads
 
@@ -66,6 +67,7 @@ _EXPECT_SCALAR = re.compile(r"^(=|!=|<>|<=|>=|<|>) -?\d+(\.\d+)?$")
 _EXPECT_ROWS = re.compile(r"^(>=|<=|>|<|=)?\s*\d+$")
 _JOB = re.compile(r"^[a-z ]+(:[a-z0-9_-]+)?$")
 _ALIAS = re.compile(r"^[a-z][a-z0-9_]*$")
+_ACT_KINDS = ("roster", "command", RAID_ORDER)
 
 
 @dataclass(frozen=True)
@@ -828,9 +830,15 @@ def _act(lint, doc, whos, names):
     bridge_on = (
         isinstance(doc.get("world"), dict) and doc["world"].get("bridge") == "on"
     )
+    lint.ensure(
+        sum(isinstance(step, dict) and RAID_ORDER in step for step in act) <= 1,
+        "decree.act",
+        "schema",
+        "may contain at most one raid order",
+    )
     for i, step in enumerate(act):
         path = f"decree.act[{i}]"
-        if lint.keys(path, step, ("at", "when", "roster", "command"), ()):
+        if lint.keys(path, step, ("at", "when", *_ACT_KINDS), ()):
             _act_step(lint, path, step, whos, names, bridge_on)
     _walk_auction(lint, doc, "act", act)
 
@@ -857,15 +865,29 @@ def _act_step(lint, path, step, whos, names, bridge_on):
             "must name an observation in observe",
         )
     lint.ensure(
-        ("roster" in step) != ("command" in step),
+        sum(key in step for key in _ACT_KINDS) == 1,
         path,
         "schema",
-        "needs exactly one of roster or command",
+        "needs exactly one of roster, command or raid_order",
     )
     if "roster" in step:
         _act_roster(lint, f"{path}.roster", step["roster"], whos)
     if "command" in step:
         _act_command(lint, f"{path}.command", step["command"], whos)
+    if RAID_ORDER in step:
+        _act_raid_order(lint, f"{path}.{RAID_ORDER}", step[RAID_ORDER], whos, bridge_on)
+
+
+def _act_raid_order(lint, path, order, whos, bridge_on):
+    lint.ensure(bridge_on, path, "schema", 'requires world.bridge: "on"')
+    if lint.keys(path, order, ("family",), ("family",)):
+        family = order["family"]
+        lint.ensure(
+            isinstance(family, str) and _NAME.fullmatch(family) and family in whos,
+            f"{path}.family",
+            "schema",
+            "must name one cast family head explicitly",
+        )
 
 
 def _act_roster(lint, path, r, whos):
