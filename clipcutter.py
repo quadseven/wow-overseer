@@ -487,6 +487,26 @@ def _store(connect, raw_id, rfile, length, root, note, clock, bound, stream_path
             if not landed:
                 _discard(target)
                 return _moved(_lookup(cur, row["id"]) or row)
+            poster = poster_name(name)
+            if poster:
+                poster_path = os.path.join(root, poster)
+                try:
+                    # "x": create only if missing; a ready row is never overwritten.
+                    fd = os.open(poster_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+                    os.close(fd)
+                except FileExistsError:
+                    pass
+                except OSError as exc:
+                    # A poster is a frame beside the video; the clip is still
+                    # ready without one, so log and continue instead of failing.
+                    log.warning("clip %s poster not written: %s", row["id"], exc.strerror or exc)
             return 200, _public(_lookup(cur, row["id"]), *_COLUMNS.split(", "))
     finally:
         _discard(tmp)
+
+
+def poster_name(file_name: str) -> str | None:
+    """The poster frame name kept beside a clip, or None for a non-mp4 name."""
+    if not file_name or not file_name.lower().endswith(".mp4"):
+        return None
+    return file_name[:-4] + "-poster.jpg"

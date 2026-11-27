@@ -700,6 +700,16 @@ def clip_url(file_name: str) -> str:
     return CLIPS_PATH + quote(file_name, safe="")
 
 
+def poster_name(file_name: str) -> str | None:
+    """The poster frame name kept beside a clip, or None for a non-mp4 name.
+
+    The cutter writes an empty placeholder poster next to the video when a clip
+    lands; a real frame can replace it later without changing the name."""
+    if not file_name or not file_name.lower().endswith(".mp4"):
+        return None
+    return file_name[:-4] + "-poster.jpg"
+
+
 def _iso(t) -> str | None:
     return t.isoformat() if isinstance(t, datetime) else (t or None)
 
@@ -812,10 +822,17 @@ def shelf(rows: Iterable[Mapping]) -> dict:
                 "at": _iso(r.get("event_at")),
                 "url": clip_url(r["file_name"]),
                 **(
+                    {"poster": clip_url(poster_name(r["file_name"]))}
+                    if r.get("file_name") and poster_name(r["file_name"])
+                    else {}
+                ),
+                **(
                     {"nth": again[r["id"]][0], "of": again[r["id"]][1]}
                     if r["id"] in again and again[r["id"]][1] > 1
                     else {}
                 ),
+                **({"item": r["item"]} if r.get("item") else {}),
+                **({"context": r["context"]} if r.get("context") else {}),
             }
             for r in ready[:SHELF_LIMIT]
         ],

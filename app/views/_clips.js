@@ -1,13 +1,13 @@
 // Saved clips: the shelf, and the link a story or timeline entry carries.
 //
 // The server decides everything here. /api/clips lists the ready clips, newest
-// first, each with the URL the file is served at; a loot story or a run card
-// carries `clip` ({url, kind}, plus `view_note` when the clip was filmed from
-// another member's view) when its event has a saved clip, or `clip_note`
-// when no live view was up. This only draws them. A clip plays in place in the
-// browser's own video element; nothing is fetched but its metadata until Play.
+// first, each with the URL the file is served at, a poster frame beside the
+// video, and - for loot - the item's quality colour and icon plus a context
+// line (run and boss for a dungeon drop, zone for open-world). A clip plays in
+// place in the browser's own video element; nothing is fetched but its
+// metadata until Play.
 
-import { html, state, pendingRead } from "../ui.js";
+import { html, state, pendingRead, item, esc } from "../ui.js";
 import { u } from "../api.js";
 import { since } from "../models/time.js";
 
@@ -50,8 +50,18 @@ export function clipLinks(entry) {
 function card(c) {
   const body = kept.has(c.url)
     ? html`<div class="clip-slot" data-clip-slot="${c.url}"></div>`
-    : html`<button type="button" class="btn clip-play" data-clip="${c.url}"><i class="ph-fill ph-play" aria-hidden="true"></i>Play</button>`;
-  return html`<article class="card clip-card"><div class="clip-head"><span class="tag tag-outline">${kindWord(c.kind)}</span><span class="clip-who">${c.character}</span>${c.subject ? html`<span class="clip-subject">${c.subject}</span>` : ""}${c.of > 1 ? html`<span class="tag tag-outline clip-nth">${c.nth} of ${c.of}</span>` : ""}<span class="muted g-when">${since(c.at)}</span></div>${body}</article>`;
+    : html`<button type="button" class="clip-poster" data-clip="${c.url}"
+        aria-label="Play clip: ${esc(c.subject || kindWord(c.kind))}">
+        ${c.poster ? html`<img src="${u(c.poster)}" alt="" loading="lazy" decoding="async">` : ""}
+        <span><i class="ph-fill ph-play" aria-hidden="true"></i>Play</span></button>`;
+  const name = c.item
+    ? item(c.item)
+    : c.subject
+      ? html`<span class="clip-subject">${c.subject}</span>`
+      : "";
+  const ctx = c.context ? html`<div class="clip-context">${c.context}</div>` : "";
+  const nth = c.of > 1 ? html`<span class="tag tag-outline clip-nth">${c.nth} of ${c.of}</span>` : "";
+  return html`<article class="card clip-card"><div class="clip-head"><span class="tag tag-outline">${kindWord(c.kind)}</span><span class="clip-who">${c.character}</span><span class="muted g-when">${since(c.at)}</span></div>${name}${ctx}${nth}${body}</article>`;
 }
 
 // The footer under the shelf: per day, how many moments left no clip and why.
