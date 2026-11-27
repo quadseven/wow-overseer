@@ -477,3 +477,48 @@ def tag_runs(found, run_of) -> dict:
         name: replace(loop, run=int(run_of[name])) if run_of.get(name) else loop
         for name, loop in (found or {}).items()
     }
+
+
+# Members of one run that must each be looping before the run itself is judged
+# to be wiping: one looping member is that member's habit, not the run's.
+RUN_WIPE_MIN_MEMBERS = 2
+
+
+@dataclass(frozen=True)
+class RunStepDown:
+    """One run's step-down decision: which run, which members, why."""
+
+    run: int
+    members: tuple
+    zone: int
+    deaths: int
+
+    def reason(self) -> str:
+        return (
+            f"run wipe (run {self.run}): {len(self.members)} members died "
+            f"{self.deaths} times in all; stepping the run down once"
+        )
+
+
+def run_step_downs(found, min_members=RUN_WIPE_MIN_MEMBERS) -> dict:
+    """run id -> RunStepDown for each run whose tagged loops (see `tag_runs`)
+    number at least `min_members`. The loops already crossed the reader's
+    threshold, so no second threshold is applied. Loops outside a run
+    (`run == 0`) are never grouped, and a run with one looping member yields
+    nothing. Pure: it decides, it writes nothing."""
+    by_run = {}
+    for loop in (found or {}).values():
+        if loop.run:
+            by_run.setdefault(loop.run, []).append(loop)
+    out = {}
+    for run, loops_ in by_run.items():
+        if len(loops_) < min_members:
+            continue
+        zones = sorted(lp.zone for lp in loops_)
+        out[run] = RunStepDown(
+            run=run,
+            members=tuple(sorted(lp.name for lp in loops_)),
+            zone=max(set(zones), key=zones.count),
+            deaths=sum(lp.deaths for lp in loops_),
+        )
+    return out
