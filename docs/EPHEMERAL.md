@@ -301,7 +301,12 @@ A log precondition or a check that requires or caps a line (`at_least` or
 strings of their emitters. The guard fails if the pinned source changes the
 format, the emitter misses the logs that the judge reads, or the pattern misses
 the formatted line. A new witness or bounded check needs an entry there. The
-judge reads the worldserver log and, for `bridge: on`, the bridge sidecar log.
+judge reads the worldserver log and, for `bridge: on`, the bridge sidecar log, so
+a bridge line is pinned to its call in the bridge and only on a `bridge: on`
+decree. An observation whose line no source in this repo writes (a core line, a
+dungeon module line, or module wording newer than the submodule pin) goes in the
+test's `UNPINNABLE` list with its reason instead, and moves to the pinned list
+once its emitter can be read here.
 
 Every bound is a whole number, zero or more; lint rejects a negative, missing or
 unknown bound, and a judge handed one anyway reports the check as an error
