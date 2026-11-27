@@ -1,6 +1,5 @@
 """Test the rehearsal configuration and guards."""
 
-import os
 import unittest
 
 import rehearsal

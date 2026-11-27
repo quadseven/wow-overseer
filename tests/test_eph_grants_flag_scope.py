@@ -14,9 +14,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 FLAG_TEXT = "grants: enabled"
 FLAG_NAME = "EPH_HARNESS_GRANTS"
 # The one place the flag is allowed: the ephemeral world's own example config.
-ALLOWED = {"data/ephemeral/config.example.env"}
+ALLOWED = {"data/ephemeral/config.example.env", "data/rehearsal/config.example.env"}
 # Not deployment files: the guard, its tests and the docs name the flag by design.
-EXEMPT_PREFIXES = ("ephemeral/", "tests/", "docs/")
+EXEMPT_PREFIXES = ("ephemeral/", "rehearsal/", "tests/", "docs/")
 
 
 def tracked_files():
@@ -68,7 +68,7 @@ class GrantsFlagScopeTest(unittest.TestCase):
         self.assertIn(FLAG_NAME, text)
 
     def test_the_allowed_file_is_the_one_that_carries_the_rehearsal_flag(self):
-        text = (ROOT / "data/ephemeral/config.example.env").read_text(encoding="utf-8")
+        text = (ROOT / "data/rehearsal/config.example.env").read_text(encoding="utf-8")
         self.assertIn("REHEARSAL_GRANTS_ENABLED", text)
         self.assertIn(FLAG_TEXT, text)
 
