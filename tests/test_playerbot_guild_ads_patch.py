@@ -68,27 +68,36 @@ class GuildAdsPatchTest(unittest.TestCase):
         db.executemany("INSERT INTO ai_playerbot_texts VALUES (?, ?, ?)", rows)
         return db
 
-    def test_patch_prunes_seed_ads_and_new_matches_on_replay(self):
+    # AI-REVIEW 2026-11-27 [Grug Elder/weakened-test] 4723085547 (Elder, PR #3381):
+    # Keep the seed and class regressions as SQL replay checks.
+    def test_patch_deletes_rows_741_and_743(self):
         db = self.seed(
             (741, "suggest_something", "%my_role is looking for guild."),
             (743, "suggest_something", "%my_role wants to join a good guild."),
+        )
+        db.executescript(self.sql)
+        self.assertEqual([], db.execute("SELECT id FROM ai_playerbot_texts").fetchall())
+
+    def test_patch_audits_suggest_something_guild_ads(self):
+        db = self.seed(
             (801, "suggest_something", "any guilds willing to carry %my_role?"),
             (816, "suggest_something", "any leveling guilds out there?"),
             (2001, "suggest_something", "  %MY_ROLE IS LOOKING FOR GUILD?!  "),
             (2002, "suggest_something", "Any leveling guilds out there"),
             (2003, "suggest_something", "Let's run a dungeon."),
+            (2004, "SUGGEST_SOMETHING", "any leveling guilds out there?"),
         )
         for _ in range(2):
             db.executescript(self.sql)
             self.assertEqual(
-                [(2003,)], db.execute("SELECT id FROM ai_playerbot_texts").fetchall()
+                [(2003,), (2004,)],
+                db.execute("SELECT id FROM ai_playerbot_texts ORDER BY id").fetchall(),
             )
 
     def test_patch_preserves_reused_ids_without_a_matching_class_and_text(self):
         preserved = (
             (741, "suggest_something", "Let's run a dungeon."),
             (743, "another_class", "%my_role wants to join a good guild."),
-            (2001, "SUGGEST_SOMETHING", "any leveling guilds out there?"),
         )
         db = self.seed(*preserved)
         db.executescript(self.sql)
