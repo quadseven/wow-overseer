@@ -155,6 +155,13 @@ SQL are checked against a snapshot of the game databases
 
 `TODO` is allowed for an issue number or commit and is a warning, never an error.
 The numeric `proves` form names an issue in this repository and requires `box`.
+
+A ticket names its decree with one body line, `Proof: decree <id>`, on a line of
+its own. `python3 -m ephemeral due` lists the open `awaiting-live-check` issues
+whose Proof line names a decree that is on the default branch, proves that issue
+(either `proves` form), and has no files yet under `<results_dir>/<id>/` (no
+submission record and no result). It prints `owner/name#N <id>` oldest first and
+writes nothing. `submit --due N` is not built yet.
 `eph report` posts the named decree's batch result, including each run's UTC
 start time and judge reason lines. It ticks one uniquely matching checkbox only
 when every declared control run is `FAIL` and every declared treatment run is
@@ -326,6 +333,7 @@ digest-pinned tools image. A missing or malformed file is an error.
 
     python3 -m ephemeral submit [--arm both] [--node N] --control-worldserver REF --control-dbimport REF --control-pin SHA
         [--control-playerbots-prefix NAME] [--control-drop-keys A,B,C] data/decrees/<name>.yaml
+    python3 -m ephemeral submit --control auto --control-history FILE data/decrees/<name>.yaml
     python3 -m ephemeral dispatch [--once] [--owner NAME]
     python3 -m ephemeral dispatch --stop --owner NAME
     python3 -m ephemeral collect [--dry-run]
@@ -471,6 +479,46 @@ own `config:`) with that prefix; the treatment arm is untouched, and a fidelity
 delta records it. Any other key the control dist lacks still fails closed; a key a
 module added after the control build (its dist predates it) is removed from the control
 arm's override files with `--control-drop-keys A,B,C`, which records a delta naming them.
+
+`--control auto` finds the control images instead of taking them by hand.
+`--control-history FILE` is a JSON list of past image sets, newest first, that the deploy
+side writes (never a file in this repository): each entry has `worldserver` and `dbimport`
+digests and the `pin` it was built from, plus `bridge` and `bridge_commit` for a bridge
+build. `submit` takes the newest entry whose pin lacks the fix (the same ancestor check as
+above; for a fix in this repository's bridge code, the entry's `bridge_commit`) and whose
+digests the registry still serves, fills `--control-worldserver`, `--control-dbimport` and
+`--control-pin` (and `--control-bridge` from the set's `bridge` when the decree turns the bridge on) from it, and records the choice as
+a fidelity delta. It refuses a `TODO` fix commit, an empty or unreadable history, and
+explicit control image flags, including `--control-bridge`. Before creating any
+Jobs, [submit](../ephemeral/submit.py) asks [the control selector](../ephemeral/controlauto.py)
+to check the registry. It skips an entry whose worldserver or db-import digest
+does not resolve, and also checks the bridge digest when the fix is in bridge code.
+Submit errors when no entry both lacks the fix and passes those checks. For a
+module fix with the bridge enabled, submit checks the selected entry's bridge
+separately and errors if that digest is missing or no longer resolves.
+
+A history entry can carry a `dist_inventory` from its exact worldserver image. It
+records the entry's complete `worldserver` digest reference, `platform: linux/amd64`,
+and `groups`, a mapping from override-group names to the configuration keys in
+each distribution file. An absent module file has no group entry. The inventory
+contains key names only.
+
+Build the inventory from a trusted filesystem export of that digest and platform:
+
+    crane export --platform linux/amd64 "$CONTROL_REF" "$CONTROL_TAR"
+    python3 -m ephemeral.controlconfig --worldserver "$CONTROL_REF" --archive "$CONTROL_TAR"
+
+Store the emitted JSON under `dist_inventory` in the matching history entry.
+The caller pairs the archive with its digest and platform when exporting it.
+The archive reader uses the reference configuration files inside the built image.
+
+For a selected entry with an inventory, `submit` uses the image's playerbots
+prefix and removes unsupported inherited overrides from the control. It refuses
+the submission when a baseline or decree key is unavailable, or when a configured
+module has no matching distribution file. Each drop records the image, group and
+key in the fidelity deltas. An inventory and manual drop or prefix flags cannot
+be combined. History entries without an inventory use the existing manual
+`--control-drop-keys` and `--control-playerbots-prefix` options.
 
 With `world.bridge: "on"` the template's bridge sidecar is kept, at the arm's own
 image: the control arm's is `--control-bridge` (the build before the fix), the

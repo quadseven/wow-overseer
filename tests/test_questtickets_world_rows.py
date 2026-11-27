@@ -261,12 +261,80 @@ class WorldRows(unittest.TestCase):
             "creature entries 1172, 1173, 1174, 1175, 1176, 1177, 1202", ticket
         )
         self.assertIn(
-            "The take step asks the world for a living creature linked to the quest "
-            "within the 20-yard arrival radius.",
+            "The take was refused because no living creature linked to the quest "
+            "matched within the 20-yard arrival radius at that time.",
             ticket,
         )
         self.assertIn(
-            "The refusal means none matched then; the stored rows do not distinguish "
+            "This explains the ledger reason, but the stored rows do not distinguish "
+            "a missing, distant, dead, or otherwise unavailable creature.",
+            ticket,
+        )
+
+    def test_relics_of_wakening_rows_explain_the_take_refusal(self):
+        row = quest_row(
+            quest=483,
+            title="The Relics of Wakening",
+            level=9,
+            min_level=4,
+            sort=141,
+            follows=476,
+            item1=3405,
+            item_count1=1,
+            item2=3406,
+            item_count2=1,
+            item3=3407,
+            item_count3=1,
+            item4=3408,
+            item_count4=1,
+        )
+        catalogue = self.catalogue(
+            row,
+            {
+                qc.ITEM_NAMES_SQL.format(ids="3405, 3406, 3407, 3408"): [
+                    {"entry": 3405, "name": "Raven Claw Talisman"},
+                    {"entry": 3406, "name": "Black Feather Quill"},
+                    {"entry": 3407, "name": "Sapphire of Sky"},
+                    {"entry": 3408, "name": "Rune of Nesting"},
+                ],
+                qc.DROP_SQL.format(ids="3405, 3406, 3407, 3408"): [],
+                qc.REWARD_SQL.format(ids="3405, 3406, 3407, 3408"): [],
+                qc.VENDOR_SQL.format(ids="3405, 3406, 3407, 3408"): [],
+                qc.OBJECT_LOOT_SQL.format(ids="3405, 3406, 3407, 3408"): [
+                    {"item": 3405, "entry": 2740},
+                    {"item": 3406, "entry": 2739},
+                    {"item": 3407, "entry": 2741},
+                    {"item": 3408, "entry": 2742},
+                ],
+            },
+        )
+        reason = qt.NO_GIVER_IN_REACH
+        ticket = qt.body(
+            483,
+            catalogue[0],
+            [{"quest": 483, "guid": 7, "character_name": "Sylvi", "reason": reason}],
+            [],
+            "",
+        )
+
+        self.assertIn("QuestLevel: 9; MinLevel: 4", ticket)
+        self.assertIn("Previous quest: 476", ticket)
+        self.assertIn("Required item 3405 x1 (Raven Claw Talisman)", ticket)
+        self.assertIn("gameobject loot entries 2740", ticket)
+        self.assertIn("Required item 3406 x1 (Black Feather Quill)", ticket)
+        self.assertIn("gameobject loot entries 2739", ticket)
+        self.assertIn("Required item 3407 x1 (Sapphire of Sky)", ticket)
+        self.assertIn("gameobject loot entries 2741", ticket)
+        self.assertIn("Required item 3408 x1 (Rune of Nesting)", ticket)
+        self.assertIn("gameobject loot entries 2742", ticket)
+        self.assertIn("Zone: Teldrassil", ticket)
+        self.assertIn(
+            "The take was refused because no living creature linked to the quest "
+            "matched within the 20-yard arrival radius at that time.",
+            ticket,
+        )
+        self.assertIn(
+            "This explains the ledger reason, but the stored rows do not distinguish "
             "a missing, distant, dead, or otherwise unavailable creature.",
             ticket,
         )

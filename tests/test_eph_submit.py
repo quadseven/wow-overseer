@@ -1,7 +1,11 @@
 """eph submit: suspended Jobs only, honest refusals, nothing created on a refusal."""
 
+import io
 import json
 import pathlib
+import subprocess
+import sys
+import tarfile
 import tempfile
 import unittest
 
@@ -54,11 +58,352 @@ class Base(unittest.TestCase):
             self.cfg, self.kube, self.gh, self.decree, args,
             clock=self.clock, out=lambda *_: None,
             image_env=getattr(self, "image_env", None),
+            resolves=getattr(self, "resolves", None),
         )  # fmt: skip
 
     def compare(self, pin, status):
         path = f"repos/quadseven/mod-dungeon-clear/compare/{FIX}...{pin}"
         self.fake_gh.answers[("GET", path)] = {"status": status}
+
+
+class ControlAutoTest(Base):
+    """--control auto fills the control images from a history file the deploy side writes."""
+
+    def setUp(self):
+        super().setUp()
+        self.resolves = lambda ref: True
+        self.history = pathlib.Path(self.tmp.name) / "history.json"
+        newest = {"worldserver": WS, "dbimport": DB, "pin": SHA}
+        older = {"worldserver": OLD_WS, "dbimport": OLD_DB, "pin": OLD}
+        self.history.write_text(json.dumps([newest, older]), encoding="utf-8")
+        self.compare(SHA, "ahead")  # the live pin and the newest set carry the fix
+        self.compare(OLD, "behind")
+
+    def auto(self, text=CHECKED, **args):
+        return self.submit(
+            text, control="auto", control_history=str(self.history), **args
+        )
+
+    def test_auto_takes_the_newest_set_without_the_fix(self):
+        rec = self.auto()
+        self.assertEqual(rec["presence"]["control"], {"pin": OLD, "state": "absent"})
+        control = [
+            j for j in self.cluster.of("jobs")
+            if j["metadata"]["labels"]["eph/arm"] == "control"
+        ]  # fmt: skip
+        self.assertEqual(len(control), 3)
+        for job in control:
+            images = json.dumps(job)
+            self.assertIn(OLD_WS, images)
+            self.assertIn(OLD_DB, images)
+        self.assertTrue(
+            any("--control auto" in d and OLD in d for d in rec["fidelity_deltas"])
+        )
+
+    def test_auto_refuses_when_the_digests_no_longer_resolve(self):
+        self.resolves = lambda ref: ref not in (OLD_WS, OLD_DB)
+        with self.assertRaisesRegex(submit.SubmitError, "do not resolve"):
+            self.auto()
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_auto_refuses_when_every_set_has_the_fix(self):
+        self.compare(OLD, "ahead")
+        with self.assertRaisesRegex(submit.SubmitError, "lacks the fix"):
+            self.auto()
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_auto_and_explicit_control_images_are_refused_together(self):
+        with self.assertRaisesRegex(submit.SubmitError, "--control auto"):
+            self.auto(control_worldserver=OLD_WS)
+        with self.assertRaisesRegex(submit.SubmitError, "--control-bridge"):
+            self.auto(control_bridge=OLD_BRIDGE)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def write_history(self, *entries):
+        self.history.write_text(json.dumps(list(entries)), encoding="utf-8")
+
+    @staticmethod
+    def inventory():
+        return {
+            "worldserver": OLD_WS,
+            "platform": "linux/amd64",
+            "groups": {
+                "playerbots": [
+                    "AiPlayerbot.Enabled",
+                    "AiPlayerbot.MaxRandomBots",
+                    "AiPlayerbot.MinRandomBots",
+                ],
+                "overseer": [
+                    "Overseer.HeadlessRoster",
+                    "Overseer.RequireClient",
+                    "Overseer.Raid.RequireHeadClient",
+                ],
+                "worldserver": ["MaxPlayerLevel"],
+                "ollama-chat": ["OllamaChat.Enable"],
+            },
+        }
+
+    def select_inventory(self, inventory):
+        self.write_history(
+            {"worldserver": WS, "dbimport": DB, "pin": SHA, "dist_inventory": None},
+            {
+                "worldserver": OLD_WS,
+                "dbimport": OLD_DB,
+                "pin": OLD,
+                "dist_inventory": inventory,
+            },
+        )
+
+    def inputs(self, record, arm):
+        run = next(r["run_id"] for r in record["runs"] if r["arm"] == arm)
+        return next(
+            c["data"]
+            for c in self.cluster.of("configmaps", "wow-ephemeral")
+            if c["metadata"].get("labels", {}).get("eph/run") == run
+        )
+
+    def test_selected_control_uses_its_inventory_and_treatment_keeps_its_bytes(self):
+        self.cluster.put(
+            "configmaps",
+            "base-realm",
+            "overseer-overrides-h1",
+            {"data": {"overseer.overrides.conf": "Overseer.ObsoleteExample = 1\n"}},
+        )
+        baseline = self.auto(arm="treatment")
+        archive_path = self.history.with_suffix(".tar")
+        files = {
+            "worldserver": "worldserver.conf.dist",
+            "playerbots": "modules/playerbots.conf.dist",
+            "overseer": "modules/mod_overseer.conf.dist",
+            "ollama-chat": "modules/mod_ollama_chat.conf.dist",
+        }
+        with tarfile.open(archive_path, "w") as archive:
+            for group, keys in self.inventory()["groups"].items():
+                content = "".join(f"# {key} = 1\n" for key in keys).encode("utf-8")
+                entry = tarfile.TarInfo(f"azerothcore/env/ref/etc/{files[group]}")
+                entry.size = len(content)
+                archive.addfile(entry, io.BytesIO(content))
+        inventory = subprocess.run(
+            [
+                sys.executable, "-m", "ephemeral.controlconfig",
+                "--archive", str(archive_path), "--worldserver", OLD_WS,
+            ],
+            check=True, capture_output=True, text=True,
+        )  # fmt: skip
+        self.select_inventory(json.loads(inventory.stdout))
+        record = self.auto()
+
+        control = self.inputs(record, "control")
+        bots = confmerge.parse(control["playerbots.overrides.conf"])
+        self.assertEqual(
+            bots,
+            {
+                "AiPlayerbot.Enabled": "1",
+                "AiPlayerbot.MaxRandomBots": "0",
+                "AiPlayerbot.MinRandomBots": "0",
+            },
+        )
+        self.assertNotIn("Overseer.ObsoleteExample", control["overseer.overrides.conf"])
+        self.assertIn("Appender.EphModule", control["worldserver.overrides.conf"])
+        self.assertIn("Logger.module.overseer", control["worldserver.overrides.conf"])
+        self.assertEqual(
+            self.inputs(record, "treatment"), self.inputs(baseline, "treatment")
+        )
+        self.assertTrue(
+            any(
+                OLD_WS in line
+                and "overseer" in line
+                and "Overseer.ObsoleteExample" in line
+                for line in record["fidelity_deltas"]
+            )
+        )
+
+    def test_inventory_refuses_a_missing_baseline_setting_before_creating_jobs(self):
+        inventory = self.inventory()
+        inventory["groups"]["overseer"].remove("Overseer.RequireClient")
+        self.select_inventory(inventory)
+        with self.assertRaisesRegex(
+            submit.SubmitError, "lacks required keys: Overseer.RequireClient"
+        ):
+            self.auto()
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_explicit_override_is_required_even_when_it_matches_the_live_value(self):
+        inventory = self.inventory()
+        inventory["groups"]["overseer"].remove("Overseer.HeadlessRoster")
+        self.select_inventory(inventory)
+        decree = CHECKED.replace(
+            "config: {}", 'config: {Overseer.HeadlessRoster: "Grug,Zug"}'
+        )
+        with self.assertRaisesRegex(
+            submit.SubmitError, "lacks required keys: Overseer.HeadlessRoster"
+        ):
+            self.auto(decree)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_inventory_refuses_an_absent_active_optional_module(self):
+        self.cluster.put(
+            "configmaps",
+            "base-realm",
+            "dungeon-clear-overrides-h1",
+            {"data": {"dungeon-clear.overrides.conf": "DungeonClear.Rest = 1\n"}},
+        )
+        deployment = self.cluster.objs[("deployments", "base-realm", "worldserver")]
+        deployment["spec"]["template"]["spec"]["volumes"].append(
+            {
+                "name": "dungeon-clear-overrides",
+                "configMap": {"name": "dungeon-clear-overrides-h1"},
+            }
+        )
+        self.select_inventory(self.inventory())
+        with self.assertRaisesRegex(
+            submit.SubmitError, "active override group dungeon-clear"
+        ):
+            self.auto()
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_invalid_inventory_is_refused_before_writes(self):
+        for inventory in (
+            None,
+            {**self.inventory(), "worldserver": WS},
+            {**self.inventory(), "platform": "linux/arm64"},
+            {**self.inventory(), "groups": {"unrecognized": []}},
+            {**self.inventory(), "groups": {"overseer": [False]}},
+            {**self.inventory(), "groups": {"overseer": ["Overseer.A\n"]}},
+            {**self.inventory(), "groups": {"overseer": ["Overseer.A", "Overseer.A"]}},
+        ):
+            with self.subTest(inventory=inventory):
+                self.select_inventory(inventory)
+                with self.assertRaisesRegex(submit.SubmitError, "dist_inventory"):
+                    self.auto()
+        self.assertEqual(self.cluster.of("jobs"), [])
+        self.assertFalse(any("create" in cmd for cmd, _ in self.cluster.calls))
+
+    def test_inventory_refuses_a_mixed_random_bot_prefix(self):
+        inventory = self.inventory()
+        inventory["groups"]["playerbots"].append("Playerbots.MinRandomBots")
+        self.select_inventory(inventory)
+        with self.assertRaisesRegex(submit.SubmitError, "both random bot key prefixes"):
+            self.auto()
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_inventory_refuses_a_prefix_rename_that_would_duplicate_a_key(self):
+        self.cluster.put(
+            "configmaps",
+            "base-realm",
+            "playerbots-overrides-h1",
+            {
+                "data": {
+                    "playerbots.overrides.conf": "Playerbots.Enabled = 1\nAiPlayerbot.Enabled = 0\n"
+                }
+            },
+        )
+        self.select_inventory(self.inventory())
+        with self.assertRaisesRegex(
+            submit.SubmitError, "would duplicate: AiPlayerbot.Enabled"
+        ):
+            self.auto()
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_inventory_and_explicit_config_fidelity_flags_are_refused_together(self):
+        self.select_inventory(self.inventory())
+        for args in (
+            {"control_drop_keys": "Overseer.HeadlessRoster"},
+            {"control_playerbots_prefix": "AiPlayerbot"},
+        ):
+            with (
+                self.subTest(args=args),
+                self.assertRaisesRegex(
+                    submit.SubmitError, "dist_inventory cannot be combined"
+                ),
+            ):
+                self.auto(**args)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_history_without_inventory_preserves_the_manual_drop_and_prefix(self):
+        record = self.auto(
+            control_drop_keys="Overseer.HeadlessRoster",
+            control_playerbots_prefix="AiPlayerbot",
+        )
+        control = self.inputs(record, "control")
+        self.assertNotIn("Overseer.HeadlessRoster", control["overseer.overrides.conf"])
+        self.assertIn("AiPlayerbot.MaxRandomBots", control["playerbots.overrides.conf"])
+
+    def test_treatment_only_does_not_consult_the_control_inventory(self):
+        self.select_inventory(None)
+        record = self.auto(arm="treatment")
+        self.assertEqual({r["arm"] for r in record["runs"]}, {"treatment"})
+
+    def test_auto_with_the_bridge_on_takes_the_chosen_sets_bridge(self):
+        self.write_history(
+            {
+                "worldserver": OLD_WS,
+                "dbimport": OLD_DB,
+                "pin": OLD,
+                "bridge": OLD_BRIDGE,
+            }
+        )
+        self.submit(
+            CHECKED.replace("bridge: off", 'bridge: "on"'),
+            control="auto", control_history=str(self.history),
+        )  # fmt: skip
+        for job in self.cluster.of("jobs"):
+            want = {"control": OLD_BRIDGE, "treatment": BRIDGE}
+            self.assertEqual(
+                _bridge(job)["image"], want[job["metadata"]["labels"]["eph/arm"]]
+            )
+
+    def test_auto_with_the_bridge_on_refuses_a_set_without_a_live_bridge(self):
+        on = CHECKED.replace("bridge: off", 'bridge: "on"')
+        self.write_history({"worldserver": OLD_WS, "dbimport": OLD_DB, "pin": OLD})
+        with self.assertRaisesRegex(submit.SubmitError, "bridge"):
+            self.submit(on, control="auto", control_history=str(self.history))
+        self.write_history(
+            {
+                "worldserver": OLD_WS,
+                "dbimport": OLD_DB,
+                "pin": OLD,
+                "bridge": OLD_BRIDGE,
+            }
+        )
+        self.resolves = lambda ref: ref != OLD_BRIDGE
+        with self.assertRaisesRegex(submit.SubmitError, "bridge"):
+            self.submit(on, control="auto", control_history=str(self.history))
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_auto_needs_a_readable_history_list(self):
+        self.history.unlink()
+        with self.assertRaisesRegex(submit.SubmitError, "history"):
+            self.auto()
+        self.history.write_text('{"not": "a list"}', encoding="utf-8")
+        with self.assertRaisesRegex(submit.SubmitError, "history"):
+            self.auto()
+        with self.assertRaisesRegex(submit.SubmitError, "history"):
+            self.submit(CHECKED, control="auto")
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_the_default_resolver_reads_the_registry_and_fails_closed(self):
+        from unittest import mock
+
+        from ephemeral import imagecommit
+
+        resolves = submit.default_resolves(self.cfg, self.kube)
+        with mock.patch.object(imagecommit, "image_env", return_value={}):
+            self.assertTrue(resolves(OLD_WS))
+        gone = imagecommit.RegistryError("registry answered 404")
+        with mock.patch.object(imagecommit, "image_env", side_effect=gone):
+            self.assertFalse(resolves(OLD_WS))
+        self.assertFalse(resolves("not-a-digest-ref"))
+        broken = kube.KubeError("forbidden: secrets")
+        with (
+            mock.patch.object(self.kube, "get", side_effect=broken),
+            self.assertRaises(kube.KubeError),
+        ):
+            resolves(OLD_WS)
+
+    def test_an_unknown_control_mode_is_refused(self):
+        with self.assertRaisesRegex(submit.SubmitError, "auto"):
+            self.submit(CHECKED, control="manual", control_history=str(self.history))
 
 
 class SubmitTest(Base):

@@ -13,8 +13,9 @@ before the request, so a crash between the request and the write can never
 file twice: that row stays at FILING and `plan` reports it for a person.
 Reopening an issue is the brain's call, never this pass's.
 
-BOUNDED. At most MAX_PER_PASS issues a pass: each one queues paid or capped
-work, and a first pass may find hundreds.
+BOUNDED. Each pass files at most MAX_PER_PASS issues and retires at most
+MAX_RETIRE_PER_PASS open issues whose quests have completion evidence and
+only quester-bound refusals. Retired tickets keep their ledger links.
 
 NO CREDENTIAL, NO PASS. `client_from_env` answers None until the App's Secret
 is mounted and the three settings below name it, and the bridge then skips.
@@ -27,6 +28,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
+from datetime import datetime
 
 import questledger
 import raidteams
@@ -43,6 +45,7 @@ STATE_LABELS = ("loom:ticket", "loom:queued")
 AREA = "area:questing"
 LABELS = STATE_LABELS + (AREA,)
 MAX_PER_PASS = 5
+MAX_RETIRE_PER_PASS = 10
 FILING = 0
 MEMO_KIND = "quest_tickets"
 MEMO_SUBJECT = "last_pass"
@@ -63,6 +66,10 @@ BROKEN_SQL = (
     "WHERE state = %s ORDER BY quest, guid"
 )
 COMPLETED_SQL = "SELECT DISTINCT quest FROM overseer_quest_ledger WHERE state = %s"
+COMPLETION_SQL = (
+    "SELECT COUNT(*) AS questers, MAX(finished) AS newest "
+    "FROM overseer_quest_ledger WHERE quest = %s AND state = %s"
+)
 # A refusal the world gave one quester at its place and in its bags: the take or
 # the hand-in was turned down ("no giver in reach", "not eligible", "the core
 # will not reward it now"). Where another quester has completed the quest, such
@@ -84,6 +91,12 @@ SCRIPTED_EVENT_NOTE = (
 # QuestErrandRefusal. The module uses different reasons for an object
 # starter and for a quest without a starter relation.
 NO_GIVER_IN_REACH = "the quest giver would not give it: no giver of that quest in reach"
+ALREADY_IN_LOG_REFUSAL = "already in the quest log"
+ALREADY_IN_LOG_NOTE = (
+    "The take refusal records that the quest was already in the character's "
+    "quest log at the time. It is a log-state observation, not evidence that "
+    "the quest's objectives cannot be completed."
+)
 TICKET_SQL = (
     "SELECT ticket FROM overseer_quest_ledger "
     "WHERE quest = %s AND ticket IS NOT NULL ORDER BY ticket DESC LIMIT 1"
@@ -139,6 +152,7 @@ class Plan:
     new: tuple  # (quest, rows) to file, oldest quest id first
     copies: tuple  # (quest, ticket): rows of a filed quest with no number yet
     stuck: tuple  # quest ids left at FILING by a filing that never finished
+    retire: tuple  # (quest, ticket) to check for retirement
 
 
 def _quest_ticket(group, quest: int, ticket_for) -> tuple[int | None, bool]:
@@ -166,24 +180,25 @@ def _quester_bound(group) -> bool:
 def plan(rows, ticket_for=None, completed=()) -> Plan:
     """What a pass does with the broken rows of the ledger. A quest in
     `completed` (some quester finished it) whose broken rows are all
-    quester-bound refusals is not filed: the quest works."""
+    quester-bound refusals qualifies for retirement if it has a ticket."""
     by_quest: dict = {}
     for row in rows or ():
         by_quest.setdefault(int(row["quest"]), []).append(row)
-    new, copies, stuck = [], [], []
+    new, copies, stuck, retire = [], [], [], []
     for quest, group in sorted(by_quest.items()):
         filed, has_filing = _quest_ticket(group, quest, ticket_for)
         tickets = [r["ticket"] for r in group if r.get("ticket") is not None]
+        works = quest in completed and _quester_bound(group)
         if filed is not None:
             if len(tickets) < len(group):
                 copies.append((quest, filed))
+            if works:
+                retire.append((quest, filed))
         elif has_filing:
             stuck.append(quest)
-        elif quest in completed and _quester_bound(group):
-            continue
-        else:
+        elif not works:
             new.append((quest, tuple(group)))
-    return Plan(tuple(new), tuple(copies), tuple(stuck))
+    return Plan(tuple(new), tuple(copies), tuple(stuck), tuple(retire))
 
 
 def initial_delay(
@@ -330,11 +345,13 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
     ]
     lines.extend(_world_rows(info))
     no_giver_in_reach = False
+    already_in_log = False
     scripted_event = False
     for row in rows:
         name = str(row.get("character_name") or "")
-        reason = row.get("reason") or "no reason recorded"
+        reason = str(row.get("reason") or "no reason recorded")
         no_giver_in_reach |= reason == NO_GIVER_IN_REACH
+        already_in_log |= reason.endswith(": " + ALREADY_IN_LOG_REFUSAL)
         scripted_event |= reason == SCRIPTED_EVENT_REASON
         lines += [
             "- Quester: %s (%s)" % (name, party_of(name)),
@@ -351,11 +368,13 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
     if no_giver_in_reach:
         lines += [
             "",
-            "The take step asks the world for a living creature linked to the quest "
-            "within the 20-yard arrival radius. The refusal means none matched then; "
-            "the stored rows do not distinguish a missing, distant, dead, or otherwise "
-            "unavailable creature.",
+            "The take was refused because no living creature linked to the quest "
+            "matched within the 20-yard arrival radius at that time. This explains "
+            "the ledger reason, but the stored rows do not distinguish a missing, "
+            "distant, dead, or otherwise unavailable creature.",
         ]
+    if already_in_log:
+        lines += ["", ALREADY_IN_LOG_NOTE]
     lines += [
         "",
         "## Acceptance criteria",
@@ -393,6 +412,11 @@ class SqlStore:
     def completed(self) -> list:
         self.cur.execute(COMPLETED_SQL, (questledger.COMPLETED,))
         return [int(r["quest"]) for r in self.cur.fetchall()]
+
+    def completion(self, quest: int) -> tuple[int, datetime | None]:
+        self.cur.execute(COMPLETION_SQL, (quest, questledger.COMPLETED))
+        row = self.cur.fetchone()
+        return int(row["questers"]), row["newest"]
 
     def objectives(self, quest: int) -> list:
         self.cur.execute(OBJECTIVES_SQL, (quest,))
@@ -440,7 +464,7 @@ def run(
     site: str = "",
     now: float | None = None,
 ) -> dict:
-    """One pass: {filed, copied, stuck, unlinked}. A refused filing frees its
+    """One pass: {filed, copied, stuck, unlinked, retired}. A refused filing frees its
     quest for the next pass and is raised, so the pass stops and the bridge
     logs it. A timed-out filing stays at FILING so it is not retried before a
     person looks. unlinked lists issues filed but not linked under the epic."""
@@ -449,9 +473,8 @@ def run(
     todo = plan(store.broken(), ticket_for=ticket_for, completed=frozenset(done))
     for quest, ticket in todo.copies:
         store.take(quest, ticket)
-    # The pass time is written before the first POST: a pass that files
-    # some issues and then fails has still spent the day, so a restart must
-    # not see it as never run.
+    # Record the pass before GitHub writes so a restart respects the daily
+    # limit even after a partial pass.
     if hasattr(store, "record_pass"):
         store.record_pass(time.time() if now is None else float(now))
     known = {q.id: q for q in catalogue or ()}
@@ -468,17 +491,25 @@ def run(
             raise
         store.filed(quest, number)
         filed += 1
+    retired = 0
+    for quest, ticket in todo.retire:
+        if retired >= MAX_RETIRE_PER_PASS:
+            break
+        count, newest = store.completion(quest)
+        if count and client.retire(ticket, quest, count, newest):
+            retired += 1
     unlinked, client.unlinked = client.unlinked, []
     return {
         "filed": filed,
         "copied": len(todo.copies),
         "stuck": list(todo.stuck),
         "unlinked": unlinked,
+        "retired": retired,
     }
 
 
 class Client:
-    """Files an issue and links it under the epic. The link is best kept
+    """Files and retires issues. The epic link is best kept
     apart: the issue exists by then, so a refused link never files twice. It
     goes on unlinked for the pass to report, not silently."""
 
@@ -518,6 +549,44 @@ class Client:
                     "tickets: #%d is not linked under #%d", made["number"], self.epic
                 )
         return int(made["number"])
+
+    def retire(
+        self, number: int, quest: int, count: int, newest: datetime | None
+    ) -> bool:
+        """Close an open issue once its quest completion is documented."""
+        path = f"/issues/{number}"
+        issue = self.github.call("GET", path, ok=(200, 404))
+        if issue.status == 404 or issue.json()["state"] != "open":
+            return False
+        questers = "quester" if count == 1 else "questers"
+        when = (
+            f"The newest recorded completion was at {newest}."
+            if newest is not None
+            else "The newest completion time is unknown."
+        )
+        # A comment can succeed even when the close fails. Reuse it on retry.
+        marker = f"<!-- questtickets: retired quest={quest} -->"
+        text = f"Quest {quest} was completed by {count} {questers}. {when}\n\n{marker}"
+        previous = next(
+            (
+                comment
+                for comment in self.github.pages(f"{path}/comments")
+                if (comment.get("body") or "").endswith(marker)
+            ),
+            None,
+        )
+        if previous is None:
+            self.github.comment(number, text)
+        elif previous["body"] != text:
+            self.github.call(
+                "PATCH", f"/issues/comments/{previous['id']}", {"body": text}
+            )
+        self.github.call(
+            "PATCH", path, {"state": "closed", "state_reason": "not_planned"}
+        )
+        if self.log:
+            self.log.info("questtickets: retired #%d for quest %d", number, quest)
+        return True
 
 
 def client_from_env(log=None, env=None, epic=None) -> Client | None:

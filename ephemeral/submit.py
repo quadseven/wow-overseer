@@ -19,7 +19,7 @@ import time
 from urllib.parse import quote
 
 from . import anchors as anchors_mod
-from . import confmerge, dbschema, imagecommit, lint, podpaths, runids
+from . import confmerge, controlauto, dbschema, imagecommit, lint, podpaths, runids
 from .kube import KubeError
 from .miniyaml import YamlError, loads
 
@@ -320,6 +320,131 @@ def default_image_env(cfg, kube):
     return image_env
 
 
+def default_resolves(cfg, kube):
+    """resolves(ref): True when the registry still serves the image by its digest."""
+
+    def resolves(ref):
+        try:
+            host = imagecommit.parse_ref(ref)[0]
+            secret = kube.get("secrets", BRIDGE_PULL_NAME, missing_ok=True)
+            imagecommit.image_env(ref, imagecommit.credentials(secret, host))
+        except imagecommit.RegistryError:
+            return False
+        return True
+
+    return resolves
+
+
+_CONTROL_FLAGS = (
+    "control_worldserver",
+    "control_dbimport",
+    "control_pin",
+    "control_bridge",
+)
+
+
+def _control_auto(gh, decree, args, resolves, deltas):
+    """args with the control images filled from the history file (`--control auto`)."""
+    if args.get("control") != "auto":
+        raise SubmitError("--control takes only auto")
+    given = [f for f in _CONTROL_FLAGS if args.get(f)]
+    if given:
+        raise SubmitError(
+            "--control auto picks the control images itself; drop "
+            + ", ".join("--" + f.replace("_", "-") for f in given)
+        )
+    fix = decree["fix"]
+    if not _SHA.match(str(fix.get("commit", ""))):
+        raise SubmitError("--control auto needs fix.commit as a full commit sha")
+    path = args.get("control_history")
+    if not path:
+        raise SubmitError(
+            "--control auto needs --control-history (the deploy side's list of past image sets)"
+        )
+    try:
+        history = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SubmitError(f"control history {path} is unreadable: {exc}") from exc
+    if not isinstance(history, list) or not all(isinstance(e, dict) for e in history):
+        raise SubmitError("control history must be a JSON list of image sets")
+    bridge_fix = fix["repo"].endswith("/wow-overseer")
+    try:
+        entry = controlauto.pick_control(
+            history, lambda sha: fix_presence(gh, fix, sha), resolves, bridge_fix
+        )
+    except controlauto.AutoError as exc:
+        raise SubmitError(f"--control auto: {exc}") from exc
+    pin = entry["bridge_commit" if bridge_fix else "pin"]
+    filled = {
+        "control_worldserver": entry["worldserver"],
+        "control_dbimport": entry["dbimport"],
+        "control_pin": pin,
+    }
+    if bridge_fix:
+        filled["control_bridge"] = entry["bridge"]  # pick_control checked it resolves
+    elif decree["world"]["bridge"] == "on":
+        bridge = entry.get("bridge")
+        if not (bridge and resolves(bridge)):
+            raise SubmitError(
+                f"--control auto: the chosen set (pin {pin}) has no bridge image that still resolves"
+            )
+        filled["control_bridge"] = bridge
+    deltas.append(
+        f"control arm: chosen by --control auto from the history: pin {pin}, "
+        f"worldserver {entry['worldserver']}"
+    )
+    return {**args, **filled}, entry
+
+
+def _control_config(args, entry, files, required, deltas):
+    prefix = args.get("control_playerbots_prefix")
+    dropped = args.get("control_drop_keys")
+    if "dist_inventory" in entry:
+        if prefix is not None or dropped is not None:
+            raise SubmitError(
+                "a selected dist_inventory cannot be combined with "
+                "--control-drop-keys or --control-playerbots-prefix"
+            )
+        try:
+            control_files, changes = controlauto.inventory_overrides(
+                entry, files, required
+            )
+        except controlauto.AutoError as exc:
+            raise SubmitError(f"--control auto: {exc}") from exc
+        deltas.extend(changes)
+        return control_files
+
+    control_files = files
+    if dropped is not None:
+        names = dropped.split(",")
+        if not all(_KEY.match(n) for n in names):
+            raise SubmitError(
+                "--control-drop-keys must be a comma-separated list of config keys such as Overseer.Raid.QuorumSeats"
+            )
+        control_files = {
+            g: confmerge.drop_keys(t, set(names)) for g, t in control_files.items()
+        }
+        deltas.append(
+            "control arm: override keys dropped (the control image's dist predates them): "
+            + ", ".join(names)
+        )
+    if prefix is not None:
+        if not _PREFIX.match(prefix):
+            raise SubmitError(
+                "--control-playerbots-prefix must be a bare name such as AiPlayerbot (no dot, no space)"
+            )
+        control_files = {
+            g: confmerge.rename_prefix(t, "Playerbots.", prefix + ".")
+            if g == "playerbots"
+            else t
+            for g, t in control_files.items()
+        }
+        deltas.append(
+            f"control arm: playerbots keys written as {prefix}.* (the control image predates the rename to Playerbots.*)"
+        )
+    return control_files
+
+
 def default_template_image(cfg, kube):
     """template(klass): the template image to run, a `:newest` ref resolved to a digest."""
 
@@ -350,7 +475,7 @@ def default_template_image(cfg, kube):
 
 def submit(
     cfg, kube, gh, decree_path, args=None, clock=time.time, out=print, image_env=None,
-    template_image=None,
+    template_image=None, resolves=None,
 ):  # fmt: skip
     """Create the suspended Jobs. Returns the submission record (also saved)."""
     args = dict(args or {})
@@ -375,38 +500,13 @@ def submit(
         raise SubmitError(f"the template has no numbers for class {klass}")
     live_images, pins, base_files = read_live(cfg, kube)
     live_bridge = read_bridge_image(cfg, kube) if bridge_on else None
-    files, deltas = _config_for(world, base_files, bridge_on)
-    prefix = args.get("control_playerbots_prefix")
-    control_files = files
-    dropped = args.get("control_drop_keys")
-    if dropped is not None:
-        names = dropped.split(",")
-        if not all(_KEY.match(n) for n in names):
-            raise SubmitError(
-                "--control-drop-keys must be a comma-separated list of config keys such as Overseer.Raid.QuorumSeats"
-            )
-        control_files = {
-            g: confmerge.drop_keys(t, set(names)) for g, t in control_files.items()
-        }
-        deltas.append(
-            "control arm: override keys dropped (the control image's dist predates them): "
-            + ", ".join(names)
-        )
-    if prefix is not None:
-        if not _PREFIX.match(prefix):
-            raise SubmitError(
-                "--control-playerbots-prefix must be a bare name such as AiPlayerbot (no dot, no space)"
-            )
-        control_files = {
-            g: confmerge.rename_prefix(t, "Playerbots.", prefix + ".")
-            if g == "playerbots"
-            else t
-            for g, t in control_files.items()
-        }
-        deltas.append(
-            f"control arm: playerbots keys written as {prefix}.* (the control image predates the rename to Playerbots.*)"
-        )
+    files, deltas, required = _config_for(world, base_files, bridge_on)
     arms = ["control", "treatment"] if arm_arg == "both" else [arm_arg]
+    entry = {}
+    if args.get("control") is not None and "control" in arms:
+        resolves = resolves or default_resolves(cfg, kube)
+        args, entry = _control_auto(gh, decree, args, resolves, deltas)
+    control_files = _control_config(args, entry, files, required, deltas)
     arm_bridge = {
         arm: _images_for(arm, live_images, args, live_bridge).get("bridge")
         for arm in arms
@@ -502,7 +602,7 @@ def _config_for(world, base_files, bridge_on=False):
         f"random bots: {bots}",
         "clients: none (every character is headless)",
     ]
-    return files, deltas
+    return files, deltas, set(changes)
 
 
 def _presence(cfg, gh, decree, arms, args, pins, arm_bridge=None, image_env=None):
