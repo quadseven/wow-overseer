@@ -35,6 +35,14 @@ anchors:
     z: 260.68
     o: -2.766
     provenance: {source: acore_world.gameobject, ref: "guid 427 (Meeting Stone, entry 179584)", observed: "2026-11-15", note: "the Blackrock Mountain stone beside Franclorn Forgewright"}
+  moltencore-raid-staging:
+    map: 0
+    zone: 0
+    x: -7508.32
+    y: -1039.74
+    z: 180.912
+    o: 3.83972
+    provenance: {source: acore_world.areatrigger_teleport, ref: "2890 (Molten Core exit landing)", observed: "2026-11-27", note: "the raid module's staging point, outside the entry trigger"}
   # Copied from game-written rows on 2026-11-15; provenance on each entry.
   theramore-pier-guard:
     map: 1
