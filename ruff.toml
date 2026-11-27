@@ -3,7 +3,7 @@
 # mod-overseer is a submodule that lints in its own repo. CI's lint job checks
 # out without submodules; the lane check checks them out, so it skips the
 # submodule here to see the same tree CI does.
-extend-exclude = ["mod-overseer"]
+extend-exclude = ["mod-overseer", ".loom", ".loom-answers"]
 
 [format]
 # bridge.py and map_server.py are read as TEXT by ~110 source-shape tests
