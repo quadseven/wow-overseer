@@ -155,6 +155,24 @@ class ARetryableRewardRefusalIsNotBroken(unittest.TestCase):
             )
             self.assertEqual(p.broken, (), free)
 
+    def test_same_refusals_with_room_count_when_not_retryable(self):
+        tried = [
+            replace(reward_refused(age=m), retryable=False) for m in (300, 200, 100)
+        ]
+        self.assertEqual(questers.refusals("Mirra", tried)[("turnin", 1)][0], 3)
+        for free in (1, 8):
+            p = questers.plan(
+                world(),
+                complete_member(free_slots=free),
+                questers.Clock(),
+                0.0,
+                tried=tried,
+            )
+            self.assertEqual([broken.quest for broken in p.broken], [1], free)
+            self.assertTrue(
+                p.broken[0].reason.startswith(questers.CANNOT_TURN_IN), free
+            )
+
     def test_another_refusal_with_full_bags_still_counts(self):
         tried = [
             questers.Attempt(
@@ -247,9 +265,18 @@ class TheHandInWaitsForRetry(unittest.TestCase):
 
     def test_a_quester_with_room_waits_after_retryable_refusal(self):
         tried = [reward_refused(age=2)]
+        member = complete_member(free_slots=8)
         self.assertEqual(questers.turn_in_held("Mirra", tried), frozenset({1}))
         self.assertEqual(
             questers.retryable_reward_refused("Mirra", tried), frozenset({1})
+        )
+        waiting = questers.plan(world(), member, questers.Clock(), 0.0, tried=tried)
+        self.assertEqual(waiting.broken, ())
+        self.assertNotEqual(
+            (waiting.move.kind, waiting.move.quest)
+            if waiting.move is not None
+            else (None, None),
+            (classquest.TURN_IN, 1),
         )
 
     def test_another_quester_s_refusal_holds_nothing(self):
