@@ -17,7 +17,14 @@ import pathlib
 import unittest
 from unittest import mock
 
-from test_campaignplan import ALLIANCE, CRESCENT, HORDE, KALIMDOR, facts
+from test_campaignplan import (
+    ALLIANCE,
+    CRESCENT,
+    EASTERN_KINGDOMS,
+    HORDE,
+    KALIMDOR,
+    facts,
+)
 from test_jev_items import FakeJev
 from test_preraid import (
     ANCHORS,
@@ -140,26 +147,17 @@ class TheLadderIsPerFactionAndPerLevel(unittest.TestCase):
         self.assertIn("Nobody's level", dungeonladder.view(horde(level=0))["line"])
 
 
-class ALevel60FamilyGearsInTheLowerDungeons(unittest.TestCase):
-    def test_zulfarrak_stays_open_while_its_loot_upgrades_somebody(self):
+class ALevel60FamilyGearsInTheLevel60Dungeons(unittest.TestCase):
+    def test_zulfarrak_is_outgrown_whatever_its_loot(self):
+        """#3282: a family of 60s no longer keeps a lower door for its loot."""
         opts = campaignplan.options(
             alliance(upgrades=worth(zulfarrak=18.0, **{"dire-maul-east-east": 9.0}))
         )
-        self.assertIn("zulfarrak", [o.keyword for o in opts])
-        # It stays offered, but the pick is the in-band run: Zul'Farrak's
-        # bosses top out well under a capped family's weakest member, so
-        # its higher raw expected gain no longer wins the pick (#2715).
+        self.assertNotIn("zulfarrak", [o.keyword for o in opts])
         pick = campaignplan.heuristic(opts)
         self.assertEqual(pick.keyword, "dire-maul-east-east")
         self.assertTrue(pick.capped)
         self.assertEqual(pick.runs, campaignplan.AT_CAP_RUNS)
-
-    def test_the_runs_made_while_levelling_do_not_fill_its_first_round(self):
-        opts = campaignplan.options(
-            alliance(upgrades=worth(zulfarrak=18.0), done={"zulfarrak": 30})
-        )
-        zf = next(o for o in opts if o.keyword == "zulfarrak")
-        self.assertEqual((zf.done, zf.target), (30, 40))
 
     def test_a_wing_is_not_blamed_for_its_neighbours_deaths(self):
         with mock.patch.object(crossing, "first_blocked_leg", return_value=None):
@@ -171,9 +169,9 @@ class ALevel60FamilyGearsInTheLowerDungeons(unittest.TestCase):
         self.assertFalse(any(o.troubled for o in wings))
         self.assertTrue(all(o.deaths is None and o.bosses is None for o in wings))
 
-    def test_zulfarrak_is_outgrown_once_it_holds_nothing(self):
+    def test_zulfarrak_is_outgrown_by_its_ceiling(self):
         refused = campaignplan.refusals(alliance(upgrades=worth()))
-        self.assertIn("holds no upgrade for anyone", refused["zulfarrak"])
+        self.assertEqual(refused["zulfarrak"], "outgrown: it tops out at 54")
 
     def test_unread_loot_is_not_claimed_empty(self):
         refused = campaignplan.refusals(alliance(upgrades=worth()))
@@ -260,14 +258,16 @@ class DeathsAndWipesCount(unittest.TestCase):
         self.assertIn("has cost the family", campaignplan.heuristic_why(pick))
 
     def test_jev_is_told_the_record(self):
-        f = alliance(
-            keys=CRESCENT,
-            deaths={209: 4, 429: 7},
-            won={209: 9},
-            upgrades=worth(zulfarrak=18.0, **{"dire-maul-east-east": 9.0}),
+        f = facts(
+            ALLIANCE,
+            EASTERN_KINGDOMS,
+            bosses={**BOSSES, 230: (52, 58)},
+            deaths={230: 4, 429: 7},
+            won={230: 9},
+            upgrades=worth(**{"blackrock-depths": 18.0, "lower-blackrock-spire": 9.0}),
         )
         opts = campaignplan.options(f)
-        fake = FakeJev(picks={"dungeon": "zulfarrak"}, confidence=0.9)
+        fake = FakeJev(picks={"dungeon": "blackrock-depths"}, confidence=0.9)
         judgment = asyncio.run(
             jev_choices.dungeon_ask(
                 jev.Client("k", transport=fake),
@@ -275,26 +275,22 @@ class DeathsAndWipesCount(unittest.TestCase):
                 opts,
                 campaignplan.heuristic(opts),
                 jev_choices.policy(jev_choices.KIND_DUNGEON, {}),
-                "Zul'Farrak is done at 50 of 50",
+                "Dire Maul (the east wing) is done at 10 of 10",
             )
         )
         [request] = fake.requests
-        zf = next(d for d in request["state"]["dungeons"] if d["door"] == "zulfarrak")
-        self.assertEqual(zf["boss_levels"], "46 to 46")
-        self.assertIn("below a weakest of 60", zf["level_fit"])
-        self.assertEqual(zf["pieces_the_loot_council_gave_a_member_there"], 9)
-        east = next(
-            d
-            for d in request["state"]["dungeons"]
-            if d["door"] == "dire-maul-east-east"
+        brd = next(
+            d for d in request["state"]["dungeons"] if d["door"] == "blackrock-depths"
         )
-        # Dire Maul's wings share map 429, so its deaths are nobody's wing.
-        self.assertEqual(east["family_deaths_there_in_the_last_week"], "unknown")
-        self.assertEqual(east["boss_levels"], "unknown")
-        self.assertEqual(zf["family_deaths_there_in_the_last_week"], 4)
+        self.assertEqual(brd["boss_levels"], "52 to 58")
+        self.assertIn("about right for a weakest of 60", brd["level_fit"])
+        self.assertEqual(brd["pieces_the_loot_council_gave_a_member_there"], 9)
+        self.assertEqual(brd["family_deaths_there_in_the_last_week"], 4)
         self.assertIn("keep dying", request["questions"]["dungeon"]["instructions"])
+        floor = campaignplan.BY_KEYWORD["blackrock-depths"].floor
         self.assertIn(
-            "zulfarrak 36-54 done 0/10 failed 0 wiped 0 died 4", judgment.facts
+            "blackrock-depths %d-60 done 0/10 failed 0 wiped 0 died 4" % floor,
+            judgment.facts,
         )
         self.assertTrue(jev_choices.dungeon_by_jev(judgment))
 
@@ -327,8 +323,13 @@ class TheOperatorFirstAndOneJevCampaignAtATime(unittest.TestCase):
         )
 
     def test_nothing_is_planned_while_jevs_entry_runs(self):
-        rows = list(alliance(upgrades=worth(zulfarrak=5.0)).level_rows)
-        mine = [self.q(source=campaignplan.SOURCE_JEV, runs=10)]
+        rows = list(alliance().level_rows)
+        mine = [
+            dict(
+                self.q(source=campaignplan.SOURCE_JEV, runs=10),
+                keyword="dire-maul-east-east",
+            )
+        ]
         self.assertEqual(
             campaignplan.due(mine, {"dungeon_runs_done": 3}, rows).reason, ""
         )

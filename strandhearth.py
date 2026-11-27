@@ -23,6 +23,15 @@ WALKING_BACK = "walking back to the leader"
 # walk and with no flight that carries it. The most stranded state there is.
 HELD_TOO_FAR = "held where it stands, too far to walk back"
 WATCHED_STATES = (WALKING_BACK, HELD_TOO_FAR)
+# The module's fall-through word for a member it is neither walking back, nor
+# holding, nor on an errand: it reads "following" at any distance. Read live, a
+# member thousands of yards from its leader reads "following", not "walking
+# back": the module's far hold ends after its minutes and the member reads
+# "following" with nothing driving it, then the hold starts again. The watch
+# forgot the member each time the word changed, so no clock ever ran out and the
+# stone was never used. A "following" member this far out is watched too.
+FOLLOWING = "following"
+FOLLOWING_FAR_YARDS = 1500.0  # the module's CATCH_UP_FOOT_LIMIT_YARDS
 # No 5-yard improvement for this long is "not closing".
 STRAND_SECONDS = 600.0
 IMPROVE_YARDS = 5.0
@@ -72,7 +81,14 @@ def observe(watch: dict, leader: str, states: dict, now: float) -> list:
     stranded = []
     for name, (state, yards) in sorted(states.items()):
         key = (leader, name)
-        if state not in WATCHED_STATES or yards is None or yards < MIN_YARDS:
+        if state == FOLLOWING:
+            floor = FOLLOWING_FAR_YARDS
+        elif state in WATCHED_STATES:
+            floor = MIN_YARDS
+        else:
+            watch.pop(key, None)
+            continue
+        if yards is None or yards < floor:
             watch.pop(key, None)
             continue
         best, since = watch.get(key, (None, now))

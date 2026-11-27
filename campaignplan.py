@@ -23,9 +23,8 @@ holds that to jobs.PORTAL_KEYWORDS. A run is offered when:
     continent or across a crossing that can be made. The same rules an
     operator's queue order is held to (#204, #205, #207).
   * the weakest member has not outgrown it (`Run.ceiling`). At the level cap
-    a lower dungeon is outgrown only once its loot holds no upgrade for any
-    member (preraid.py reads Zul'Farrak, Maraudon, Uldaman, Razorfen Downs
-    and the Scarlet wings as well as the level 60 dungeons).
+    that holds for every door whose band stops under the cap, whatever its
+    loot reads (#3282): a family of 60s runs the level 60 dungeons.
   * its door does not need a key nobody in the family holds (DOOR_KEYS): the
     Scarlet Armory and Cathedral wait for the Scarlet Key from the Library,
     Dire Maul West and North for the Crescent Key from the East wing.
@@ -80,7 +79,8 @@ under its weakest member (BELOW_BAND, #2715), unless that run drops a
 planned fire resistance piece; then the most expected item levels, halved
 for a run across a continent crossing; the least of its target done; path
 order. While a run in the band is only held back as stalled, a run below
-the band is not offered in its place (#2715). Each dungeon is still
+the band is not offered in its place (#2715). A door whose band stops
+under the cap is never offered at the cap (#3282). Each dungeon is still
 run AT_CAP_RUNS times a round before the next round starts, so the family
 works through the dungeons as it outgrows their loot rather than living in
 one.
@@ -146,9 +146,10 @@ FIT_BELOW = 6
 # under the weakest member ranks behind every run in the family's band,
 # however much its loot scores: an empty slot counts any drop as all gain,
 # so raw expected gain alone pulls a capped family into the lowest dungeon
-# that drops anything (#2715). The run stays offered while its loot holds
-# an upgrade, and a planned fire resistance piece excepts it: the tanks
-# reach the cap short of the raid's fire floor without those pieces.
+# that drops anything (#2715). A planned fire resistance piece excepts
+# it: the tanks reach the cap short of the raid's fire floor without those
+# pieces. A door whose band stops under the cap never gets this far at the
+# cap (`_outgrown_run`, #3282).
 BELOW_BAND = 5
 
 # DOORS THAT NEED A KEY, and the run a player earns it in. mod-dungeon-clear
@@ -205,6 +206,60 @@ REFUSED_LOCKED = "locked"
 # The family's two latest runs there stalled, the later no further in
 # (dungeonstall.py, #1041): a third would stall the same way.
 REFUSED_STALLED = "stalled"
+
+# A door across the sea the family was queued for and never started. The
+# module's `boards` build fact is realm-wide, so it cannot say whether THIS
+# family's origin has a berth; an entry that sits unstarted can.
+# Long enough for a ship to dock and the family to board and reach the door.
+UNSTARTED_WAIT_SECONDS = 30 * 60
+# Long enough for the berths to change, short enough not to bar a door all day.
+UNSTARTED_COOLDOWN_SECONDS = 3 * 3600
+
+# One row per queue entry of the family, with the map of each run that leader
+# started since the entry was made (NULL when none did). The run ledger keeps
+# no door keyword, so `unstarted` matches the entry to a run by map in Python:
+# a run at some other dungeon must not clear this door.
+UNSTARTED_SQL = (
+    "SELECT q.id AS entry, q.keyword AS keyword, "
+    "TIMESTAMPDIFF(SECOND, q.created_at, NOW()) AS age_s, r.map_id AS map_id "
+    "FROM overseer_dungeon_queue q LEFT JOIN overseer_dungeon_run r "
+    "ON r.leader_name IN ({holes}) AND r.started_at >= q.created_at "
+    "WHERE q.family = %s AND q.created_at >= NOW() - INTERVAL %s SECOND"
+)
+
+
+def unstarted_args(key: str, names) -> tuple:
+    """UNSTARTED_SQL's arguments (the `{holes}` count is len(names))."""
+    return (
+        *[str(n) for n in names],
+        key,
+        UNSTARTED_WAIT_SECONDS + UNSTARTED_COOLDOWN_SECONDS,
+    )
+
+
+def unstarted(rows) -> dict | None:
+    """Facts.unstarted off UNSTARTED_SQL's rows: Run keyword -> seconds since
+    its oldest entry, or None when unread."""
+    if rows is None:
+        return None
+    ages: dict = {}
+    started: set = set()
+    for row in rows:
+        door = wing_of(str(row.get("keyword") or ""))
+        age = row.get("age_s")
+        if not door or age is None:
+            continue
+        entry = row.get("entry")
+        ages[(entry, door)] = int(age)
+        map_id = row.get("map_id")
+        if map_id is not None and int(map_id) == BY_KEYWORD[door].map_id:
+            started.add((entry, door))
+    out: dict = {}
+    for (entry, door), age in ages.items():
+        if (entry, door) not in started:
+            out[door] = max(age, out.get(door, 0))
+    return out
+
 
 LEVEL_CAP = 60
 
@@ -624,6 +679,8 @@ class Facts:
     keys        door key entries somebody carries (DOOR_KEYS), or None
     stalled     Run keyword -> why it stalled twice running
                 (dungeonstall.barred), or None when unread
+    unstarted   Run keyword -> seconds since the oldest queue entry for it
+                that started no run (UNSTARTED_SQL), or None when unread
     """
 
     family: str
@@ -641,6 +698,7 @@ class Facts:
     bosses: dict | None = None
     keys: frozenset | None = None
     stalled: dict | None = None
+    unstarted: dict | None = None
     # Run keyword -> completed runs since the family's last level (#1400,
     # `dry_doors`), or None when unread.
     dry: dict | None = None
@@ -801,7 +859,7 @@ class Option:
     def why(self) -> str:
         """The run count, said: how it was sized."""
         if self.capped:
-            how = "a round at the level cap" + _kept(self.ceiling, self.expected)
+            how = "a round at the level cap"
         else:
             how = "until the weakest member outgrows it at %d" % self.ceiling
         if self.quests:
@@ -810,18 +868,6 @@ class Option:
                 "" if self.quests == 1 else "s",
             )
         return how
-
-
-def _kept(ceiling: int, expected: float | None) -> str:
-    """Why a capped family is on a door past its ceiling, said (#2207); ""
-    for a door of the cap. Only its loot keeps such a door (`_outgrown_run`),
-    so the line names the ceiling and what a run is still worth."""
-    if ceiling >= LEVEL_CAP or not expected:
-        return ""
-    return (
-        ", kept past its ceiling of %d for the %.1f expected item levels a run "
-        "its loot still holds" % (ceiling, expected)
-    )
 
 
 def _rounds(facts: Facts, runs: list) -> int:
@@ -846,29 +892,21 @@ def target(run: Run, level: int, quests: int | None, rounds: int = 0) -> int:
     return base
 
 
-def _expected(facts: Facts, keyword: str) -> float | None:
-    """The item levels one run of `keyword` is worth, None when unread or
-    when preraid does not read that dungeon's loot at all."""
-    if facts.upgrades is None or keyword not in facts.upgrades:
-        return None
-    return round(sum(float(g.levels) for g in facts.upgrades.get(keyword, ())), 2)
-
-
-def _outgrown_run(facts: Facts, run: Run, level: int) -> str:
+def _outgrown_run(run: Run, level: int) -> str:
     """Why the family has outgrown `run`, or "" while it has not.
 
-    Levelling, a run is outgrown past its ceiling. At the level cap it is
-    outgrown only once its loot holds no upgrade for anybody, because a raid
-    guild gears in the lower dungeons too.
+    A run is outgrown once the weakest member passes its ceiling, at the
+    level cap too (#3282). The cap used to keep a lower door open while its
+    loot held any upgrade (#2207), and an empty or two-tier-down slot counts
+    any drop as one, so a family of 60s was queued for a door whose band
+    stops at 55 (Maraudon). The guard that ranks such a door
+    behind the band (`Option.below_band`, #2715) reads bosses per map and
+    is blind on a shared map such as Maraudon's. A capped family gears in
+    the doors whose band reaches the cap, as players at 60 do.
     """
     if level <= run.ceiling:
         return ""
-    worth = _expected(facts, run.keyword) if level >= LEVEL_CAP else None
-    if worth:
-        return ""
-    if worth is None:
-        return "outgrown: it tops out at %d" % run.ceiling
-    return "outgrown: it tops out at %d and holds no upgrade for anyone" % (run.ceiling)
+    return "outgrown: it tops out at %d" % run.ceiling
 
 
 # A DOOR THAT TEACHES NOTHING IS LEFT FOR ANOTHER (#1400).
@@ -949,13 +987,33 @@ def _stalled(facts: Facts, run: Run) -> str:
     return str((facts.stalled or {}).get(run.keyword) or "")
 
 
+def _unstarted(facts: Facts, run: Run) -> str:
+    """Why a door across the sea is refused for the family: it was queued
+    and no run started within UNSTARTED_WAIT_SECONDS, or "". Never applies on
+    the door's own continent, so it clears when the leader crosses."""
+    age = (facts.unstarted or {}).get(run.keyword)
+    if age is None:
+        return ""
+    door = council.continent_of(run.map_id)
+    home = council._home_continent(list(facts.level_rows))
+    if door is None or home is None or door == home:
+        return ""
+    left = UNSTARTED_WAIT_SECONDS + UNSTARTED_COOLDOWN_SECONDS - int(age)
+    if int(age) < UNSTARTED_WAIT_SECONDS or left <= 0:
+        return ""
+    return "queued across the sea and never started; held for %.1f more hour(s)" % (
+        left / 3600
+    )
+
+
 def _refusal_kind(facts: Facts, run: Run, level: int) -> tuple:
     """(kind, why) `run` is not offered, ("", "") when it is."""
     kind, why = council.door_refusal_kind(run.keyword, list(facts.level_rows))
     if why:
         return kind, why
     for kind, why in (
-        (REFUSED_OUTGROWN, _outgrown_run(facts, run, level)),
+        (council.REFUSED_CROSSING, _unstarted(facts, run)),
+        (REFUSED_OUTGROWN, _outgrown_run(run, level)),
         (REFUSED_LOCKED, _locked(facts, run)),
         (REFUSED_STALLED, _stalled(facts, run)),
         (REFUSED_DRY, _dry(facts.dry, run.keyword, level)),
@@ -1052,16 +1110,7 @@ def options(facts: Facts) -> list:
     out = []
     for run in open_runs:
         quests = None if facts.quests is None else int(facts.quests.get(run.zone, 0))
-        # A LOWER DUNGEON AT THE CAP COUNTS ITS OWN ROUNDS. The ledger has
-        # no window, so the runs a family made while levelling through it
-        # would otherwise fill the first at-cap round before it began. Its
-        # loot (`_outgrown_run`) is what retires it.
-        own = (
-            int(facts.done.get(run.keyword, 0)) // AT_CAP_RUNS
-            if level >= LEVEL_CAP and run.ceiling < LEVEL_CAP
-            else 0
-        )
-        want = target(run, level, quests, max(rounds, own))
+        want = target(run, level, quests, rounds)
         done = int(facts.done.get(run.keyword, 0))
         if done >= want:
             continue
@@ -1249,16 +1298,13 @@ class Due:
     dry: bool = False
 
 
-def due(
-    rows: list, leader: dict | None, level_rows: list, dry=None, upgrades=None
-) -> Due:
+def due(rows: list, leader: dict | None, level_rows: list, dry=None) -> Due:
     """Whether this family needs a planned run, from its pending queue rows.
 
     rows      the family's queued and active entries, in order, each with its
               `source` (campaignqueue.SELECT_PENDING_SQL)
     leader    the leader's roster row; its dungeon_runs_done counts the head
-    upgrades  Facts.upgrades, or None unread; only a capped family on a door
-              past its ceiling is judged by it (`needs_loot`)
+    level_rows  each member's level and map (campaignqueue.LEVEL_ROWS_SQL)
 
     Conservative on purpose: nothing is planned while any entry waits behind
     the head, or while the head (the operator's or a planned one) is short of
@@ -1282,7 +1328,7 @@ def due(
                 int(head["runs_wanted"]),
             )
         )
-    return _outgrown(head, level_rows, dry, upgrades)
+    return _outgrown(head, level_rows, dry)
 
 
 def _planned_run(head: dict) -> Run | None:
@@ -1293,32 +1339,24 @@ def _planned_run(head: dict) -> Run | None:
     return BY_KEYWORD.get(wing_of(str(head.get("keyword") or "")))
 
 
-def needs_loot(rows: list, level_rows: list) -> bool:
-    """Whether `due` needs Facts.upgrades to judge these rows (#2207): the
-    one pending entry is the planner's own, active, for a door under the
-    level cap, and the weakest member is at the cap. Every other family is
-    judged without the loot read, so the bridge makes it for this one alone."""
-    if len(rows) != 1 or str(rows[0].get("status")) != "active":
-        return False
-    run = _planned_run(rows[0])
-    weakest = [int(r.get("level") or 0) for r in level_rows if r.get("level")]
-    return bool(
-        run is not None
-        and run.ceiling < LEVEL_CAP
-        and weakest
-        and min(weakest) >= LEVEL_CAP
+def _inside(run: Run, level_rows: list) -> bool:
+    """Whether any member stands on `run`'s map: a run of it is under way."""
+    return any(
+        r.get("map_id") is not None and int(r["map_id"]) == run.map_id
+        for r in level_rows
     )
 
 
-def _outgrown(head: dict, level_rows: list, dry=None, upgrades=None) -> Due:
+def _outgrown(head: dict, level_rows: list, dry=None) -> Due:
     """An active planner entry the weakest member has outgrown ends early.
 
     Only the planner's own entries: an operator's order runs to its count.
-    While the family levels the ceiling alone ends it. At the level cap a
-    lower dungeon was chosen for its loot, not its levels, so it ends once
-    that loot, as read, holds no upgrade for anybody: the rule the plan
-    refuses the door by (`_outgrown_run`), kept for the entry already running
-    (#2207). Unread loot ends nothing.
+    While the family levels the ceiling alone ends it. At the level cap an
+    entry for a door whose band stops under the cap, queued before #3282,
+    ends too, by the rule the plan now refuses that door by
+    (`_outgrown_run`). It ends between runs, never during one: while a
+    member stands on the door's map the entry runs on, and the next pass
+    after the party is out ends it.
     """
     run = _planned_run(head)
     if run is None:
@@ -1330,15 +1368,14 @@ def _outgrown(head: dict, level_rows: list, dry=None, upgrades=None) -> Due:
             % (run.place, min(weakest), run.ceiling),
             finish=int(head["id"]),
         )
-    if weakest and run.ceiling < LEVEL_CAP <= min(weakest) and upgrades is not None:
-        if not sum(float(g.levels) for g in upgrades.get(run.keyword, ())):
-            return Due(
-                "the family has outgrown %s (the weakest is %d, it tops out at "
-                "%d and holds no upgrade for anyone)"
-                % (run.place, min(weakest), run.ceiling),
-                finish=int(head["id"]),
-            )
-        return Due()
+    if weakest and run.ceiling < LEVEL_CAP <= min(weakest):
+        if _inside(run, level_rows):
+            return Due()
+        return Due(
+            "the family has outgrown %s (every member is at the level cap of "
+            "%d, it tops out at %d)" % (run.place, LEVEL_CAP, run.ceiling),
+            finish=int(head["id"]),
+        )
     why = _dry(dry, run.keyword, min(weakest) if weakest else 0)
     if weakest and why:
         return Due("%s is %s" % (run.place, why), finish=int(head["id"]), dry=True)
@@ -1511,15 +1548,6 @@ def choice_line(row: dict | None) -> str:
     )
 
 
-def _kept_now(facts: Facts | None, head: dict) -> str:
-    """`_kept` for the entry the family is on now; "" when there is nothing
-    to say or the facts were not read."""
-    run = BY_KEYWORD.get(wing_of(str(head.get("keyword") or "")))
-    if facts is None or run is None or facts.weakest[1] < LEVEL_CAP:
-        return ""
-    return _kept(run.ceiling, _expected(facts, run.keyword))
-
-
 def page_view(
     queue_view: dict, facts: Facts | None, done: int | None, choice: dict | None = None
 ) -> dict:
@@ -1537,7 +1565,7 @@ def page_view(
             if head["status"] == "active" and done is not None
             else "%d runs, starting" % head["runs"]
         )
-        now = "Now: %s, %s%s." % (head["place"], count, _kept_now(facts, head))
+        now = "Now: %s, %s." % (head["place"], count)
     else:
         now = "Now: no dungeon; the family quests."
     if len(entries) > 1:

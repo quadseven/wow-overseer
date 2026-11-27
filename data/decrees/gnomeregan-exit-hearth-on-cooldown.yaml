@@ -4,13 +4,15 @@
 # The cooldown is a state a decree cannot set; the hearth command in act spends the stone first, so the
 # cooldown is real when the town run starts.
 # Fix: mod-overseer pull 1216 (the road check judges followers and spawn aims).
-# Scope: the road-refusal or 'hearths to its bind' line is bridge log text a decree can only forbid, so it is
-# not asserted. Instead the family must END in Stormwind (a trip that is still crossing Burning Steppes at the
-# end fails), and no event is recorded in zone 46 or by a death in the window.
+# Scope: the road-refusal line ("The road it was planned along crosses ... so it is not walked") and the
+# 'hearths to its bind beside ... instead of walking the road there' line are worldserver text the module
+# writes, and one or the other is required at least once (wow-overseer issue 2767). The family must also END
+# in Stormwind (a trip that is still crossing Burning Steppes at the end fails), and no event is recorded in
+# zone 46 or by a death in the window.
 decree: v1
 id: gnomeregan-exit-hearth-on-cooldown
 proves:
-  - {repo: quadseven/mod-overseer, issue: 836, criterion: "a Gnomeregan exit with the hearthstone on cooldown ends in Stormwind with no zone 46 event or death (the road-refusal and hearth-to-bind lines are not asserted here)"}
+  - {repo: quadseven/mod-overseer, issue: 836, criterion: "a Gnomeregan exit with the hearthstone on cooldown reaches Stormwind without crossing Burning Steppes, shown by a road-refusal or hearths to its bind line and no zone 46 event or death"}
 fix: {repo: quadseven/mod-overseer, commit: "c4aea4076a6ca25ce86112cd7d2b444ba77ad421"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}
@@ -63,3 +65,7 @@ observe:
     sql: |
       SELECT character_name, created_at FROM overseer_death WHERE created_at >= @t0
     expect: {rows: 0}
+  # The two lines of the road check; pinned to the module source by tests/test_eph_required_lines.py.
+  - name: the-lethal-road-was-refused-or-hearthed
+    role: check
+    log: {pattern: "above its party's youngest member \\(worst [0-9]+\\), so it is not walked - |hearths to its bind beside '[^']+' instead of walking the road there", expect: {at_least: 1}}

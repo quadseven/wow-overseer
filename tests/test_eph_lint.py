@@ -237,6 +237,28 @@ class CoordinatesTest(unittest.TestCase):
             [f for f in run(d) if f.level == "warning" and f.rule == "anchor"]
         )
 
+    def test_numeric_issue_and_box_are_accepted_for_batch_reporting(self):
+        d = doc()
+        d["proves"] = 42
+        d["box"] = "The family leaves without a defeat"
+        self.assertEqual(errors(d), [])
+
+    def test_numeric_issue_requires_box_text(self):
+        d = doc()
+        d["proves"] = 42
+        self.assertIn("schema", rules(d))
+
+    def test_box_cannot_be_attached_to_legacy_issue_list(self):
+        d = doc()
+        d["box"] = "The family leaves without a defeat"
+        self.assertIn("schema", rules(d))
+
+    def test_numeric_issue_must_be_positive(self):
+        d = doc()
+        d["proves"] = 0
+        d["box"] = "The family leaves without a defeat"
+        self.assertIn("schema", rules(d))
+
     def test_two_anchor_keys_are_rejected(self):
         d = doc()
         d["cast"][0]["set"]["at"] = {"creature": "A", "captured": "real-spot"}
@@ -490,6 +512,69 @@ class TodoTest(unittest.TestCase):
 
 
 class ShippedDecreesTest(unittest.TestCase):
+    def test_smith_decree_restores_the_hammer_purchase_scenario(self):
+        d = loads(
+            (ROOT / "data/decrees/smith-without-a-hammer-buys-one.yaml").read_text()
+        )
+        self.assertEqual(lint.lint_document(d), [])
+        self.assertEqual(d["proves"], 1590)
+        self.assertEqual(
+            d["box"],
+            "Live: on the dev realm a job craft smith with no hammer gets exactly one kind buy row for item 5956 in the town errand table, and no second one while it is held.",
+        )
+        self.assertEqual(d["duration"], "45m")
+        self.assertEqual([c["who"] for c in d["cast"]], ["Zug", "family:zug"])
+        for member in d["cast"]:
+            self.assertEqual(
+                member["set"], {"alive": True, "at": {"creature": "Krinkle Goodsteel"}}
+            )
+        self.assertEqual(
+            d["act"],
+            [
+                {"at": "0s", "roster": {"who": "Zug", "job": "craft"}},
+                {"at": "0s", "roster": {"who": "family:zug", "job": "craft"}},
+            ],
+        )
+        expected = [
+            (
+                "precondition",
+                "start",
+                "SELECT COUNT(*) FROM overseer_snapshot WHERE guid IN (@cast)",
+                "= 5",
+            ),
+            (
+                "precondition",
+                "start",
+                "SELECT COUNT(*) FROM item_instance WHERE owner_guid = @cast0 AND itemEntry = 5956",
+                "= 0",
+            ),
+            (
+                "check",
+                "end",
+                "SELECT COUNT(*) FROM overseer_command WHERE kind = 'buy' AND target_name = 'Zug' AND command LIKE 'entry:5956 %' AND created_at >= @t0",
+                "= 1",
+            ),
+            (
+                "check",
+                "end",
+                "SELECT COUNT(*) FROM overseer_command WHERE kind = 'buy' AND target_name = 'Zug' AND command LIKE 'entry:5956 %' AND created_at >= @t0 AND status = 'delivered'",
+                "= 1",
+            ),
+            (
+                "check",
+                "end",
+                "SELECT COUNT(*) FROM item_instance WHERE owner_guid = @cast0 AND itemEntry = 5956",
+                "= 1",
+            ),
+        ]
+        self.assertEqual(len(d["observe"]), len(expected))
+        for observation, (role, when, sql, scalar) in zip(d["observe"], expected):
+            with self.subTest(observation=observation["name"]):
+                self.assertEqual(observation["role"], role)
+                self.assertEqual(observation["when"], when)
+                self.assertEqual(" ".join(observation["sql"].split()), sql)
+                self.assertEqual(observation["expect"], {"scalar": scalar})
+
     def test_there_are_three_examples(self):
         self.assertGreaterEqual(len(DECREES), 3)
 

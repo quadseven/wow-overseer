@@ -193,7 +193,7 @@ export function bind(main) {
       document.querySelectorAll("[data-spectate-wait]").forEach((n) => { n.hidden = true; });
     });
   }
-  slot.append(kept.video, kept.status);
+  if (kept.video.parentElement !== slot) slot.append(kept.video, kept.status);
   // A redraw draws the "starting" line again; once the player has spoken it stays hidden.
   if (kept.status.textContent && typeof slot.querySelector === "function") {
     const wait = slot.querySelector("[data-spectate-wait]");

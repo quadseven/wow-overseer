@@ -108,7 +108,7 @@ def motd_command(text: str) -> str:
 
 def _sanitize_motd(text: str) -> str:
     collapsed = " ".join(str(text or "").split())
-    ascii_only = collapsed.encode("ascii", "ignore").decode("ascii").strip()
+    ascii_only = "".join(c for c in collapsed if " " <= c <= "~").strip()
     if len(ascii_only) <= MAX_MOTD_BYTES:
         return ascii_only
     return ascii_only[: MAX_MOTD_BYTES - 3].rstrip() + "..."

@@ -297,6 +297,12 @@ COOLDOWN_MINUTES = {
 FULL_BAGS_COLLECT_MINUTES = 240
 FULL_BAGS_COLLECT = "collect-full"
 
+# A SHOP BUY REFUSED FOR BAG ROOM WAITS FOUR HOURS (#3188). A bag refusal does
+# not make space by itself; the ordinary shop cooldown allowed the same failed
+# buy to be asked again about every two hours, for more than ten refusals a day.
+FULL_BAGS_SHOP_MINUTES = 240
+FULL_BAGS_SHOP = "shop-full"
+
 # A BAG IS CRAFTED AT A MAILBOX AND POSTED IN THE SAME STAND (2026-09-24).
 # Measured on dev: Baldam crafted a Runecloth Bag at 08:09, its post walk ended
 # in a fight and then off the map, and by 09:54 the bag was gone from the realm.
@@ -1159,10 +1165,9 @@ def master_bag(tailor):
     return max(reached, key=lambda b: b.slots, default=None)
 
 
-def _shopper(crew, entry, vendors_by_map, busy):
-    """The maintenance member who buys `entry`: online, free, on a classic
-    map whose vendor sells it; the lowest name, for a stable answer."""
-    return min(
+def _shoppers(crew, entry, vendors_by_map, busy):
+    """Available maintenance shoppers on a classic vendor map, in name order."""
+    return sorted(
         (
             m
             for m in crew
@@ -1174,7 +1179,6 @@ def _shopper(crew, entry, vendors_by_map, busy):
             and int(entry) in (vendors_by_map or {}).get(m.map_id, ())
         ),
         key=lambda m: m.name,
-        default=None,
     )
 
 
@@ -1257,25 +1261,41 @@ def _shop_wants(master) -> dict:
     return wants
 
 
-def shop_steps(master, crew, vendors_by_map, busy, recent=None, cap=NEAR) -> list:
+def shop_steps(
+    master, crew, vendors_by_map, busy, recent=None, cap=NEAR, notes=None
+) -> list:
     """The crew's shopping for one family master: thread and dye, bought and
     posted, for the bag it sews and the garment rungs it climbs.
 
     Nothing is bought twice inside the shop cooldown: `recent` holds
     ("to:<master>", "shop", entry) for every purchase already made for it.
+    A bag-room refusal cools its shopper, adds a reason to `notes`, and lets
+    the next eligible shopper take the errand.
     """
     steps = []
+    noted_full = set()
     for entry, (stocked, buy, why) in sorted(_shop_wants(master).items()):
         if master.count(entry) + master.incoming(entry) >= stocked:
             continue
         asked = (recent or {}).get(("to:" + master.name, "shop", int(entry)))
         if asked is not None and asked < COOLDOWN_MINUTES["shop"]:
             continue
-        shopper = _shopper(crew, entry, vendors_by_map, busy)
-        if shopper is None:
-            continue
-        steps.append(_shop_step(shopper, master, why, entry, buy, cap))
-        busy.add(shopper.name)
+        for shopper in _shoppers(crew, entry, vendors_by_map, busy):
+            full = (recent or {}).get((shopper.name, FULL_BAGS_SHOP, 0))
+            if full is None or full >= FULL_BAGS_SHOP_MINUTES:
+                steps.append(_shop_step(shopper, master, why, entry, buy, cap))
+                busy.add(shopper.name)
+                break
+            if notes is not None and shopper.name not in noted_full:
+                notes.append(
+                    "%s waits out the %d-minute shop backoff after the bags "
+                    "refused a shop item"
+                    % (
+                        shopper.name,
+                        FULL_BAGS_SHOP_MINUTES,
+                    )
+                )
+                noted_full.add(shopper.name)
     return steps
 
 
@@ -1545,7 +1565,9 @@ def _guild_steps(
         by_post = patterns_by_post(tailor, crew, vendors_by_map)
         if tailor.family and tailor.online:
             steps.extend(
-                shop_steps(tailor, crew, vendors_by_map, busy, recent, travel[0])
+                shop_steps(
+                    tailor, crew, vendors_by_map, busy, recent, travel[0], notes=notes
+                )
             )
         step, why = tailor_step(
             tailor,
@@ -1858,6 +1880,12 @@ def recent_from_rows(rows, prefix=SOURCE) -> dict:
             and any(r in str(row.get("result") or "") for r in corpstickets.BAG_REASONS)
         ):
             note((str(row.get("target_name") or ""), FULL_BAGS_COLLECT, key), age)
+        if (
+            action == "shop"
+            and parts[1] == "shop"
+            and any(r in str(row.get("result") or "") for r in corpstickets.BAG_REASONS)
+        ):
+            note((str(row.get("target_name") or ""), FULL_BAGS_SHOP, 0), age)
         if action in ("supply", "shop") and row.get("target_arg"):
             note(("to:" + str(row["target_arg"]), action, key), age)
     return out

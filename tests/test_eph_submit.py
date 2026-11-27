@@ -33,6 +33,11 @@ class Base(unittest.TestCase):
         self.cluster = FakeCluster()
         self.kube = kube.Kubectl("wow-ephemeral", runner=self.cluster)
         self.fake_gh = FakeGh()
+        for repo in ("quadseven/mod-dungeon-clear", "quadseven/wow-overseer"):
+            self.fake_gh.answers[("GET", f"repos/{repo}")] = {"default_branch": "main"}
+            self.fake_gh.answers[("GET", f"repos/{repo}/compare/{FIX}...main")] = {
+                "status": "ahead"
+            }
         self.gh = ghx.Gh(self.fake_gh)
         self.decree = pathlib.Path(self.tmp.name) / "d.yaml"
 
@@ -49,11 +54,140 @@ class Base(unittest.TestCase):
             self.cfg, self.kube, self.gh, self.decree, args,
             clock=self.clock, out=lambda *_: None,
             image_env=getattr(self, "image_env", None),
+            resolves=getattr(self, "resolves", None),
         )  # fmt: skip
 
     def compare(self, pin, status):
         path = f"repos/quadseven/mod-dungeon-clear/compare/{FIX}...{pin}"
         self.fake_gh.answers[("GET", path)] = {"status": status}
+
+
+class ControlAutoTest(Base):
+    """--control auto fills the control images from a history file the deploy side writes."""
+
+    def setUp(self):
+        super().setUp()
+        self.resolves = lambda ref: True
+        self.history = pathlib.Path(self.tmp.name) / "history.json"
+        newest = {"worldserver": WS, "dbimport": DB, "pin": SHA}
+        older = {"worldserver": OLD_WS, "dbimport": OLD_DB, "pin": OLD}
+        self.history.write_text(json.dumps([newest, older]), encoding="utf-8")
+        self.compare(SHA, "ahead")  # the live pin and the newest set carry the fix
+        self.compare(OLD, "behind")
+
+    def auto(self, **args):
+        return self.submit(
+            CHECKED, control="auto", control_history=str(self.history), **args
+        )
+
+    def test_auto_takes_the_newest_set_without_the_fix(self):
+        rec = self.auto()
+        self.assertEqual(rec["presence"]["control"], {"pin": OLD, "state": "absent"})
+        control = [
+            j for j in self.cluster.of("jobs")
+            if j["metadata"]["labels"]["eph/arm"] == "control"
+        ]  # fmt: skip
+        self.assertEqual(len(control), 3)
+        for job in control:
+            images = json.dumps(job)
+            self.assertIn(OLD_WS, images)
+            self.assertIn(OLD_DB, images)
+        self.assertTrue(
+            any("--control auto" in d and OLD in d for d in rec["fidelity_deltas"])
+        )
+
+    def test_auto_refuses_when_the_digests_no_longer_resolve(self):
+        self.resolves = lambda ref: ref not in (OLD_WS, OLD_DB)
+        with self.assertRaisesRegex(submit.SubmitError, "do not resolve"):
+            self.auto()
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_auto_refuses_when_every_set_has_the_fix(self):
+        self.compare(OLD, "ahead")
+        with self.assertRaisesRegex(submit.SubmitError, "lacks the fix"):
+            self.auto()
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_auto_and_explicit_control_images_are_refused_together(self):
+        with self.assertRaisesRegex(submit.SubmitError, "--control auto"):
+            self.auto(control_worldserver=OLD_WS)
+        with self.assertRaisesRegex(submit.SubmitError, "--control-bridge"):
+            self.auto(control_bridge=OLD_BRIDGE)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def write_history(self, *entries):
+        self.history.write_text(json.dumps(list(entries)), encoding="utf-8")
+
+    def test_auto_with_the_bridge_on_takes_the_chosen_sets_bridge(self):
+        self.write_history(
+            {
+                "worldserver": OLD_WS,
+                "dbimport": OLD_DB,
+                "pin": OLD,
+                "bridge": OLD_BRIDGE,
+            }
+        )
+        self.submit(
+            CHECKED.replace("bridge: off", 'bridge: "on"'),
+            control="auto", control_history=str(self.history),
+        )  # fmt: skip
+        for job in self.cluster.of("jobs"):
+            want = {"control": OLD_BRIDGE, "treatment": BRIDGE}
+            self.assertEqual(
+                _bridge(job)["image"], want[job["metadata"]["labels"]["eph/arm"]]
+            )
+
+    def test_auto_with_the_bridge_on_refuses_a_set_without_a_live_bridge(self):
+        on = CHECKED.replace("bridge: off", 'bridge: "on"')
+        self.write_history({"worldserver": OLD_WS, "dbimport": OLD_DB, "pin": OLD})
+        with self.assertRaisesRegex(submit.SubmitError, "bridge"):
+            self.submit(on, control="auto", control_history=str(self.history))
+        self.write_history(
+            {
+                "worldserver": OLD_WS,
+                "dbimport": OLD_DB,
+                "pin": OLD,
+                "bridge": OLD_BRIDGE,
+            }
+        )
+        self.resolves = lambda ref: ref != OLD_BRIDGE
+        with self.assertRaisesRegex(submit.SubmitError, "bridge"):
+            self.submit(on, control="auto", control_history=str(self.history))
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_auto_needs_a_readable_history_list(self):
+        self.history.unlink()
+        with self.assertRaisesRegex(submit.SubmitError, "history"):
+            self.auto()
+        self.history.write_text('{"not": "a list"}', encoding="utf-8")
+        with self.assertRaisesRegex(submit.SubmitError, "history"):
+            self.auto()
+        with self.assertRaisesRegex(submit.SubmitError, "history"):
+            self.submit(CHECKED, control="auto")
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_the_default_resolver_reads_the_registry_and_fails_closed(self):
+        from unittest import mock
+
+        from ephemeral import imagecommit
+
+        resolves = submit.default_resolves(self.cfg, self.kube)
+        with mock.patch.object(imagecommit, "image_env", return_value={}):
+            self.assertTrue(resolves(OLD_WS))
+        gone = imagecommit.RegistryError("registry answered 404")
+        with mock.patch.object(imagecommit, "image_env", side_effect=gone):
+            self.assertFalse(resolves(OLD_WS))
+        self.assertFalse(resolves("not-a-digest-ref"))
+        broken = kube.KubeError("forbidden: secrets")
+        with (
+            mock.patch.object(self.kube, "get", side_effect=broken),
+            self.assertRaises(kube.KubeError),
+        ):
+            resolves(OLD_WS)
+
+    def test_an_unknown_control_mode_is_refused(self):
+        with self.assertRaisesRegex(submit.SubmitError, "auto"):
+            self.submit(CHECKED, control="manual", control_history=str(self.history))
 
 
 class SubmitTest(Base):
@@ -178,6 +312,50 @@ class SubmitTest(Base):
         text = json.dumps(self.cluster.of("jobs")[0])
         self.assertIn("client-data-a", text)
         self.assertNotIn("{{", text)
+
+    def test_newest_template_is_resolved_and_the_job_names_it_by_digest(self):
+        import base64
+        from unittest import mock
+
+        from test_eph_imagecommit import (
+            CREDS,
+            TPL,
+            TPL_MANIFEST,
+            NewestTemplateTest,
+            TemplateRegistry,
+        )
+
+        self.cfg.template_images["lean"] = f"{TPL}:newest"
+        self.cfg.template_pull_secret = "template-reader"
+        auth = base64.b64encode(":".join(CREDS).encode()).decode()
+        docker_config = json.dumps({"auths": {TPL.split("/")[0]: {"auth": auth}}})
+        self.cluster.put(
+            "secrets",
+            "wow-ephemeral",
+            "template-reader",
+            {
+                "data": {
+                    ".dockerconfigjson": base64.b64encode(
+                        docker_config.encode()
+                    ).decode()
+                }
+            },
+        )
+        reg = TemplateRegistry(NewestTemplateTest.TAGS, basic=True)
+        with mock.patch("ephemeral.imagecommit.urlfetch", reg):
+            rec = self.submit(**CONTROL)
+        self.assertFalse(any("/token?" in url for url in reg.calls))
+        import hashlib
+
+        want = f"{TPL}@sha256:" + hashlib.sha256(TPL_MANIFEST).hexdigest()
+        self.assertEqual(rec["template_image"], want)
+        for job in self.cluster.of("jobs"):
+            self.assertIn(want, json.dumps(job))
+            self.assertNotIn(":newest", json.dumps(job))
+
+    def test_an_explicit_template_tag_still_works_without_the_registry(self):
+        rec = self.submit(**CONTROL)
+        self.assertEqual(rec["template_image"], "registry.example.com/t:lean-1")
 
     def test_realm_ids_are_unique_and_in_range(self):
         rec = self.submit(**CONTROL)
@@ -592,6 +770,98 @@ BRIDGE_FIX = (
     .replace("commit: TODO", f"commit: {FIX}")
     .replace("quadseven/mod-dungeon-clear", "quadseven/wow-overseer")
 )
+
+
+class OffBranchFixTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.compare(SHA, "diverged")
+        self.repo_path = "repos/quadseven/mod-dungeon-clear"
+        self.branch_path = f"{self.repo_path}/compare/{FIX}...main"
+        self.pulls_path = f"{self.repo_path}/commits/{FIX}/pulls?per_page=100"
+        self.fake_gh.answers[("GET", self.branch_path)] = {"status": "diverged"}
+        self.fake_gh.answers[("GET", self.pulls_path)] = [[]]
+        self.refusal = (
+            f"fix.commit {FIX} is not on quadseven/mod-dungeon-clear's default branch main; "
+            "replace the branch commit with a commit on the default branch"
+        )
+
+    def test_off_branch_fix_names_the_commit_and_creates_nothing(self):
+        with self.assertRaises(submit.SubmitError) as caught:
+            self.submit(CHECKED, arm="treatment")
+        self.assertEqual(str(caught.exception), self.refusal)
+        self.assertEqual(self.cluster.of("jobs"), [])
+        self.assertFalse(any("apply" in argv for argv, _ in self.cluster.calls))
+
+    def test_off_branch_refusal_includes_reported_merge_commit(self):
+        self.fake_gh.answers[("GET", self.pulls_path)] = [
+            [],
+            [{"merged_at": "2026-01-01T00:00:00Z", "merge_commit_sha": "e" * 40}],
+        ]
+        with self.assertRaises(submit.SubmitError) as caught:
+            self.submit(CHECKED, arm="treatment")
+        self.assertEqual(
+            str(caught.exception), self.refusal + "; pull merge commit: " + "e" * 40
+        )
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_unmerged_or_missing_merge_commits_are_not_suggested(self):
+        for pull in (
+            {"merged_at": None, "merge_commit_sha": "e" * 40},
+            {"merged_at": "2026-01-01T00:00:00Z", "merge_commit_sha": None},
+            {"merged_at": "2026-01-01T00:00:00Z", "merge_commit_sha": ""},
+        ):
+            with self.subTest(pull=pull):
+                self.fake_gh.answers[("GET", self.pulls_path)] = [[pull]]
+                with self.assertRaises(submit.SubmitError) as caught:
+                    self.submit(CHECKED, arm="treatment")
+                self.assertEqual(str(caught.exception), self.refusal)
+
+    def test_missing_pull_lookup_still_refuses_the_branch_commit(self):
+        del self.fake_gh.answers[("GET", self.pulls_path)]
+        with self.assertRaises(submit.SubmitError) as caught:
+            self.submit(CHECKED, arm="treatment")
+        self.assertEqual(str(caught.exception), self.refusal)
+
+    def test_reachable_diverged_control_is_absent_on_a_slash_named_default_branch(self):
+        self.fake_gh.answers[("GET", self.repo_path)] = {
+            "default_branch": "release/stable"
+        }
+        path = f"{self.repo_path}/compare/{FIX}...release%2Fstable"
+        self.compare(OLD, "diverged")
+        for status in ("ahead", "identical"):
+            with self.subTest(status=status):
+                self.fake_gh.answers[("GET", path)] = {"status": status}
+                rec = self.submit(CHECKED, arm="control", **CONTROL)
+                self.assertEqual(rec["presence"]["control"]["state"], "absent")
+
+    def test_reachable_diverged_treatment_keeps_the_image_refusal(self):
+        self.fake_gh.answers[("GET", self.branch_path)] = {"status": "ahead"}
+        with self.assertRaises(submit.SubmitError) as caught:
+            self.submit(CHECKED, arm="treatment")
+        self.assertEqual(
+            str(caught.exception),
+            "fix presence is wrong for the treatment image: expected present, found absent",
+        )
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_default_branch_behind_the_fix_also_refuses_it(self):
+        self.fake_gh.answers[("GET", self.branch_path)] = {"status": "behind"}
+        self.compare(OLD, "diverged")
+        with self.assertRaises(submit.SubmitError) as caught:
+            self.submit(CHECKED, arm="control", **CONTROL)
+        self.assertEqual(str(caught.exception), self.refusal)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_unknown_default_branch_reachability_is_not_reported_as_off_branch(self):
+        for response in ({}, {"status": "unknown"}):
+            with self.subTest(response=response):
+                self.fake_gh.answers[("GET", self.branch_path)] = response
+                with self.assertRaisesRegex(
+                    submit.SubmitError, "cannot verify fix.commit"
+                ):
+                    self.submit(CHECKED, arm="treatment")
+        self.assertEqual(self.cluster.of("jobs"), [])
 
 
 class BridgePinTest(Base):

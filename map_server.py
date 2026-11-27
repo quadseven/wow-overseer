@@ -2352,7 +2352,8 @@ def _fetch_jev_openai(cur) -> list:
     """The OpenAI backend's per-kind report as lines, or none where it has never
     run (no spend table yet); the card is one card and never fails for it."""
     try:
-        report = jev_openai.fetch_report(cur, os.environ)
+        report = jev_openai.fetch_report(
+            cur, os.environ, db_errors=(pymysql.err.MySQLError,))
     except Exception:
         return []
     return [jev_openai.summary_line(k, v) for k, v in report.items()]
@@ -3700,8 +3701,8 @@ def _fetch_ladder_records(rd, families: dict, chars: list) -> dict:
 def _fetch_ladder_record(rd, head: str, members: list, capped: bool) -> dict:
     """One family's rows for the ladder and Jev's reasons. Reads only.
 
-    `capped` reads the pre-raid plan too, because at the level cap a lower
-    dungeon stays on the ladder only while its loot upgrades somebody.
+    `capped` reads the pre-raid plan too, because at the level cap the
+    doors are ranked by what their loot is worth to the family.
     """
     holes = campaignplan.holes(len(members))
     args = tuple(members)
@@ -3918,20 +3919,18 @@ _LOOT_CLIPS_SQL = (
 
 def _run_reports(rd, rows: list, limit: int) -> dict:
     """Each recent run's post-run report (mod-overseer#152), by run id: the
-    newest `limit` run ids in the timeline rows, read through runreport.read,
-    the same read the bridge posts to Discord. A realm without the summary
-    view shows no report rather than one that says nothing dropped."""
+    newest `limit` run ids in the timeline rows, read in batch through
+    runreport.read_many, the same builder the bridge posts to Discord. A realm
+    without the summary view shows no report rather than one that says nothing
+    dropped."""
     ids = sorted({int(r.get("run_id") or 0) for r in rows} - {0}, reverse=True)[:limit]
-    reports: dict = {}
+    if not ids:
+        return {}
     try:
-        for run_id in ids:
-            report = runreport.read(rd.must, run_id)
-            if report is not None:
-                reports[run_id] = report
+        return runreport.read_many(rd.must, ids)
     except realmread.Gap:
         log.info("run reports unavailable (no overseer_dungeon_run_summary yet)")
         return {}
-    return reports
 
 
 # --- the live dungeon recap and the loot board (infra#2597) ------------------
@@ -5154,7 +5153,8 @@ SHARED_READS = readcache.ReadCache(SHARED_READ_SECONDS)
 # is shared too rather than read once per open family page.
 SHARED_GET_PATHS = frozenset({
     "/api/map", "/api/wall", "/api/guildgear", "/api/raidgoals", "/api/wealth",
-    "/api/runtimeline", "/api/guildrouting",
+    "/api/runtimeline", "/api/guildrouting", "/api/guildruns", "/api/live",
+    "/api/eye",
 })
 
 
@@ -5231,13 +5231,16 @@ def _get_route(what: str, **dumps):
 GZIP_MIN_BYTES = 4096
 
 
-# What is compressed. JSON answers are built per request, so each is compressed
-# on the way out. The app's scripts and styles are the same bytes until the next
-# deploy, so theirs are compressed once (at the best level) and kept, bounded.
+# What is compressed. Static scripts and styles are compressed once at the best
+# level and kept in _GZIP_KEPT; JSON bodies (including /shapes.json and shared
+# API polls) are compressed at level 5 and kept in a separate bounded LRU so
+# dynamic JSON never evicts static app assets.
 _GZIP_JSON = "application/json"
 _GZIP_STATIC = ("text/javascript", "text/css")
 GZIP_KEPT_MAX = 128
+GZIP_JSON_KEPT_MAX = 64
 _GZIP_KEPT: "collections.OrderedDict" = collections.OrderedDict()
+_GZIP_JSON_KEPT: "collections.OrderedDict" = collections.OrderedDict()
 _GZIP_KEPT_LOCK = threading.Lock()
 
 
@@ -5265,31 +5268,55 @@ def _accepts_gzip(handler) -> bool:
     return False
 
 
-def _gzipped(handler, ctype: str, body: bytes) -> bytes | None:
+def _will_gzip(handler, ctype: str, body: bytes) -> bool:
+    """Whether `_gzipped` would compress this response."""
+    return (
+        _compressible(ctype)
+        and len(body) >= GZIP_MIN_BYTES
+        and _accepts_gzip(handler)
+    )
+
+
+def _gzipped(
+    handler,
+    ctype: str,
+    body: bytes,
+    *,
+    digest: bytes | None = None,
+) -> bytes | None:
     """The body gzipped, or None when it should go out as it is."""
-    if not _compressible(ctype) or len(body) < GZIP_MIN_BYTES:
+    if not _will_gzip(handler, ctype, body):
         return None
-    if not _accepts_gzip(handler):
-        return None
-    if ctype.split(";")[0].strip() == _GZIP_JSON:
-        return gzip.compress(body, 5, mtime=0)
-    key = (ctype, len(body), hashlib.sha256(body).digest())
+    kind = ctype.split(";")[0].strip()
+    is_json = kind == _GZIP_JSON
+    cache = _GZIP_JSON_KEPT if is_json else _GZIP_KEPT
+    limit = GZIP_JSON_KEPT_MAX if is_json else GZIP_KEPT_MAX
+    body_digest = digest if digest is not None else hashlib.sha256(body).digest()
+    key = (kind, len(body), body_digest)
     with _GZIP_KEPT_LOCK:
-        kept = _GZIP_KEPT.get(key)
+        kept = cache.get(key)
         if kept is not None:
-            _GZIP_KEPT.move_to_end(key)
+            cache.move_to_end(key)
             return kept
-    packed = gzip.compress(body, 9, mtime=0)
+    if not is_json:
+        packed = gzip.compress(body, 9, mtime=0)
+    else:
+        packed = gzip.compress(body, 5, mtime=0)
     with _GZIP_KEPT_LOCK:
-        _GZIP_KEPT[key] = packed
-        while len(_GZIP_KEPT) > GZIP_KEPT_MAX:
-            _GZIP_KEPT.popitem(last=False)
+        cache[key] = packed
+        while len(cache) > limit:
+            cache.popitem(last=False)
     return packed
+
+
+def _etag_from_digest(digest: bytes) -> str:
+    """A strong validator from a SHA-256 digest: same bytes, same tag."""
+    return '"' + digest.hex()[:24] + '"'
 
 
 def _etag(body: bytes) -> str:
     """A strong validator for a response body: same bytes, same tag."""
-    return '"' + hashlib.sha256(body).hexdigest()[:24] + '"'
+    return _etag_from_digest(hashlib.sha256(body).digest())
 
 
 def _fetch_decree() -> dict:
@@ -5801,7 +5828,52 @@ def _family_scope(query: dict):
     return rosters.get(chosen, []), chosen, list(rosters)
 
 
+# The only Content-Length the handler accepts: plain ASCII digits.
+_CONTENT_LENGTH_RE = re.compile(r"[0-9]+")
+
+
+class _CountingReader:
+    """The request socket's reader, counting every byte it hands out.
+
+    The handler compares the count against Content-Length to learn whether a
+    request body was read in full before the response goes out. Anything not
+    defined here passes straight through to the wrapped reader.
+    """
+
+    def __init__(self, raw) -> None:
+        self._raw = raw
+        self.count = 0
+
+    def _counted(self, data: bytes) -> bytes:
+        self.count += len(data)
+        return data
+
+    def read(self, *args) -> bytes:
+        return self._counted(self._raw.read(*args))
+
+    def read1(self, *args) -> bytes:
+        return self._counted(self._raw.read1(*args))
+
+    def readline(self, *args) -> bytes:
+        return self._counted(self._raw.readline(*args))
+
+    def readinto(self, buf) -> int | None:
+        n = self._raw.readinto(buf)
+        self.count += n or 0
+        return n
+
+    def __getattr__(self, name):
+        return getattr(self._raw, name)
+
+
 class Handler(BaseHTTPRequestHandler):
+    # Persistent connections avoid paying a fresh TCP handshake on every poll
+    # and asset request. Every response either sends Content-Length or has no
+    # body (304), and `timeout` bounds idle sockets. A response sent before
+    # the request body was read in full closes the connection (end_headers):
+    # the unread bytes would otherwise be parsed as the next request, which
+    # is request smuggling behind the ingress.
+    protocol_version = "HTTP/1.1"
     # Socket reads and writes give up after this long. Without it a client
     # that opens a connection and sends nothing, or declares a body it never
     # sends, holds one thread of the threading server for as long as it
@@ -6101,7 +6173,7 @@ class Handler(BaseHTTPRequestHandler):
         return 200, payload
 
     @_get_route("wall query failed")
-    def _wall(_query: dict, _ctx) -> tuple[int, dict]:
+    def _wall(_query: dict, ctx) -> tuple[int, dict]:
         """GET /api/wall - the Watch wall: every family's streamed characters.
 
         TAKES NO PARAMETERS. The families come from the roster table and the
@@ -6123,20 +6195,27 @@ class Handler(BaseHTTPRequestHandler):
             mine = [r for r in rows if r["name"] in names]
             built.append((key, family.build_family(
                 mine, GEO, names, {n: profiles[n] for n in names if n in profiles})))
+        all_names = everyone + [director.WATCHER_NAME]
         try:
-            facts = fetch_now_facts(everyone + [director.WATCHER_NAME])
+            facts = fetch_now_facts(all_names)
         except (pymysql.err.MySQLError, OSError):
             # The tiles still draw; each says its sentence is unavailable.
             log.exception("wall status feed failed")
             facts = False
         observers = family.build_observers(
             _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,))
-        # The roster's re-read of an Idle member (#2192): one function words it.
+        # The roster's re-read of an Idle member (#2192): batched once across
+        # every Idle tile on the wall, reusing the request's realm reader.
         try:
-            with realmread.Session(_connect) as rd:
+            if ctx is not None and getattr(ctx, "read", None) is not None:
+                reread = v2_members.idle_rereader(ctx.read, all_names)
                 payload = watchwall.build_heads(
-                    built, observers, facts=facts,
-                    reread=lambda name, now: v2_members.reread_idle(rd, name, now))
+                    built, observers, facts=facts, reread=reread)
+            else:
+                with realmread.Session(_connect) as rd:
+                    reread = v2_members.idle_rereader(rd, all_names)
+                    payload = watchwall.build_heads(
+                        built, observers, facts=facts, reread=reread)
         except (pymysql.err.MySQLError, OSError):
             log.exception("wall idle re-read failed")
             payload = watchwall.build_heads(built, observers, facts=facts)
@@ -7496,7 +7575,7 @@ class Handler(BaseHTTPRequestHandler):
             "group_leader FROM overseer_snapshot "
             "WHERE updated_at > NOW() - INTERVAL 60 SECOND",
             what="live snapshot")]
-        runs = guildrun.page(guildrun.recent(rd, n=GUILD_RUNS_LIMIT))["active"]
+        runs = guildrun.active_runs(rd)
         seats = [(r["name"], r["role"]) for r in rd.rows(
             "SELECT name, role FROM overseer_raid_seat", what="live raid seats")]
         return 200, director.live_now(spots, runs, seats, places.map_name)
@@ -7579,13 +7658,15 @@ class Handler(BaseHTTPRequestHandler):
         # was measured at several MB of plain JSON. The gzipped form gets a
         # "-gz" tag, so the two representations never share a validator.
         tag = ""
+        digest: bytes | None = None
         if (revalidate and code == 200 and cache_control == "no-store"
                 and getattr(self, "command", "") == "GET"):
             cache_control = "no-cache"
-            tag = _etag(body)
-        packed = _gzipped(self, ctype, body)
+            digest = hashlib.sha256(body).digest()
+            tag = _etag_from_digest(digest)
+        will_gz = _will_gzip(self, ctype, body)
         if tag:
-            if packed is not None:
+            if will_gz:
                 tag = tag[:-1] + '-gz"'
             asked = self.headers.get("If-None-Match", "") if getattr(self, "headers", None) else ""
             if tag in [t.strip() for t in asked.split(",")]:
@@ -7597,6 +7678,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header(hkey, hval)
                 self.end_headers()
                 return
+        packed = _gzipped(self, ctype, body, digest=digest) if will_gz else None
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         if packed is not None:
@@ -7613,12 +7695,66 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def setup(self) -> None:
+        super().setup()
+        self.rfile = _CountingReader(self.rfile)
+        self._body_mark = None
+
+    def parse_request(self) -> bool:
+        # The mark is where this request's body starts, set only once its
+        # headers parsed. An error response before that point has no body to
+        # account for, and the stdlib closes the connection itself.
+        self._body_mark = None
+        ok = super().parse_request()
+        if not ok:
+            return False
+        # A body whose length cannot be known is refused before routing.
+        # int() takes "-5", " 5", "+5" and "5_0", and a front proxy may read
+        # any of those differently, so only plain ASCII digits count as a
+        # length. Two Content-Length headers, or one beside
+        # Transfer-Encoding, are the classic smuggling shapes. send_error
+        # sends Connection: close, so whatever bytes follow are dropped.
+        lengths = self.headers.get_all("Content-Length") or []
+        if len(lengths) > 1 or (lengths and (
+                not _CONTENT_LENGTH_RE.fullmatch(lengths[0])
+                or self.headers.get("Transfer-Encoding") is not None)):
+            self.send_error(400, "Bad Content-Length")
+            return False
+        self._body_mark = self.rfile.count
+        return True
+
+    def _body_unread(self) -> bool:
+        """True when the request declared a body not yet read in full.
+
+        Only Content-Length bodies are ever read here, so a chunked body
+        (any Transfer-Encoding) always counts as unread.
+        """
+        mark = getattr(self, "_body_mark", None)
+        headers = getattr(self, "headers", None)
+        if mark is None or headers is None:
+            return False
+        if headers.get("Transfer-Encoding") is not None:
+            return True
+        raw = headers.get("Content-Length")
+        if raw is None:
+            return False
+        # parse_request already refused anything else; fail closed anyway.
+        if not _CONTENT_LENGTH_RE.fullmatch(raw):
+            return True
+        length = int(raw)
+        return length != 0 and self.rfile.count - mark < length
+
     def end_headers(self) -> None:
         # Every response, however it was built, says not to leak the page's
         # address and not to be indexed (basepath.PRIVACY_HEADERS): the one
         # place all of them pass through, so a new response cannot forget.
         for name, value in basepath.PRIVACY_HEADERS:
             self.send_header(name, value)
+        # The same one place closes a kept-alive connection whose request
+        # body is still (partly) on the socket. send_header sets
+        # close_connection when it sees this header.
+        if self._body_unread() and not getattr(self, "close_connection", False):
+            self.send_header("Connection", "close")
         super().end_headers()
 
     def log_message(self, fmt, *args):

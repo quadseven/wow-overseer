@@ -347,19 +347,19 @@ class WhichOne(unittest.TestCase):
         )
         self.assertEqual(campaignplan.heuristic(opts).keyword, "dire-maul-west-north")
 
-    # The bosses' levels as read for these doors, by map: Sunken Temple
-    # tops out five under a capped family's weakest member, the Spire is
-    # its band.
-    CAP_BOSSES = {109: (50, 55), 229: (56, 60), 230: (52, 58), 289: (57, 60)}
+    # The bosses' levels as read for these doors, by map. Blackrock Depths
+    # reads as topping out five under a capped family's weakest member, so
+    # the below-band rank (#2715) has a level 60 door to act on; a door whose
+    # band stops under the cap is refused outright at the cap (#3282).
+    CAP_BOSSES = {109: (50, 55), 229: (56, 60), 230: (50, 55), 289: (57, 60)}
 
     def test_at_the_cap_a_run_below_the_band_loses_to_one_in_it(self):
-        """A capped family with empty slots scores a loot-dense low dungeon
+        """A capped family with empty slots scores a loot-dense low run
         highest on raw expected gain, because an empty slot counts any drop
-        as all gain. While a level-appropriate run is unfinished the pick
-        is in the family's band; the low run stays offered, because its
-        loot still upgrades somebody (#2715)."""
+        as all gain. While a run in the band is unfinished the pick is in
+        the family's band (#2715)."""
         upgrades = {
-            "sunken-temple": (preraid.Gain("Grug", 3, 0.6, 30.0, "a helm"),),
+            "blackrock-depths": (preraid.Gain("Grug", 3, 0.6, 30.0, "a helm"),),
             "lower-blackrock-spire": (preraid.Gain("Grug", 1, 0.2, 10.0, "a helm"),),
         }
         opts = campaignplan.options(
@@ -371,7 +371,8 @@ class WhichOne(unittest.TestCase):
                 upgrades=upgrades,
             )
         )
-        self.assertIn("sunken-temple", keywords(opts))
+        self.assertIn("blackrock-depths", keywords(opts))
+        self.assertNotIn("sunken-temple", keywords(opts))
         pick = campaignplan.heuristic(opts)
         self.assertEqual(pick.keyword, "lower-blackrock-spire")
 
@@ -379,7 +380,7 @@ class WhichOne(unittest.TestCase):
         """The band rule excepts a fire-resistance need: a low run that
         drops a planned fire piece for a tank is still the pick (#2715)."""
         upgrades = {
-            "sunken-temple": (
+            "blackrock-depths": (
                 preraid.Gain(
                     "Grug", 3, 0.6, 30.0, "a helm", 10.0, "Emberplate Armguards"
                 ),
@@ -396,19 +397,21 @@ class WhichOne(unittest.TestCase):
             )
         )
         pick = campaignplan.heuristic(opts)
-        self.assertEqual(pick.keyword, "sunken-temple")
+        self.assertEqual(pick.keyword, "blackrock-depths")
+
+    def _stalled_band(self):
+        return {
+            r.keyword: "stalled twice"
+            for r in campaignplan.RUNS
+            if r.ceiling >= campaignplan.LEVEL_CAP and r.keyword != "blackrock-depths"
+        }
 
     def test_at_the_cap_a_held_band_is_not_filled_by_a_run_below_it(self):
         """With every run in the band refused as stalled, a below-band run is
         the only one left to rank, and the family was sent to it for hours
         (#2715). The band is held, not finished, so nothing is planned."""
-        stalled = {
-            r.keyword: "stalled twice"
-            for r in campaignplan.RUNS
-            if r.ceiling >= campaignplan.LEVEL_CAP
-        }
         upgrades = {
-            "sunken-temple": (preraid.Gain("Grug", 3, 0.6, 30.0, "a helm"),),
+            "blackrock-depths": (preraid.Gain("Grug", 3, 0.6, 30.0, "a helm"),),
         }
         opts = campaignplan.options(
             facts(
@@ -417,20 +420,15 @@ class WhichOne(unittest.TestCase):
                 keys=SHADOWFORGE,
                 bosses=self.CAP_BOSSES,
                 upgrades=upgrades,
-                stalled=stalled,
+                stalled=self._stalled_band(),
             )
         )
-        self.assertNotIn("sunken-temple", keywords(opts))
+        self.assertNotIn("blackrock-depths", keywords(opts))
         self.assertIsNone(campaignplan.heuristic(opts))
 
     def test_a_held_band_still_lets_a_fire_piece_in_from_below(self):
-        stalled = {
-            r.keyword: "stalled twice"
-            for r in campaignplan.RUNS
-            if r.ceiling >= campaignplan.LEVEL_CAP
-        }
         upgrades = {
-            "sunken-temple": (
+            "blackrock-depths": (
                 preraid.Gain(
                     "Grug", 3, 0.6, 30.0, "a helm", 10.0, "Emberplate Armguards"
                 ),
@@ -443,10 +441,10 @@ class WhichOne(unittest.TestCase):
                 keys=SHADOWFORGE,
                 bosses=self.CAP_BOSSES,
                 upgrades=upgrades,
-                stalled=stalled,
+                stalled=self._stalled_band(),
             )
         )
-        self.assertEqual(campaignplan.heuristic(opts).keyword, "sunken-temple")
+        self.assertEqual(campaignplan.heuristic(opts).keyword, "blackrock-depths")
 
     def test_nothing_to_choose_is_none(self):
         self.assertIsNone(campaignplan.heuristic([]))
@@ -639,7 +637,7 @@ class TheBridgePass(unittest.TestCase):
         self.sources = []
 
         ns = _load(
-            ["_plan_campaigns", "_plan_campaign", "_planner_due"],
+            ["_plan_campaigns", "_plan_campaign"],
             {
                 "asyncio": asyncio,
                 "time": __import__("time"),
@@ -664,7 +662,6 @@ class TheBridgePass(unittest.TestCase):
         me = types.SimpleNamespace(
             _jev=jev.Client(key, transport=fake),
             _planner_said={},
-            _planner_loot_read={},
         )
         me._plan_campaign = types.MethodType(ns["_plan_campaign"], me)
 
@@ -909,14 +906,10 @@ class ADoorThatTeachesNothing(unittest.TestCase):
 
 
 class ADoorPastItsCeilingAtTheCap(unittest.TestCase):
-    """#2207: a capped family stayed on a planned Maraudon entry (ceiling 55).
-
-    Below the cap `due` ends a planned entry once the weakest member passes
-    the ceiling. At the cap it never read the loot, so an entry for a door the
-    plan itself refuses as outgrown (`_outgrown_run`) ran to its count.
+    """#2207 then #3282: a capped family on a planned Maraudon entry (ceiling
+    55). The entry once ran while its loot read as an upgrade; now it ends
+    by its levels alone, between runs.
     """
-
-    SPIRE = (preraid.Gain("Grug", 1, 0.2, 10.0, "a helm"),)
 
     def head(self, source=campaignplan.SOURCE, keyword="maraudon-orange"):
         return {
@@ -929,126 +922,78 @@ class ADoorPastItsCeilingAtTheCap(unittest.TestCase):
             "source": source,
         }
 
-    def due(self, upgrades, level=None, **head):
+    def due(self, level=None, **head):
         return campaignplan.due(
             [self.head(**head)],
             {"dungeon_runs_done": 2},
             list(rows(ALLIANCE, KALIMDOR, level)),
             None,
-            upgrades,
         )
 
-    def test_the_planned_entry_ends_once_its_loot_holds_no_upgrade(self):
-        upgrades = {"lower-blackrock-spire": self.SPIRE}
-        due = self.due(upgrades)
+    def test_the_planned_entry_ends_whatever_its_loot(self):
+        due = self.due()
         self.assertIn("outgrown Maraudon (the orange wing)", due.reason)
         self.assertIn("tops out at 55", due.reason)
-        self.assertIn("holds no upgrade for anyone", due.reason)
         self.assertEqual(due.finish, 61)
         self.assertFalse(due.dry)
-        # ... and the next door is chosen: the plan over the same loot does
-        # not offer Maraudon again.
+        # ... and the next door is chosen: Maraudon is not offered again,
+        # however much its loot reads.
+        wanted = (preraid.Gain("Grug", 1, 0.3, 40.0, "a ring"),)
         opts = campaignplan.options(
-            facts(ALLIANCE, EASTERN_KINGDOMS, keys=SHADOWFORGE, upgrades=upgrades)
+            facts(
+                ALLIANCE,
+                EASTERN_KINGDOMS,
+                keys=SHADOWFORGE,
+                upgrades={"maraudon-orange": wanted},
+            )
         )
         self.assertNotIn("maraudon-orange", keywords(opts))
-        self.assertEqual(campaignplan.heuristic(opts).keyword, "lower-blackrock-spire")
-
-    def test_a_piece_that_drops_nothing_worth_wearing_is_no_upgrade(self):
-        nothing = (preraid.Gain("Grug", 0, 0.0, 0.0, ""),)
-        due = self.due({"maraudon-orange": nothing})
-        self.assertEqual(due.finish, 61)
-
-    def test_a_wanted_drop_keeps_it(self):
-        wanted = (preraid.Gain("Grug", 1, 0.3, 12.0, "a ring"),)
-        self.assertEqual(self.due({"maraudon-orange": wanted}), campaignplan.Due())
-
-    def test_unread_loot_leaves_it_running(self):
-        self.assertEqual(self.due(None), campaignplan.Due())
 
     def test_an_operators_order_runs_to_its_count(self):
-        self.assertEqual(self.due({}, source="web:overseer"), campaignplan.Due())
+        self.assertEqual(self.due(source="web:overseer"), campaignplan.Due())
 
     def test_a_door_of_the_cap_is_never_past_its_ceiling(self):
-        self.assertEqual(
-            self.due({}, keyword="lower-blackrock-spire"), campaignplan.Due()
-        )
+        self.assertEqual(self.due(keyword="lower-blackrock-spire"), campaignplan.Due())
 
     def test_below_the_cap_the_ceiling_alone_still_ends_it(self):
-        due = self.due(None, level=57)
+        due = self.due(level=57)
         self.assertIn("the weakest is 57, it tops out at 55", due.reason)
         self.assertEqual(due.finish, 61)
 
-    def test_only_a_capped_family_on_a_lower_door_needs_the_loot_read(self):
-        capped = list(rows(ALLIANCE, KALIMDOR))
-        need = campaignplan.needs_loot
-        self.assertTrue(need([self.head()], capped))
-        self.assertFalse(need([self.head(keyword="scholomance")], capped))
-        self.assertFalse(need([self.head(source="web:overseer")], capped))
-        self.assertFalse(need([self.head()], list(rows(ALLIANCE, KALIMDOR, 57))))
-        self.assertFalse(need([self.head(), self.head()], capped))
-        self.assertFalse(need([dict(self.head(), status="queued")], capped))
-        self.assertFalse(need([], capped))
-
-    def test_the_campaign_line_says_why_a_door_is_kept_past_its_ceiling(self):
-        wanted = (preraid.Gain("Grug", 1, 0.3, 12.0, "a ring"),)
-        f = facts(
-            ALLIANCE,
-            KALIMDOR,
-            upgrades={"maraudon-orange": wanted, "dire-maul-east-east": self.SPIRE},
-        )
-        [kept] = [o for o in campaignplan.options(f) if o.keyword == "maraudon-orange"]
-        said = (
-            "kept past its ceiling of 55 for the 12.0 expected item levels "
-            "a run its loot still holds"
-        )
-        self.assertIn(said, kept.why)
-        self.assertIn(said, campaignplan.planned_line(kept, "x", "the heuristic"))
+    def test_the_campaign_line_says_a_round_at_the_cap(self):
+        f = facts(ALLIANCE, KALIMDOR)
         [at_cap] = [
             o for o in campaignplan.options(f) if o.keyword == "dire-maul-east-east"
         ]
         self.assertEqual(at_cap.why, "a round at the level cap")
 
-    def test_the_now_line_says_why_the_running_door_is_kept(self):
-        wanted = (preraid.Gain("Grug", 1, 0.3, 12.0, "a ring"),)
+    def test_the_now_line_names_the_running_door(self):
         view = campaignqueue.view(
             [{"keyword": "maraudon-orange", "runs_wanted": 10, "status": "active"}],
             2,
             "Grug",
         )
-        page = campaignplan.page_view(
-            view, facts(ALLIANCE, KALIMDOR, upgrades={"maraudon-orange": wanted}), 2
-        )
-        self.assertEqual(
-            page["now"],
-            "Now: Maraudon (the orange wing), 2 of 10, kept past its ceiling "
-            "of 55 for the 12.0 expected item levels a run its loot still holds.",
-        )
-        plain = campaignplan.page_view(view, facts(ALLIANCE, KALIMDOR), 2)
-        self.assertEqual(plain["now"], "Now: Maraudon (the orange wing), 2 of 10.")
+        page = campaignplan.page_view(view, facts(ALLIANCE, KALIMDOR), 2)
+        self.assertEqual(page["now"], "Now: Maraudon (the orange wing), 2 of 10.")
 
 
-class TheBridgeReadsTheLootForADoorPastItsCeiling(unittest.TestCase):
-    """#2207: `_plan_campaign` hands `due` the preraid upgrades, which it used
-    to read only after `due` had already said nothing was due."""
+class TheBridgeEndsALowerEntryAtTheCap(unittest.TestCase):
+    """#3282: `_plan_campaign` ends a capped family's planned entry for a
+    door under the cap and queues a level 60 door, with no loot read."""
 
     SPIRE = (preraid.Gain("Grug", 1, 0.2, 10.0, "a helm"),)
 
-    def run_pass(self, upgrades, head=None, level_rows=None, passes=1):
+    def run_pass(self, head=None, level_rows=None):
         log = _Log()
-        written, reads = [], []
+        written = []
         levels = list(level_rows or rows(ALLIANCE, EASTERN_KINGDOMS))
 
         def append(family, rows_, finish, option, source):
             written.append((family, finish, option.keyword))
             return 1
 
-        def preraid_read(names, level_rows_):
-            reads.append(tuple(names))
-            return upgrades, None
-
         ns = _load(
-            ["_plan_campaign", "_planner_due"],
+            ["_plan_campaign"],
             {
                 "asyncio": asyncio,
                 "time": __import__("time"),
@@ -1064,7 +1009,6 @@ class TheBridgeReadsTheLootForADoorPastItsCeiling(unittest.TestCase):
                     keys=SHADOWFORGE,
                     upgrades={"lower-blackrock-spire": self.SPIRE},
                 ),
-                "_planner_preraid": preraid_read,
                 "_append_planned": append,
                 "_insert_jev_judgment": lambda judgment: None,
                 "_planner_dry": lambda names: None,
@@ -1076,51 +1020,117 @@ class TheBridgeReadsTheLootForADoorPastItsCeiling(unittest.TestCase):
         me = types.SimpleNamespace(
             _jev=jev.Client("", transport=FakeJev()),
             _planner_said={},
-            _planner_loot_read={},
         )
-        fam = {"leader": {"name": "Grug", "dungeon_runs_done": 2}, "names": ["Grug"]}
+        fam = {"leader": {"name": "Grug", "dungeon_runs_done": 0}, "names": ["Grug"]}
         queue = [
             head
             or {
                 "id": 61,
                 "keyword": "maraudon-orange",
-                "runs_wanted": 10,
+                "runs_wanted": 13,
                 "status": "active",
                 "position": 0,
                 "source": campaignplan.SOURCE,
             }
         ]
-        wrote = [
-            asyncio.run(ns["_plan_campaign"](me, "Grug", fam, queue))
-            for _ in range(passes)
-        ]
-        return wrote, written, reads, log.lines
+        wrote = asyncio.run(ns["_plan_campaign"](me, "Grug", fam, queue))
+        return wrote, written, log.lines
 
-    def test_the_outgrown_entry_is_finished_and_the_next_door_queued(self):
-        wrote, written, reads, lines = self.run_pass({})
-        self.assertEqual(wrote, [True])
+    def test_the_outgrown_entry_is_finished_and_a_level_60_door_queued(self):
+        wrote, written, lines = self.run_pass()
+        self.assertTrue(wrote)
         self.assertEqual(written, [("Grug", 61, "lower-blackrock-spire")])
-        self.assertEqual(reads, [("Grug",)])
         self.assertTrue(
             any("outgrown Maraudon (the orange wing)" in line for line in lines), lines
         )
 
-    def test_a_wanted_drop_leaves_the_entry_and_the_read_waits_its_turn(self):
-        wanted = (preraid.Gain("Grug", 1, 0.3, 12.0, "a ring"),)
-        wrote, written, reads, _lines = self.run_pass(
-            {"maraudon-orange": wanted}, passes=3
-        )
-        self.assertEqual(wrote, [False, False, False])
-        self.assertEqual(written, [])
-        # Read once, then not again inside campaignplan.IDLE_SECONDS.
-        self.assertEqual(reads, [("Grug",)])
+    def test_a_member_inside_keeps_the_run_going(self):
+        inside = [dict(r) for r in rows(ALLIANCE, EASTERN_KINGDOMS)]
+        inside[0]["map_id"] = 349
+        wrote, written, _lines = self.run_pass(level_rows=inside)
+        self.assertEqual((wrote, written), (False, []))
 
-    def test_unread_loot_ends_nothing(self):
-        wrote, written, _reads, _lines = self.run_pass(None)
-        self.assertEqual((wrote, written), ([False], []))
-
-    def test_no_read_for_a_family_still_levelling(self):
-        wrote, written, reads, _lines = self.run_pass(
-            {}, level_rows=rows(ALLIANCE, EASTERN_KINGDOMS, 50)
+    def test_nothing_ends_for_a_family_still_levelling(self):
+        wrote, written, _lines = self.run_pass(
+            level_rows=rows(ALLIANCE, EASTERN_KINGDOMS, 50)
         )
-        self.assertEqual((wrote, written, reads), ([False], [], []))
+        self.assertEqual((wrote, written), (False, []))
+
+    def test_the_bridge_no_longer_reads_loot_to_judge_the_entry(self):
+        self.assertNotIn("_planner_due", BRIDGE)
+        self.assertNotIn("needs_loot", BRIDGE)
+
+
+class ADoorAcrossTheSeaQueuedAndNeverStarted(unittest.TestCase):
+    """The module's `boards` fact is realm-wide, so a far door is offered to
+    every family. One queued and never started is held back for a while."""
+
+    WAIT = campaignplan.UNSTARTED_WAIT_SECONDS
+    COOL = campaignplan.UNSTARTED_COOLDOWN_SECONDS
+
+    def setUp(self):
+        from council import continent_of
+        import crossing
+
+        crossing.note_module_crossing("boards")
+        self.addCleanup(crossing.note_module_crossing, "")
+        self.family = ALLIANCE
+        base = campaignplan.refusal_kinds(facts(ALLIANCE, map_id=KALIMDOR))
+        self.far = next(
+            r
+            for r in campaignplan.RUNS
+            if continent_of(r.map_id) == 0 and r.keyword not in base
+        )
+
+    def refused(self, age, map_id=KALIMDOR):
+        f = facts(ALLIANCE, map_id=map_id, unstarted={self.far.keyword: age})
+        return campaignplan.refusal_kinds(f).get(self.far.keyword)
+
+    def test_past_the_wait_the_far_door_is_refused_as_a_crossing(self):
+        kind, why = self.refused(self.WAIT + 1)
+        self.assertEqual(campaignplan.council.REFUSED_CROSSING, kind)
+        self.assertIn("queued across the sea and never started", why)
+
+    def test_inside_the_wait_it_is_still_offered(self):
+        self.assertIsNone(self.refused(self.WAIT - 1))
+
+    def test_after_the_cooldown_it_is_offered_again(self):
+        self.assertIsNone(self.refused(self.WAIT + self.COOL))
+
+    def test_nothing_queued_changes_nothing(self):
+        f = facts(ALLIANCE, map_id=KALIMDOR)
+        self.assertNotIn(self.far.keyword, campaignplan.refusal_kinds(f))
+
+    def test_a_leader_on_the_doors_continent_is_never_refused(self):
+        self.assertIsNone(self.refused(self.WAIT + 1, map_id=EASTERN_KINGDOMS))
+
+    def test_the_rows_read_into_the_oldest_age_per_door(self):
+        rows_ = [
+            {"entry": 1, "keyword": self.far.keyword, "age_s": 5, "map_id": None},
+            {"entry": 2, "keyword": self.far.keyword, "age_s": 9, "map_id": None},
+            {"entry": 3, "keyword": "nowhere", "age_s": 7, "map_id": None},
+        ]
+        self.assertEqual({self.far.keyword: 9}, campaignplan.unstarted(rows_))
+        self.assertIsNone(campaignplan.unstarted(None))
+
+    def test_a_run_at_another_dungeon_does_not_clear_the_door(self):
+        other = self.far.map_id + 1
+        rows_ = [{"entry": 1, "keyword": self.far.keyword, "age_s": 9, "map_id": other}]
+        self.assertEqual({self.far.keyword: 9}, campaignplan.unstarted(rows_))
+
+    def test_a_run_at_the_door_clears_that_entry_only(self):
+        rows_ = [
+            {
+                "entry": 1,
+                "keyword": self.far.keyword,
+                "age_s": 9,
+                "map_id": self.far.map_id,
+            },
+            {"entry": 2, "keyword": self.far.keyword, "age_s": 4, "map_id": None},
+        ]
+        self.assertEqual({self.far.keyword: 4}, campaignplan.unstarted(rows_))
+
+    def test_the_arguments_follow_the_placeholders(self):
+        args = campaignplan.unstarted_args("fam", ["a", "b"])
+        self.assertEqual(("a", "b", "fam"), args[:2] + args[2:3])
+        self.assertEqual(4, len(args))
