@@ -477,6 +477,18 @@ class ARecallCannotLoop(unittest.TestCase):
         self.assertIsNone(world.judge(ns))
         self.assertEqual([("Oz", "vendor")], world.released)
 
+    # AI-REVIEW 2026-11-27 [subscription/gpt-6-luna] b5bf0861 (Elder, PR #3316):
+    # Keep queue-owned recall credit covered alongside open-run clocks.
+    def test_a_new_queue_entry_starts_the_clock_over(self):
+        world = World()
+        ns = world.namespace(strict=True)
+        key = ("Zug", "Oz", stall.ERRAND_STATE)
+        ns["_ERRAND_SERVED"][("Zug", "Oz")] = errandgate.Served(7, 600.0, 1000.0)
+        self.assertEqual(400.0, ns["_errand_clock_start"](key, 7, 1060.0))
+        self.assertEqual(1060.0, ns["_errand_clock_start"](key, 8, 1060.0))
+        dead = ("Zug", "Oz", "dead")
+        self.assertEqual(1060.0, ns["_errand_clock_start"](dead, 7, 1060.0))
+
     def test_a_new_run_starts_the_clock_over(self):
         world = World()
         ns = world.namespace(strict=True)
