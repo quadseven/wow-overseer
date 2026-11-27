@@ -764,8 +764,15 @@ def _arrange_instance(lint, path, v, whos, aliases):
 def _arrange_group(lint, path, v, whos):
     if not lint.keys(path, v, ("members", "leader"), ("members", "leader")):
         return
+    members = v["members"]
+    selectors = members if isinstance(members, list) else [members]
     lint.ensure(
-        v["members"] in whos, f"{path}.members", "schema", "must name a cast member"
+        bool(selectors)
+        and all(isinstance(who, str) and who in whos for who in selectors)
+        and len(set(selectors)) == len(selectors),
+        f"{path}.members",
+        "schema",
+        "must name one or more distinct cast entries",
     )
     lint.ensure(
         bool(_NAME.match(str(v["leader"]))),
@@ -830,7 +837,9 @@ def _act(lint, doc, whos, names):
     )
     for i, step in enumerate(act):
         path = f"decree.act[{i}]"
-        if lint.keys(path, step, ("at", "when", "roster", "command"), ()):
+        if lint.keys(
+            path, step, ("at", "when", "roster", "command", "travel_guard"), ()
+        ):
             _act_step(lint, path, step, whos, names, bridge_on)
     _walk_auction(lint, doc, "act", act)
 
@@ -857,15 +866,36 @@ def _act_step(lint, path, step, whos, names, bridge_on):
             "must name an observation in observe",
         )
     lint.ensure(
-        ("roster" in step) != ("command" in step),
+        sum(key in step for key in ("roster", "command", "travel_guard")) == 1,
         path,
         "schema",
-        "needs exactly one of roster or command",
+        "needs exactly one of roster, command or travel_guard",
     )
     if "roster" in step:
         _act_roster(lint, f"{path}.roster", step["roster"], whos)
     if "command" in step:
         _act_command(lint, f"{path}.command", step["command"], whos)
+    if "travel_guard" in step:
+        _act_travel_guard(lint, f"{path}.travel_guard", step["travel_guard"], whos)
+
+
+def _act_travel_guard(lint, path, aim, whos):
+    fields = ("who", "enabled")
+    if not lint.keys(path, aim, fields, fields):
+        return
+    who = aim["who"]
+    lint.ensure(
+        isinstance(who, str) and _NAME.fullmatch(who) and who in whos,
+        f"{path}.who",
+        "schema",
+        "must be a named cast entry",
+    )
+    lint.ensure(
+        isinstance(aim["enabled"], bool),
+        f"{path}.enabled",
+        "schema",
+        "must be true or false",
+    )
 
 
 def _act_roster(lint, path, r, whos):

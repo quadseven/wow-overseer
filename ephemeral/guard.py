@@ -20,6 +20,7 @@ the only literals, and the label key is supplied by the pod's own spec.
 """
 
 import contextlib
+import math
 import re
 import weakref
 from dataclasses import dataclass
@@ -36,7 +37,7 @@ GRANTS_ENABLED = "grants: enabled"
 MARKER_TABLE = "ephemeral_world"
 MARKER_SQL = "SELECT COUNT(*) FROM `acore_characters`.`ephemeral_world`"
 
-# The judge's one write: an operator's order, as the bridge writes it. A fixed
+# The judge queues an operator's order as the bridge writes it. A fixed
 # statement with bound parameters, so nothing in a decree can reshape it.
 COMMAND_TABLE = "overseer_command"
 COMMAND_COLUMNS = ("target_name", "command", "kind", "source")
@@ -48,10 +49,44 @@ COMMAND_SOURCE = "eph-judge"
 COMMAND_KINDS = tuple(k for k in gamedata.COMMAND_KINDS if k != "gm")
 # The semicolon is the playerbots `go x;y` separator; the row is bound as a parameter, never spliced.
 _SAFE_COMMAND_TEXT = re.compile(r"^[A-Za-z0-9 _.,:;\-]{1,250}$")
+_CHARACTER_NAME = re.compile(r"[A-Z][a-z]{1,11}")
+_TRAVEL_GUARD_PREFIX = "guard:"
+_TRAVEL_AIM_MAX_CHARS = 32
+_TRAVEL_GUARD_READ = (
+    "SELECT r.`travel_npc`, h.`mapId`, h.`posX`, h.`posY`, h.`posZ` "
+    "FROM `acore_characters`.`overseer_roster` r "
+    "JOIN `acore_characters`.`characters` c ON c.`name` = r.`name` "
+    "AND CAST(c.`name` AS BINARY) = CAST(r.`name` AS BINARY) "
+    "LEFT JOIN `acore_characters`.`character_homebind` h ON h.`guid` = c.`guid` "
+    "WHERE r.`name` = %s AND CAST(r.`name` AS BINARY) = CAST(%s AS BINARY) "
+    "AND r.`enabled` = 1"
+)
+_TRAVEL_GUARD_UPDATE = (
+    "UPDATE `acore_characters`.`overseer_roster` SET `travel_npc` = %s "
+    "WHERE `name` = %s AND CAST(`name` AS BINARY) = CAST(%s AS BINARY) "
+    "AND `enabled` = 1 AND CAST(`travel_npc` AS BINARY) <=> CAST(%s AS BINARY)"
+)
 
 
 class GuardError(SeedError):
     """The guard refused; nothing was run."""
+
+
+def _homebind_guard(map_id: int, x: float, y: float, z: float) -> str:
+    coords = (x, y, z)
+    if type(map_id) is not int or not 0 <= map_id <= 65535:
+        raise GuardError("homebind map must be an unsigned small integer")
+    if not all(
+        type(value) in (float, int) and math.isfinite(value) for value in coords
+    ):
+        raise GuardError("homebind coordinates must be finite numbers")
+    # Use the module's positional-aim precision within the roster column width.
+    for precision in (1, 0):
+        position = ",".join(f"{value:.{precision}f}" for value in coords)
+        aim = f"{_TRAVEL_GUARD_PREFIX}{map_id}:{position}"
+        if len(aim) <= _TRAVEL_AIM_MAX_CHARS:
+            return aim
+    raise GuardError("homebind guard exceeds the roster travel aim width")
 
 
 @dataclass(frozen=True)
@@ -145,11 +180,11 @@ class GuardedConnection:
             cur.close()
 
     def insert_command(self, target, kind, text, source=COMMAND_SOURCE):
-        """Queue one operator order (an overseer_command row); the judge's only write.
+        """Queue one operator order (an overseer_command row).
 
         Never kind `gm` (bot sessions ignore it), only a kind the live schema
         and the module know, and only plain text, so a decree cannot smuggle
-        anything else through the one path that writes.
+        anything else through this command path.
         """
         self._require_opened()
         if kind not in COMMAND_KINDS:
@@ -170,6 +205,54 @@ class GuardedConnection:
             raise
         finally:
             cur.close()
+
+    def write_travel_guard(
+        self, target: str, enabled: bool, *, expected: str | None = None
+    ) -> str:
+        """Set a homebind guard on an idle aim or clear this run's exact guard."""
+        self._require_opened()
+        if not isinstance(target, str) or _CHARACTER_NAME.fullmatch(target) is None:
+            raise GuardError("travel guard needs a character name")
+        if type(enabled) is not bool:
+            raise GuardError("travel guard enabled must be boolean")
+        if enabled and expected is not None:
+            raise GuardError("setting a travel guard needs a blank travel aim")
+        if not enabled and (
+            not isinstance(expected, str)
+            or not expected.startswith(_TRAVEL_GUARD_PREFIX)
+            or not len(_TRAVEL_GUARD_PREFIX) < len(expected) <= _TRAVEL_AIM_MAX_CHARS
+        ):
+            raise GuardError("clearing a travel guard needs this run's exact guard")
+
+        try:
+            with contextlib.closing(self._conn.cursor()) as cur:
+                cur.execute(_TRAVEL_GUARD_READ, (target, target))
+                rows = cur.fetchall()
+                if len(rows) != 1:
+                    raise GuardError(
+                        "travel guard needs exactly one enabled roster row"
+                    )
+                previous, *homebind = rows[0]
+                if enabled:
+                    if previous not in (None, ""):
+                        raise GuardError(
+                            "setting a travel guard needs a blank travel aim"
+                        )
+                    aim = _homebind_guard(*homebind)
+                else:
+                    if previous != expected:
+                        raise GuardError(
+                            "stored travel guard does not match this run's guard"
+                        )
+                    aim = ""
+                cur.execute(_TRAVEL_GUARD_UPDATE, (aim, target, target, previous))
+                if cur.rowcount != 1:
+                    raise GuardError("travel aim changed before the guard write")
+            self._conn.commit()
+        except Exception:
+            self._rollback_quietly()
+            raise
+        return aim
 
     def run(self, statements):
         """Verify every statement, then execute them in one transaction."""

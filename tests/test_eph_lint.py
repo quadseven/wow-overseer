@@ -317,6 +317,39 @@ class GmAndAuctionTest(unittest.TestCase):
 
 
 class PreconditionAndCeilingTest(unittest.TestCase):
+    def test_a_travel_guard_act_accepts_one_named_member_and_a_boolean(self):
+        d = doc()
+        step = {"at": "1m", "travel_guard": {"who": "Grug", "enabled": True}}
+        d["act"] = [step]
+        self.assertEqual(errors(d), [])
+        self.assertEqual(
+            errors(
+                {
+                    **d,
+                    "act": [
+                        {"at": "1m", "travel_guard": {"who": "Grug", "enabled": False}}
+                    ],
+                }
+            ),
+            [],
+        )
+        for bad in ({"who": "Ugga"}, {"who": "family:grug"}, {"enabled": 1}):
+            with self.subTest(bad=bad):
+                d["act"] = [{**step, "travel_guard": {**step["travel_guard"], **bad}}]
+                self.assertTrue(errors(d))
+        d["act"] = [{**step, "roster": {"who": "Grug", "job": "quest"}}]
+        self.assertTrue(errors(d))
+
+    def test_a_group_can_include_two_individually_seeded_members(self):
+        d = doc()
+        d["cast"].append({"who": "Ugga", "set": {}})
+        d["arrange"] = [{"group": {"leader": "Grug", "members": ["Grug", "Ugga"]}}]
+        self.assertEqual(errors(d), [])
+        for members in ([], ["Grug", "Grug"], ["Grug", "Zug"], ["Grug", []]):
+            with self.subTest(members=members):
+                d["arrange"][0]["group"]["members"] = members
+                self.assertTrue(errors(d))
+
     def test_needs_a_precondition(self):
         d = doc()
         d["observe"] = [d["observe"][1]]
