@@ -127,7 +127,9 @@ class _Fetcher:
     _gear_fetch_pass = bridge.Bridge._gear_fetch_pass
     _start_gear_fetch = bridge.Bridge._start_gear_fetch
     _gear_fetch_meet = bridge.Bridge._gear_fetch_meet
+    _gear_fetch_meeting = bridge.Bridge._gear_fetch_meeting
     _gear_fetch_walk = bridge.Bridge._gear_fetch_walk
+    _gear_fetch_task_done = bridge.Bridge._gear_fetch_task_done
 
     def __init__(self, answers=None, busy=(), held=()):
         self._gear_fetch_walks = {}
@@ -269,18 +271,77 @@ class TheMeeting(unittest.TestCase):
         read.assert_not_called()
 
 
+class TheMeetingTask(unittest.TestCase):
+    def test_a_failed_meeting_is_logged_loud_and_dropped(self):
+        this = _Fetcher()
+
+        async def boom():
+            raise RuntimeError("bug")
+
+        async def go():
+            task = asyncio.ensure_future(boom())
+            this._gear_fetch_tasks.add(task)
+            await asyncio.gather(task, return_exceptions=True)
+            this._gear_fetch_task_done(task)
+
+        with self.assertLogs(bridge.log, "ERROR") as said:
+            asyncio.run(go())
+        self.assertEqual(this._gear_fetch_tasks, set())
+        self.assertTrue(any("meeting task failed" in line for line in said.output))
+
+    def test_the_members_are_released_when_the_meeting_is_cancelled(self):
+        this = _Fetcher()
+        fetch = gf.Fetch(gf.MEET, route(), 77, (("Cowpoke", CMD), ("Bigmon", CMD)))
+
+        async def hang(fetch, name, command):
+            await asyncio.Event().wait()
+
+        async def go():
+            this._gear_fetch_walk = hang
+            this._start_gear_fetch(fetch, 0.0)
+            (task,) = this._gear_fetch_tasks
+            await asyncio.sleep(0)
+            self.assertEqual(set(this._gear_fetch_walks), {"Cowpoke", "Bigmon"})
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.sleep(0)
+
+        with self.assertLogs(bridge.log, "INFO"):
+            asyncio.run(go())
+        self.assertEqual(this._gear_fetch_walks, {})
+        self.assertEqual(this._gear_fetch_tasks, set())
+
+
 class TheRoutingPassCallsIt(unittest.TestCase):
-    def test_the_pass_runs_after_the_walks_and_not_from_its_own_rerun(self):
+    def test_the_pass_runs_after_the_walks(self):
         body = inspect.getsource(bridge.Bridge._gear_routing_once)
         walks = body.index("await self._gear_routing_walks(result, world)")
-        fetch = body.index("await self._gear_fetch_pass(result)")
+        fetch = body.index("await self._gear_fetch_pass(result, fetch)")
         self.assertLess(walks, fetch)
-        self.assertIn("if GEAR_FETCH and fetch:", body)
+
+    def test_a_fetchs_own_rerun_plans_no_fetch(self):
+        this = _Fetcher()
+        with mock.patch.object(bridge, "_gear_fetch_member_rows") as read:
+            asyncio.run(
+                this._gear_fetch_pass(gx.Result(steps=(waiting(route()),)), fetch=False)
+            )
+        read.assert_not_called()
+        self.assertEqual(this._gear_fetch_tasks, set())
+
+    def test_the_off_switch_plans_no_fetch(self):
+        this = _Fetcher()
+        with (
+            mock.patch.object(bridge, "GEAR_FETCH", False),
+            mock.patch.object(bridge, "_gear_fetch_member_rows") as read,
+        ):
+            asyncio.run(this._gear_fetch_pass(gx.Result(steps=(waiting(route()),))))
+        read.assert_not_called()
 
     def test_the_pass_writes_no_travel_aim(self):
         for method in (
             bridge.Bridge._gear_fetch_pass,
             bridge.Bridge._gear_fetch_meet,
+            bridge.Bridge._gear_fetch_meeting,
             bridge.Bridge._gear_fetch_walk,
         ):
             body = inspect.getsource(method)

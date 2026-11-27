@@ -15299,9 +15299,7 @@ class Bridge(discord.Client):
         log.info("gear routing: %s", gearroutingexec.summary(result))
         if GEAR_ROUTING_WALKS:
             await self._gear_routing_walks(result, world)
-        # A fetch's own re-run (`fetch` False) plans no further fetch.
-        if GEAR_FETCH and fetch:
-            await self._gear_fetch_pass(result)
+        await self._gear_fetch_pass(result, fetch)
 
     async def _gear_routing_freeables(self, names: list, free_slots: dict) -> dict:
         """name -> the grey a full member may give away to make room (#2245).
@@ -15383,7 +15381,7 @@ class Bridge(discord.Client):
             per_day=GEAR_ROUTING_WALKS_PER_DAY,
             per_pass=GEAR_ROUTING_WALKS_PER_PASS)
 
-    async def _gear_fetch_pass(self, result) -> None:
+    async def _gear_fetch_pass(self, result, fetch: bool = True) -> None:
         """Bring a waiting route's two guild bots together at a mailbox (#2503).
 
         Runs after `_gear_routing_walks`, so a holder the mail run already
@@ -15395,8 +15393,11 @@ class Bridge(discord.Client):
         Members another pass has on a walk, families under an operator hold,
         a fight, an instance, another map and a mailbox inside a death-cell
         avoid disc are refused there. Only walk rows are written: no travel
-        aim, no town slot, nothing granted.
+        aim, no town slot, nothing granted. A fetch's own re-run of the
+        routing pass (`fetch` False) plans no further fetch.
         """
+        if not (GEAR_FETCH and fetch):
+            return
         routes = gearfetch.candidates(result)[:GEAR_FETCH_READS]
         if not routes:
             return
@@ -15438,14 +15439,36 @@ class Bridge(discord.Client):
             self._gear_fetch_walks[name] = now
         self._gear_fetch_starts.append(now)
         log.info("gear fetch: %s", fetch.said)
+        # Followed in its own task, as the mail walks are: the meeting can
+        # take MEET_STAY_SECONDS and the routing pass must not wait on it. The
+        # set keeps a strong reference until it ends, counts the fetches under
+        # way for the planner, and its done callback makes any bug loud.
         task = asyncio.create_task(self._gear_fetch_meet(fetch))
         self._gear_fetch_tasks.add(task)
-        task.add_done_callback(self._gear_fetch_tasks.discard)
+        task.add_done_callback(self._gear_fetch_task_done)
+
+    def _gear_fetch_task_done(self, task) -> None:
+        """Drop a finished meeting task, and make any bug in it loud."""
+        self._gear_fetch_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("gear fetch: a meeting task failed",
+                      exc_info=(type(exc), exc, exc.__traceback__))
 
     async def _gear_fetch_meet(self, fetch) -> bool:
         """Walk both members to the mailbox; once both stand there, run the
         routing pass once so the trade is written while they are together.
-        True when that pass ran. Both members are given back at the end."""
+        True when that pass ran. Both members are given back at the end, on
+        every way out, a cancel included."""
+        try:
+            return await self._gear_fetch_meeting(fetch)
+        finally:
+            for name, _command in fetch.walks:
+                self._gear_fetch_walks.pop(name, None)
+
+    async def _gear_fetch_meeting(self, fetch) -> bool:
         route = fetch.route
         try:
             arrived = await asyncio.wait_for(
@@ -15458,23 +15481,20 @@ class Bridge(discord.Client):
             log.exception("gear fetch: following the walks to mailbox %d failed",
                           fetch.mailbox)
             arrived = (False,)
+        if not all(arrived):
+            log.info("gear fetch: %s and %s did not both reach mailbox %d; "
+                     "%s (item %d) stays with %s", route.holder, route.wearer,
+                     fetch.mailbox, route.item, route.guid, route.holder)
+            return False
+        log.info("gear fetch: %s and %s stand at mailbox %d; the routing pass "
+                 "runs once for %s (item %d)", route.holder, route.wearer,
+                 fetch.mailbox, route.item, route.guid)
         try:
-            if not all(arrived):
-                log.info("gear fetch: %s and %s did not both reach mailbox %d; "
-                         "%s (item %d) stays with %s", route.holder, route.wearer,
-                         fetch.mailbox, route.item, route.guid, route.holder)
-                return False
-            log.info("gear fetch: %s and %s stand at mailbox %d; the routing pass "
-                     "runs once for %s (item %d)", route.holder, route.wearer,
-                     fetch.mailbox, route.item, route.guid)
             await self._gear_routing_once(fetch=False)
-            return True
         except Exception:
             log.exception("gear fetch: the routing pass after the meeting failed")
             return False
-        finally:
-            for name, _command in fetch.walks:
-                self._gear_fetch_walks.pop(name, None)
+        return True
 
     async def _gear_fetch_walk(self, fetch, name: str, command: str) -> bool:
         """One member's walk row to the meeting mailbox; True when it arrived."""
