@@ -346,10 +346,16 @@ class ARecallCannotLoop(unittest.TestCase):
     def test_a_different_wing_on_the_same_map_starts_fresh(self):
         world = World()
         ns = world.namespace()
-        run = {"id": 12345, "portal_keyword": "maraudon-orange"}
+        selects = []
+
+        def rows():
+            # The module records the active portal on the exact run's timeline.
+            portal = "maraudon-orange" if "e.run_id = r.id" in selects[-1] else ""
+            return [{"id": 12345, "portal_keyword": portal}]
+
         cursor = types.SimpleNamespace(
-            execute=lambda query, args: None,
-            fetchall=lambda: [run],
+            execute=lambda query, args: selects.append(query),
+            fetchall=rows,
         )
         connection = types.SimpleNamespace(cursor=lambda: nullcontext(cursor))
         ns.update(
@@ -368,6 +374,11 @@ class ARecallCannotLoop(unittest.TestCase):
         self.assertIsNone(world.judge(ns))
 
         world.clock[0] += stall.HOLD_SECONDS
+        ns["_door_run_boss_age"] = lambda run_id: 1 if run_id == 12345 else None
+        self.assertIsNone(world.judge(ns))
+        ns["_door_run_boss_age"] = lambda run_id: None
+        same_wing = dict(HEAD, id=HEAD["id"] + 1)
+        self.assertIsNotNone(ns["_door_wedge"](same_wing, ["Zug", "Oz"], "Zug"))
         other_wing = dict(HEAD, id=HEAD["id"] + 1, keyword="maraudon-purple")
         self.assertIsNone(ns["_door_wedge"](other_wing, ["Zug", "Oz"], "Zug"))
 

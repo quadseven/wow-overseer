@@ -6797,8 +6797,13 @@ def _door_wedge_ages(leader: str, members, clock_id: int) -> dict:
 # by a member questing on another map, and the run row's own heartbeat is
 # presence, not progress.
 _DOOR_RUN_SQL = (
-    "SELECT id, portal_keyword FROM overseer_dungeon_run WHERE leader_name = %s "
-    "AND map_id = %s AND ended_at IS NULL ORDER BY id DESC LIMIT 1"
+    # The module fills the run row's portal only at completion. While the run
+    # is open, its timeline names the door (see dungeonstall.RUNS_SQL_TIMELINE).
+    "SELECT r.id, (SELECT e.portal FROM overseer_dungeon_run_event e "
+    "WHERE e.run_id = r.id AND e.portal <> _utf8mb4'' COLLATE utf8mb4_unicode_ci "
+    "ORDER BY e.id LIMIT 1) AS portal_keyword "
+    "FROM overseer_dungeon_run r WHERE r.leader_name = %s AND r.map_id = %s "
+    "AND r.ended_at IS NULL ORDER BY r.id DESC LIMIT 1"
 )
 _DOOR_RUN_LEGACY_SQL = (
     "SELECT id FROM overseer_dungeon_run WHERE leader_name = %s AND map_id = %s "
@@ -6824,7 +6829,7 @@ def _door_open_run_id(leader: str, keyword: str) -> int | None:
             try:
                 cur.execute(_DOOR_RUN_SQL, args)
             except pymysql.err.MySQLError as exc:
-                if not (exc.args and exc.args[0] == 1054):
+                if not (exc.args and exc.args[0] in (1054, 1146)):
                     raise
                 cur.execute(_DOOR_RUN_LEGACY_SQL, args)
             runs = cur.fetchall()
