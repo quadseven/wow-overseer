@@ -1778,6 +1778,16 @@ class TheDoorWedgeReads(unittest.TestCase):
         self.assertIsNotNone(got)
         self.assertIn("Tork", got.why)
 
+    def test_a_new_head_starts_new_clocks(self):
+        """A hold timed before a run opens belongs to the queue entry."""
+        clock = [1000.0]
+        judge = self.judge(
+            (0, (self.member("Uzza", "on an errand of its own"),)), clock, run_id=None
+        )
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        clock[0] += stall.HOLD_SECONDS + 1
+        self.assertIsNone(judge(dict(self.HEAD, id=8), ["Zug", "Uzza"], "Zug"))
+
     def test_a_new_head_for_the_same_run_keeps_the_clock(self):
         """A hold timed under one queue entry persists for the next entry
         if it is the same run: the run is the attempt being judged."""

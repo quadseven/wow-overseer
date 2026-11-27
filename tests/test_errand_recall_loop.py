@@ -316,18 +316,6 @@ class ARecallCannotLoop(unittest.TestCase):
         self.assertIsNone(world.judge(ns))
         self.assertEqual([], world.released)
 
-    def test_a_new_queue_entry_starts_fresh_before_the_run_row_exists(self):
-        world = World()
-        ns = world.namespace()
-        ns["_door_open_run_id"] = lambda leader, keyword: None
-        world.aims["Oz"] = "vendor"
-        self.assertIsNone(world.judge(ns))
-
-        world.clock[0] += stall.HOLD_SECONDS
-        replacement = dict(HEAD, id=HEAD["id"] + 1)
-        self.assertIsNone(ns["_door_wedge"](replacement, ["Zug", "Oz"], "Zug"))
-        self.assertEqual([], world.released)
-
     def test_a_queued_replacement_keeps_the_open_runs_clock(self):
         world = World()
         ns = world.namespace()

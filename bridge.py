@@ -6577,6 +6577,7 @@ def _job_story(names: list) -> str:
 
 # The member-state words the wedge judges are named inside _door_wedge.
 
+# AI-REVIEW 2026-11-27 [Codex GPT-6/standards] 2191-clock-memo (PR #3316):
 # (leader, member) -> (clock id, monotonic first seen). The same clock is
 # stored in overseer_bridge_memo as a wall timestamp so a pod restart cannot
 # start the stand-down bound over.
@@ -6797,6 +6798,7 @@ def _door_wedge_ages(leader: str, members, clock_id: int) -> dict:
 # by a member questing on another map, and the run row's own heartbeat is
 # presence, not progress.
 _DOOR_RUN_SQL = (
+    # AI-REVIEW 2026-11-27 [Codex GPT-6/spec] 2191-active-portal (PR #3316):
     # The module fills the run row's portal only at completion. While the run
     # is open, its timeline names the door (see dungeonstall.RUNS_SQL_TIMELINE).
     "SELECT r.id, (SELECT e.portal FROM overseer_dungeon_run_event e "
@@ -6839,6 +6841,8 @@ def _door_open_run_id(leader: str, keyword: str) -> int | None:
             return None
     if not runs:
         return None
+    # AI-REVIEW 2026-11-27 [Codex GPT-6/spec] 2191-run-wing (PR #3316):
+    # Independent wings on one map must never inherit each other's clock.
     run = runs[0]
     wing = campaignplan.ALTERNATES.get(keyword, keyword)
     portal = str(run.get("portal_keyword") or "").strip().lower()
@@ -7019,6 +7023,7 @@ def _door_wedge(head: dict, names: list, leader: str):
     """
     status = head.get("status")
     if status != campaignqueue.ACTIVE:
+        # AI-REVIEW 2026-11-27 [Codex GPT-6/spec] 2191-queued-clock (PR #3316):
         # A queued replacement waits to be judged until it starts. Its active
         # pass will keep the clock only if the same run still owns the door.
         keep_run_clocks = status == campaignqueue.QUEUED
