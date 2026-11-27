@@ -2,7 +2,11 @@
 
 The world marks "the core will not reward it now" as retryable. A quester
 must keep trying that hand-in without turning the refusal into a broken-quest
-ledger row, even when the bridge's free-slot read is positive or unavailable."""
+ledger row, even when the bridge's free-slot read is positive or unavailable.
+
+The former room-based expectations are inverted below: these refusals stay
+uncounted when there is room, and the hand-in remains held during its retry
+window because the module marks the refusal retryable."""
 
 import json
 import unittest
@@ -138,7 +142,7 @@ class ARetryableRewardRefusalIsNotBroken(unittest.TestCase):
         )
         self.assertEqual(p.broken, ())
 
-    def test_retryable_reward_refusals_do_not_count_as_broken_with_any_slot_read(self):
+    def test_same_refusals_with_room_do_not_count_when_retryable(self):
         tried = [reward_refused(age=m) for m in (300, 200, 100)]
         for free in (0, 1, 8, None):
             self.assertEqual(questers.refusals("Mirra", tried), {})
@@ -241,7 +245,7 @@ class TheHandInWaitsForRetry(unittest.TestCase):
         self.assertNotIn(320, completed.quest_log)
         self.assertIn(320, completed.quests_done)
 
-    def test_a_quester_with_room_is_held(self):
+    def test_a_quester_with_room_waits_after_retryable_refusal(self):
         tried = [reward_refused(age=2)]
         self.assertEqual(questers.turn_in_held("Mirra", tried), frozenset({1}))
         self.assertEqual(
