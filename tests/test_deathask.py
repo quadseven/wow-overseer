@@ -549,6 +549,7 @@ class DeathSlopeAsks(unittest.TestCase):
         self.assertEqual(post.asker, "Sloper")
         self.assertEqual(post.kind, "deathloop")
         self.assertEqual(post.target, "deathloop:%d" % HILLSBRAD)
+        self.assertTrue(post.said.startswith("I've already died "))
 
     def test_a_two_death_risk_is_not_asked_for_yet(self):
         sloper, helper = sloper_and_mate()
@@ -568,6 +569,7 @@ class DeathSlopeAsks(unittest.TestCase):
         )
         self.assertEqual(len(found.posts), 1)
         self.assertEqual(found.posts[0].asker, "Looper")
+        self.assertTrue(found.posts[0].said.startswith("Keep dying "))
 
     def test_a_slope_members_live_ask_is_not_expired_or_reposted(self):
         sloper, helper = sloper_and_mate()
