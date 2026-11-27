@@ -342,6 +342,10 @@ class WorldRows(unittest.TestCase):
     def test_mindless_ones_rows_explain_the_stored_stall_without_claiming_a_defect(
         self,
     ):
+        # The quest row mirrors questcatalogue.QUESTS_SQL and its spawn counts
+        # mirror questcatalogue.SPAWN_COUNTS_SQL. The ledger reason is produced
+        # by questers.failures and written by bridge._record_quest_broken via
+        # questers.BROKEN_SQL; objective counters mirror questers.LOG_SQL.
         row = quest_row(
             quest=364,
             title="The Mindless Ones",

@@ -440,6 +440,10 @@ WARRIOR = 1
 
 
 def mindless_ones_catalogue():
+    # Quest fields and objectives mirror questers.QUESTS_SQL; spawn rows mirror
+    # classquest.SPAWNS_SQL. The ticket supplies the objective IDs, counts,
+    # quest level, minimum level and map spawn counts. Coordinates, spawn levels
+    # and the ender are planner scaffolding because that snapshot omits them.
     row = quest(
         QUEST,
         TIRISFAL,
@@ -488,6 +492,8 @@ def mindless_ones_catalogue():
 
 
 def mindless_ones_holder(counts, status=questers.STATUS_INCOMPLETE):
+    # This row shape mirrors questers.LOG_SQL and members_from_rows; the world
+    # writes the underlying character_queststatus counters.
     row = {"guid": 7, "quest": QUEST, "status": status}
     for i, entry in enumerate((ZOMBIE, GHOUL, 0, 0), start=1):
         row["npc%d" % i] = entry
@@ -540,22 +546,24 @@ class Quest364MindlessOnes(unittest.TestCase):
     def test_the_stored_stall_is_retried_while_its_objectives_are_actionable(self):
         cat = mindless_ones_catalogue()
         member = mindless_ones_holder({ZOMBIE: 0, GHOUL: 0})
+        held = {QUEST: questers.STALLED}
+        ledger = {
+            (member.name, QUEST): questers.ledger_state(
+                questers.LEDGER_BROKEN, questers.STALLED
+            )
+        }
 
         self.assertEqual(
-            questers.ledger_state(questers.LEDGER_BROKEN, questers.STALLED),
+            ledger[(member.name, QUEST)],
             questers.LEDGER_STALLED,
         )
-        self.assertEqual(
-            questers.known_broken(
-                member.name,
-                {},
-                {(member.name, QUEST): questers.LEDGER_STALLED},
-            ),
-            frozenset(),
-        )
-        self.assertEqual(
-            questers.stalled_holds_with_actionable_objectives(
-                cat, member, {QUEST: questers.STALLED}
-            ),
-            frozenset({QUEST}),
-        )
+        retry = questers.stalled_holds_with_actionable_objectives(cat, member, held)
+        self.assertEqual(retry, frozenset({QUEST}))
+        for qid in retry:
+            held.pop(qid)
+
+        broken = questers.known_broken(member.name, held, ledger)
+        self.assertEqual(broken, frozenset())
+        move = questers.plan(cat, member, questers.Clock(), 0.0, broken).move
+        self.assertEqual((move.kind, move.quest), (classquest.HUNT, QUEST))
+        self.assertIn(move.spot.entry, (ZOMBIE, GHOUL))
