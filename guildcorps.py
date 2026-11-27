@@ -1165,10 +1165,9 @@ def master_bag(tailor):
     return max(reached, key=lambda b: b.slots, default=None)
 
 
-def _shopper(crew, entry, vendors_by_map, busy):
-    """The maintenance member who buys `entry`: online, free, on a classic
-    map whose vendor sells it; the lowest name, for a stable answer."""
-    return min(
+def _shoppers(crew, entry, vendors_by_map, busy):
+    """Available maintenance shoppers on a classic vendor map, in name order."""
+    return sorted(
         (
             m
             for m in crew
@@ -1180,7 +1179,6 @@ def _shopper(crew, entry, vendors_by_map, busy):
             and int(entry) in (vendors_by_map or {}).get(m.map_id, ())
         ),
         key=lambda m: m.name,
-        default=None,
     )
 
 
@@ -1271,7 +1269,8 @@ def shop_steps(
 
     Nothing is bought twice inside the shop cooldown: `recent` holds
     ("to:<master>", "shop", entry) for every purchase already made for it.
-    A refusal for bag room is keyed to its shopper and adds a reason to `notes`.
+    A bag-room refusal cools its shopper, adds a reason to `notes`, and lets
+    the next eligible shopper take the errand.
     """
     steps = []
     noted_full = set()
@@ -1281,11 +1280,12 @@ def shop_steps(
         asked = (recent or {}).get(("to:" + master.name, "shop", int(entry)))
         if asked is not None and asked < COOLDOWN_MINUTES["shop"]:
             continue
-        shopper = _shopper(crew, entry, vendors_by_map, busy)
-        if shopper is None:
-            continue
-        full = (recent or {}).get((shopper.name, FULL_BAGS_SHOP, 0))
-        if full is not None and full < FULL_BAGS_SHOP_MINUTES:
+        for shopper in _shoppers(crew, entry, vendors_by_map, busy):
+            full = (recent or {}).get((shopper.name, FULL_BAGS_SHOP, 0))
+            if full is None or full >= FULL_BAGS_SHOP_MINUTES:
+                steps.append(_shop_step(shopper, master, why, entry, buy, cap))
+                busy.add(shopper.name)
+                break
             if notes is not None and shopper.name not in noted_full:
                 notes.append(
                     "%s waits out the %d-minute shop backoff after the bags "
@@ -1296,9 +1296,6 @@ def shop_steps(
                     )
                 )
                 noted_full.add(shopper.name)
-            continue
-        steps.append(_shop_step(shopper, master, why, entry, buy, cap))
-        busy.add(shopper.name)
     return steps
 
 

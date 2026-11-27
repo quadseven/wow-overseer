@@ -1,4 +1,4 @@
-"""`python3 -m ephemeral <lint|acts|seed|judge|submit|dispatch|collect> ...`: the `eph` command line."""
+"""`python3 -m ephemeral <lint|acts|seed|judge|submit|dispatch|collect|due> ...`: the `eph` command line."""
 
 import argparse
 import json
@@ -7,7 +7,7 @@ import pathlib
 import signal
 import sys
 
-from . import acts, anchors as anchors_mod, dbschema, lint
+from . import acts, anchors as anchors_mod, dbschema, due as due_mod, lint
 from .miniyaml import YamlError, loads
 
 
@@ -113,6 +113,7 @@ def _submit(args):
     cfg, k, gh = _runner(args)
     opts = {
         "arm": args.arm, "node": args.node, "anchors": args.anchors,
+        "control": args.control, "control_history": args.control_history,
         "control_worldserver": args.control_worldserver, "control_dbimport": args.control_dbimport,
         "control_playerbots_prefix": args.control_playerbots_prefix,
         "control_drop_keys": args.control_drop_keys,
@@ -163,6 +164,13 @@ def _report(args):
     cfg, k, gh = _runner(args)
     reporter = report.Reporter(cfg, k, gh, env=os.environ)
     reporter.run(args.batches, dry_run=args.dry_run)
+    return 0
+
+
+def _due(args):
+    cfg, _k, gh = _runner(args)
+    for repo, n, did in due_mod.due(gh, cfg):
+        print(f"{repo}#{n} {did}")
     return 0
 
 
@@ -218,6 +226,17 @@ def main(argv=None):
     s.add_argument(
         "--node",
         help="a node from the config (default: the first that takes the class)",
+    )
+    s.add_argument(
+        "--control",
+        choices=("auto",),
+        help="auto: take the control images and pin from --control-history, the newest set "
+        "whose pin lacks the fix and whose digests still resolve",
+    )
+    s.add_argument(
+        "--control-history",
+        help="JSON list of past image sets, newest first, written by the deploy side "
+        '([{"worldserver", "dbimport", "pin", "bridge", "bridge_commit"}])',
     )
     s.add_argument(
         "--control-worldserver", help="control worldserver image, name@sha256:..."
@@ -312,6 +331,12 @@ def main(argv=None):
         "--dry-run", action="store_true", help="print the comment and proposed box edit"
     )
     rp.set_defaults(func=_guarded(_report))
+    du = sub.add_parser(
+        "due",
+        help="list open awaiting-live-check issues whose Proof line names a runnable decree",
+    )
+    du.add_argument("--config", help=cfg_help)
+    du.set_defaults(func=_guarded(_due))
     args = parser.parse_args(argv)
     return args.func(args)
 

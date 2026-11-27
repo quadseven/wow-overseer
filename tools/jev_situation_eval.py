@@ -30,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import bonds  # noqa: E402
 import bridge  # noqa: E402
 import campaignqueue  # noqa: E402
 import jev  # noqa: E402
@@ -68,7 +69,7 @@ def logged(hours: int = 24) -> dict:
     }
 
 
-def activity_facts(key: str, fam: dict, rows: list) -> jev_activity.Facts:
+def activity_facts(key: str, fam: dict, rows: list, own: bool) -> jev_activity.Facts:
     """The activity Facts the bridge builds, without the bridge's clock state:
     the reason is the cadence and nothing can gather or train (only the
     bridge's own family gets those, and they need its live loops)."""
@@ -84,6 +85,8 @@ def activity_facts(key: str, fam: dict, rows: list) -> jev_activity.Facts:
         reads["worn"],
         reads["goods"],
         reads["recipes"],
+        reads["pole_holders"],
+        reads["fishing"],
     )
     return jev_activity.Facts(
         family=key or str(leader.get("name") or ""),
@@ -91,6 +94,7 @@ def activity_facts(key: str, fam: dict, rows: list) -> jev_activity.Facts:
         job=str(leader.get("job") or "").strip().lower(),
         queue=campaignqueue.progress_line(rows, runs),
         withheld=jev_activity.withheld(bool(rows), reads["free"]),
+        allow_partial_fishing=own,
         reason=jev_activity.CADENCE,
     )
 
@@ -210,12 +214,13 @@ def main() -> int:
         sample()
         time.sleep(30.0)
     fams = campaignqueue.families(bridge._fetch_queue_roster())
+    own_key = bridge._cohort_of(bonds.head_of_family())
     pending = campaignqueue.pending_by_family(bridge._fetch_queue_rows())
     for rnd in range(args.rounds):
         sample()
         now = time.monotonic()
         for key, fam in sorted(fams.items()):
-            f = activity_facts(key, fam, pending.get(key, []))
+            f = activity_facts(key, fam, pending.get(key, []), own=key == own_key)
             where = picture(key, fam, tracker, seer, now)
             out = {
                 "round": rnd,

@@ -6,6 +6,7 @@ import unittest
 
 import holdclock
 import profloop
+import townerrand
 
 
 class Store:
@@ -146,6 +147,132 @@ class LoopState(unittest.TestCase):
 
     def test_garbage_is_none(self):
         self.assertIsNone(holdclock.state_from_wall(profloop.State, {}, 1.0, 2.0))
+
+
+def errands(store, mono, wall):
+    """A fresh process's town errand table; its monotonic clock starts at `mono`."""
+    box = {"mono": mono, "wall": wall}
+    table = holdclock.ErrandEnds(
+        holdclock.TOWN_ERRAND_KIND,
+        store.read,
+        store.upsert,
+        store.delete,
+        townerrand.State,
+        mono=lambda: box["mono"],
+        wall=lambda: box["wall"],
+    )
+    return table, box
+
+
+class ErrandCooldownRestart(unittest.TestCase):
+    """The town errand's cooldown resumes after a restart instead of lapsing."""
+
+    KEY = ("Bork", "Grug")
+
+    def test_restart_keeps_the_errands_cooldown(self):
+        store = Store()
+        first, box = errands(store, 1000.0, 5_000_000.0)
+        done, _ = townerrand.end(townerrand.start(900.0, {}, "x"), 1000.0, "done")
+        first[self.KEY] = done
+        # restart 600 seconds later, monotonic clock near zero
+        second, box2 = errands(store, 4.0, 5_000_600.0)
+        back = second.get(self.KEY, townerrand.State())
+        self.assertFalse(back.active)
+        self.assertAlmostEqual(box2["mono"] - back.ended, 600.0)
+        why = townerrand.should_start(
+            back,
+            now=box2["mono"],
+            in_run=False,
+            mail_gear={},
+            facts={},
+            supply_gaps=("Og drink",),
+        )
+        self.assertEqual(why, "")
+
+    def test_a_run_since_the_end_and_an_unlanded_walk_are_kept(self):
+        store = Store()
+        first, _ = errands(store, 1000.0, 5_000_000.0)
+        first[self.KEY] = townerrand.State(ended=990.0, ran_since=True, unlanded=True)
+        second, _ = errands(store, 4.0, 5_000_010.0)
+        back = second[self.KEY]
+        self.assertTrue(back.ran_since and back.unlanded)
+
+    def test_a_family_with_no_errand_yet_stores_nothing(self):
+        store = Store()
+        first, _ = errands(store, 1000.0, 5_000_000.0)
+        first[self.KEY] = townerrand.State()
+        self.assertEqual(store.rows, {})
+        second, _ = errands(store, 4.0, 5_000_010.0)
+        self.assertNotIn(self.KEY, second)
+
+    def test_an_unchanged_end_is_written_once(self):
+        store = Store()
+        writes = []
+        first, _ = errands(store, 1000.0, 5_000_000.0)
+        first._upsert = lambda *a: writes.append(a)
+        for _ in range(3):
+            first[self.KEY] = townerrand.State(ended=990.0)
+        self.assertEqual(len(writes), 1)
+
+    def test_a_restored_end_is_not_written_back(self):
+        store = Store()
+        first, _ = errands(store, 1000.0, 5_000_000.0)
+        first[self.KEY] = townerrand.State(ended=990.0)
+        second, _ = errands(store, 4.0, 5_000_010.0)
+        writes = []
+        second._upsert = lambda *a: writes.append(a)
+        back = second[self.KEY]
+        second[self.KEY] = townerrand.State(ended=back.ended)
+        self.assertEqual(writes, [])
+
+    def test_a_live_errand_in_this_process_wins_over_the_store(self):
+        store = Store()
+        first, _ = errands(store, 1000.0, 5_000_000.0)
+        first[self.KEY] = townerrand.State(ended=990.0)
+        second, _ = errands(store, 4.0, 5_000_010.0)
+        live = townerrand.start(3.0, {}, "x")
+        second[self.KEY] = live
+        self.assertIs(second.get(self.KEY), live)
+        self.assertEqual([s for s in second.values() if s.active], [live])
+
+    def test_an_unreadable_store_is_an_empty_table(self):
+        def broken(kind):
+            raise RuntimeError("down")
+
+        table = holdclock.ErrandEnds(
+            holdclock.TOWN_ERRAND_KIND,
+            broken,
+            lambda *a: None,
+            lambda *a: None,
+            townerrand.State,
+        )
+        with self.assertLogs("holdclock", level="WARNING"):
+            self.assertIsNone(table.get(self.KEY))
+        self.assertEqual(list(table.items()), [])
+
+    def test_the_bridge_keeps_its_errands_in_the_store(self):
+        from test_guildsocial_bridge import bridge
+
+        table = bridge._TOWN_ERRANDS
+        self.assertIsInstance(table, holdclock.ErrandEnds)
+        self.assertEqual(table._kind, holdclock.TOWN_ERRAND_KIND)
+        self.assertIs(table._make, townerrand.State)
+
+    def test_an_unreadable_row_is_logged_and_the_rest_restored(self):
+        store = Store()
+        store.rows[(holdclock.TOWN_ERRAND_KIND, "Og")] = ("junk", 1.0)
+        store.rows[(holdclock.TOWN_ERRAND_KIND, "Ugga")] = ({"ended": "x"}, 1.0)
+        first, _ = errands(store, 1000.0, 5_000_000.0)
+        first[self.KEY] = townerrand.State(ended=990.0)
+        second, _ = errands(store, 4.0, 5_000_010.0)
+        with self.assertLogs("holdclock", level="WARNING") as logs:
+            self.assertIn(self.KEY, second)
+        self.assertEqual(len(logs.output), 2)
+        self.assertIn("Og", logs.output[0] + logs.output[1])
+        self.assertNotIn(("Og",), second)
+
+    def test_the_kind_fits_the_memo_column(self):
+        self.assertLessEqual(len(holdclock.TOWN_ERRAND_KIND), 32)
 
 
 if __name__ == "__main__":
