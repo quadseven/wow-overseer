@@ -1088,7 +1088,8 @@ class Book:
             # The item that starts a quest is read too: a member carrying it
             # takes the quest with no giver (wow-overseer#2297).
             out.update(i for i, _from in q.item_from)
-            # A dropped item is read too: the hunt asks for what is still missing.
+            # A dropped item is read too: planning needs its bag count to know
+            # which required items remain short.
             out.update(i for i, _n in q.items if i in q.droppable)
             if q.uses:
                 out.update(q.provided)

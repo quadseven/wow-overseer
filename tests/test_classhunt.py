@@ -47,7 +47,7 @@ def hunt_rows(step):
 
 
 class TheRow(unittest.TestCase):
-    def test_an_item_objective_names_the_item_and_how_many_are_missing(self):
+    def test_an_item_objective_names_the_item_and_total_target(self):
         quest = warrior_book().quests[1498]
         self.assertEqual(
             classhunt.command(quest, 3130),
@@ -56,13 +56,13 @@ class TheRow(unittest.TestCase):
         held = {6486: 2}.get
         self.assertEqual(
             classhunt.command(quest, 3130, lambda i: held(i, 0)),
-            "hunt-spawn creature:3130 item:6486 count:3 max:%d" % classhunt.MAX_SECONDS,
+            "hunt-spawn creature:3130 item:6486 count:5 max:%d" % classhunt.MAX_SECONDS,
         )
         self.assertLessEqual(classhunt.MAX_SECONDS, 600)
 
-    def test_a_count_already_held_still_asks_for_one(self):
+    def test_an_item_count_stays_total_when_the_member_already_has_enough(self):
         quest = warrior_book().quests[1498]
-        self.assertIn("count:1 ", classhunt.command(quest, 3130, lambda i: 9))
+        self.assertIn("item:6486 count:5 ", classhunt.command(quest, 3130, lambda i: 9))
 
     def test_an_item_hunt_skips_a_completed_item_from_the_same_creature(self):
         quest = classquest.Quest(
@@ -82,7 +82,7 @@ class TheRow(unittest.TestCase):
 
         self.assertEqual(
             classhunt.command(quest, 1001, held),
-            "hunt-spawn creature:1001 item:1080 count:1 max:%d" % classhunt.MAX_SECONDS,
+            "hunt-spawn creature:1001 item:1080 count:5 max:%d" % classhunt.MAX_SECONDS,
         )
 
     def test_an_older_worldserver_gets_the_row_with_no_item_key(self):
@@ -257,7 +257,7 @@ class ThePlan(unittest.TestCase):
         (step,) = class_steps(class_plan([m], hunts=hunters(classhunt.Slots(2))))
         self.assertTrue(
             step.rows[0].command.startswith(
-                "hunt-spawn creature:3130 item:6486 count:3 "
+                "hunt-spawn creature:3130 item:6486 count:5 "
             )
         )
 
