@@ -54,11 +54,140 @@ class Base(unittest.TestCase):
             self.cfg, self.kube, self.gh, self.decree, args,
             clock=self.clock, out=lambda *_: None,
             image_env=getattr(self, "image_env", None),
+            resolves=getattr(self, "resolves", None),
         )  # fmt: skip
 
     def compare(self, pin, status):
         path = f"repos/quadseven/mod-dungeon-clear/compare/{FIX}...{pin}"
         self.fake_gh.answers[("GET", path)] = {"status": status}
+
+
+class ControlAutoTest(Base):
+    """--control auto fills the control images from a history file the deploy side writes."""
+
+    def setUp(self):
+        super().setUp()
+        self.resolves = lambda ref: True
+        self.history = pathlib.Path(self.tmp.name) / "history.json"
+        newest = {"worldserver": WS, "dbimport": DB, "pin": SHA}
+        older = {"worldserver": OLD_WS, "dbimport": OLD_DB, "pin": OLD}
+        self.history.write_text(json.dumps([newest, older]), encoding="utf-8")
+        self.compare(SHA, "ahead")  # the live pin and the newest set carry the fix
+        self.compare(OLD, "behind")
+
+    def auto(self, **args):
+        return self.submit(
+            CHECKED, control="auto", control_history=str(self.history), **args
+        )
+
+    def test_auto_takes_the_newest_set_without_the_fix(self):
+        rec = self.auto()
+        self.assertEqual(rec["presence"]["control"], {"pin": OLD, "state": "absent"})
+        control = [
+            j for j in self.cluster.of("jobs")
+            if j["metadata"]["labels"]["eph/arm"] == "control"
+        ]  # fmt: skip
+        self.assertEqual(len(control), 3)
+        for job in control:
+            images = json.dumps(job)
+            self.assertIn(OLD_WS, images)
+            self.assertIn(OLD_DB, images)
+        self.assertTrue(
+            any("--control auto" in d and OLD in d for d in rec["fidelity_deltas"])
+        )
+
+    def test_auto_refuses_when_the_digests_no_longer_resolve(self):
+        self.resolves = lambda ref: ref not in (OLD_WS, OLD_DB)
+        with self.assertRaisesRegex(submit.SubmitError, "do not resolve"):
+            self.auto()
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_auto_refuses_when_every_set_has_the_fix(self):
+        self.compare(OLD, "ahead")
+        with self.assertRaisesRegex(submit.SubmitError, "lacks the fix"):
+            self.auto()
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_auto_and_explicit_control_images_are_refused_together(self):
+        with self.assertRaisesRegex(submit.SubmitError, "--control auto"):
+            self.auto(control_worldserver=OLD_WS)
+        with self.assertRaisesRegex(submit.SubmitError, "--control-bridge"):
+            self.auto(control_bridge=OLD_BRIDGE)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def write_history(self, *entries):
+        self.history.write_text(json.dumps(list(entries)), encoding="utf-8")
+
+    def test_auto_with_the_bridge_on_takes_the_chosen_sets_bridge(self):
+        self.write_history(
+            {
+                "worldserver": OLD_WS,
+                "dbimport": OLD_DB,
+                "pin": OLD,
+                "bridge": OLD_BRIDGE,
+            }
+        )
+        self.submit(
+            CHECKED.replace("bridge: off", 'bridge: "on"'),
+            control="auto", control_history=str(self.history),
+        )  # fmt: skip
+        for job in self.cluster.of("jobs"):
+            want = {"control": OLD_BRIDGE, "treatment": BRIDGE}
+            self.assertEqual(
+                _bridge(job)["image"], want[job["metadata"]["labels"]["eph/arm"]]
+            )
+
+    def test_auto_with_the_bridge_on_refuses_a_set_without_a_live_bridge(self):
+        on = CHECKED.replace("bridge: off", 'bridge: "on"')
+        self.write_history({"worldserver": OLD_WS, "dbimport": OLD_DB, "pin": OLD})
+        with self.assertRaisesRegex(submit.SubmitError, "bridge"):
+            self.submit(on, control="auto", control_history=str(self.history))
+        self.write_history(
+            {
+                "worldserver": OLD_WS,
+                "dbimport": OLD_DB,
+                "pin": OLD,
+                "bridge": OLD_BRIDGE,
+            }
+        )
+        self.resolves = lambda ref: ref != OLD_BRIDGE
+        with self.assertRaisesRegex(submit.SubmitError, "bridge"):
+            self.submit(on, control="auto", control_history=str(self.history))
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_auto_needs_a_readable_history_list(self):
+        self.history.unlink()
+        with self.assertRaisesRegex(submit.SubmitError, "history"):
+            self.auto()
+        self.history.write_text('{"not": "a list"}', encoding="utf-8")
+        with self.assertRaisesRegex(submit.SubmitError, "history"):
+            self.auto()
+        with self.assertRaisesRegex(submit.SubmitError, "history"):
+            self.submit(CHECKED, control="auto")
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_the_default_resolver_reads_the_registry_and_fails_closed(self):
+        from unittest import mock
+
+        from ephemeral import imagecommit
+
+        resolves = submit.default_resolves(self.cfg, self.kube)
+        with mock.patch.object(imagecommit, "image_env", return_value={}):
+            self.assertTrue(resolves(OLD_WS))
+        gone = imagecommit.RegistryError("registry answered 404")
+        with mock.patch.object(imagecommit, "image_env", side_effect=gone):
+            self.assertFalse(resolves(OLD_WS))
+        self.assertFalse(resolves("not-a-digest-ref"))
+        broken = kube.KubeError("forbidden: secrets")
+        with (
+            mock.patch.object(self.kube, "get", side_effect=broken),
+            self.assertRaises(kube.KubeError),
+        ):
+            resolves(OLD_WS)
+
+    def test_an_unknown_control_mode_is_refused(self):
+        with self.assertRaisesRegex(submit.SubmitError, "auto"):
+            self.submit(CHECKED, control="manual", control_history=str(self.history))
 
 
 class SubmitTest(Base):

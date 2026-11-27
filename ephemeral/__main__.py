@@ -113,6 +113,7 @@ def _submit(args):
     cfg, k, gh = _runner(args)
     opts = {
         "arm": args.arm, "node": args.node, "anchors": args.anchors,
+        "control": args.control, "control_history": args.control_history,
         "control_worldserver": args.control_worldserver, "control_dbimport": args.control_dbimport,
         "control_playerbots_prefix": args.control_playerbots_prefix,
         "control_drop_keys": args.control_drop_keys,
@@ -218,6 +219,17 @@ def main(argv=None):
     s.add_argument(
         "--node",
         help="a node from the config (default: the first that takes the class)",
+    )
+    s.add_argument(
+        "--control",
+        choices=("auto",),
+        help="auto: take the control images and pin from --control-history, the newest set "
+        "whose pin lacks the fix and whose digests still resolve",
+    )
+    s.add_argument(
+        "--control-history",
+        help="JSON list of past image sets, newest first, written by the deploy side "
+        '([{"worldserver", "dbimport", "pin", "bridge", "bridge_commit"}])',
     )
     s.add_argument(
         "--control-worldserver", help="control worldserver image, name@sha256:..."
