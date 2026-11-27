@@ -973,8 +973,13 @@ def _hold_fillers(by_name: dict, aims: dict, moves: dict, recent, maps) -> None:
             continue
         queued = _queued_key(name, recent)
         level = int(s.level)
+        map_id = maps.get(name)
+        if map_id is not None and type(map_id) is not int:
+            # An unread or malformed position cannot identify an active game,
+            # but an accepted queue row still holds the member safely.
+            map_id = None
         if level < FILLER_HOLD_MIN_LEVEL:
-            bg = _battleground_at(maps.get(name))
+            bg = _battleground_at(map_id)
             waiting = queued is not None and queued[1] < WAITING_MINUTES
             if bg is None and not waiting:
                 continue
@@ -987,7 +992,7 @@ def _hold_fillers(by_name: dict, aims: dict, moves: dict, recent, maps) -> None:
         else:
             continue
         aims[name] = _filler(s, bg)
-        moves[name] = next_move(aims[name], maps.get(name), False, recent)
+        moves[name] = next_move(aims[name], map_id, False, recent)
 
 
 def _battleground_at(map_id):

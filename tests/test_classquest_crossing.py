@@ -81,13 +81,13 @@ def pvp_crossing_row(name, age):
 
 
 def quester_crossing_row(name, age):
-    """An in-flight crossing row written by the quester pass."""
+    """The in-flight status written by mod-overseer's crossing executor."""
     row = {
         "id": 902,
         "target_name": name,
         "command": "cross-to-map map:%d" % KALIMDOR,
         "source": guildjobs.source_for(guildjobs.QUESTER_CROSS_ACTION, name),
-        "status": "applied",
+        "status": "verifying",
         "age": age,
         "result": "",
     }

@@ -65,13 +65,25 @@ def walk_refused(age):
 
 def boat_refused(age, reason=WALL):
     command = classquest.ride_command(1, *classquest.ISLAND_BOAT_STOP)
-    return refused_row(
-        command,
-        guildjobs.source_for(questers.CROSS_ACTION, "Mirra"),
-        reason,
-        age,
-        retry=False,
+    result = json.dumps(
+        {
+            "outcome": "refused",
+            "reason": reason,
+            "retry": False,
+            "map": 1,
+            "steps": 0,
+        },
+        separators=(",", ":"),
     )
+    return {
+        "id": 900 + age,
+        "target_name": "Mirra",
+        "command": command,
+        "source": guildjobs.source_for(questers.CROSS_ACTION, "Mirra"),
+        "status": "error",
+        "age": age,
+        "result": result,
+    }
 
 
 def plan(member=None, walks=(), boats=()):

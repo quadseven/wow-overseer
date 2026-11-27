@@ -2,6 +2,7 @@
 drafted as a cohort filler: its experience comes from dungeons and quests, and a
 battleground queue that does not pop holds it out of both."""
 
+import json
 import unittest
 
 import guildjobs
@@ -11,14 +12,39 @@ from test_pvp_cohort import filler, run, wanter
 
 def queued_filler(name="Low", age=5):
     aim = pvpgear._filler(filler(name, level=39), pvpgear.WSG)
-    return guildjobs.Recent(
-        name,
-        pvpgear.ACTION,
-        age,
-        status="queued",
-        command=pvpgear.queue_command(aim),
-        result='{"outcome":"queued"}',
+    command = pvpgear.queue_command(aim)
+    result = json.dumps(
+        {
+            "outcome": "queued",
+            "reason": "",
+            "retry": "",
+            "character": name,
+            "level": 39,
+            "battleground": aim.battleground.key,
+            "bg_type": 2,
+            "bracket": 2,
+            "as_group": False,
+            "in_battleground": False,
+            "queued_for_this": True,
+            "deserter": False,
+            "honor": 0,
+            "request": command,
+        },
+        separators=(",", ":"),
     )
+    return guildjobs.recent_from_rows(
+        [
+            {
+                "id": 1,
+                "target_name": name,
+                "command": command,
+                "source": guildjobs.source_for(pvpgear.ACTION, name),
+                "status": "delivered",
+                "age": age,
+                "result": result,
+            }
+        ]
+    )[0]
 
 
 class LevellingFirst(unittest.TestCase):
@@ -69,6 +95,15 @@ class LevellingFirst(unittest.TestCase):
         )
         self.assertIsNone(step)
         self.assertTrue(held)
+
+    def test_a_queued_member_stays_held_when_its_map_id_is_malformed(self):
+        aims, moves, _cohorts = run(
+            [filler("Low", level=39)],
+            recent=(queued_filler(),),
+            maps={"Low": "unread"},
+        )
+        self.assertIn("Low", aims)
+        self.assertEqual(moves["Low"].kind, pvpgear.WAITING)
 
     def test_a_queue_that_ended_does_not_requeue_a_member_below_the_floor(self):
         aims, moves, cohorts = run(
