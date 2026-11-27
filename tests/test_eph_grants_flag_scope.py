@@ -67,6 +67,11 @@ class GrantsFlagScopeTest(unittest.TestCase):
         text = (ROOT / "data/ephemeral/config.example.env").read_text(encoding="utf-8")
         self.assertIn(FLAG_NAME, text)
 
+    def test_the_allowed_file_is_the_one_that_carries_the_rehearsal_flag(self):
+        text = (ROOT / "data/ephemeral/config.example.env").read_text(encoding="utf-8")
+        self.assertIn("REHEARSAL_GRANTS_ENABLED", text)
+        self.assertIn(FLAG_TEXT, text)
+
     def test_the_scan_names_a_unit_file_that_gains_the_line(self):
         files = ["systemd/metric-watcher.service", "data/ephemeral/config.example.env"]
         texts = {
