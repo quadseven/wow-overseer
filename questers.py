@@ -307,6 +307,11 @@ FLAGON_OF_MEAD = (
     "only Malgin Barleybrew drops: one vendor spawn on another continent than "
     "the quest's zone, and questers cannot buy the item from a vendor"
 )
+DEATHS_IN_THE_FAMILY = (
+    "Deaths in the Family (quest 354) requires Gregor's Remains (item 2829), "
+    "Nissa's Remains (item 2828), and Thurman's Remains (item 2830), "
+    "which no spawned creature drops"
+)
 ENDER_MISSING = "the turn-in NPC is not in the world"
 OBJECT_ENDER_MISSING = "the turn-in object is not in the world"
 NO_TURN_IN_NAMED = "the quest names no creature or object to take it in"
@@ -2016,6 +2021,13 @@ def _broken_reason(
         and played >= STALL_SECONDS
     ):
         return FLAGON_OF_MEAD
+    if (
+        quest.id == 354
+        and status == STATUS_INCOMPLETE
+        and played >= STALL_SECONDS
+        and not quest.fields
+    ):
+        return DEATHS_IN_THE_FAMILY
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
     # spawn is not judged on its ender: a script or an event summons that
