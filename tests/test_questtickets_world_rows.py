@@ -339,6 +339,62 @@ class WorldRows(unittest.TestCase):
             ticket,
         )
 
+    def test_young_crocolisk_skins_rows_explain_the_take_refusal(self):
+        row = quest_row(
+            quest=484,
+            title="Young Crocolisk Skins",
+            level=22,
+            min_level=18,
+            sort=38,
+            item1=3397,
+            item_count1=4,
+            objective1=1417,
+            objective_count1=4,
+        )
+        catalogue = self.catalogue(
+            row,
+            {
+                qc.ITEM_NAMES_SQL.format(ids="3397"): [
+                    {"entry": 3397, "name": "Young Crocolisk Skin"}
+                ],
+                qc.DROP_SQL.format(ids="3397"): [],
+                qc.REWARD_SQL.format(ids="3397"): [],
+                qc.VENDOR_SQL.format(ids="3397"): [],
+                qc.SPAWN_COUNTS_SQL.format(ids="1417"): [
+                    {"entry": 1417, "map": 1, "n": 1},
+                ],
+            },
+        )
+        reason = qt.NO_GIVER_IN_REACH
+        ticket = qt.body(
+            484,
+            catalogue[0],
+            [
+                {"quest": 484, "guid": 7, "character_name": "Bromli", "reason": reason},
+                {"quest": 484, "guid": 8, "character_name": "Sylvi", "reason": reason},
+                {"quest": 484, "guid": 9, "character_name": "Kellan", "reason": reason},
+                {"quest": 484, "guid": 10, "character_name": "Velo", "reason": reason},
+            ],
+            [],
+            "",
+        )
+
+        self.assertIn("QuestLevel: 22; MinLevel: 18", ticket)
+        self.assertIn("Zone: Loch Modan", ticket)
+        self.assertIn("Required item 3397 x4 (Young Crocolisk Skin)", ticket)
+        self.assertIn("Required creature/object 1417", ticket)
+        self.assertIn("0 spawn(s) on the quest's map, 1 total", ticket)
+        self.assertIn(
+            "The take was refused because no living creature linked to the quest "
+            "matched within the 20-yard arrival radius at that time.",
+            ticket,
+        )
+        self.assertIn(
+            "This explains the ledger reason, but the stored rows do not distinguish "
+            "a missing, distant, dead, or otherwise unavailable creature.",
+            ticket,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
