@@ -23,6 +23,8 @@ directly again.
 
 import os
 import pathlib
+import re
+import subprocess
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -52,6 +54,31 @@ def read(path: pathlib.Path, encoding: str = "utf-8", errors=None) -> str:
     """The text of a file inside the submodule, once require() has passed."""
     require()
     return pathlib.Path(path).read_text(encoding=encoding, errors=errors)
+
+
+def read_revision(revision: str, path: pathlib.Path) -> str:
+    """Read an immutable blob from the history fetched by the existing pin check."""
+    require()
+    if not re.fullmatch(r"[a-f0-9]{40}", revision):
+        raise ValueError("module source revision must be a full commit SHA")
+    source = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(SUBMODULE),
+            "show",
+            f"{revision}:{path.relative_to(SUBMODULE)}",
+        ],
+        check=False,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if source.returncode != 0:
+        raise AssertionError(
+            f"missing module source at {revision}; run scripts/check-locally.sh"
+        )
+    return source.stdout
 
 
 def glob(path: pathlib.Path, pattern: str) -> list:
