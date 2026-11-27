@@ -571,3 +571,14 @@ still win when given; an image whose commit cannot be read is recorded as
 unchecked.
 
 Not built: requeueing an INVALID first pair (resubmit instead) and PR-built images.
+
+## Travel-guard scenarios
+
+Set a named cast member's operator guard to its seeded homebind with
+`travel_guard: {who: Grug, enabled: true}` in a timed act. The roster aim must
+start empty. A later act with `enabled: false` clears the exact value written by
+the same run. Each act records the value and the time it fired. Generic seed SQL
+still refuses roster writes.
+
+Use a list under `arrange.group.members` to group distinct cast entries with
+different starting positions or homebinds. A single selector continues to work.
