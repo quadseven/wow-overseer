@@ -193,9 +193,11 @@ SELL_FLOOR = 1
 # every pass.
 SELL_COOLDOWN_MINUTES = 20
 # A hunt refused for a full bag gets a longer retry window than a sale. The
-# sale step runs first; if it cannot make room, a three-hour window keeps the
+# sale step runs first; if it cannot make room, a four-hour window keeps the
 # same refusal from recurring every pass while still retrying in bounded time.
-BAG_HUNT_RETRY_MINUTES = 3 * 60
+# Four hours keeps a day under ten asks (24*60/240 = 6), matching the corps
+# collect and shop backoffs (guildcorps.FULL_BAGS_COLLECT_MINUTES).
+BAG_HUNT_RETRY_MINUTES = 4 * 60
 # A quester's crossing row has its own source action (quest takes, hand-ins
 # and hunts are ACTION), so it shares the one crossing clock and the walls of
 # the class quest's and the level step's crossings (guildjobs.CROSS_ACTIONS).
