@@ -4,6 +4,7 @@
   "source_deployment": "<base-worldserver-deployment>",
   "kubeconfig": "",
   "results_dir": "/path/to/ephemeral-results",
+  "proof_repos": ["quadseven/wow-overseer", "quadseven/mod-overseer"],
   "ledger_path": "/path/to/livecheck-results.jsonl",
   "tools_image": "registry.example.com/eph-tools@sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "template_pull_secret": "<template-registry-pull-secret>",

@@ -113,6 +113,9 @@ class CliTest(unittest.TestCase):
         raw["tools_image"] = "registry.example.com/t@sha256:" + "0" * 64
         cfg = runcfg.from_dict(raw)
         self.assertEqual(set(cfg.nodes), {"<node-name-1>", "<node-name-2>"})
+        self.assertEqual(
+            cfg.proof_repos, ("quadseven/wow-overseer", "quadseven/mod-overseer")
+        )
 
     def test_config_refuses_a_never_node_and_a_tag_only_tools_image(self):
         from ephemeral import runcfg
@@ -122,7 +125,10 @@ class CliTest(unittest.TestCase):
             "template_images": {"lean": "a:1", "full": "b:1"},
             "nodes": {"n": {"claim": "c", "max_worlds": 1}},
         }  # fmt: skip
-        runcfg.from_dict(base)
+        self.assertEqual(runcfg.from_dict(base).proof_repos, ())
+        self.assertEqual(runcfg.from_dict({**base, "proof_repos": []}).proof_repos, ())
+        with self.assertRaisesRegex(runcfg.ConfigError, "proof_repos"):
+            runcfg.from_dict({**base, "proof_repos": ["example/repo", "invalid"]})
         with self.assertRaises(runcfg.ConfigError):
             runcfg.from_dict({**base, "never_nodes": ["n"]})
         with self.assertRaises(runcfg.ConfigError):

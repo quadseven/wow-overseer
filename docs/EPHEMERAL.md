@@ -161,7 +161,21 @@ its own. `python3 -m ephemeral due` lists the open `awaiting-live-check` issues
 whose Proof line names a decree that is on the default branch, proves that issue
 (either `proves` form), and has no files yet under `<results_dir>/<id>/` (no
 submission record and no result). It prints `owner/name#N <id>` oldest first and
-writes nothing. `submit --due N` is not built yet.
+writes nothing. Set the runner's `proof_repos` list to scan multiple issue
+repositories in that order when issue timestamps tie. An empty or omitted
+list scans only `decree_repo`, which always supplies the decree file.
+
+Run `python3 -m ephemeral submit --due N --control-history FILE --dry-run` to
+preflight the first N distinct due decrees. A claim or active Loom lane on any
+open issue named in `proves` holds the decree. Every target is checked again
+before queueing, including issues outside the scan.
+The limit counts unheld decrees. A preflight refusal is printed and consumes its
+place in that selection. The command uses the default-branch file bytes for
+both arms and picks the control with `--control auto`. Omit `--dry-run` to queue
+one suspended batch per decree that passes preflight. A submission error after
+preflight stops the command and returns an error. The path form of `submit`
+still supports manual image, config and single-arm options.
+
 `eph report` posts the named decree's batch result, including each run's UTC
 start time and judge reason lines. It ticks one uniquely matching checkbox only
 when every declared control run is `FAIL` and every declared treatment run is

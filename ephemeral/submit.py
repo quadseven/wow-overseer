@@ -286,8 +286,10 @@ def _render(template, values, used):
     return text
 
 
-def _load_decree(decree_path, args):
-    raw = pathlib.Path(decree_path).read_bytes()
+def _load_decree(decree_path, args, decree_bytes):
+    raw = (
+        pathlib.Path(decree_path).read_bytes() if decree_bytes is None else decree_bytes
+    )
     try:
         decree = loads(raw.decode("utf-8"))
         anchors_doc = loads(
@@ -426,14 +428,14 @@ def default_template_image(cfg, kube):
 
 def submit(
     cfg, kube, gh, decree_path, args=None, clock=time.time, out=print, image_env=None,
-    template_image=None, resolves=None,
+    template_image=None, resolves=None, *, decree_bytes=None,
 ):  # fmt: skip
     """Create the suspended Jobs. Returns the submission record (also saved)."""
     args = dict(args or {})
     arm_arg = args.get("arm", "both")
     if arm_arg not in ("control", "treatment", "both"):
         raise SubmitError("--arm must be control, treatment or both")
-    raw, decree = _load_decree(decree_path, args)
+    raw, decree = _load_decree(decree_path, args, decree_bytes)
     sha = hashlib.sha256(raw).hexdigest()
     world = decree["world"]
     if world["image"] != "follow-dev":
