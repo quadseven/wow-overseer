@@ -4620,6 +4620,96 @@ def _write_raid_seats(cur, family: str, keyword: str, seats: list,
     return True
 
 
+def _ensure_raid_gathering_store() -> None:
+    """Create the bridge-owned per-order record for full Molten Core gathers."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(raidrun.GATHERING_CREATE_SQL)
+
+
+def _start_raid_gathering(family: str, keyword: str, seats: list,
+                          command_id: int) -> None:
+    """Start a full raid timer at the first job row's database timestamp."""
+    members = json.dumps([str(seat[2]) for seat in seats], separators=(",", ":"))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(raidrun.GATHERING_CANCEL_PENDING_SQL, (family, keyword))
+        cur.execute(
+            raidrun.GATHERING_INSERT_SQL,
+            (family[:24], keyword[:20], members, len(seats), command_id),
+        )
+        if cur.rowcount != 1:
+            log.error("raid gathering: order for %s has no first command timestamp",
+                      campaignqueue._family(family))
+
+
+def _record_raid_gathering(family: str, keyword: str, seats: list,
+                           written: int, command_id: int | None) -> None:
+    """Start timing only for a fully seated Molten Core order with a job row."""
+    if (keyword != raidrun.MOLTEN_CORE or len(seats) != raidrun.MOLTEN_CORE_SEATS
+            or not written or command_id is None):
+        return
+    try:
+        _start_raid_gathering(family, keyword, seats, command_id)
+    except pymysql.err.MySQLError:
+        log.exception("raid gathering: timer for %s could not be started",
+                      campaignqueue._family(family))
+
+
+def _raid_gathering_names(row: dict) -> list | None:
+    """Read and validate the saved forty-seat list for one order."""
+    try:
+        names = json.loads(row.get("members") or "[]")
+    except (TypeError, ValueError):
+        log.exception("raid gathering: seat list for record %s is unreadable", row.get("id"))
+        return None
+    expected = int(row.get("expected") or 0)
+    if (not isinstance(names, list) or expected != raidrun.MOLTEN_CORE_SEATS
+            or len(names) != expected or any(not isinstance(name, str) or not name
+                                             for name in names)):
+        log.error("raid gathering: record %s does not hold a full Molten Core roster",
+                  row.get("id"))
+        return None
+    return names
+
+
+def _complete_raid_gathering(cur, row: dict, names: list) -> bool:
+    """Finish and log one timer only after all saved seats are inside."""
+    keyword = str(row.get("keyword") or "")
+    map_id = raidrun.MAPS.get(keyword)
+    if map_id != raidrun.MOLTEN_CORE_MAP:
+        log.error("raid gathering: record %s has an unknown raid map", row.get("id"))
+        return False
+    holes = ", ".join(["%s"] * len(names))
+    cur.execute(raidrun.GATHERING_POSITIONS_SQL.format(holes=holes), tuple(names))
+    positions = list(cur.fetchall())
+    inside = {
+        str(position.get("name") or ""): int(position["instance_id"])
+        for position in positions
+        if int(position.get("map_id") or -1) == map_id
+        and position.get("instance_id") is not None
+    }
+    expected = len(names)
+    if len(inside) != expected or len(set(inside.values())) != 1:
+        return False
+    elapsed = max(0, int(row.get("elapsed_seconds") or 0))
+    cur.execute(raidrun.GATHERING_COMPLETE_SQL, (elapsed, row["id"]))
+    if not cur.rowcount:
+        return False
+    log.info("%s", raidrun.gathering_line(row["family"], keyword, expected, elapsed))
+    return True
+
+
+def _observe_raid_gatherings_once() -> int:
+    """Log each full order when fresh positions show all its seats inside."""
+    completed = 0
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(raidrun.GATHERING_PENDING_SQL)
+        for row in cur.fetchall():
+            names = _raid_gathering_names(row)
+            if names is not None and _complete_raid_gathering(cur, row, names):
+                completed += 1
+    return completed
+
+
 def _plan_raid_seats(cur, keyword: str, family: str, names: list,
                      withheld: list | None, first_kill: bool = False) -> tuple | None:
     """Read the guild lineup and refuse a raid whose selected seats cannot form."""
@@ -4666,16 +4756,19 @@ def _persist_raid_lineup(cur, family: str, keyword: str, lineup: dict,
     return True
 
 
-def _insert_raid_jobs(names: list, mode: str, source: str) -> int:
-    """Write each ordered member's job and isolate individual insert failures."""
+def _insert_raid_jobs(names: list, mode: str, source: str) -> tuple[int, int | None]:
+    """Write the jobs; return their count and the first command row id."""
     written = 0
+    first_command_id = None
     for name in names:
         try:
-            _insert_job(name, mode, source)
+            command_id = _insert_job(name, mode, source)
+            if first_command_id is None and command_id is not None:
+                first_command_id = int(command_id)
             written += 1
         except Exception:
             log.exception("raid job insert failed for %s (mode=%s)", name, mode)
-    return written
+    return written, first_command_id
 
 
 def _drive_raid(keyword: str, family: str, names: list, source: str,
@@ -4704,7 +4797,8 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
         # is written, and the job loop below does not run.
         if not _persist_raid_lineup(cur, family, keyword, lineup, seats, withheld):
             return 0
-    written = _insert_raid_jobs(names, mode, source)
+    written, first_command_id = _insert_raid_jobs(names, mode, source)
+    _record_raid_gathering(family, keyword, seats, written, first_command_id)
     log.info("raid: %s ordered into %s - %d seats written in %d groups, %d "
              "job row(s) of %d. %s", campaignqueue._family(family), keyword,
              len(seats), len({s[3] for s in seats}), written, len(names),
@@ -9542,6 +9636,7 @@ PASSES = (
     _Pass("_campaign_queue_loop"),
     _Pass("_activity_loop"),
     _Pass("_run_recovery_loop"),
+    _Pass("_raid_gathering_loop"),
     _Pass("_guild_run_loop"),
     _Pass("_loot_council_loop"),
     _Pass("_situation_loop"),
@@ -10009,6 +10104,7 @@ class Bridge(discord.Client):
         for ensure in (
             _ensure_thought_store,
             _ensure_dungeon_run_event_store,
+            _ensure_raid_gathering_store,
             _ensure_event_store,
             _ensure_command_store,
             _ensure_goal_store,
@@ -26774,6 +26870,19 @@ class Bridge(discord.Client):
                 _mark_pass_completed("campaign_queue")
             except Exception:
                 log.exception("queue: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _raid_gathering_loop(self) -> None:
+        """Log when all forty Molten Core seats reach the instance map."""
+        await self.wait_until_ready()
+        cycle = 15.0
+        await asyncio.sleep(5.0)
+        while not self.is_closed():
+            try:
+                await asyncio.to_thread(_observe_raid_gatherings_once)
+                _mark_pass_completed("raid_gathering")
+            except Exception:
+                log.exception("raid gathering: observation pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _note_stalls(self, pending: dict, fams: dict) -> None:

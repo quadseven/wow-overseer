@@ -13,6 +13,7 @@ What these pin, because "a raid can be queued" is not it:
 
 import ast
 import contextlib
+import json
 import pathlib
 import types
 import unittest
@@ -373,7 +374,12 @@ DOOR = {"map": 0, "x": -7510.87, "y": -1035.87}
 
 
 def _load_drive_raid(
-    events, members, missing_table=False, missing_duty=False, current_rows=None
+    events,
+    members,
+    missing_table=False,
+    missing_duty=False,
+    current_rows=None,
+    job_ids=None,
 ):
     """bridge._drive_raid, run for real against fakes that record order."""
     source = "\n\n".join(
@@ -383,6 +389,8 @@ def _load_drive_raid(
             "_seat_current_rows",
             "_raid_seat_eligibility",
             "_write_raid_seats",
+            "_start_raid_gathering",
+            "_record_raid_gathering",
             "_log_raid_arrivals",
             "_plan_raid_seats",
             "_persist_raid_lineup",
@@ -395,6 +403,8 @@ def _load_drive_raid(
         pass
 
     class Cursor:
+        rowcount = 1
+
         def execute(self, sql, args=()):
             if "overseer_raid_seat" in sql:
                 if missing_table:
@@ -404,6 +414,10 @@ def _load_drive_raid(
                 "SELECT c.name, c.level, c.online FROM characters c WHERE"
             ):
                 events.append(("eligibility", args))
+            elif sql == raidrun.GATHERING_CANCEL_PENDING_SQL:
+                events.append(("cancel_gathering", args))
+            elif sql == raidrun.GATHERING_INSERT_SQL:
+                events.append(("gathering", args))
             else:
                 events.append(("read", args))
 
@@ -429,9 +443,16 @@ def _load_drive_raid(
 
         warning = exception = info
 
+    ids = iter(job_ids or ())
+
+    def insert_job(name, mode, by):
+        events.append(("job", name, mode))
+        return next(ids, None)
+
     namespace = {
         "jobs": jobs,
         "raidrun": raidrun,
+        "json": json,
         "raidlineup": raidlineup,
         "guildjobs": types.SimpleNamespace(entrances=lambda: {"409": DOOR}),
         # The readiness read is its own test (test_raidgear); here the members
@@ -439,7 +460,7 @@ def _load_drive_raid(
         "_with_readiness": lambda cur, members: members,
         "campaignqueue": campaignqueue,
         "log": Log(),
-        "_insert_job": lambda name, mode, by: events.append(("job", name, mode)),
+        "_insert_job": insert_job,
         "_connect": lambda: contextlib.nullcontext(Conn()),
         "pymysql": types.SimpleNamespace(
             err=types.SimpleNamespace(MySQLError=MissingTable)
@@ -481,6 +502,20 @@ class TheBridgeWritesSeatsThenTheJob(unittest.TestCase):
         self.assertEqual(40, len(inserts[0][2]))
         self.assertEqual(("job", "Grug", "raid:moltencore"), events[-1])
         self.assertLess(kinds.index("seat"), kinds.index("job"))
+
+    def test_a_full_molten_core_order_starts_from_its_first_job_timestamp(self):
+        events = []
+        drive = _load_drive_raid(events, GUILD, job_ids=[314])
+
+        drive("moltencore", "Grug", ["Grug"], "overseer:queue", [])
+
+        recorded = [event for event in events if event[0] == "gathering"]
+        self.assertEqual(1, len(recorded))
+        self.assertEqual("Grug", recorded[0][1][0])
+        self.assertEqual("moltencore", recorded[0][1][1])
+        self.assertEqual(40, len(json.loads(recorded[0][1][2])))
+        self.assertEqual(40, recorded[0][1][3])
+        self.assertEqual(314, recorded[0][1][4])
 
     def test_offline_approved_member_refuses_before_any_write(self):
         """The bridge does not delete or insert seats for an offline member."""
@@ -785,3 +820,144 @@ class TheArrivalOrderNamesHowEachRaiderComes(unittest.TestCase):
         self.assertIn("logs how each raider away from the door is to arrive", line)
         self.assertIn("Every seat is walked to the door", line)
         self.assertNotIn("Only the head is walked", line)
+
+
+class TheRaidGatheringTimer(unittest.TestCase):
+    def test_the_completion_line_reports_the_full_raid_and_order_duration(self):
+        self.assertEqual(
+            "raid gathering: Cave - Molten Core - all 40 raiders inside in "
+            "00:01:23 from order",
+            raidrun.gathering_line("Cave", "moltencore", 40, 83),
+        )
+
+    def test_the_observer_logs_only_after_every_seat_is_inside(self):
+        pending = [
+            {
+                "id": 7,
+                "family": "Cave",
+                "keyword": "moltencore",
+                "members": json.dumps(["R%d" % i for i in range(40)]),
+                "expected": 40,
+                "elapsed_seconds": 83,
+            }
+        ]
+        inside = [
+            {
+                "name": "R%d" % i,
+                "map_id": raidrun.MOLTEN_CORE_MAP,
+                "instance_id": 101,
+            }
+            for i in range(40)
+        ]
+        events, lines = [], []
+        observe = _load_raid_gathering_observer(events, pending, inside, lines)
+
+        observe()
+
+        self.assertEqual(1, len([event for event in events if event[0] == "complete"]))
+        self.assertIn(
+            "raid gathering: Cave - Molten Core - all 40 raiders inside in "
+            "00:01:23 from order",
+            lines,
+        )
+
+    def test_seats_split_between_instance_copies_do_not_complete_the_timer(self):
+        pending = [
+            {
+                "id": 9,
+                "family": "Cave",
+                "keyword": "moltencore",
+                "members": json.dumps(["R%d" % i for i in range(40)]),
+                "expected": 40,
+                "elapsed_seconds": 83,
+            }
+        ]
+        inside = [
+            {
+                "name": "R%d" % i,
+                "map_id": raidrun.MOLTEN_CORE_MAP,
+                "instance_id": 101 if i < 20 else 202,
+            }
+            for i in range(40)
+        ]
+        events, lines = [], []
+        observe = _load_raid_gathering_observer(events, pending, inside, lines)
+
+        observe()
+
+        self.assertFalse([event for event in events if event[0] == "complete"])
+        self.assertEqual([], lines)
+
+    def test_thirty_nine_inside_does_not_complete_the_nights_timer(self):
+        pending = [
+            {
+                "id": 8,
+                "family": "Cave",
+                "keyword": "moltencore",
+                "members": json.dumps(["R%d" % i for i in range(40)]),
+                "expected": 40,
+                "elapsed_seconds": 83,
+            }
+        ]
+        inside = [
+            {
+                "name": "R%d" % i,
+                "map_id": raidrun.MOLTEN_CORE_MAP,
+                "instance_id": 101,
+            }
+            for i in range(39)
+        ]
+        events, lines = [], []
+        observe = _load_raid_gathering_observer(events, pending, inside, lines)
+
+        observe()
+
+        self.assertFalse([event for event in events if event[0] == "complete"])
+        self.assertEqual([], lines)
+
+
+def _load_raid_gathering_observer(events, pending, positions, lines):
+    source = "\n\n".join(
+        ast.get_source_segment(BRIDGE, _function(name))
+        for name in (
+            "_raid_gathering_names",
+            "_complete_raid_gathering",
+            "_observe_raid_gatherings_once",
+        )
+    )
+
+    class Cursor:
+        rowcount = 1
+
+        def execute(self, sql, args=()):
+            if sql == raidrun.GATHERING_PENDING_SQL:
+                self.rows = pending
+            elif sql.startswith(
+                "SELECT name, map_id, instance_id FROM overseer_snapshot"
+            ):
+                self.rows = positions
+                events.append(("positions", args))
+            elif sql.startswith("UPDATE overseer_raid_gathering"):
+                events.append(("complete", args))
+            else:
+                raise AssertionError("unexpected raid gathering SQL: %s" % sql)
+
+        def fetchall(self):
+            return list(self.rows)
+
+    class Conn:
+        def cursor(self):
+            return contextlib.nullcontext(Cursor())
+
+    class Log:
+        def info(self, message, *args):
+            lines.append(message % args if args else message)
+
+    namespace = {
+        "raidrun": raidrun,
+        "json": json,
+        "_connect": lambda: contextlib.nullcontext(Conn()),
+        "log": Log(),
+    }
+    exec(compile(source, str(BRIDGE), "exec"), namespace)  # noqa: S102 - bridge.py's own source
+    return namespace["_observe_raid_gatherings_once"]

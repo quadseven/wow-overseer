@@ -35,6 +35,7 @@ log = logging.getLogger("raidrun")
 # The raid doors mod-overseer has (RaidDoorFor in overseer_decisions).
 MOLTEN_CORE = "moltencore"
 MOLTEN_CORE_MAP = 409
+MOLTEN_CORE_SEATS = 40
 # THE KEYWORD AND NOT THE PLACE: overseer_raid_seat.keyword is VARCHAR(20) and
 # `upper-blackrock-spire` is 21. spirerun.py says why this raid is here.
 UPPER_SPIRE = "ubrs"
@@ -188,6 +189,63 @@ ARRIVAL_SQL = (
     "(SELECT COUNT(*) FROM character_spell cs WHERE cs.guid = c.guid "
     "AND cs.spell = 698) AS ritual FROM characters c WHERE c.name IN ({holes})"
 )
+
+# ONE GATHERING RESULT PER FULL ORDER. The bridge timestamps the first job row
+# that carries the order and finishes this record when a fresh overseer_snapshot
+# shows every seat on the instance map. Incomplete or superseded orders remain
+# in the table without a completion time.
+GATHERING_CREATE_SQL = (
+    "CREATE TABLE IF NOT EXISTS overseer_raid_gathering ("
+    " id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,"
+    " order_command_id INT UNSIGNED NOT NULL,"
+    " family VARCHAR(24) NOT NULL,"
+    " keyword VARCHAR(20) NOT NULL,"
+    " members TEXT NOT NULL,"
+    " expected TINYINT UNSIGNED NOT NULL,"
+    " ordered_at TIMESTAMP NOT NULL,"
+    " completed_at TIMESTAMP NULL DEFAULT NULL,"
+    " cancelled_at TIMESTAMP NULL DEFAULT NULL,"
+    " elapsed_seconds INT UNSIGNED NULL DEFAULT NULL,"
+    " PRIMARY KEY (id), UNIQUE KEY idx_order_command (order_command_id),"
+    " KEY idx_pending (completed_at, cancelled_at, ordered_at)"
+    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+)
+GATHERING_CANCEL_PENDING_SQL = (
+    "UPDATE overseer_raid_gathering SET cancelled_at = NOW() "
+    "WHERE family = %s AND keyword = %s AND completed_at IS NULL "
+    "AND cancelled_at IS NULL"
+)
+GATHERING_INSERT_SQL = (
+    "INSERT INTO overseer_raid_gathering "
+    "(family, keyword, members, expected, ordered_at, order_command_id) "
+    "SELECT %s, %s, %s, %s, created_at, id FROM overseer_command WHERE id = %s"
+)
+GATHERING_PENDING_SQL = (
+    "SELECT id, family, keyword, members, expected, "
+    "TIMESTAMPDIFF(SECOND, ordered_at, NOW()) AS elapsed_seconds "
+    "FROM overseer_raid_gathering WHERE completed_at IS NULL "
+    "AND cancelled_at IS NULL AND ordered_at > NOW() - INTERVAL 1 DAY "
+    "ORDER BY id"
+)
+GATHERING_POSITIONS_SQL = (
+    "SELECT name, map_id, instance_id FROM overseer_snapshot WHERE name IN ({holes}) "
+    "AND updated_at > NOW() - INTERVAL 60 SECOND"
+)
+GATHERING_COMPLETE_SQL = (
+    "UPDATE overseer_raid_gathering SET completed_at = NOW(), elapsed_seconds = %s "
+    "WHERE id = %s AND completed_at IS NULL AND cancelled_at IS NULL"
+)
+
+
+def gathering_line(family: str, keyword: str, seats: int, elapsed_seconds: int) -> str:
+    """The completion log for one full raid, measured from its order row."""
+    seconds = max(0, int(elapsed_seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return (
+        "raid gathering: %s - %s - all %d raiders inside in %02d:%02d:%02d from order"
+        % (family, place(keyword), int(seats), hours, minutes, seconds)
+    )
 
 
 # --- the seats -----------------------------------------------------------------
