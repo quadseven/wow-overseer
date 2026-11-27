@@ -105,16 +105,16 @@ class _Pass:
 
 
 class AFishingBreakAfterARestart(_World):
-    def restore(self, this, job, now, names=NAMES, leader="Grug"):
+    def restore(self, this, now):
         return asyncio.run(
-            bridge.Bridge._activity_restore_job(this, "Grug", job, now, names, leader)
+            bridge.Bridge._activity_restore_job(this, "Grug", NAMES, now)
         )
 
     def test_is_ended_and_the_family_put_back_on_the_default_job(self):
         self.jobs = {n: FISH for n in NAMES}
         self.sources = {n: jev_activity.SOURCE for n in NAMES}
         this = _Pass()
-        self.assertTrue(self.restore(this, FISH, 500.0))
+        self.assertTrue(self.restore(this, 500.0))
         self.assertEqual(
             sorted((n, BACK) for n in NAMES),
             sorted((n, mode) for n, mode, _ in self.written),
@@ -122,13 +122,14 @@ class AFishingBreakAfterARestart(_World):
         # Adopted like any break, so a refused row is written again later.
         self.assertIn("Grug", this._activity_restore)
         later = 500.0 + bridge.ACTIVITY_RESTORE_RETRY_SECONDS
-        self.assertFalse(self.restore(this, BACK, later))
+        self.assertFalse(self.restore(this, later))
         self.assertNotIn("Grug", this._activity_restore)
 
     def test_an_operators_own_fishing_order_stands(self):
+        self.jobs = dict.fromkeys(NAMES, FISH)
         self.sources = {n: "discord" for n in NAMES}
         this = _Pass()
-        self.assertFalse(self.restore(this, FISH, 500.0))
+        self.assertFalse(self.restore(this, 500.0))
         self.assertEqual([], self.written)
         self.assertEqual({}, this._activity_restore)
 
@@ -138,7 +139,7 @@ class AFishingBreakAfterARestart(_World):
 
         this = _Pass()
         with mock.patch.object(bridge, "_last_job_source", unread):
-            self.assertFalse(self.restore(this, jobs.DEFAULT, 500.0))
+            self.assertFalse(self.restore(this, 500.0))
         self.assertEqual([], self.written)
 
 
