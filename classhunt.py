@@ -140,13 +140,12 @@ def command(quest: classquest.Quest, entry, held=None, item_form=True) -> str:
     or "" when the quest has no creature to hunt there.
 
     A kill objective asks for its own kill count, so the row finishes by itself.
-    An item the creature drops names the item and how many
-    are still missing, `item:<entry> count:<needed>`: the module loots the
-    corpse itself and ends the row `done` when the bot holds that many. `held`
-    is the member's count of an item (guildjobs.Member.count). With
-    `item_form` False (a worldserver that rejects `item:`) or no known item,
-    the row asks for neither, and the bridge ends it when the member's counters
-    say the quest is complete.
+    An item the creature drops names the full inventory target,
+    `item:<entry> count:<total>`: the module loots the corpse and compares
+    the target with everything the bot holds. The member's saved `held`
+    counts (guildjobs.Member.count) select the next incomplete item.
+    With item form disabled, no known item, or a total above the module's
+    ceiling, the bridge follows the plain row to verify objective completion.
     """
     entry = int(entry or 0)
     if entry <= 0:
@@ -163,9 +162,9 @@ def command(quest: classquest.Quest, entry, held=None, item_form=True) -> str:
     )
     word = ""
     if item and item_form:
-        have = int(held(item)) if callable(held) else 0
-        need = min(MAX_COUNT, max(1, int(wants[item]) - have))
-        word = " item:%d count:%d" % (item, need)
+        total = max(1, int(wants[item]))
+        if total <= MAX_COUNT:
+            word = " item:%d count:%d" % (item, total)
     return "%s creature:%d%s max:%d" % (VERB, entry, word, MAX_SECONDS)
 
 
