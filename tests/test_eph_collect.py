@@ -173,6 +173,32 @@ class ProvenTest(Base):
         self.collect()
         self.assertEqual(len(self.fg.calls), n)
 
+    def test_a_proven_rerun_posts_its_own_evidence_before_updating_the_issue(self):
+        target = f"repos/{REPO}/issues/12/comments"
+        prior_rows = "\n".join(
+            f"| `{run['run_id'].replace('abc123', 'def456')}` | {run['arm']} | PASS |"
+            for run in self.rec["runs"]
+        )
+        self.fg.comments[target] = [
+            {
+                "user": {"login": self.cfg.author_login},
+                "body": f"<!-- eph:demo-decree:{SHA} -->\n**underpowered**\n{prior_rows}",
+                "html_url": "https://example.com/old",
+            }
+        ]
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        self.collect()
+        self.assertEqual(len(self.fg.comments[target]), 2)
+        evidence = self.fg.comments[target][-1]
+        self.assertIn("**proven**", evidence["body"])
+        self.assertIn("`abc123-t3`", evidence["body"])
+        self.assertEqual(self.ledger()[0]["comment_url"], evidence["html_url"])
+        self.assertEqual(
+            self.writes()[:2],
+            [("POST", target), ("PATCH", f"repos/{REPO}/issues/12")],
+        )
+        self.assertEqual(len(self.closes()), 1)
+
     def test_self_approval_never_closes(self):
         self.main(approver="agent-anthropic-claude-code[bot]")
         self.results(["FAIL"] * 3, ["PASS"] * 3)
@@ -214,6 +240,57 @@ class ProvenTest(Base):
         self.collect()
         self.assertEqual(self.closes(), [])
         self.assertIn("unticked", self.ledger()[0]["evidence"])
+
+    def test_proof_records_its_box_before_unrelated_live_boxes_block_close(self):
+        body = (
+            "## Departure\n"
+            "- [ ] Live: the family leaves without a patron dying\n"
+            "- [ ] Live: a witness follows the family\n"
+            "## Return\n"
+            "- [ ] Live: the family returns before nightfall\n"
+        )
+        self.issue(body=body)
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        self.assertEqual(self.collect(), {"abc123": "proven"})
+        issue_path = f"repos/{REPO}/issues/12"
+        writes = self.writes()
+        self.assertEqual(
+            writes, [("POST", f"{issue_path}/comments"), ("PATCH", issue_path)]
+        )
+        issue_edits = [
+            json.loads(payload)
+            for argv, payload in self.fg.calls
+            if argv[2] == issue_path and "PATCH" in argv
+        ]
+        self.assertEqual(issue_edits, [{"body": body.replace("[ ]", "[x]", 1)}])
+        self.assertIn("unticked", self.ledger()[0]["evidence"])
+        self.collect()
+        self.assertEqual(self.writes(), writes)
+
+    def assert_evidence_only(self, body):
+        self.issue(body=body)
+        self.results(["FAIL"] * 3, ["PASS"] * 3)
+        self.assertEqual(self.collect(), {"abc123": "proven"})
+        self.assertEqual(self.writes(), [("POST", f"repos/{REPO}/issues/12/comments")])
+
+    def test_proof_cannot_tick_a_longer_live_criterion(self):
+        self.assert_evidence_only(
+            "- [ ] Live: the family leaves without a patron dying and returns in 10 minutes\n"
+        )
+
+    def test_proof_without_a_matching_box_keeps_a_checked_issue_open(self):
+        self.assert_evidence_only("- [x] the family returns before nightfall\n")
+
+    def test_proof_without_a_matching_box_keeps_an_issue_with_no_boxes_open(self):
+        self.assert_evidence_only(
+            "## Acceptance\nThe family returns before nightfall.\n"
+        )
+
+    def test_proof_with_duplicate_matching_boxes_is_evidence_only(self):
+        self.assert_evidence_only(
+            "- [x] the family leaves without a patron dying\n"
+            "- [ ] Live: the family leaves without a patron dying\n"
+        )
 
     def test_an_epic_is_never_closed(self):
         self.issue(labels=("awaiting-live-check", "epic"))
@@ -475,9 +552,13 @@ class FetchTest(Base):
 
 class ReviewFixesTest(Base):
     def test_a_strangers_marker_comment_does_not_suppress_the_apps_own(self):
-        mark = "<!-- eph:demo-decree:" + SHA + " -->"
+        body = "\n".join(
+            [f"<!-- eph:demo-decree:{SHA} -->"]
+            + [f"| `{run['run_id']}` |" for run in self.rec["runs"]]
+        )
         self.fg.comments[f"repos/{REPO}/issues/12/comments"] = [
-            {"user": {"login": "someone-else"}, "body": mark, "html_url": "u"}]  # fmt: skip
+            {"user": {"login": "someone-else"}, "body": body, "html_url": "u"}
+        ]
         self.results(["FAIL"] * 3, ["PASS"] * 3)
         self.collect()
         mine = [

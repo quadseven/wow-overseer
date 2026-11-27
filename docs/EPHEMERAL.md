@@ -155,6 +155,13 @@ SQL are checked against a snapshot of the game databases
 
 `TODO` is allowed for an issue number or commit and is a warning, never an error.
 The numeric `proves` form names an issue in this repository and requires `box`.
+
+A ticket names its decree with one body line, `Proof: decree <id>`, on a line of
+its own. `python3 -m ephemeral due` lists the open `awaiting-live-check` issues
+whose Proof line names a decree that is on the default branch, proves that issue
+(either `proves` form), and has no files yet under `<results_dir>/<id>/` (no
+submission record and no result). It prints `owner/name#N <id>` oldest first and
+writes nothing. `submit --due N` is not built yet.
 `eph report` posts the named decree's batch result, including each run's UTC
 start time and judge reason lines. It ticks one uniquely matching checkbox only
 when every declared control run is `FAIL` and every declared treatment run is
@@ -326,6 +333,7 @@ digest-pinned tools image. A missing or malformed file is an error.
 
     python3 -m ephemeral submit [--arm both] [--node N] --control-worldserver REF --control-dbimport REF --control-pin SHA
         [--control-playerbots-prefix NAME] [--control-drop-keys A,B,C] data/decrees/<name>.yaml
+    python3 -m ephemeral submit --control auto --control-history FILE data/decrees/<name>.yaml
     python3 -m ephemeral dispatch [--once] [--owner NAME]
     python3 -m ephemeral dispatch --stop --owner NAME
     python3 -m ephemeral collect [--dry-run]
@@ -396,9 +404,14 @@ label and never closes an issue. An issue closes only when the same decree FAILe
 and PASSed on every treatment run, every run valid, the fix verified present in
 the treatment image and absent from the control, the decree on the default
 branch byte for byte, that decree's pull request approved by someone other than
-its author or the posting App (each reviewer's latest formal review or approval marker decides, by time; a COMMENTED review changes nothing and any outstanding request for changes refuses), and no unticked box left in the issue body (the
-live-check boxes are ticked first, then the label is removed, then the issue is
-closed as completed). An epic is never closed. A disproven result comments,
+its author or the posting App (each reviewer's latest formal review or approval marker decides, by time; a COMMENTED review changes nothing and any outstanding request for changes refuses).
+The collector posts evidence for each distinct batch. The decree's `criterion`
+must match the full text of exactly one issue checkbox.
+Capitalization, whitespace, and an initial `Live:` label may differ. The
+collector records that checkbox even when others remain open. Once no unchecked
+boxes remain, it removes the label and closes the issue as completed. A missing
+or ambiguous match leaves the issue body and state unchanged. An epic is never
+closed. A disproven result comments,
 removes the label and leaves the issue open. A treatment pass without a usable
 control comments and leaves it open. A passing control and an INVALID run post
 nothing to the issue. A decree not yet merged posts to its own pull request when
@@ -466,6 +479,18 @@ own `config:`) with that prefix; the treatment arm is untouched, and a fidelity
 delta records it. Any other key the control dist lacks still fails closed; a key a
 module added after the control build (its dist predates it) is removed from the control
 arm's override files with `--control-drop-keys A,B,C`, which records a delta naming them.
+
+`--control auto` finds the control images instead of taking them by hand.
+`--control-history FILE` is a JSON list of past image sets, newest first, that the deploy
+side writes (never a file in this repository): each entry has `worldserver` and `dbimport`
+digests and the `pin` it was built from, plus `bridge` and `bridge_commit` for a bridge
+build. `submit` takes the newest entry whose pin lacks the fix (the same ancestor check as
+above; for a fix in this repository's bridge code, the entry's `bridge_commit`) and whose
+digests the registry still serves, fills `--control-worldserver`, `--control-dbimport` and
+`--control-pin` (and `--control-bridge` from the set's `bridge` when the decree turns the bridge on) from it, and records the choice as
+a fidelity delta. It refuses a `TODO` fix commit, an empty or unreadable history, a history
+where every set carries the fix or no set without it still resolves, and explicit
+control image flags, `--control-bridge` included, given beside it. With the bridge on, a chosen set whose `bridge` is missing or no longer resolves is refused. `--control-drop-keys` is still given by hand.
 
 With `world.bridge: "on"` the template's bridge sidecar is kept, at the arm's own
 image: the control arm's is `--control-bridge` (the build before the fix), the
