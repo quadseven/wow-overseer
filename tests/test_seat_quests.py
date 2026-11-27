@@ -8,6 +8,7 @@ pass (`_read_seat_quests`, `_seat_untaken_quests`) over a fake database.
 from __future__ import annotations
 
 import pathlib
+import sqlite3
 import unittest
 from unittest import mock
 
@@ -212,6 +213,18 @@ class TheStepTheSeatIsSentOn(unittest.TestCase):
         )
         self.assertEqual(self.step(sent(), [recent]).action, guildjobs.UNTAKEN_ACTION)
 
+    def test_a_refusal_for_a_longer_quest_id_does_not_hold_this_quest(self):
+        recent = guildjobs.Recent(
+            name=SEAT,
+            action=guildjobs.UNTAKEN_ACTION,
+            age_minutes=guildjobs.UNTAKEN_PAUSE_MINUTES + 5,
+            status="error",
+            command="take quest:%d1" % QUEST,
+        )
+        step = self.step(sent(), [recent])
+        self.assertIsNotNone(step)
+        self.assertEqual(step.key, QUEST)
+
     def test_a_step_under_way_holds_the_next(self):
         recent = guildjobs.Recent(
             name=SEAT,
@@ -304,6 +317,36 @@ class TheBridgePass(unittest.TestCase):
         self.assertEqual(got.givers[QUEST][0].spawn, 4242)
         self.assertEqual(got.givers[QUEST][0].near, int(guildjobs.UNTAKEN_NEAR))
         self.assertEqual(len(self.sql), 3)
+
+    def test_only_items_in_the_backpack_and_worn_bags_are_carried(self):
+        db = sqlite3.connect(":memory:")
+        self.addCleanup(db.close)
+        db.row_factory = sqlite3.Row
+        db.executescript("""
+            ATTACH DATABASE ':memory:' AS acore_world;
+            CREATE TABLE characters (guid INT, name TEXT);
+            CREATE TABLE character_inventory (guid INT, bag INT, slot INT, item INT);
+            CREATE TABLE item_instance (guid INT, itemEntry INT);
+            CREATE TABLE acore_world.item_template (entry INT, class INT);
+            INSERT INTO character_inventory VALUES
+                (1, 0, 23, 10), (1, 20, 0, 11),
+                (1, 0, 39, 12), (1, 21, 0, 13),
+                (1, 0, 19, 20), (1, 0, 67, 21);
+            INSERT INTO item_instance VALUES (10, 5010), (11, 5011), (12, 5012), (13, 5013);
+            INSERT INTO acore_world.item_template VALUES (5010, 12), (5011, 12), (5012, 12), (5013, 12);
+        """)
+        db.execute("INSERT INTO characters VALUES (1, ?)", (SEAT,))
+        execute = FakeCursor.execute
+
+        def read_inventory(cursor, sql, params=()):
+            if "FROM characters c" in sql:
+                cursor.result = db.execute(sql.replace("%s", "?"), params).fetchall()
+            else:
+                execute(cursor, sql, params)
+
+        with mock.patch.object(FakeCursor, "execute", read_inventory):
+            got = bridge._read_seat_quests([SEAT])
+        self.assertEqual(got.carried, {SEAT: {5010, 5011}})
 
     def test_a_seat_with_no_quest_items_reads_no_quests(self):
         with mock.patch.object(
