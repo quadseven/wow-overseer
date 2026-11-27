@@ -104,10 +104,10 @@ these modules.
 
 ## Metric snapshots
 
-`tools/metric_watcher.py` reads the versioned API and appends one aggregate
-JSON object per guild to a JSON Lines file: level gains, measured XP per hour,
-dungeon runs, class quests, deaths, stuck and offline members, and each
-crafter's profession skills. It writes no member names and uses no write
+`tools/metric_watcher.py` reads the versioned API and appends one JSON object
+per sample to a JSON Lines file. It records level gains, measured XP per hour,
+dungeon runs, class quests, deaths, stuck and offline members by guild, and
+each crafter's profession skills. It writes no member names and uses no write
 endpoint. When the site's `METRIC_WATCHER_OUTPUT` points at the same file,
 the Raid tab shows alchemy progress and projected dates.
 
@@ -129,6 +129,23 @@ sudo systemctl enable --now metric-watcher.timer
 
 `--api-root` and `--output`, or `METRIC_WATCHER_API_ROOT` and
 `METRIC_WATCHER_OUTPUT`, set the API root and output path.
+
+Each snapshot also includes `pre_wedge`:
+
+- `preemptions_24h` counts recorded death-slope help asks and early restart
+  stand-downs in the past 24 hours. A missing action source is `null`, and
+  the total is available once both sources answer. Death-slope asks can be
+  counted from the first bridge build that gives those asks distinct wording.
+- `family_wedges_over_30m` counts unique families with a member currently
+  stuck for a measured duration greater than 30 minutes. Use these gauge
+  readings in order to compare family wedges over a week.
+- `wedges_formed_anyway_24h` counts families entering that set since the prior
+  sample, once per observed episode. The first sample establishes the
+  baseline and `wedge_observed_since` shows the start of the observation window.
+  Episodes that begin and end between samples can be missed.
+
+The JSONL keeps hashed family keys so a wedge spanning consecutive samples
+is counted once, including across watcher restarts.
 
 ## Clip retention
 
