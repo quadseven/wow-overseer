@@ -1475,6 +1475,10 @@ def weakest_payload(name: str, class_id, level, slots: list[dict]):
         "level": weakest.level,
         "shortfall": weakest.shortfall,
         "said": weakest.said,
+        # The one threshold, owned here (#3372): the paperdoll tag and the
+        # header chip both read this verdict instead of the page keeping a
+        # second number of its own, so the two can never disagree.
+        "flagged": weakest.shortfall >= WEAKEST_FLAG,
     }
 
 
