@@ -911,6 +911,36 @@ class TheCrewShopsForTheMasters(unittest.TestCase):
             BRIDGE,
         )
 
+    def test_another_shopper_takes_the_errand_during_the_bag_room_backoff(self):
+        master = self.og()
+        crew = [master, member("Shopper"), member("Runner")]
+        vendors = {EVERLOOK: frozenset({self.FINE_THREAD})}
+        recent = gc.recent_from_rows(
+            [
+                {
+                    "target_name": "Runner",
+                    "target_arg": "",
+                    "source": "guildcorps:shop:6260",
+                    "status": "error",
+                    "age": 30,
+                    "result": '{"outcome":"refused","reason":"bags cannot take the item"}',
+                }
+            ]
+        )
+
+        plan = gc.plan(crew, {"Cave": [master]}, TRAINABLE, vendors, recent, set())
+
+        self.assertEqual(
+            [("Shopper", self.FINE_THREAD)],
+            [(step.holder, step.key) for step in plan.steps if step.action == "shop"],
+        )
+        self.assertTrue(
+            any(
+                note.startswith("Runner waits") and "bags refused" in note
+                for note in plan.notes
+            )
+        )
+
     def test_the_family_never_shops_and_a_busy_member_is_not_asked(self):
         og = self.og()
         vendors = {EVERLOOK: frozenset({self.FINE_THREAD})}
