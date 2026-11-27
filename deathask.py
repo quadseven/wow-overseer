@@ -108,6 +108,12 @@ _ASK_LINE = (
     "Keep dying in {place}, {deaths} times in an hour. "
     "Anyone free to group up and help me out of here?"
 )
+# The watch recognizes this prefix on the recorded ask, even after it closes.
+SLOPE_ASK_PREFIX = "I've already died "
+_SLOPE_ASK_LINE = (
+    SLOPE_ASK_PREFIX + "{deaths} times in an hour. "
+    "Anyone free to group up near {place} before I try again?"
+)
 
 _ANSWER_LINES = (
     "Count me in, {asker}. On my way to {place}.",
@@ -322,6 +328,7 @@ def plan_pass(
             continue
         mate = found[0]
         loop = candidates[name]
+        ask_line = _SLOPE_ASK_LINE if name in slope else _ASK_LINE
         posts.append(
             Post(
                 guild=member.guild,
@@ -334,7 +341,7 @@ def plan_pass(
                     "%s is in reach to group up for the way out" % mate.name,
                     REASON_CHARS,
                 ),
-                said=_ASK_LINE.format(place=loop.place, deaths=loop.deaths),
+                said=ask_line.format(place=loop.place, deaths=loop.deaths),
                 minutes=ASK_MINUTES,
             )
         )
