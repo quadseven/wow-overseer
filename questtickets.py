@@ -87,6 +87,14 @@ SCRIPTED_EVENT_NOTE = (
     "The world rows list no required item or creature/object objectives, "
     "so the stored reason is the only evidence of how it completes: a scripted event."
 )
+STALL_REASON_PREFIX = "its objectives did not move for "
+STALL_SOURCE_NOTE = (
+    "The ledger reason records only that objective counts did not move during "
+    "two hours of play. It does not prove the quest is impossible. The world "
+    "rows list creature loot entries for a required item, but do not show "
+    "whether any listed creature has a reachable spawn."
+)
+VENDOR_LIMIT_NOTE = "Questers cannot buy vendor stock."
 # The stored take reason from questers._giver_failure and the module's
 # QuestErrandRefusal. The module uses different reasons for an object
 # starter and for a quest without a starter relation.
@@ -322,6 +330,24 @@ def _world_rows(info) -> list[str]:
     return lines + [""]
 
 
+def _stall_source_note(rows, info) -> str:
+    """Explain what a stalled ledger row and item-source rows do and do not
+    establish. Creature loot rows alone do not say whether a quester can reach
+    one of the creature's spawns."""
+    if not info or not any(
+        str(row.get("reason") or "").startswith(STALL_REASON_PREFIX)
+        for row in rows or ()
+    ):
+        return ""
+    items = getattr(info, "items", ())
+    if not any(item.get("droppers") for item in items):
+        return ""
+    note = STALL_SOURCE_NOTE
+    if any(item.get("vendors") for item in items):
+        note += " " + VENDOR_LIMIT_NOTE
+    return note
+
+
 def body(quest: int, info, rows, objectives, site: str) -> str:
     """The issue body. `site` is the site's public base; without one the
     Quests page is named by its route, since no host may be guessed."""
@@ -358,6 +384,9 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
             "  - Reason: %s" % reason,
             "  - Last objective counts: %s" % _objectives(counts.get(int(row["guid"]))),
         ]
+    stall_source_note = _stall_source_note(rows, info)
+    if stall_source_note:
+        lines += ["", stall_source_note]
     if (
         scripted_event
         and info is not None

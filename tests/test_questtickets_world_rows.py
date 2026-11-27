@@ -72,6 +72,136 @@ class WorldRows(unittest.TestCase):
         self.assertIn("sold by vendor entries 277", text)
         self.assertNotIn("no source in the world rows", text)
 
+    def test_look_to_the_stars_stall_is_distinguished_from_no_item_source(self):
+        # These quest, creature-loot and vendor rows are the T2002 ticket's
+        # world rows, selected by questcatalogue.QUESTS_SQL, DROP_SQL and
+        # VENDOR_SQL. That snapshot does not include the dropper spawn rows.
+        droppers = (
+            3374,
+            3375,
+            3377,
+            3993,
+            4073,
+            4074,
+            6206,
+            6207,
+            6222,
+            6225,
+            6226,
+            6227,
+            6230,
+            6231,
+            6232,
+            6233,
+            6234,
+            6329,
+            7603,
+            9676,
+            11684,
+        )
+        vendors = (
+            1448,
+            1694,
+            2682,
+            2683,
+            2684,
+            2685,
+            2687,
+            2688,
+            3133,
+            3413,
+            3495,
+            4453,
+            4587,
+            5175,
+            5519,
+            6730,
+            6777,
+            8678,
+            8679,
+            9544,
+            9676,
+            11185,
+            14637,
+            16657,
+            16782,
+            17222,
+            17421,
+            18278,
+            18484,
+            18752,
+            18775,
+            19383,
+            20890,
+            26600,
+            26898,
+            27711,
+            28722,
+            28797,
+            29688,
+            29907,
+            30345,
+            30434,
+            30825,
+            31776,
+            31781,
+            33594,
+            33634,
+            33669,
+            33677,
+            37935,
+        )
+        world_row = quest_row(
+            174,
+            title="Look To The Stars",
+            level=25,
+            min_level=20,
+            sort=10,
+            item1=4371,
+            item_count1=1,
+        )
+        info = self.catalogue(
+            world_row,
+            {
+                qc.ITEM_NAMES_SQL.format(ids="4371"): [
+                    {"entry": 4371, "name": "Bronze Tube"}
+                ],
+                qc.DROP_SQL.format(ids="4371"): [
+                    {"item": 4371, "entry": entry} for entry in droppers
+                ],
+                qc.REWARD_SQL.format(ids="4371"): [],
+                qc.VENDOR_SQL.format(ids="4371"): [
+                    {"item": 4371, "entry": entry} for entry in vendors
+                ],
+            },
+        )[0]
+        text = qt.body(
+            174,
+            info,
+            [
+                {
+                    "quest": 174,
+                    "guid": 7,
+                    "character_name": "Quester A",
+                    "reason": questers.STALLED,
+                }
+            ],
+            [],
+            "",
+        )
+
+        self.assertIn("Required item 4371 x1 (Bronze Tube)", text)
+        self.assertIn("creature entries " + ", ".join(map(str, droppers)), text)
+        self.assertIn("sold by vendor entries " + ", ".join(map(str, vendors)), text)
+        self.assertIn(
+            "The ledger reason records only that objective counts did not move "
+            "during two hours of play. It does not prove the quest is impossible. "
+            "The world rows list creature loot entries for a required item, but "
+            "do not show whether any listed creature has a reachable spawn. "
+            "Questers cannot buy vendor stock.",
+            text,
+        )
+
     def test_gameobject_loot_and_vendor_sale_are_sources(self):
         row = quest_row(item1=2640, item_count1=4, item2=1941, item_count2=1)
         ids = "1941, 2640"
