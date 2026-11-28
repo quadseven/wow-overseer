@@ -8,13 +8,14 @@ Three verdicts, never two:
   step never fired, a query timed out, the guard refused, the seed handoff is
   missing). INVALID never counts as a pass and never closes anything.
 
-What the judge may write, in total: `overseer_command` rows in the world's own
-database (an operator's order, through `GuardedConnection.insert_command`) and
-one ConfigMap named `eph-result-<run-id>` in its own namespace. Every read goes
-through the same guard the seed uses (loopback MySQL only, ephemeral namespace,
-one marker row), and every observation is re-checked as a single SELECT against
-the world's live schema before it runs. A job goes in as a command row, never a
-direct roster write (measured: a roster UPDATE has no effect).
+The judge writes `overseer_command` rows for ordinary acts, named cast members'
+operator guards for `travel_guard`, at most one tagged Molten Core order in the
+world's campaign queue for `raid_order`, and one ConfigMap named
+`eph-result-<run-id>` in its own namespace. Database access goes through the
+seed guard (loopback MySQL, ephemeral namespace, one marker row). The guard
+locks that row before reading the campaign queue and holds the lock through
+the write's commit or rollback. Every observation is re-checked as a single
+SELECT against the world's live schema before it runs.
 
 Seams: `Judge` takes the world, the clock and the log as arguments, so the
 whole verdict logic runs in unit tests with no database and no cluster.
@@ -114,6 +115,9 @@ class GuardedWorldDb:
 
     def write_travel_guard(self, target, enabled, *, expected=None):
         return self._g.write_travel_guard(target, enabled, expected=expected)
+
+    def enqueue_molten_core_order(self, family):
+        return self._g.enqueue_molten_core_order(family)
 
 
 # -- expectations and rendering --------------------------------------------------
@@ -633,7 +637,9 @@ class Judge:
         steps = []
         for i, cmd in enumerate(acts.act_commands(self.decree)):
             travel_guard = cmd["kind"] == acts.TRAVEL_GUARD and "guard_enabled" in cmd
-            if cmd["kind"] not in guard.COMMAND_KINDS and not travel_guard:
+            if cmd["kind"] not in guard.COMMAND_KINDS and not (
+                travel_guard or cmd.get(acts.RAID_ORDER)
+            ):
                 raise JudgeError(
                     f"act step {i}: command kind {cmd['kind']!r} is not allowed"
                 )
@@ -642,7 +648,7 @@ class Judge:
                     f"act step {i}: waits for unknown observation {cmd['when']!r}"
                 )
             who = cmd["who"]
-            targets = self._targets(who, i)
+            targets = self._act_targets(cmd, i)
             if travel_guard and not self._is_named_target(who, targets):
                 raise JudgeError(
                     f"act step {i}: travel_guard needs one named cast member"
@@ -665,6 +671,17 @@ class Judge:
         return targets == [who] and any(
             member["who"] == who for member in self.handoff.get("members", [])
         )
+
+    def _act_targets(self, cmd, i):
+        if cmd.get(acts.RAID_ORDER):
+            family = cmd["who"]
+            members = self.handoff.get("members") or []
+            if self.decree.get("world", {}).get("bridge") != "on":
+                raise JudgeError(f"act step {i}: raid order needs the headless bridge")
+            if [m["name"] for m in members if m["who"] == family] != [family]:
+                raise JudgeError(f"act step {i}: raid order needs one named cast head")
+            return [family]
+        return self._targets(cmd["who"], i)
 
     def _targets(self, who, i):
         members = self.handoff.get("members") or []
@@ -689,6 +706,8 @@ class Judge:
         row, _ = step
         if "guard_enabled" in row:
             self._fire_travel_guard(row)
+        elif row["kind"] == acts.RAID_ORDER:
+            self.world.enqueue_molten_core_order(row["targets"][0])
         else:
             for name in row["targets"]:
                 self.world.insert_command(name, row["kind"], row["text"])
