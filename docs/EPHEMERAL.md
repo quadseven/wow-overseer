@@ -109,7 +109,7 @@ SQL are checked against a snapshot of the game databases
     duration: 20m
     cast:      # characters in the template, by name, family:<name> or guild:<Guild>:<role>
     arrange:   # instances, groups, creatures, raid seats, before the world loads
-    act:       # after load: roster or command steps, at a time or when an observation holds
+    act:       # after load: roster, command, travel_guard or raid_order, at a time or on an observation
     observe:   # preconditions and checks: SQL or a log pattern
 
 ## Rules lint enforces
@@ -143,6 +143,11 @@ SQL are checked against a snapshot of the game databases
   `overseer_command` row. Measured on a hand-made world, such a row was applied
   within seconds with no bridge, while a direct update of `overseer_roster`
   showed no effect. `ephemeral/acts.py` turns the timeline into those rows.
+- `raid_order: {family: Grug}` uses the headless bridge's campaign queue in a
+  bridge-on world. The family head must be named explicitly in the cast and
+  resolve to the enabled head in the disposable roster. One act per decree may
+  queue one ordinary Molten Core run. The guard refuses a family with a
+  pending order or a world with a prior rehearsal order.
 - Observation SQL is one read-only SELECT. Every table and column must exist, a
   derived table (`FROM (SELECT ...)`) is not supported, and a database qualifier
   must lead to a table and column (`db.table.column`).
@@ -309,11 +314,15 @@ unknown bound, and a judge handed one anyway reports the check as an error
 a timeout or error is sticky and makes the run INVALID even if a later look
 violates or passes; a violation outranks a later clean look.
 
-What the judge may write, in total: `overseer_command` rows in the world's own
-database (through the same guard as the seed, and never kind `gm`), and one
-ConfigMap, `eph-result-<run-id>`, created in its own namespace. Every
-observation is re-checked as a single SELECT against the live schema before it
-runs. Settings come from the pod environment: the seed's variables plus
+The judge writes `overseer_command` rows for ordinary acts, a named cast
+member's operator guard for `travel_guard`, one tagged Molten Core order in the
+world's campaign queue for `raid_order`, and one ConfigMap, `eph-result-<run-id>`,
+in its own namespace. The guard accepts at most one rehearsal order per
+disposable world, including across families. It locks the world's singleton
+marker row before reading the queue and holds the lock through commit or
+rollback. The guard rejects `gm` commands and re-checks every observation as a
+single SELECT against the live schema.
+Settings come from the pod environment: the seed's variables plus
 `EPH_RUN_ID`, `EPH_ARM` and `EPH_NAMESPACE`. The ConfigMap holds the verdict, the
 reasons, the rendered SQL and observed values per assertion, sample rows and
 matched log lines (cut to fit 256 KB, never the verdict). Exit 0 means a verdict
@@ -333,7 +342,7 @@ alias, or are unqualified when it is the only table. A run with no core encounte
 evidence is INVALID.
 
 Use a typed `encounter` end precondition for the supported bosses in Blackrock
-Depths and Molten Core. Its alias must identify the decree's only arranged
+Depths, Molten Core and Razorfen Downs. Its alias must identify the decree's only arranged
 instance, on the boss's map and bound to a member of the cast. The judge reads
 the same instance save before any act and again at the end. A missing or malformed
 save or a selected encounter that is already DONE before the first act makes
@@ -348,6 +357,11 @@ in that instance.
   Ragnaros's death.
 - `encounter: {instance: mc, boss: "Any Molten Core boss"}` accepts any of the ten
   Molten Core encounters on an instance where all ten began incomplete.
+- `encounter: {instance: rfd, boss: "Any Razorfen Downs boss"}` reads the
+  instance's `completedEncounters` mask instead of its save, because the Razorfen
+  Downs instance script keeps no boss states. The core sets one bit of that mask
+  per DungeonEncounter.dbc credit, and which bit is which boss is not known here,
+  so any bit counts. The mask must start at zero.
 
 The judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`; without them it prints an INVALID verdict and exits 2,
@@ -366,6 +380,7 @@ digest-pinned tools image. A missing or malformed file is an error.
     python3 -m ephemeral submit --control auto --control-history FILE data/decrees/<name>.yaml
     python3 -m ephemeral dispatch [--once] [--owner NAME]
     python3 -m ephemeral dispatch --stop --owner NAME
+    python3 -m ephemeral withdraw <batch-id>
     python3 -m ephemeral collect [--dry-run]
     python3 -m ephemeral report <batch-id> [batch-id ...] [--dry-run]
 
@@ -403,6 +418,37 @@ fit, but nothing skips a head that has waited 30 minutes. Runs after the first
 control and treatment pair start only if the pair was control FAIL then
 treatment PASS; any other first pair stops the batch and removes its waiting
 Jobs. A finished Job with no result gets an INVALID result recorded for it.
+A started Job whose pod has waited on an image pull failure (`ErrImagePull`,
+`ImagePullBackOff`, `InvalidImageName`, `ErrImageNeverPull`) for longer than the
+runner setting `image_pull_grace_seconds` (default 600) gets an INVALID result
+naming the container and image, and is deleted, so its node slot and quota come
+back on the same pass instead of at the Job's deadline. This reads the
+namespace's pods; if they cannot be read, the pass goes on without the check.
+
+`withdraw` drops a batch that should not run (a wrong decree, a superseded fix
+commit, a batch submitted twice) without `kubectl delete`. It creates one request
+ConfigMap, `eph-withdraw-<batch-id>`, labelled `eph/withdraw`. On its next pass the
+dispatcher deletes that batch's suspended Jobs, writes an INVALID result for each
+run naming the withdrawal, then deletes the request. Runs already started are not
+touched. A repeated request says "already requested".
+
+The dispatcher also cleans up after itself. A suspended Job that has waited longer
+than the runner setting `queue_max_age_seconds` (default 86400) is deleted with an
+INVALID result naming the wait, so an abandoned batch cannot hold the queue head. A
+run ConfigMap (`eph-run-<run-id>`) whose Job is gone and whose result exists is
+deleted. Finished Jobs are left to the Job's own `ttlSecondsAfterFinished`.
+
+The dispatcher's ServiceAccount Role is part of the cluster manifests, outside this
+repository. `dispatch.DISPATCHER_RULES` lists what the code asks of the API, and a
+test holds every call inside it. Compared with the earlier dispatcher, the new
+permission is `delete` on `configmaps`, in the ephemeral namespace only. The Role
+must grant exactly these verbs and no others:
+
+- `leases.coordination.k8s.io`: `get`, `create`, `update`
+- `jobs`: `list`, `patch`, `delete`
+- `configmaps`: `list`, `create`, `delete`
+- `pods`, `resourcequotas`: `list`
+- `nodes/proxy`: `get`
 
 Each dispatcher also takes a local owner lock (`~/.ephemeral/dispatch.lock`, or
 `EPH_LOCK`) recording the owner, pid and start time; the cluster Lease holder
@@ -515,6 +561,19 @@ delta records it. Any other key the control dist lacks still fails closed; a key
 module added after the control build (its dist predates it) is removed from the control
 arm's override files with `--control-drop-keys A,B,C`, which records a delta naming them.
 
+`submit` also does this for the harness baseline keys on its own. When
+`--control-worldserver` and `--control-pin` name the control build (or `--control auto`
+selects a history entry without a `dist_inventory`, which supplies the entry's `pin`),
+`submit` reads the module's `conf/mod_overseer.conf.dist` from the module repository at that
+commit. A baseline key in the module's own group that the dist does not define (for example
+`Overseer.Raid.RequireHeadClient` on a build that predates it) is removed from the control
+arm's override files only, and one fidelity delta names the keys and the pin. The treatment
+arm keeps them. A pin whose dist cannot be read refuses the submit and names the pin. Only
+baseline keys are dropped this way: a key the decree's own `config:` sets, or one from the
+base realm's override files, still fails closed in `seed-conf`, and keys of other modules'
+dists or of a bridge-code fix's manual `--control-pin` (a bridge commit) are not checked.
+`--control-drop-keys` still works and wins for the keys it names.
+
 `--control auto` finds the control images instead of taking them by hand.
 `--control-history FILE` is a JSON list of past image sets, newest first, that the deploy
 side writes (never a file in this repository): each entry has `worldserver` and `dbimport`
@@ -571,3 +630,14 @@ still win when given; an image whose commit cannot be read is recorded as
 unchecked.
 
 Not built: requeueing an INVALID first pair (resubmit instead) and PR-built images.
+
+## Travel-guard scenarios
+
+Set a named cast member's operator guard to its seeded homebind with
+`travel_guard: {who: Grug, enabled: true}` in a timed act. The roster aim must
+start empty. A later act with `enabled: false` clears the exact value written by
+the same run. Each act records the value and the time it fired. Generic seed SQL
+still refuses roster writes.
+
+Use a list under `arrange.group.members` to group distinct cast entries with
+different starting positions or homebinds. A single selector continues to work.

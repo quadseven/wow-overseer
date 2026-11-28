@@ -536,6 +536,86 @@ class TheStuckList(unittest.TestCase):
 
 
 @NODE
+class TheCampaign(unittest.TestCase):
+    """/api/agenda, read by the Now view's Campaigns block: the family's
+    campaign from its queue, or from the agenda's own campaign reading when
+    the queue holds no entry for a campaign that is running."""
+
+    def test_a_running_campaign_with_an_empty_queue_still_reads(self):
+        agenda = {
+            "queue": {"entries": [], "done": None, "line": ""},
+            "campaign": {
+                "done": 3,
+                "wanted": 30,
+                "recorded_by": "Jug",
+                "disagrees": None,
+                "over": False,
+            },
+            "campaign_state": "running",
+        }
+        got = node_module(
+            "views/now/data.js",
+            "const c = M.campaign(%s); console.log(JSON.stringify([c && c.name, c && c.step, c && c.next]));"
+            % json.dumps(agenda),
+        )
+        self.assertEqual(got, ["Dungeon campaign", "3 of 30 done", None])
+
+    def test_a_running_state_without_the_counter_is_no_campaign(self):
+        agenda = {"queue": {"entries": []}, "campaign_state": "running"}
+        got = node_module(
+            "views/now/data.js",
+            "console.log(JSON.stringify(M.campaign(%s)));" % json.dumps(agenda),
+        )
+        self.assertEqual(got, None)
+
+    def test_no_queue_entry_and_no_running_campaign_is_none(self):
+        base = {
+            "queue": {"entries": [], "done": None, "line": ""},
+            "campaign": {
+                "done": 30,
+                "wanted": 30,
+                "recorded_by": "Jug",
+                "disagrees": None,
+                "over": True,
+            },
+        }
+        states = ["over", "stopped", "never started", None]
+        agendas = [dict(base, campaign_state=s) for s in states] + [{}]
+        got = node_module(
+            "views/now/data.js",
+            "console.log(JSON.stringify([%s]));"
+            % ", ".join("M.campaign(%s)" % json.dumps(a) for a in agendas),
+        )
+        self.assertEqual(got, [None] * len(agendas))
+
+    def test_a_queue_entry_still_wins_over_the_counter(self):
+        agenda = {
+            "queue": {
+                "entries": [
+                    {"place": "Uldaman", "runs": 30, "status": "active"},
+                    {"place": "Zul'Farrak", "runs": 50, "status": "queued"},
+                ],
+                "done": 1,
+                "line": "Queue: Uldaman 1 of 30, then Zul'Farrak 50.",
+            },
+            "campaign": {
+                "done": 3,
+                "wanted": 30,
+                "recorded_by": "Jug",
+                "disagrees": None,
+                "over": False,
+            },
+            "campaign_state": "running",
+        }
+        got = node_module(
+            "views/now/data.js",
+            "const c = M.campaign(%s); console.log(JSON.stringify([c.name, c.step, c.next]));"
+            % json.dumps(agenda),
+        )
+        self.assertEqual(got, ["Uldaman", "1 of 30 done", "Zul'Farrak, 50 runs"])
+
+
+@NODE
 class TheChronicleBadge(unittest.TestCase):
     """badges.js counts what is newer than the last visit, read by the clock."""
 
