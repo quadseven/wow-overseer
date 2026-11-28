@@ -17,6 +17,14 @@ STRAY_MINUTES is 30: a group that is really playing together is on one map and
 within sight, and a dungeon run or a quest party never spends half an hour
 with its members on different continents. Pure: the bridge reads the rows,
 keeps the clock and writes the rows.
+
+THE MODULE'S OWN ANSWER DECIDES THE BACKOFF. A leave row the module refused
+(the group is a battleground or dungeon finder group, which this verb may
+not break up) can never take for that group, however often it is asked, so
+the bridge reads the newest row's status and detail back (`refusals`:
+name -> the module's named reason) and the pass neither asks that member
+again nor guesses at the cause: the one log line names the refusal the
+module actually gave.
 """
 
 from __future__ import annotations
@@ -98,18 +106,29 @@ def track(since: dict, followers, now: float) -> dict:
 
 
 def plan(
-    followers, since: dict, now: float, recent: dict, guilds, tries: dict | None = None
+    followers,
+    since: dict,
+    now: float,
+    recent: dict,
+    guilds,
+    tries: dict | None = None,
+    refusals: dict | None = None,
 ) -> tuple:
     """(rows, lines): a `leave-group` row and one log line for each stray
     member apart for STRAY_MINUTES, out of a fight and off its cooldown
     (`recent`: name -> minutes since its last leave row) and under MAX_TRIES
     rows in the last day (`tries`: name -> that count), at most
-    LEAVES_PER_PASS, longest apart first."""
+    LEAVES_PER_PASS, longest apart first. A member in `refusals` (name -> the
+    module's named reason for refusing its newest leave row) is not asked
+    again: the module has said that leave cannot take for this group."""
     tries = tries or {}
+    refusals = refusals or {}
     due = []
     for f in followers or ():
         why = apart(f)
         if not why or not stranger(f, guilds) or f.in_combat:
+            continue
+        if f.name in refusals:
             continue
         first = since.get(f.name)
         if first is None or now - first < STRAY_MINUTES * 60.0:
@@ -131,10 +150,20 @@ def plan(
     return tuple(rows), tuple(lines)
 
 
-def gave_up(followers, since: dict, now: float, tries: dict, guilds) -> tuple:
+def gave_up(
+    followers,
+    since: dict,
+    now: float,
+    tries: dict,
+    guilds,
+    refusals: dict | None = None,
+) -> tuple:
     """One log line for each member plan() has stopped asking: a stray apart
     for STRAY_MINUTES with MAX_TRIES or more leave rows in the last day, so the
-    cause is read from the log and not guessed from a stream of rows."""
+    cause is read from the log and not guessed from a stream of rows. A member
+    the module refused is named at once, under the limit or over it, and the
+    line carries the module's own reason, not a guess."""
+    refusals = refusals or {}
     lines = []
     for f in followers or ():
         why = apart(f)
@@ -142,7 +171,16 @@ def gave_up(followers, since: dict, now: float, tries: dict, guilds) -> tuple:
         count = int(tries.get(f.name, 0))
         if not why or not stranger(f, guilds) or first is None:
             continue
-        if now - first < STRAY_MINUTES * 60.0 or count < MAX_TRIES:
+        if now - first < STRAY_MINUTES * 60.0:
+            continue
+        reason = refusals.get(f.name)
+        if reason:
+            lines.append(
+                "%s is still in the group of %s and is not asked again: the module "
+                "refused the leave (%s)" % (f.name, f.leader, reason)
+            )
+            continue
+        if count < MAX_TRIES:
             continue
         lines.append(
             "%s is still in the group of %s after %d leave-group rows today and is "
@@ -150,6 +188,29 @@ def gave_up(followers, since: dict, now: float, tries: dict, guilds) -> tuple:
             % (f.name, f.leader, count, why)
         )
     return tuple(lines)
+
+
+def refusals_from_rows(rows) -> dict:
+    """name -> the module's named reason, from each member's newest leave row
+    (the bridge reads them newest first, so the first row a name has is its
+    newest). A row counts as a refusal when its status is `refused` or
+    `error`, or its detail says refused; an answered leave is no entry."""
+    out = {}
+    for r in rows or ():
+        name = str(r.get("target_name") or "")
+        if not name or name in out:
+            continue
+        status = str(r.get("status") or "").strip().lower()
+        detail = str(r.get("detail") or "").strip()
+        if status not in ("refused", "error") and "refus" not in detail.lower():
+            continue
+        reason = detail
+        for prefix in ("refused:", "refused -", "refused"):
+            if reason.lower().startswith(prefix):
+                reason = reason[len(prefix) :].strip(" :-")
+                break
+        out[name] = reason or status
+    return out
 
 
 def _int(value):
