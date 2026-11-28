@@ -153,22 +153,20 @@ class CanFinishSouvenirsOfDeath(unittest.TestCase):
             (move.kind, move.quest), (classquest.TURN_IN, SOUVENIRS_OF_DEATH)
         )
 
-    def test_the_reason_is_not_unsourced_when_droppers_spawn(self):
-        # item 3692 has creature droppers, so the quest is not "no source in
-        # the world rows"; the stall reason the catalogue can prove is the only
-        # one, and it names no invented cause.
+    def test_two_idle_hours_give_the_sourced_stall_not_unsourced(self):
+        # item 3692 has creature droppers spawned in the world, so two hours
+        # of stillness is the plain STALLED reason, not STALLED_UNSOURCED.
         cat = souvenirs_world()
         reason = questers._broken_reason(
             cat.quest(SOUVENIRS_OF_DEATH),
             cat.facts[SOUVENIRS_OF_DEATH],
             questers.STATUS_INCOMPLETE,
-            0,
+            questers.STALL_SECONDS,
             frozenset(),
             {},
         )
-        self.assertEqual(reason, "")
-        self.assertNotIn("no creature drops", reason)
-        self.assertNotIn("unsourced", reason)
+        self.assertEqual(reason, questers.STALLED)
+        self.assertNotEqual(reason, questers.STALLED_UNSOURCED)
 
 
 if __name__ == "__main__":
