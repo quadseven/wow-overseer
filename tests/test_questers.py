@@ -7,6 +7,7 @@ from unittest import mock
 import classhunt
 import classquest
 import guildjobs
+import questcatalogue
 import questers
 
 ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE, DUSKWOOD = 12, 9, 40, 44, 10
@@ -2591,6 +2592,83 @@ class ASummonedObjectEnder(unittest.TestCase):
             (move.kind, move.quest, move.spot.entry),
             (classquest.HUNT, 167, 626),
         )
+
+    def test_ghoulish_effigy_hunts_a_ghoul_that_drops_its_rib(self):
+        # Ghoulish Effigy (133) has no kill counter: its required item
+        # 884 (Ghoul Rib, x7) is a quest-only drop from the ghouls the
+        # ticket lists (entries 3, 210, 570, 604, 948). The world read
+        # must pass the creature_questitem rows through LOOT_SQL for
+        # this hunt, as it does for Oh Brother (167).
+        ghoulish = quest(133, DUSKWOOD, 27, min_level=20, title="Ghoulish Effigy")
+        ghoulish.update(item1=884, item_count1=7)
+        cat = world(
+            extra_quests=[ghoulish],
+            extra_givers=[
+                giver(133, "start", 6133, 186, 0, 0),
+                giver(133, "end", 6134, 187, 400, 0),
+            ],
+            extra_spawns=[
+                spawn(6135, 604, 30, 0, level=25),
+            ],
+            extra_loot=[
+                {"item": 884, "entry": entry} for entry in (3, 210, 570, 604, 948)
+            ],
+        )
+        member = mirra(
+            level=27,
+            zone_id=999,
+            quest_log={133: questers.STATUS_INCOMPLETE},
+            quest_progress={133: 0},
+            quest_objectives={133: {}},
+        )
+
+        move = questers.plan(cat, member, questers.Clock(), 0.0).move
+
+        self.assertEqual(
+            (move.kind, move.quest, move.spot.entry),
+            (classquest.HUNT, 133, 604),
+        )
+
+    def test_ghoulish_effigy_ledger_stall_does_not_hold_it_broken(self):
+        # The ticket's ledger reason for quest 133 is the stall clock's
+        # STALLED, written by BROKEN_SQL as state 'broken' (questers.py
+        # `_broken_reason`): one quester's two hours, not a world fact. It
+        # reads LEDGER_STALLED, so a quester without the memo's stall takes
+        # and hunts quest 133 again (the test above). The quests page must
+        # name the ghouls too: Ghoul Rib (884) has its sources only in
+        # creature_questitem, so a drop read without that table listed the
+        # rib with no source and the quest read as unfinishable.
+        state = questers.ledger_state("broken", questers.STALLED)
+        ledger = {("Durga", 133): state}
+
+        self.assertEqual(questers.LEDGER_STALLED, state)
+        self.assertEqual(frozenset(), questers.known_broken("Durga", {}, ledger))
+        ghoul_entries = [3, 210, 570, 604, 948]
+        self.assertEqual(ghoul_entries, self.catalogue_droppers(ghoul_entries))
+
+    def catalogue_droppers(self, ghoul_entries):
+        # The world rows the ticket lists: quest 133 needs item 884 x7, and
+        # creature_questitem names its five ghouls; no loot-template row
+        # holds it, so only a read that joins creature_questitem sees them.
+        quest_row = {"quest": 133, "title": "Ghoulish Effigy", "level": 27}
+        quest_row.update(min_level=20, sort=DUSKWOOD, item1=884, item_count1=7)
+        givers = [
+            {"quest": 133, "role": role, "map_id": 0} for role in ("start", "end")
+        ]
+
+        def read(sql):
+            if sql == questcatalogue.QUESTS_SQL:
+                return [quest_row]
+            if sql == questcatalogue.GIVERS_SQL:
+                return givers
+            if "creature_questitem" in sql and "884" in sql:
+                return [{"item": 884, "entry": e} for e in ghoul_entries]
+            return []
+
+        questcatalogue.forget()
+        self.addCleanup(questcatalogue.forget)
+        (effigy,) = questcatalogue.load(read)
+        return effigy.items[0]["droppers"]
 
     def test_digging_through_the_ooze_hunts_the_bag_drop_and_turns_in(self):
         ooze = quest(470, 11, 24, min_level=19, title="Digging Through the Ooze")
