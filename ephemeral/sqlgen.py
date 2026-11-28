@@ -13,9 +13,15 @@ from dataclasses import dataclass
 
 WRITE_DB = "acore_characters"
 # Tables a seed never writes. A job goes in as an overseer_command row (a direct
-# overseer_roster update was measured to have no effect), and the realm id is
-# the baseline's (the worldserver only accepts 1 to 255).
-NEVER_WRITTEN = {"overseer_roster", "overseer_command", "realmlist", "realmcharacters"}
+# overseer_roster update was measured to have no effect). The judge owns the
+# campaign queue ingress, and the baseline owns the realm id.
+NEVER_WRITTEN = {
+    "overseer_roster",
+    "overseer_command",
+    "overseer_dungeon_queue",
+    "realmlist",
+    "realmcharacters",
+}
 _SAFE_STRING = re.compile(r"^[A-Za-z0-9 _.,:\-]*$")
 _STRING = re.compile(r"'(?:[^'\\]|'')*'")
 _BACKTICKED = re.compile(r"`([^`]*)`")
