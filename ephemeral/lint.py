@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 
 from . import anchors as anchors_mod
-from .acts import RAID_ORDER, TRAVEL_GUARD
+from .acts import QUEST_AIM, RAID_ORDER, TRAVEL_GUARD
 from . import dbschema, gamedata
 from .miniyaml import YamlError, loads
 
@@ -67,7 +67,7 @@ _EXPECT_SCALAR = re.compile(r"^(=|!=|<>|<=|>=|<|>) -?\d+(\.\d+)?$")
 _EXPECT_ROWS = re.compile(r"^(>=|<=|>|<|=)?\s*\d+$")
 _JOB = re.compile(r"^[a-z ]+(:[a-z0-9_-]+)?$")
 _ALIAS = re.compile(r"^[a-z][a-z0-9_]*$")
-_ACT_KINDS = ("roster", "command", TRAVEL_GUARD, RAID_ORDER)
+_ACT_KINDS = ("roster", "command", TRAVEL_GUARD, RAID_ORDER, QUEST_AIM)
 
 
 @dataclass(frozen=True)
@@ -896,14 +896,15 @@ def _act(lint, doc, whos, names):
         "schema",
         "may contain at most one raid order",
     )
+    duration = duration_seconds(doc.get("duration"))
     for i, step in enumerate(act):
         path = f"decree.act[{i}]"
-        if lint.keys(path, step, ("at", "when", *_ACT_KINDS), ()):
-            _act_step(lint, path, step, whos, names, bridge_on)
+        if lint.keys(path, step, ("at", "when", "by", *_ACT_KINDS), ()):
+            _act_step(lint, path, step, whos, names, bridge_on, duration)
     _walk_auction(lint, doc, "act", act)
 
 
-def _act_step(lint, path, step, whos, names, bridge_on):
+def _act_step(lint, path, step, whos, names, bridge_on, duration):
     lint.ensure(
         ("at" in step) != ("when" in step),
         path,
@@ -924,11 +925,26 @@ def _act_step(lint, path, step, whos, names, bridge_on):
             "schema",
             "must name an observation in observe",
         )
+    if "by" in step:
+        deadline = duration_seconds(step["by"])
+        lint.ensure(
+            "when" in step and deadline is not None,
+            f"{path}.by",
+            "schema",
+            "must be a deadline such as 5m on a conditional act",
+        )
+        if deadline is not None and duration is not None:
+            lint.ensure(
+                deadline <= duration,
+                f"{path}.by",
+                "schema",
+                "deadline exceeds the decree duration",
+            )
     lint.ensure(
         sum(key in step for key in _ACT_KINDS) == 1,
         path,
         "schema",
-        "needs exactly one of roster, command, travel_guard or raid_order",
+        "needs exactly one of roster, command, travel_guard, raid_order or quest_aim",
     )
     if "roster" in step:
         _act_roster(lint, f"{path}.roster", step["roster"], whos)
@@ -938,6 +954,27 @@ def _act_step(lint, path, step, whos, names, bridge_on):
         _act_travel_guard(lint, f"{path}.{TRAVEL_GUARD}", step[TRAVEL_GUARD], whos)
     if RAID_ORDER in step:
         _act_raid_order(lint, f"{path}.{RAID_ORDER}", step[RAID_ORDER], whos, bridge_on)
+    if QUEST_AIM in step:
+        _act_quest_aim(lint, f"{path}.{QUEST_AIM}", step[QUEST_AIM], whos)
+
+
+def _act_quest_aim(lint, path, aim, whos):
+    fields = ("who", "quest")
+    if not lint.keys(path, aim, fields, fields):
+        return
+    who, quest = aim["who"], aim["quest"]
+    lint.ensure(
+        isinstance(who, str) and _NAME.fullmatch(who) and who in whos,
+        f"{path}.who",
+        "schema",
+        "must be a named cast entry",
+    )
+    lint.ensure(
+        _is_int(quest) and 0 < quest <= 0xFFFFFFFF,
+        f"{path}.quest",
+        "schema",
+        "must be a positive unsigned quest ID",
+    )
 
 
 def _act_travel_guard(lint, path, aim, whos):

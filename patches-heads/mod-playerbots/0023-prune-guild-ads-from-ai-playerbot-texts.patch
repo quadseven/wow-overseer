@@ -1,0 +1,56 @@
+Subject: [PATCH] the guild advertisements are pruned from bot speech
+
+WHY THIS PATCH EXISTS
+
+Four suggest_something rows of ai_playerbot_texts (ids 741, 743, 801
+and 816 in data/sql/playerbots/base/ai_playerbot_texts.sql at the pin
+below) are guild searches: "%my_role is looking for guild." and three
+like it. A bot already in a guild that says one asserts a state it is
+not in. Patch 0017 took suggest_something out of the guild channel; the
+rows still play in world and general chat.
+
+The prune was first merged as an SQL file in the site's repository
+(its #1640 and #2252), where nothing applies it: the realm build
+compiles this tree plus these patches, and the module runs its own
+database updater over data/sql/playerbots/updates/ in this tree
+(src/Script/Playerbots.cpp, ModuleDBUpdater::Update, gated on
+Playerbots.Updates.EnableDatabases, default on). This patch adds the
+update file there, so the next start of a worldserver built with it
+deletes the four rows once and records the file as applied.
+
+WHAT WOULD LET THIS PATCH BE DELETED
+
+Upstream (or the operator's fork) removing or rewriting those four rows
+in its own seed or updates.
+
+APPLIES TO
+
+mod-playerbots @ 40884e9c135c1daf27ffd894a6047502a5701130 (the pin
+patch 0017 names), on top of local patches 0001-0024. Adds one new file,
+data/sql/playerbots/updates/2026_11_12_00_ai_playerbot_guild_ads.sql,
+which sorts after the pin's last update
+(2026_10_05_01_ai_playerbot_rpg_gather_texts.sql). Touches no source.
+
+diff --git a/data/sql/playerbots/updates/2026_11_12_00_ai_playerbot_guild_ads.sql b/data/sql/playerbots/updates/2026_11_12_00_ai_playerbot_guild_ads.sql
+new file mode 100644
+index 0000000..4603333
+--- /dev/null
++++ b/data/sql/playerbots/updates/2026_11_12_00_ai_playerbot_guild_ads.sql
+@@ -0,0 +1,17 @@
++-- Prune the guild advertisements from the suggest_something speech class
++-- (mod-overseer patch 0025).
++--
++-- These four seed rows of ai_playerbot_texts each say the speaker is looking
++-- for a guild, which is false for a bot already in one:
++--
++--   id 741: %my_role is looking for guild.
++--   id 743: %my_role wants to join a good guild.
++--   id 801: any guilds willing to carry %my_role?
++--   id 816: any leveling guilds out there?
++--
++-- Delete rather than rewrite: each row carries the same guild search in its
++-- localized columns. ai_playerbot_texts_chance is keyed by class name, so
++-- nothing is orphaned. Each delete is guarded to the suggest_something class.
++DELETE FROM `ai_playerbot_texts`
++WHERE `name` = 'suggest_something'
++  AND `id` IN (741, 743, 801, 816);
