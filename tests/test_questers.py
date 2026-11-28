@@ -7,6 +7,7 @@ from unittest import mock
 import classhunt
 import classquest
 import guildjobs
+import questcatalogue
 import questers
 
 ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE, DUSKWOOD = 12, 9, 40, 44, 10
@@ -2633,12 +2634,41 @@ class ASummonedObjectEnder(unittest.TestCase):
         # STALLED, written by BROKEN_SQL as state 'broken' (questers.py
         # `_broken_reason`): one quester's two hours, not a world fact. It
         # reads LEDGER_STALLED, so a quester without the memo's stall takes
-        # and hunts quest 133 again (the test above).
+        # and hunts quest 133 again (the test above). The quests page must
+        # name the ghouls too: Ghoul Rib (884) has its sources only in
+        # creature_questitem, so a drop read without that table listed the
+        # rib with no source and the quest read as unfinishable.
         state = questers.ledger_state("broken", questers.STALLED)
         ledger = {("Durga", 133): state}
 
         self.assertEqual(questers.LEDGER_STALLED, state)
         self.assertEqual(frozenset(), questers.known_broken("Durga", {}, ledger))
+        ghoul_entries = [3, 210, 570, 604, 948]
+        self.assertEqual(ghoul_entries, self.catalogue_droppers(ghoul_entries))
+
+    def catalogue_droppers(self, ghoul_entries):
+        # The world rows the ticket lists: quest 133 needs item 884 x7, and
+        # creature_questitem names its five ghouls; no loot-template row
+        # holds it, so only a read that joins creature_questitem sees them.
+        quest_row = {"quest": 133, "title": "Ghoulish Effigy", "level": 27}
+        quest_row.update(min_level=20, sort=DUSKWOOD, item1=884, item_count1=7)
+        givers = [
+            {"quest": 133, "role": role, "map_id": 0} for role in ("start", "end")
+        ]
+
+        def read(sql):
+            if sql == questcatalogue.QUESTS_SQL:
+                return [quest_row]
+            if sql == questcatalogue.GIVERS_SQL:
+                return givers
+            if "creature_questitem" in sql and "884" in sql:
+                return [{"item": 884, "entry": e} for e in ghoul_entries]
+            return []
+
+        questcatalogue.forget()
+        self.addCleanup(questcatalogue.forget)
+        (effigy,) = questcatalogue.load(read)
+        return effigy.items[0]["droppers"]
 
     def test_digging_through_the_ooze_hunts_the_bag_drop_and_turns_in(self):
         ooze = quest(470, 11, 24, min_level=19, title="Digging Through the Ooze")
