@@ -333,7 +333,7 @@ alias, or are unqualified when it is the only table. A run with no core encounte
 evidence is INVALID.
 
 Use a typed `encounter` end precondition for the supported bosses in Blackrock
-Depths and Molten Core. Its alias must identify the decree's only arranged
+Depths, Molten Core and Razorfen Downs. Its alias must identify the decree's only arranged
 instance, on the boss's map and bound to a member of the cast. The judge reads
 the same instance save before any act and again at the end. A missing or malformed
 save or a selected encounter that is already DONE before the first act makes
@@ -348,6 +348,11 @@ in that instance.
   Ragnaros's death.
 - `encounter: {instance: mc, boss: "Any Molten Core boss"}` accepts any of the ten
   Molten Core encounters on an instance where all ten began incomplete.
+- `encounter: {instance: rfd, boss: "Any Razorfen Downs boss"}` reads the
+  instance's `completedEncounters` mask instead of its save, because the Razorfen
+  Downs instance script keeps no boss states. The core sets one bit of that mask
+  per DungeonEncounter.dbc credit, and which bit is which boss is not known here,
+  so any bit counts. The mask must start at zero.
 
 The judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`; without them it prints an INVALID verdict and exits 2,
@@ -403,6 +408,12 @@ fit, but nothing skips a head that has waited 30 minutes. Runs after the first
 control and treatment pair start only if the pair was control FAIL then
 treatment PASS; any other first pair stops the batch and removes its waiting
 Jobs. A finished Job with no result gets an INVALID result recorded for it.
+A started Job whose pod has waited on an image pull failure (`ErrImagePull`,
+`ImagePullBackOff`, `InvalidImageName`, `ErrImageNeverPull`) for longer than the
+runner setting `image_pull_grace_seconds` (default 600) gets an INVALID result
+naming the container and image, and is deleted, so its node slot and quota come
+back on the same pass instead of at the Job's deadline. This reads the
+namespace's pods; if they cannot be read, the pass goes on without the check.
 
 Each dispatcher also takes a local owner lock (`~/.ephemeral/dispatch.lock`, or
 `EPH_LOCK`) recording the owner, pid and start time; the cluster Lease holder
@@ -571,3 +582,14 @@ still win when given; an image whose commit cannot be read is recorded as
 unchecked.
 
 Not built: requeueing an INVALID first pair (resubmit instead) and PR-built images.
+
+## Travel-guard scenarios
+
+Set a named cast member's operator guard to its seeded homebind with
+`travel_guard: {who: Grug, enabled: true}` in a timed act. The roster aim must
+start empty. A later act with `enabled: false` clears the exact value written by
+the same run. Each act records the value and the time it fired. Generic seed SQL
+still refuses roster writes.
+
+Use a list under `arrange.group.members` to group distinct cast entries with
+different starting positions or homebinds. A single selector continues to work.
