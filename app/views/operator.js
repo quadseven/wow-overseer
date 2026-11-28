@@ -23,25 +23,25 @@ import { post, refreshNow } from "../api.js";
 // inputs, named exactly as the handler reads them. `header` sends one field as
 // a request header instead of in the body. tests/test_operator_view.py checks
 // every path and name here against map_server.py and decree.py.
-const FAMILY = { name: "family", label: "Family", choices: "families", typed: "the family key", hint: "Needed when the realm runs more than one family." };
+const FAMILY = { name: "family", label: "Family", choices: "families", typed: "the family key", hint: "Needed when the realm runs more than one family.", need: "Pick which family this is for." };
 export const ACTIONS = {
   job: {
     path: "/api/decree", fixed: { section: "job" }, submit: "Set the family's job",
-    fields: [FAMILY, { name: "mode", label: "Job mode", choices: "modes", typed: "a job mode" }],
+    fields: [FAMILY, { name: "mode", label: "Job mode", choices: "modes", typed: "a job mode", need: "Pick a job mode." }],
   },
   muster: {
     path: "/api/decree", fixed: { section: "muster" }, submit: "Send to the guild",
-    fields: [{ name: "guild", label: "Guild name", typed: "a guild name" },
-      { name: "command", label: "Order", kind: "textarea" }],
+    fields: [{ name: "guild", label: "Guild name", typed: "a guild name", need: "Name the guild." },
+      { name: "command", label: "Order", kind: "textarea", need: "Type the order." }],
   },
   guildrun: {
     path: "/api/decree", fixed: { section: "guildrun" }, submit: "Form the run",
-    fields: [{ name: "guild", label: "Guild name", typed: "a guild name" },
-      { name: "keyword", label: "Dungeon keyword", typed: "a dungeon keyword such as scarlet-armory" }],
+    fields: [{ name: "guild", label: "Guild name", typed: "a guild name", need: "Name the guild." },
+      { name: "keyword", label: "Dungeon keyword", typed: "a dungeon keyword such as scarlet-armory", need: "Type a dungeon keyword." }],
   },
   cap: {
     path: "/api/decree", fixed: { section: "campaign" }, submit: "Set the run cap",
-    fields: [FAMILY, { name: "wanted", label: "Runs wanted", kind: "number", hint: "0 stops the campaign outright." }],
+    fields: [FAMILY, { name: "wanted", label: "Runs wanted", kind: "number", hint: "0 stops the campaign outright.", need: "Type how many runs are wanted. 0 stops the campaign." }],
   },
   restart: {
     path: "/api/decree", fixed: { section: "campaign", restart: true }, submit: "Start the count again",
@@ -49,7 +49,7 @@ export const ACTIONS = {
   },
   queue: {
     path: "/api/decree", fixed: { section: "queue" }, submit: "Set the queue",
-    fields: [FAMILY, { name: "entries", label: "Dungeons and runs, in order", kind: "textarea", example: "queue" }],
+    fields: [FAMILY, { name: "entries", label: "Dungeons and runs, in order", kind: "textarea", example: "queue", need: "Type the dungeons and runs, in order." }],
   },
   unqueue: {
     path: "/api/decree", fixed: { section: "queue", clear: true }, submit: "Clear the queue",
@@ -57,23 +57,23 @@ export const ACTIONS = {
   },
   aim: {
     path: "/api/decree", fixed: { section: "travel" }, submit: "Send them",
-    fields: [{ name: "name", label: "Character", choices: "who", typed: "a character name" }, { name: "role", label: "Where to", choices: "roles", typed: "a role or a creature entry" }],
+    fields: [{ name: "name", label: "Character", choices: "who", typed: "a character name", need: "Pick who to send." }, { name: "role", label: "Where to", choices: "roles", typed: "a role or a creature entry", need: "Pick where to send them." }],
   },
   standdown: {
     // role "" is travel.NONE: the value that clears the aim.
     path: "/api/decree", fixed: { section: "travel", role: "" }, submit: "Stand them down",
-    fields: [{ name: "name", label: "Character", choices: "who", typed: "a character name" }],
+    fields: [{ name: "name", label: "Character", choices: "who", typed: "a character name", need: "Pick who to stand down." }],
   },
   chat: {
     path: "/api/chat", submit: "Send",
-    fields: [{ name: "name", label: "Character", choices: "who", typed: "a character name" }, { name: "text", label: "What to say", kind: "textarea" }],
+    fields: [{ name: "name", label: "Character", choices: "who", typed: "a character name", need: "Pick who to talk to." }, { name: "text", label: "What to say", kind: "textarea", need: "Type what to say." }],
   },
   priorities: {
     // The whole ranking, highest first. decree.py holds it to a full
     // permutation of the fixed list (priorities.validate) and refuses
     // anything else; this page only reorders what the read gave it.
     path: "/api/decree", fixed: { section: "priorities" }, submit: "Save this order",
-    fields: [{ name: "order", label: "Highest first", kind: "ranked" }],
+    fields: [{ name: "order", label: "Highest first", kind: "ranked", need: "The saved order is not read yet." }],
   },
   unrank: {
     path: "/api/decree", fixed: { section: "priorities", reset: true }, submit: "Reset to default",
@@ -82,15 +82,17 @@ export const ACTIONS = {
   will: {
     // The will is the chat route once per character, oldest first, in the
     // order /api/decree's will.audience gives. decree.py refuses section
-    // "will" on its own route for exactly this reason.
-    path: "/api/chat", fanout: true, submit: "Let the family overhear it",
-    fields: [{ name: "text", label: "The decree", kind: "textarea" }],
+    // "will" on its own route for exactly this reason. `section` here is
+    // not sent (it is not in `fixed`); it names the console card whose
+    // can_send this form honours.
+    path: "/api/chat", fanout: true, section: "will", submit: "Let the family overhear it",
+    fields: [{ name: "text", label: "The decree", kind: "textarea", need: "Type the decree." }],
   },
   director: {
     path: "/api/director", submit: "Point the Watcher",
     fields: [
-      { name: "watch", label: "Order", example: "usage" },
-      { name: "token", label: "Director token", kind: "password", header: "X-Director-Token" },
+      { name: "watch", label: "Order", example: "usage", need: "Type the Watcher's order." },
+      { name: "token", label: "Director token", kind: "password", header: "X-Director-Token", need: "Type the director token." },
     ],
   },
 };
@@ -103,7 +105,7 @@ function form(id) {
   if (!forms[id]) {
     const draft = {};
     ACTIONS[id].fields.forEach((f) => { draft[f.name] = f.initial || ""; });
-    forms[id] = { draft, phase: "idle", body: null, headers: null, answer: null };
+    forms[id] = { draft, phase: "idle", body: null, headers: null, answer: null, invalid: null, invalidField: null, touched: false, sentCount: 0 };
   }
   return forms[id];
 }
@@ -111,6 +113,7 @@ function form(id) {
 let lastCtx = null;
 let lastOn = false;
 let bound = false;
+let dragging = null;
 
 // ---- what the forms are given to choose from ------------------------------------
 
@@ -127,6 +130,32 @@ function example(key, dec, dir) {
   if (key === "queue") return (dec && dec.queue && dec.queue.example) || "";
   if (key === "usage") return (dir && dir.usage) || "";
   return "";
+}
+
+// ---- the console's word on whether a card may be sent ------------------------------
+//
+// The decree read carries per-section can_send, why_not and instead
+// (decree.py). A section that cannot be sent renders its form disabled
+// with the read's own sentences where the submit was: the page never
+// decides this for itself, and a section the read does not mention, or
+// one whose can_send is not false, is left as it was.
+
+function sectionOf(id, dec) {
+  const a = ACTIONS[id];
+  const key = (a.fixed && a.fixed.section) || a.section || "";
+  if (!key) return null;
+  return ((dec && dec.sections) || []).find((x) => x.key === key) || null;
+}
+
+function blockedOf(id, dec) {
+  const s = sectionOf(id, dec);
+  return !!(s && s.can_send === false);
+}
+
+function blockedBlock(id, dec) {
+  const s = sectionOf(id, dec) || {};
+  const tag = (dec && dec.refusal_tag) || "This cannot be sent from here";
+  return html`<div class="op-blocked" role="note"><p class="t">${tag}</p>${s.why_not ? html`<p>${s.why_not}</p>` : ""}${s.instead ? html`<p>${s.instead}</p>` : ""}</div>`;
 }
 
 // ---- the family's priorities (decree.py's priorities card, #1559) ----------------
@@ -165,7 +194,7 @@ function entryOf(dec, pid) {
 function rankedControl(id, f, dec) {
   const st = form(id);
   const order = shownOrder(id, dec);
-  const locked = st.phase === "confirm" || st.phase === "sending";
+  const locked = st.phase === "confirm" || st.phase === "sending" || blockedOf(id, dec);
   const fid = "op-" + id + "-" + f.name;
   const dis = locked ? raw(" disabled") : "";
   const rows = order.map((pid, i) => {
@@ -178,13 +207,16 @@ function rankedControl(id, f, dec) {
   const list = order.length
     ? html`<ol class="op-rank" id="${fid}-list" aria-labelledby="${fid}-label">${rows}</ol>`
     : html`<span class="unmeasured">The saved order is not read yet. It comes from the decree console read.</span>`;
-  return html`<div class="op-field"><span class="op-flabel" id="${fid}-label">${f.label}</span>${list}<input type="hidden" id="${fid}" name="${f.name}" data-op-field="${id}" value="${order.join(",")}"${dis}><span class="op-hint">Drag a row, use its arrows, or focus it and press Alt with the up or down arrow.</span>${changed ? html`<span class="op-hint op-unsaved" role="status">Not saved yet. Until it is, the family keeps the saved order.</span>` : ""}</div>`;
+  return html`<div class="op-field"><span class="op-flabel" id="${fid}-label">${f.label}</span>${list}<input type="hidden" id="${fid}" name="${f.name}" data-op-field="${id}" value="${order.join(",")}"${dis}><span class="op-hint"><span class="op-hint-fine">Drag a row, use its arrows, or focus it and press Alt with the up or down arrow.</span></span>${changed ? html`<span class="op-hint op-unsaved" role="status">Not saved yet. Until it is, the family keeps the saved order.</span>` : ""}</div>`;
 }
 
 function reorder(id, pid, rank) {
   const dec = lastCtx && lastCtx.get("/api/decree").data;
   const st = form(id);
   if (st.phase !== "idle") return;
+  if (blockedOf(id, dec)) return;
+  st.touched = true;
+  if (st.invalidField === "order") { st.invalid = null; st.invalidField = null; }
   st.draft.order = moveTo(shownOrder(id, dec), pid, rank);
   st.answer = null;
   redrawForm(id);
@@ -213,7 +245,7 @@ function control(id, f, dec, dir) {
   if (f.kind === "ranked") return rankedControl(id, f, dec);
   const st = form(id);
   const fid = "op-" + id + "-" + f.name;
-  const locked = st.phase === "confirm" || st.phase === "sending";
+  const locked = st.phase === "confirm" || st.phase === "sending" || blockedOf(id, dec);
   const val = st.draft[f.name];
   // With no choices to offer, the box says what to type in their place.
   // The Watcher's grammar is too long for a placeholder, so it is a hint.
@@ -260,20 +292,105 @@ export function bodyOf(id, draft) {
   return { body, headers };
 }
 
-function shown(v) {
-  if (Array.isArray(v)) return v.map((x, i) => (i + 1) + ". " + x).join("  ");
-  if (v === "") return "(empty)";
-  if (v === true) return "yes";
-  return String(v);
+// The first field with nothing in it, or null when the form is complete.
+// Every field is required: an empty one is a sentence the server would
+// refuse, said here first with the field's own name for what is missing.
+// A typed 0 is a value (it stops a campaign), not a blank.
+function missingField(id, st) {
+  for (const f of ACTIONS[id].fields) {
+    const v = typed(f, st.draft[f.name]);
+    if (Array.isArray(v) ? v.length === 0 : String(v).trim() === "") return f;
+  }
+  return null;
 }
 
-function confirmLines(id, st, dec) {
-  const a = ACTIONS[id];
-  const lines = Object.keys(st.body).map((k) => html`<li><span class="op-k">${k}</span> ${shown(st.body[k])}</li>`);
-  Object.keys(st.headers).forEach((k) => lines.push(html`<li><span class="op-k">${k}</span> (hidden)</li>`));
-  const who = a.fanout ? audience(dec) : [];
-  const to = a.fanout ? html`<p class="op-hint">Sent once to each of: ${who.join(", ") || "nobody"}.</p>` : "";
-  return html`<ul class="op-sent">${lines}</ul>${to}`;
+// ---- what a person is asked to confirm, in plain words ---------------------------
+//
+// The confirm names the action, not the wire: family labels rather than
+// keys, the words being sent in quotes, and nothing the person did not
+// type (the fixed fields and the director token are never shown). The five
+// destructive actions carry a consequence line and their own verb on the
+// button, so they cannot be mistaken for a reversible send.
+
+function familyLabel(dec, key) {
+  const f = ((dec && dec.families) || []).find((x) => x.key === key);
+  return (f && f.label) || key;
+}
+
+function quoted(s) { return '"' + String(s == null ? "" : s) + '"'; }
+
+function confirmSpec(id, st, dec) {
+  const b = st.body || {};
+  const fam = b.family !== undefined ? familyLabel(dec, b.family) : "";
+  switch (id) {
+    case "job":
+      return { heading: "Set the family's job", lines: [["Family", fam], ["Job mode", b.mode]] };
+    case "muster":
+      return { heading: "Send to the guild", lines: [["Guild", b.guild], ["Order", quoted(b.command)]] };
+    case "guildrun":
+      return { heading: "Form the run", lines: [["Guild", b.guild], ["Dungeon", b.keyword]] };
+    case "cap":
+      if (Number(b.wanted) === 0) {
+        return {
+          heading: "Stop the campaign", lines: [["Family", fam], ["Runs wanted", 0]],
+          danger: { verb: "Yes, stop the campaign", consequence: "The campaign stops outright. The family runs no more dungeons until the cap is set above 0 again." },
+        };
+      }
+      return { heading: "Set the run cap", lines: [["Family", fam], ["Runs wanted", b.wanted]] };
+    case "restart":
+      return {
+        heading: "Start the count again", lines: [["Family", fam]],
+        danger: { verb: "Yes, start the count again", consequence: "Every member's runs done count goes back to the start. The runs themselves are not undone." },
+      };
+    case "queue":
+      return { heading: "Set the queue", lines: [["Family", fam], ["Queue", quoted(b.entries)]] };
+    case "unqueue":
+      return {
+        heading: "Clear the queue", lines: [["Family", fam]],
+        danger: { verb: "Yes, clear the queue", consequence: "The waiting dungeons are wiped. A run already going is not stopped." },
+      };
+    case "aim":
+      return { heading: "Send them", lines: [["Character", b.name], ["Where to", b.role]] };
+    case "standdown":
+      return {
+        heading: "Stand them down", lines: [["Character", b.name]],
+        danger: { verb: "Yes, stand them down", consequence: "Their errand is cleared outright rather than replaced. Whatever they were walking to is given up." },
+      };
+    case "chat":
+      return { heading: "Send this to " + b.name, lines: [quoted(b.text)] };
+    case "priorities": {
+      const names = (b.order || []).map((pid, i) => (i + 1) + ". " + entryOf(dec, pid).label).join(", ");
+      return { heading: "Save this order", lines: [["Highest first", names]] };
+    }
+    case "unrank":
+      return {
+        heading: "Reset the priorities", lines: [],
+        danger: { verb: "Yes, reset the priorities", consequence: "The ranking goes back to the default order. The order on screen now is lost." },
+      };
+    case "will": {
+      const who = audience(dec);
+      return {
+        heading: "Let the family overhear it",
+        lines: [quoted(b.text), ["Heard by", who.length + " of them: " + who.join(", ")]],
+        note: "It goes to each of them one by one, and a line already sent cannot be unsent.",
+      };
+    }
+    case "director":
+      return { heading: "Point the Watcher", lines: [["Order", quoted(b.watch)]] };
+    default:
+      return { heading: ACTIONS[id].submit, lines: [] };
+  }
+}
+
+function confirmBlock(id, st, dec) {
+  const spec = confirmSpec(id, st, dec);
+  const danger = spec.danger || null;
+  const lines = spec.lines.length
+    ? html`<ul class="op-sent">${spec.lines.map((l) => Array.isArray(l)
+      ? html`<li><span class="op-k">${l[0]}</span> ${l[1]}</li>`
+      : html`<li>${l}</li>`)}</ul>`
+    : "";
+  return html`<div class="op-confirm"${danger ? raw(' data-danger="1"') : ""} role="group" aria-labelledby="op-${id}-ask"><p class="t" id="op-${id}-ask">${spec.heading}</p>${lines}${spec.note ? html`<p class="op-hint">${spec.note}</p>` : ""}${danger ? html`<p class="op-consequence">${danger.consequence}</p>` : ""}<div class="row"><button type="button" class="btn ${danger ? "btn-danger" : "btn-primary"}" data-op-confirm="${id}" id="op-${id}-yes"><i class="ph ph-paper-plane-tilt" aria-hidden="true"></i>${danger ? danger.verb : "Yes, send it"}</button><button type="button" class="btn btn-secondary" data-op-cancel="${id}">Cancel</button></div></div>`;
 }
 
 function audience(dec) { return (dec && dec.will && dec.will.audience) || []; }
@@ -320,13 +437,21 @@ function answerBlock(st) {
 
 function footer(id, st, dec) {
   const a = ACTIONS[id];
+  if (blockedOf(id, dec)) {
+    return blockedBlock(id, dec);
+  }
   if (st.phase === "confirm") {
-    return html`<div class="op-confirm" role="group" aria-labelledby="op-${id}-ask"><p class="t" id="op-${id}-ask">Send this to the realm?</p>${confirmLines(id, st, dec)}<div class="row"><button type="button" class="btn btn-primary" data-op-confirm="${id}" id="op-${id}-yes"><i class="ph ph-paper-plane-tilt" aria-hidden="true"></i>Yes, send it</button><button type="button" class="btn btn-secondary" data-op-cancel="${id}">Cancel</button></div></div>`;
+    return confirmBlock(id, st, dec);
   }
   if (st.phase === "sending") {
+    if (a.fanout) {
+      const total = audience(dec).length;
+      const line = st.sentCount ? "Sent " + st.sentCount + " of " + total + "." : "Sending to " + total + " of them, one by one.";
+      return html`<div class="op-sending" role="status"><i class="ph ph-spinner-gap" aria-hidden="true"></i>${line}</div>`;
+    }
     return html`<div class="op-sending" role="status"><i class="ph ph-spinner-gap" aria-hidden="true"></i>Sending. Waiting for the server's answer.</div>`;
   }
-  return html`${answerBlock(st)}<div class="row"><button type="submit" class="btn btn-primary" id="op-${id}-send">${a.submit}</button></div>`;
+  return html`${answerBlock(st)}${st.invalid ? html`<p class="op-invalid" role="alert">${st.invalid}</p>` : ""}<div class="row"><button type="submit" class="btn btn-primary" id="op-${id}-send">${a.submit}</button></div>`;
 }
 
 function formOf(id, title, lede, dec, dir) {
@@ -411,9 +536,13 @@ function onView(dec, dirRead, agendaRead) {
   const d = dec.data;
   const dir = dirRead.data;
   const willReady = audience(d).length > 0;
+  // Sections run in the order a phone reaches for them: Talk and Travel
+  // first, the decree console behind them, the Watcher last.
   return html`${pageHead("Operator actions", "Every action asks you to confirm before it sends. The server checks each order and its answer is shown as it was given.")}
 <div class="card op-lock"><span class="card-title op-lock-title"><i class="ph ph-lock-simple-open" aria-hidden="true"></i>On for this deployment</span><span class="muted">The operator setting is on, so these controls send orders to the realm.</span></div>
-<section class="op-sec" aria-labelledby="op-h-decree">${sectionHead("01", html`<span id="op-h-decree">Decree console</span>`)}${consoleState(dec)}
+<section class="op-sec" aria-labelledby="op-h-talk">${sectionHead("01", html`<span id="op-h-talk">Talk to a character</span>`)}<div class="op-grid"><div class="card op-card">${formOf("chat", "One character", "Your words are kept even if the character does not answer.", d)}</div></div></section>
+<section class="op-sec" aria-labelledby="op-h-travel">${sectionHead("02", html`<span id="op-h-travel">Travel</span>`)}<div class="op-grid"><div class="card op-card">${formOf("aim", "Send them somewhere", (d && d.travel && d.travel.caveat) || sectionDoes(d, "travel"), d)}${formOf("standdown", "Stand them down", "", d)}</div></div></section>
+<section class="op-sec" aria-labelledby="op-h-decree">${sectionHead("03", html`<span id="op-h-decree">Decree console</span>`)}${consoleState(dec)}
 ${prioritiesCard(d, agendaRead)}
 <div class="op-grid">
 <div class="card op-card">${formOf("job", "Standing job", sectionDoes(d, "job"), d)}</div>
@@ -421,11 +550,9 @@ ${prioritiesCard(d, agendaRead)}
 <div class="card op-card">${formOf("guildrun", "Guild finder run", sectionDoes(d, "guildrun"), d)}</div>
 <div class="card op-card">${formOf("cap", "Campaign counter", sectionDoes(d, "campaign"), d)}${formOf("restart", "Start the count again", "Sets the runs done back to the start on every member of the family.", d)}</div>
 <div class="card op-card">${formOf("queue", "Dungeon queue", sectionDoes(d, "queue"), d)}${formOf("unqueue", "Clear the queue", "", d)}</div>
-<div class="card op-card">${formOf("aim", "Travel", (d && d.travel && d.travel.caveat) || sectionDoes(d, "travel"), d)}${formOf("standdown", "Stand them down", "", d)}</div>
 <div class="card op-card">${willReady ? formOf("will", "Speak to the family", "Every one of them hears it and answers in their own words, oldest first.", d) : html`<div class="op-form-title">Speak to the family</div>${state("unmeasured", "Waiting for the console", "Who hears the decree comes from the decree console read, which has not answered.")}`}</div>
 </div></section>
-<section class="op-sec" aria-labelledby="op-h-chat">${sectionHead("02", html`<span id="op-h-chat">Talk to a character</span>`)}<div class="op-grid"><div class="card op-card">${formOf("chat", "One character", "Your words are kept even if the character does not answer.", d)}</div></div></section>
-<section class="op-sec" aria-labelledby="op-h-watcher">${sectionHead("03", html`<span id="op-h-watcher">The Watcher</span>`)}${watcherState(dirRead)}<div class="op-grid"><div class="card op-card">${formOf("director", "Point the Watcher", "", d, dir)}</div></div></section>
+<section class="op-sec" aria-labelledby="op-h-watcher">${sectionHead("04", html`<span id="op-h-watcher">The Watcher</span>`)}${watcherState(dirRead)}<div class="op-grid"><div class="card op-card">${formOf("director", "Point the Watcher", "", d, dir)}</div></div></section>
 <p class="op-hint op-foot">The stream agent's picture upload (POST /api/frame) is not an operator action and has no form here.</p>`;
 }
 
@@ -462,6 +589,9 @@ async function sendFanout(id, st) {
   for (const name of audience(lastCtx && lastCtx.get("/api/decree").data)) {
     const res = await post(ACTIONS[id].path, Object.assign({ name }, st.body), st.headers);
     list.push({ name, ok: res.ok, text: res.ok ? successOf("chat", res).text : refusalOf(res) });
+    // The send is one by one and cannot be hurried; say how far it got.
+    st.sentCount = list.length;
+    redrawForm(id);
   }
   st.answer = { list };
 }
@@ -470,6 +600,7 @@ async function confirmed(id) {
   const st = form(id);
   if (st.phase !== "confirm" || !lastOn) return;
   st.phase = "sending";
+  st.sentCount = 0;
   redrawForm(id);
   if (ACTIONS[id].fanout) await sendFanout(id, st);
   else await sendOne(id, st);
@@ -477,6 +608,7 @@ async function confirmed(id) {
   // comes round: the draft was the operator's, the order is now the realm's.
   if (id === "unrank" && st.answer && st.answer.kind !== "refused") form("priorities").draft.order = "";
   st.phase = "idle";
+  st.touched = false;
   st.body = null; st.headers = null;
   redrawForm(id);
   focusIn(id, ".op-answer, button[type=submit]");
@@ -491,7 +623,13 @@ function bind(main) {
   const keep = (e) => {
     const el = fieldOf(e);
     if (!el) return;
-    form(el.getAttribute("data-op-field")).draft[el.name] = el.value;
+    const st = form(el.getAttribute("data-op-field"));
+    st.draft[el.name] = el.value;
+    st.touched = true;
+    // Typing in the named field answers its reason; the line itself goes
+    // at the next redraw, so a keystroke never rebuilds the field being
+    // typed in. Typing anywhere else leaves the reason standing.
+    if (st.invalidField === el.name) { st.invalid = null; st.invalidField = null; }
   };
   main.addEventListener("input", keep);
   main.addEventListener("change", keep);
@@ -502,10 +640,22 @@ function bind(main) {
     const id = f.getAttribute("data-op");
     const st = form(id);
     if (!lastOn || st.phase !== "idle") return;
+    if (blockedOf(id, lastCtx && lastCtx.get("/api/decree").data)) return;
     // The ranking sent is the one on screen at this moment.
     if (ACTIONS[id].fields.some((x) => x.kind === "ranked")) {
       st.draft.order = shownOrder(id, lastCtx && lastCtx.get("/api/decree").data);
     }
+    const miss = missingField(id, st);
+    if (miss) {
+      st.invalid = miss.need || "Type " + (miss.typed || "a value") + ".";
+      st.invalidField = miss.name;
+      st.answer = null;
+      redrawForm(id);
+      focusIn(id, '[name="' + miss.name + '"]');
+      return;
+    }
+    st.invalid = null;
+    st.invalidField = null;
     const sent = bodyOf(id, st.draft);
     st.body = sent.body; st.headers = sent.headers; st.answer = null;
     st.phase = "confirm";
@@ -534,6 +684,9 @@ function bind(main) {
       const id = no.getAttribute("data-op-cancel");
       const st = form(id);
       st.phase = "idle"; st.body = null; st.headers = null;
+      // The confirm was put down on purpose; the draft stays in the
+      // fields, and the poll may draw the page again.
+      st.touched = false;
       redrawForm(id);
       focusIn(id, "button[type=submit]");
     }
@@ -550,7 +703,6 @@ function bind(main) {
     focusIn(id, 'li[data-pid="' + pid + '"]');
   });
   // Drag a row onto another: it takes that row's place and the rest shift.
-  let dragging = null;
   main.addEventListener("dragstart", (e) => {
     const li = e.target.closest && e.target.closest("li[data-op-rank]");
     if (!li) return;
@@ -574,6 +726,31 @@ function bind(main) {
   main.addEventListener("dragend", () => { dragging = null; });
 }
 
+// ---- the poll waits for the operator --------------------------------------------
+//
+// main.js offers a view its own swap, to keep what a plain swap would
+// take out of the document. Here what it would take out is the operator:
+// a form being typed in, a confirm standing open, a send in flight, a
+// priority row mid drag. While any of those is live the swap is claimed
+// and the page left exactly as it is, so the 30 second poll never
+// redraws over a draft, a focus, a caret or a scroll. The next poll
+// whose moment is quiet draws the page whole again.
+
+function editingNow(main) {
+  if (!main || typeof main.querySelector !== "function" || !main.querySelector('form[data-op]')) return false;
+  if (dragging) return true;
+  for (const id of Object.keys(forms)) {
+    if (forms[id].phase === "confirm" || forms[id].phase === "sending") return true;
+    // An unsent draft is an edit in progress whether or not its field
+    // still holds the focus: a tap elsewhere must not cost the typing.
+    if (forms[id].touched) return true;
+  }
+  const ae = typeof document !== "undefined" ? document.activeElement : null;
+  if (ae && typeof ae.getAttribute === "function" && ae.getAttribute("data-op-field")
+    && typeof main.contains === "function" && main.contains(ae)) return true;
+  return false;
+}
+
 export default {
   css: ["views/operator.css"],
   reads: (ctx) => {
@@ -583,6 +760,11 @@ export default {
   },
   every: 30000,
   title: () => "Operator actions",
+  swap(main, body) {
+    if (editingNow(main)) return true;
+    main.innerHTML = body;
+    return true;
+  },
   render(ctx) {
     lastCtx = ctx;
     const op = ctx.get("/api/v2/operator");

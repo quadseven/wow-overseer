@@ -325,7 +325,8 @@ class ConfirmBeforeSending(unittest.TestCase):
             % json.dumps(on_reads())
         )
         self.assertEqual(got["afterSubmit"], 0)
-        self.assertIn("Send this to the realm?", got["asked"])
+        self.assertIn("Send this to Grug", got["asked"])
+        self.assertIn("&quot;hello&quot;", got["asked"])
         self.assertIn("data-op-confirm", got["asked"])
         writes = [p for p in got["posted"] if p["method"] == "POST"]
         self.assertEqual(len(writes), 1)
@@ -337,6 +338,8 @@ class ConfirmBeforeSending(unittest.TestCase):
     def test_cancel_sends_nothing(self):
         got = run(
             "const c = ctx(%s);\nV.render(c); V.after(main, c);\n"
+            "listeners.input({target: field('job', 'family', 'Zug')});\n"
+            "listeners.input({target: field('job', 'mode', 'quest')});\n"
             "listeners.submit({target: target({'form[data-op]': 'job'}), preventDefault() {}});\n"
             "listeners.click({target: target({'data-op-cancel': 'job'}), preventDefault() {}});\n"
             "listeners.click({target: target({'data-op-confirm': 'job'}), preventDefault() {}});\n"
@@ -351,6 +354,8 @@ class ConfirmBeforeSending(unittest.TestCase):
             "globalThis.fetch = async (url, opts) => ({ok: false, status: 400,"
             " json: async () => ({error: 'Pick which family this is for.', section: 'job'})});\n"
             "const c = ctx(%s);\nV.render(c); V.after(main, c);\n"
+            "listeners.input({target: field('job', 'family', 'Zug')});\n"
+            "listeners.input({target: field('job', 'mode', 'quest')});\n"
             "listeners.submit({target: target({'form[data-op]': 'job'}), preventDefault() {}});\n"
             "listeners.click({target: target({'data-op-confirm': 'job'}), preventDefault() {}});\n"
             "await new Promise((r) => setTimeout(r, 50));\n"
@@ -542,6 +547,405 @@ class ThePostHelper(unittest.TestCase):
         self.assertTrue(got["a"]["ok"])
         self.assertFalse(got["b"]["ok"])
         self.assertEqual(got["b"]["failed"], "offline")
+
+
+def confirm_of(aid, fields=(), reads=None):
+    """Render the on view, type `fields` into form `aid`, submit it, and
+    return the markup the form was redrawn with: its confirm, or whatever
+    stopped the confirm from opening."""
+    steps = "".join(
+        "listeners.input({target: field(%s, %s, %s)});\n"
+        % (json.dumps(aid), json.dumps(name), json.dumps(value))
+        for name, value in fields
+    )
+    return run(
+        "const c = ctx(%s);\nV.render(c); V.after(main, c);\n%s"
+        "listeners.submit({target: target({'form[data-op]': %s}), preventDefault() {}});\n"
+        "console.log(JSON.stringify(swapped.length ? swapped[swapped.length - 1] : ''));"
+        % (json.dumps(reads or on_reads()), steps, json.dumps(aid))
+    )
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class PlainWordConfirms(unittest.TestCase):
+    """#3366: a confirm names the action in plain words. No wire key, no
+    fixed field, no "(empty)", no hidden header line."""
+
+    CASES = (
+        ("job", (("family", "Zug"), ("mode", "quest")), "Set the family&#39;s job"),
+        ("muster", (("guild", "Cave"), ("command", "Form up")), "Send to the guild"),
+        (
+            "guildrun",
+            (("guild", "Cave"), ("keyword", "scarlet-armory")),
+            "Form the run",
+        ),
+        ("cap", (("family", "Zug"), ("wanted", "3")), "Set the run cap"),
+        ("queue", (("family", "Grug"), ("entries", "ragefire 50")), "Set the queue"),
+        ("aim", (("name", "Grug"), ("role", "vendor")), "Send them"),
+        ("chat", (("name", "Grug"), ("text", "hello")), "Send this to Grug"),
+        ("director", (("watch", "watch Grug"), ("token", "x")), "Point the Watcher"),
+        ("priorities", (), "Save this order"),
+        ("will", (("text", "Hold the bridge."),), "Let the family overhear it"),
+    )
+
+    def test_every_confirm_names_its_action_and_shows_no_wire(self):
+        for aid, fields, heading in self.CASES:
+            with self.subTest(action=aid):
+                chunk = confirm_of(aid, fields)
+                self.assertIn(heading, chunk)
+                self.assertIn("data-op-confirm", chunk)
+                for wire in (
+                    "Send this to the realm?",
+                    "(empty)",
+                    "(hidden)",
+                    "X-Director-Token",
+                    '<span class="op-k">section</span>',
+                    '<span class="op-k">family</span>',
+                    '<span class="op-k">wanted</span>',
+                    '<span class="op-k">restart</span>',
+                    '<span class="op-k">clear</span>',
+                    '<span class="op-k">reset</span>',
+                ):
+                    self.assertNotIn(wire, chunk, aid)
+
+    def test_the_family_is_named_by_its_label_not_its_key(self):
+        chunk = confirm_of("job", (("family", "Zug"), ("mode", "quest")))
+        self.assertIn("Family</span> Zug&#39;s family", chunk)
+
+    def test_the_words_sent_are_shown_in_quotes(self):
+        chunk = confirm_of("muster", (("guild", "Cave"), ("command", "Form up")))
+        self.assertIn("&quot;Form up&quot;", chunk)
+        chunk = confirm_of("chat", (("name", "Grug"), ("text", "hello")))
+        self.assertIn("&quot;hello&quot;", chunk)
+
+    def test_the_priorities_confirm_names_entries_not_ids(self):
+        chunk = confirm_of("priorities")
+        self.assertIn("Highest first", chunk)
+        first = next(p.label for p in priorities.PRIORITIES if p.id == DEFAULT[0])
+        self.assertIn(first.replace("'", "&#39;"), chunk)
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class DangerConfirms(unittest.TestCase):
+    """#3366: the five destructive actions carry the bad border, their own
+    verb on the button, and a consequence line."""
+
+    CASES = (
+        (
+            "cap",
+            (("family", "Grug"), ("wanted", "0")),
+            "Stop the campaign",
+            "Yes, stop the campaign",
+            "stops outright",
+        ),
+        (
+            "restart",
+            (("family", "Grug"),),
+            "Start the count again",
+            "Yes, start the count again",
+            "goes back to the start",
+        ),
+        (
+            "unqueue",
+            (("family", "Grug"),),
+            "Clear the queue",
+            "Yes, clear the queue",
+            "are wiped",
+        ),
+        (
+            "unrank",
+            (),
+            "Reset the priorities",
+            "Yes, reset the priorities",
+            "default order",
+        ),
+        (
+            "standdown",
+            (("name", "Grug"),),
+            "Stand them down",
+            "Yes, stand them down",
+            "cleared outright",
+        ),
+    )
+
+    def test_each_destructive_confirm_carries_the_treatment(self):
+        for aid, fields, heading, verb, consequence in self.CASES:
+            with self.subTest(action=aid):
+                chunk = confirm_of(aid, fields)
+                self.assertIn(heading, chunk)
+                self.assertIn('data-danger="1"', chunk)
+                self.assertIn(verb, chunk)
+                self.assertIn(consequence, chunk)
+
+    def test_an_ordinary_confirm_has_no_danger_treatment(self):
+        chunk = confirm_of("cap", (("family", "Grug"), ("wanted", "3")))
+        self.assertIn("Set the run cap", chunk)
+        self.assertNotIn("data-danger", chunk)
+        self.assertIn("Yes, send it", chunk)
+        chunk = confirm_of("chat", (("name", "Grug"), ("text", "hello")))
+        self.assertNotIn("data-danger", chunk)
+        self.assertIn("Yes, send it", chunk)
+
+
+def decree_with_sections(sections):
+    """The canned decree read with its sections replaced wholesale."""
+    d = json.loads(json.dumps(DECREE))
+    d["sections"] = sections
+    d["refusal_tag"] = "this cannot be sent from here"
+    return {"data": d, "at": 1, "error": None}
+
+
+def form_chunk(html, aid):
+    start = html.index('data-op="%s"' % aid)
+    return html[start : html.index("</form>", start)]
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class CanSendIsHonoured(unittest.TestCase):
+    """#3366: a section the read says cannot be sent renders its form
+    disabled, with the read's why_not and instead where the submit was."""
+
+    SECTIONS = (
+        {
+            "key": "job",
+            "does": "Tells every member to switch to this job.",
+            "can_send": True,
+            "why_not": "",
+            "instead": "",
+        },
+        {
+            "key": "campaign",
+            "does": "Sets how many runs the family wants.",
+            "can_send": False,
+            "why_not": "The bridge is holding the counter while a run is counted.",
+            "instead": "Set the dungeon queue instead.",
+        },
+    )
+
+    def reads(self):
+        return on_reads(decree_with_sections(self.SECTIONS))
+
+    def test_the_blocked_forms_are_disabled_and_say_why(self):
+        html = render_with(self.reads())["html"]
+        for aid in ("cap", "restart"):
+            chunk = form_chunk(html, aid)
+            self.assertNotIn('type="submit"', chunk, aid)
+            self.assertIn("disabled", chunk, aid)
+            self.assertIn("this cannot be sent from here", chunk, aid)
+            self.assertIn(
+                "The bridge is holding the counter while a run is counted.",
+                chunk,
+                aid,
+            )
+            self.assertIn("Set the dungeon queue instead.", chunk, aid)
+        # A section that can be sent keeps its working submit.
+        self.assertIn('type="submit"', form_chunk(html, "job"))
+
+    def test_a_blocked_form_opens_no_confirm_and_sends_nothing(self):
+        got = run(
+            "const c = ctx(%s);\nV.render(c); V.after(main, c);\n"
+            "listeners.input({target: field('cap', 'family', 'Grug')});\n"
+            "listeners.input({target: field('cap', 'wanted', '0')});\n"
+            "listeners.submit({target: target({'form[data-op]': 'cap'}), preventDefault() {}});\n"
+            "listeners.click({target: target({'data-op-confirm': 'cap'}), preventDefault() {}});\n"
+            "await new Promise((r) => setTimeout(r, 50));\n"
+            "console.log(JSON.stringify({asked: swapped.some((h) => h.includes('data-op-confirm')),"
+            " posted: posted.filter((p) => p.method === 'POST').length}));"
+            % json.dumps(self.reads())
+        )
+        self.assertEqual(got, {"asked": False, "posted": 0})
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class RequiredFieldsBlockTheConfirm(unittest.TestCase):
+    """#3366: a form with an empty required field opens no confirm; it
+    names what is missing, in the form, and sends nothing."""
+
+    def test_each_blank_field_names_itself(self):
+        cases = (
+            ("chat", (("name", "Grug"),), "Type what to say."),
+            ("chat", (("text", "hello"),), "Pick who to talk to."),
+            ("job", (("family", "Zug"),), "Pick a job mode."),
+            ("job", (("mode", "quest"),), "Pick which family this is for."),
+            ("muster", (("guild", "Cave"),), "Type the order."),
+            ("cap", (("family", "Grug"),), "Type how many runs are wanted."),
+            ("will", (), "Type the decree."),
+            ("director", (("watch", "watch Grug"),), "Type the director token."),
+        )
+        for aid, fields, reason in cases:
+            with self.subTest(action=aid, reason=reason):
+                chunk = confirm_of(aid, fields)
+                self.assertIn(reason, chunk)
+                self.assertIn('role="alert"', chunk)
+                self.assertNotIn("data-op-confirm", chunk)
+
+    def test_zero_runs_wanted_is_a_value_not_a_blank(self):
+        chunk = confirm_of("cap", (("family", "Grug"), ("wanted", "0")))
+        self.assertIn("data-op-confirm", chunk)
+        self.assertNotIn('role="alert"', chunk)
+
+    def test_the_reason_goes_away_once_the_field_is_filled(self):
+        got = run(
+            "const c = ctx(%s);\nV.render(c); V.after(main, c);\n"
+            "listeners.input({target: field('chat', 'name', 'Grug')});\n"
+            "listeners.submit({target: target({'form[data-op]': 'chat'}), preventDefault() {}});\n"
+            "const blocked = swapped[swapped.length - 1];\n"
+            "listeners.input({target: field('chat', 'text', 'hello')});\n"
+            "listeners.submit({target: target({'form[data-op]': 'chat'}), preventDefault() {}});\n"
+            "const opened = swapped[swapped.length - 1];\n"
+            "console.log(JSON.stringify({blocked, opened}));" % json.dumps(on_reads())
+        )
+        self.assertIn("Type what to say.", got["blocked"])
+        self.assertIn("data-op-confirm", got["opened"])
+        self.assertNotIn("Type what to say.", got["opened"])
+
+    def test_an_unread_priorities_order_blocks_the_save(self):
+        reads = on_reads()
+        d = json.loads(json.dumps(DECREE))
+        d["priorities"] = {
+            "order": [],
+            "entries": [],
+            "state_says": "",
+            "takes_effect": "",
+        }
+        reads["/api/decree"] = {"data": d, "at": 1, "error": None}
+        chunk = confirm_of("priorities", (), reads)
+        self.assertIn("The saved order is not read yet.", chunk)
+        self.assertNotIn("data-op-confirm", chunk)
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class RankArrowsAndHints(unittest.TestCase):
+    """#3366: priority arrows are 44px targets, and the drag hint is
+    dropped where the pointer is a finger."""
+
+    def test_the_arrows_are_44px(self):
+        css = (APP / "views" / "operator.css").read_text(encoding="utf-8")
+        rule = css[css.index(".op-rank-btn") :]
+        rule = rule[: rule.index("}")]
+        self.assertIn("min-width: 44px", rule)
+        self.assertIn("min-height: 44px", rule)
+
+    def test_the_drag_hint_drops_on_touch_pointers(self):
+        css = (APP / "views" / "operator.css").read_text(encoding="utf-8")
+        self.assertIn("@media (pointer: coarse)", css)
+        coarse = css[css.index("@media (pointer: coarse)") :]
+        self.assertIn(".op-hint-fine", coarse)
+        self.assertIn("display: none", coarse)
+        html = render_with(on_reads())["html"]
+        self.assertIn("op-hint-fine", html)
+        self.assertIn("Drag a row", html)
+        self.assertNotIn("op-hint-coarse", html)
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class SectionOrderByPhoneUse(unittest.TestCase):
+    """#3366: Talk and Travel lead the page, the Watcher comes last."""
+
+    def test_the_sections_run_talk_travel_decree_watcher(self):
+        html = render_with(on_reads())["html"]
+        heads = [
+            html.index('id="op-h-%s"' % name)
+            for name in ("talk", "travel", "decree", "watcher")
+        ]
+        self.assertEqual(heads, sorted(heads))
+        self.assertLess(html.index('data-op="chat"'), html.index('data-op="job"'))
+        self.assertLess(html.index('data-op="aim"'), html.index('data-op="job"'))
+        self.assertLess(html.index('data-op="job"'), html.index('data-op="director"'))
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class ThePollWaitsForTheOperator(unittest.TestCase):
+    """#3366: the view's own swap (the seam main.js offers a view) holds
+    the page while a form is being edited or a confirm is open, so the
+    30 second poll never redraws over a draft, focus, caret or scroll."""
+
+    FAKE = "{innerHTML: 'OLD', querySelector: () => ({}), contains: () => true}"
+
+    def swap_after(self, steps):
+        return run(
+            "const c = ctx(%s);\nV.render(c); V.after(main, c);\n%s"
+            "const m = %s;\nconst took = V.swap(m, 'NEW');\n"
+            "console.log(JSON.stringify({took, html: m.innerHTML}));"
+            % (json.dumps(on_reads()), steps, self.FAKE)
+        )
+
+    def test_a_redraw_swaps_when_nothing_is_being_edited(self):
+        self.assertEqual(self.swap_after(""), {"took": True, "html": "NEW"})
+
+    def test_a_redraw_waits_while_a_confirm_is_open(self):
+        got = self.swap_after(
+            "listeners.input({target: field('chat', 'name', 'Grug')});\n"
+            "listeners.input({target: field('chat', 'text', 'hello')});\n"
+            "listeners.submit({target: target({'form[data-op]': 'chat'}), preventDefault() {}});\n"
+        )
+        self.assertEqual(got, {"took": True, "html": "OLD"})
+
+    def test_a_redraw_waits_while_a_field_has_focus(self):
+        got = self.swap_after(
+            "document.activeElement = {getAttribute: (a) => a === 'data-op-field' ? 'chat' : null};\n"
+        )
+        self.assertEqual(got, {"took": True, "html": "OLD"})
+
+    def test_a_redraw_waits_while_a_form_holds_an_unsent_draft(self):
+        # Typed and then left (no focus, no submit): the draft is an edit
+        # in progress, and the poll must not draw over it.
+        got = self.swap_after(
+            "listeners.input({target: field('chat', 'text', 'half a thought')});\n"
+        )
+        self.assertEqual(got, {"took": True, "html": "OLD"})
+
+    def test_a_redraw_resumes_once_the_send_completes(self):
+        got = run(
+            "const c = ctx(%s);\nV.render(c); V.after(main, c);\n"
+            "listeners.input({target: field('chat', 'name', 'Grug')});\n"
+            "listeners.input({target: field('chat', 'text', 'hello')});\n"
+            "listeners.submit({target: target({'form[data-op]': 'chat'}), preventDefault() {}});\n"
+            "listeners.click({target: target({'data-op-confirm': 'chat'}), preventDefault() {}});\n"
+            "await new Promise((r) => setTimeout(r, 50));\n"
+            "const m = %s;\nconst took = V.swap(m, 'NEW');\n"
+            "console.log(JSON.stringify({took, html: m.innerHTML}));"
+            % (json.dumps(on_reads()), self.FAKE)
+        )
+        self.assertEqual(got, {"took": True, "html": "NEW"})
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class TheWillFanout(unittest.TestCase):
+    """#3366: the will's confirm counts its audience and says a sent line
+    cannot be unsent; the send shows how many have gone."""
+
+    def test_the_confirm_counts_the_audience(self):
+        chunk = confirm_of("will", (("text", "Hold the bridge."),))
+        self.assertIn("2 of them", chunk)
+        self.assertIn("Grug, Bork", chunk)
+        self.assertIn("one by one", chunk)
+        self.assertIn("cannot be unsent", chunk)
+        self.assertIn("&quot;Hold the bridge.&quot;", chunk)
+
+    def test_the_send_shows_how_many_have_gone(self):
+        got = run(
+            "const gates = [];\n"
+            "globalThis.fetch = async (url, opts) => { posted.push({url, method: 'POST', body: opts && opts.body});"
+            " return new Promise((res) => gates.push(() => res({ok: true, status: 200,"
+            " json: async () => ({say: 'Heard.'}), text: async () => '{}'}))); };\n"
+            "const c = ctx(%s);\nV.render(c); V.after(main, c);\n"
+            "listeners.input({target: field('will', 'text', 'Hold the bridge.')});\n"
+            "listeners.submit({target: target({'form[data-op]': 'will'}), preventDefault() {}});\n"
+            "listeners.click({target: target({'data-op-confirm': 'will'}), preventDefault() {}});\n"
+            "await new Promise((r) => setTimeout(r, 20));\n"
+            "gates[0]();\n"
+            "await new Promise((r) => setTimeout(r, 20));\n"
+            "const mid = swapped[swapped.length - 1];\n"
+            "gates[1]();\n"
+            "await new Promise((r) => setTimeout(r, 50));\n"
+            "const done = swapped[swapped.length - 1];\n"
+            "console.log(JSON.stringify({mid, done, sent: posted.length}));"
+            % json.dumps(on_reads())
+        )
+        self.assertIn("Sent 1 of 2", got["mid"])
+        self.assertIn("Answers, in the order they were asked", got["done"])
+        self.assertEqual(got["sent"], 2)
 
 
 if __name__ == "__main__":
