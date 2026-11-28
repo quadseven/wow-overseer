@@ -68,13 +68,61 @@ def rules(runs=(), levelled=(), jobs=()):
     ]
 
 
-def roster(**kw):
-    ctx, _log = ctx_for(rules(**kw), server(guildmates=NAMES))
+def roster(*, facts=None, **kw):
+    ctx, _log = ctx_for(
+        rules(**kw), server(guildmates=NAMES, fetch_now_facts=lambda _: facts or {})
+    )
     _code, payload = members.roster({}, ctx)
     return {m["name"]: m for m in payload["members"]}, ctx
 
 
+def class_hold(age):
+    return {
+        "Oak": {
+            "steps": [
+                {
+                    "kind": "class_quest_held",
+                    "doing": "Waiting for a class quest",
+                    "waiting": "the member is in combat",
+                    "first_at": NOW - age,
+                    "last_at": NOW - age,
+                },
+            ],
+        },
+    }
+
+
 class TheIdleLineIsEarned(unittest.TestCase):
+    def test_a_recent_class_hold_names_the_reason_between_planner_passes(self):
+        by, _ = roster(facts=class_hold(13 * 60))
+        self.assertEqual(
+            by["Oak"]["step"], "Last class quest hold: the member is in combat."
+        )
+        self.assertFalse(by["Oak"]["stuck"])
+
+    def test_a_class_hold_expires_after_the_planner_cadence_and_grace(self):
+        by, _ = roster(facts=class_hold(25 * 60 + 1))
+        self.assertEqual(by["Oak"]["line"], "Idle: no errand and no hold found.")
+
+    def test_a_newer_job_or_completion_precedes_the_last_class_hold(self):
+        job = {
+            "name": "Oak",
+            "source": "guildjobs:classquest:Oak",
+            "command": "turnin quest:1",
+            "at": NOW - 11 * 60,
+        }
+        for status in ("claimed", "delivered"):
+            with self.subTest(status=status):
+                by, _ = roster(
+                    facts=class_hold(13 * 60), jobs=[dict(job, status=status)]
+                )
+                self.assertEqual(by["Oak"]["step"], "Guild job: class quest")
+                self.assertNotIn("Last class quest hold", by["Oak"]["line"])
+
+    def test_an_active_guild_run_precedes_the_last_class_hold(self):
+        by, _ = roster(facts=class_hold(13 * 60), runs=["Oak:tank:warrior:47"])
+        self.assertEqual(by["Oak"]["step"], "In a guild run")
+
     def test_a_member_inside_an_active_guild_run_reads_as_in_that_run(self):
         by, _ = roster(runs=["Moss:tank:warrior:31,Pip:dps:mage:30"])
         self.assertEqual(by["Moss"]["doing"], "In a guild run")
