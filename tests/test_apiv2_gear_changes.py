@@ -98,6 +98,7 @@ class TestGearChanges(unittest.TestCase):
         )
         self.assertEqual(code, 200)
         self.assertEqual(len(body["changes"]), 500)
+        self.assertTrue(body["limited"])
         self.assertTrue(
             all(
                 r["character"] == "Tharn" and r["guild"] == "Cave"
@@ -117,6 +118,83 @@ class TestGearChanges(unittest.TestCase):
         self.assertIn("/api/v2/gear/changes", apiv2.ROUTES)
         self.assertEqual(self.get({})[0], 400)
 
+    def test_opted_in_feed_can_read_revisions_at_the_same_timestamp(self):
+        exact = dict(EVENTS[0], event_id=9007199254740993, occurrences=4, at=SINCE)
+        inclusive = gear_changes.CHANGES_SQL.replace(
+            "e.last_seen > %s", "e.last_seen >= %s"
+        )
+        ctx = types.SimpleNamespace(
+            read=realmread.Memory({gear_changes.CHANGES_SQL: [], inclusive: [exact]})
+        )
+        route = "/api/v2/gear/changes"
+        query = {"since": [SINCE.isoformat()]}
+        self.assertEqual(apiv2.handle(route, query, ctx)[1]["changes"], [])
+        status, body = apiv2.handle(route, {**query, "include_boundary": ["1"]}, ctx)
+        self.assertEqual(status, 200)
+        self.assertFalse(body["limited"])
+        self.assertEqual(
+            [(row["event_id"], row["occurrences"]) for row in body["changes"]],
+            [("9007199254740993", 4)],
+        )
+
+    def test_exactly_five_hundred_rows_are_not_truncated(self):
+        rows = [dict(EVENTS[0], event_id=i + 1) for i in range(500)]
+        code, body = self.get({"since": [SINCE.isoformat()]}, rows)
+        self.assertEqual(code, 200)
+        self.assertEqual(len(body["changes"]), 500)
+        self.assertFalse(body["limited"])
+
+    def oldest(self, rows, *, inclusive=False):
+        query = {"since": [SINCE.isoformat()], "oldest_first": ["1"]}
+        if inclusive:
+            query["include_boundary"] = ["1"]
+        statement = (
+            gear_changes.OLDEST_BOUNDARY_SQL if inclusive else gear_changes.OLDEST_SQL
+        )
+        reader = realmread.Memory({statement: rows})
+        code, body = apiv2.handle(
+            "/api/v2/gear/changes", query, types.SimpleNamespace(read=reader)
+        )
+        self.assertEqual(code, 200)
+        params = (SINCE, "", "", "", "")
+        self.assertEqual(reader.asked, [(statement, params * (2 if inclusive else 1))])
+        return body
+
+    def test_full_boundary_does_not_consume_forward_batch(self):
+        boundary = [
+            dict(EVENTS[0], at=SINCE, event_id=i + 1, boundary_row=1)
+            for i in range(500)
+        ]
+        new = dict(EVENTS[1], event_id=501, boundary_row=0)
+        body = self.oldest([*boundary, new], inclusive=True)
+        self.assertFalse(body["limited"])
+        self.assertEqual(len(body["changes"]), 501)
+        self.assertEqual(body["changes"][-1]["event_id"], "501")
+
+    def test_lookahead_protects_the_first_incomplete_timestamp(self):
+        complete = SINCE + datetime.timedelta(seconds=1)
+        split = SINCE + datetime.timedelta(seconds=2)
+        rows = [dict(EVENTS[0], at=complete, event_id=1)] + [
+            dict(EVENTS[0], at=split, event_id=i + 2) for i in range(500)
+        ]
+        body = self.oldest(rows)
+        self.assertEqual(len(body["changes"]), 500)
+        self.assertTrue(body["limited"])
+        self.assertEqual(body["complete_through"], complete.isoformat(sep=" "))
+
+    def test_oversized_boundary_blocks_advancing_to_a_later_timestamp(self):
+        boundary = [
+            dict(EVENTS[0], at=SINCE, event_id=i + 1, boundary_row=1)
+            for i in range(501)
+        ]
+        body = self.oldest([*boundary, EVENTS[1]], inclusive=True)
+        self.assertTrue(body["limited"])
+        self.assertIsNone(body["complete_through"])
+        self.assertEqual(len(body["changes"]), 500)
+        self.assertTrue(
+            all(row["at"] == SINCE.isoformat(sep=" ") for row in body["changes"])
+        )
+
 
 class TheSqlParsesOnMySql8(unittest.TestCase):
     """2026-10-15: the deployed read answered 503 because the query aliased a
@@ -129,3 +207,16 @@ class TheSqlParsesOnMySql8(unittest.TestCase):
         aliases = re.findall(r"\bAS\s+([A-Za-z_]+)", gear_changes.CHANGES_SQL, re.I)
         reserved = {"character", "key", "order", "group", "rank", "range"}
         self.assertEqual(sorted(set(a.lower() for a in aliases) & reserved), [])
+
+    def test_boundary_and_forward_lookaheads_share_one_bounded_statement(self):
+        from sqlglot import exp, parse_one
+
+        sql = gear_changes.OLDEST_BOUNDARY_SQL
+        self.assertIn("e.last_seen = %s", sql)
+        self.assertIn("e.last_seen > %s", sql)
+        statement = parse_one(sql.replace("%s", "NULL"), read="mysql")
+        self.assertIsInstance(statement, exp.Union)
+        self.assertEqual(
+            [row.expression.this for row in statement.find_all(exp.Limit)],
+            ["501", "501"],
+        )
