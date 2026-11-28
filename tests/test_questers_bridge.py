@@ -419,6 +419,42 @@ class TheQuesterPass(unittest.TestCase):
         run.run()
         self.assertEqual(run.recorded, [])
 
+    def test_a_world_fact_replaces_a_stale_stall_in_the_ledger(self):
+        broken = questers.Broken(
+            "Mirra", 3, "Report to Goldshire", questers.ENDER_MISSING, True
+        )
+        recorded = []
+        state = types.SimpleNamespace(_quester_unledgered=0.0)
+        ledger = {("Mirra", 3): questers.LEDGER_STALLED}
+        held = {3: questers.STALLED}
+
+        async def inline_to_thread(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        with (
+            mock.patch.object(bridge.asyncio, "to_thread", new=inline_to_thread),
+            mock.patch.object(
+                bridge,
+                "_record_quest_broken",
+                side_effect=lambda row: recorded.append(row) or True,
+            ),
+        ):
+            asyncio.run(
+                bridge.Bridge._quester_ledger(
+                    state,
+                    quester(),
+                    types.SimpleNamespace(broken=(broken,)),
+                    held,
+                    ledger,
+                    0.0,
+                )
+            )
+
+        self.assertEqual(held, {3: questers.ENDER_MISSING})
+        self.assertEqual(
+            [(b.quest, b.reason) for b in recorded], [(3, questers.ENDER_MISSING)]
+        )
+
     def test_a_broken_quest_the_ledger_lost_is_written_again(self):
         # The ledger's own pass reads only the log: while the quest is still
         # held it may read it as taken again (#923). The quester puts it back.
