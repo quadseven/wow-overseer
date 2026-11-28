@@ -20,7 +20,7 @@ from test_questers import ended, giver, started
 
 WESTFALL, TIRISFAL, DEATHKNELL = 40, 85, 154
 ASHENVALE, STONETALON, DESOLACE, LOCH_MODAN, WETLANDS = 331, 406, 405, 38, 11
-REDRIDGE = 44
+HILLSBRAD, REDRIDGE = 267, 44
 ALLIANCE, HORDE = 1101, 690
 DWARF, NIGHT_ELF, GNOME, TAUREN, ORC, HUMAN = 3, 4, 7, 6, 2, 1
 WARSONG_OUTRIDERS = 889
@@ -481,6 +481,91 @@ class TheBridgeHandsTheQuesterItsRoom(unittest.TestCase):
                 ),
                 ASHENVALE,
             ),
+        )
+
+
+class TheCatalogueReadsGameobjectObjectiveSpawns(unittest.TestCase):
+    def test_negative_objective_entries_are_in_the_object_spawn_read(self):
+        # Quest and objective values mirror #3267's World rows. The ticket gives
+        # spawn counts, not GUIDs or coordinates; those and the giver rows here
+        # are synthetic inputs for the catalogue read.
+        quest = row(
+            498,
+            "The Rescue",
+            HILLSBRAD,
+            22,
+            17,
+            HORDE,
+            npc1=-1721,
+            npc_count1=1,
+            npc2=-1722,
+            npc_count2=1,
+        )
+        object_rows = [
+            {
+                "guid": 9991,
+                "entry": 1721,
+                "map_id": 0,
+                "x": 100.0,
+                "y": 0.0,
+                "name": "Locked ball and chain",
+                "rank": 0,
+                "level": 0,
+                "z": 5.0,
+            },
+            {
+                "guid": 9992,
+                "entry": 1722,
+                "map_id": 0,
+                "x": 200.0,
+                "y": 0.0,
+                "name": "Locked ball and chain",
+                "rank": 0,
+                "level": 0,
+                "z": 5.0,
+            },
+        ]
+        object_entries = []
+
+        def class_rows(cur, what, sql, key, values):
+            if sql != classquest.OBJECT_SPAWNS_SQL:
+                return []
+            object_entries.extend(values)
+            return object_rows if values else []
+
+        def job_read(cur, what, sql, params=()):
+            if sql == questers.QUESTS_SQL:
+                return [quest]
+            if what == "quester quest givers":
+                return [
+                    giver(498, "start", 5000, 900, 0.0, 0.0),
+                    giver(498, "end", 5000, 900, 0.0, 0.0),
+                ]
+            if what == "quester quest starters":
+                return [started(498, 900)]
+            if what == "quester quest enders":
+                return [ended(498, 900)]
+            return []
+
+        class Conn:
+            def cursor(self):
+                return contextlib.nullcontext(object())
+
+        with (
+            mock.patch.multiple(
+                bridge,
+                _QUESTER_CATALOGUE=None,
+                _connect=lambda: contextlib.nullcontext(Conn()),
+                _class_rows=class_rows,
+            ),
+            mock.patch.object(bridge, "_job_read", side_effect=job_read),
+        ):
+            cat = bridge._quester_catalogue()
+
+        self.assertEqual(set(object_entries), {1721, 1722})
+        self.assertEqual(
+            [s.guid for use in cat.quest(498).uses for s in use.spots],
+            [9991, 9992],
         )
 
 

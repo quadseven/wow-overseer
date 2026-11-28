@@ -12,10 +12,12 @@ import unittest
 
 import classquest
 import questers
-from test_questers import WESTFALL, ended, giver, mirra, quest, spawn
+from test_questers import ORC, WESTFALL, ended, giver, mirra, quest, spawn
 
 WATCH, WARDROBE = 841, 290
 SILVERPINE = 130
+HILLSBRAD, RESCUE = 267, 498
+LOCKED_BALL_AND_CHAIN = (1721, 1722)
 WILD_HEARTS, WORG_HEART = 429, 3164
 WORG_ENTRIES = (1765, 1766, 1923, 12431)
 # Fixture-only entries: the ticket does not include the giver or spawn rows.
@@ -79,6 +81,61 @@ def wild_hearts_world(spawn_droppers=True, spawn_chest=False):
     )
 
 
+def rescue_object_spawn(guid, entry, x):
+    """A synthetic spawn row for testing a quest objective walk."""
+    row = chest_spawn(guid, entry, x, 0.0)
+    row["name"] = "Locked ball and chain"
+    return row
+
+
+def rescue_world(spawned=True):
+    rescue = quest(RESCUE, HILLSBRAD, 22, min_level=17, title="The Rescue")
+    rescue.update(
+        npc1=-LOCKED_BALL_AND_CHAIN[0],
+        npc_count1=1,
+        npc2=-LOCKED_BALL_AND_CHAIN[1],
+        npc_count2=1,
+    )
+    giver_rows = [
+        giver(RESCUE, "start", 9004, 9005, 0.0, 0.0, name="Quest giver"),
+        giver(RESCUE, "end", 9004, 9005, 0.0, 0.0, name="Quest giver"),
+    ]
+    # The ticket's world-row snapshot gives objective entries and spawn counts,
+    # but not spawn GUIDs, coordinates, or giver rows. Those rows are test-only.
+    object_rows = (
+        [
+            rescue_object_spawn(9991, 1721, 100.0),
+            rescue_object_spawn(9992, 1722, 200.0),
+        ]
+        if spawned
+        else []
+    )
+    return questers.catalogue(
+        [rescue],
+        giver_rows,
+        [],
+        [],
+        [{"quest": RESCUE, "kind": "creature", "entry": 9005}],
+        [ended(RESCUE, 9005)],
+        object_rows=object_rows,
+    )
+
+
+def rescue_holder(**kw):
+    base = dict(
+        level=22,
+        race=ORC,
+        zone_id=HILLSBRAD,
+        x=0.0,
+        y=0.0,
+        quest_log={RESCUE: questers.STATUS_INCOMPLETE},
+        quest_progress={RESCUE: 0},
+        quest_objectives={RESCUE: {1721: 0, 1722: 0}},
+    )
+    base.update(kw)
+    return mirra(**base)
+
+
 def holder(**kw):
     base = dict(
         level=12,
@@ -103,6 +160,7 @@ class TheCatalogueReadsTheChest(unittest.TestCase):
             (classquest.USE_OBJECT, WATCH, (WARDROBE,)),
         )
         self.assertEqual([s.guid for s in use.spots], [2290])
+        self.assertTrue(questers._object_sourced(quest64))
         self.assertTrue(questers._chested(quest64))
 
     def test_with_no_chest_rows_the_quest_has_no_use(self):
@@ -122,6 +180,7 @@ class TheCatalogueReadsTheChest(unittest.TestCase):
         self.assertEqual(
             (use.verb, use.item, use.spots), (classquest.USE_OBJECT, WORG_HEART, ())
         )
+        self.assertFalse(questers._object_sourced(wild_hearts))
         self.assertFalse(questers._chested(wild_hearts))
         member = mirra(level=11, zone_id=SILVERPINE)
         self.assertNotIn(WILD_HEARTS, questers.in_reach(cat, member, SILVERPINE))
@@ -248,18 +307,19 @@ class TheQuesterOpensTheChest(unittest.TestCase):
     def test_an_item_already_counted_leaves_the_chest_alone(self):
         member = holder(quest_item_objectives={64: {WATCH: 1}})
         self.assertEqual(
-            questers.chest_spots(member, 64, heirloom_world().quest(64)), ()
+            questers.object_spots(member, 64, heirloom_world().quest(64)), ()
         )
 
     def test_a_chest_on_another_map_is_not_walked_to(self):
         cat = heirloom_world()
         far = holder(map_id=1)
+        self.assertIsNone(questers._nearest_object(far, 64, cat.quest(64)))
         self.assertIsNone(questers._nearest_chest(far, 64, cat.quest(64)))
 
     def test_a_chest_the_walk_left_is_passed_over(self):
         cat = heirloom_world()
         self.assertIsNone(
-            questers._nearest_chest(holder(), 64, cat.quest(64), frozenset({2290}))
+            questers._nearest_object(holder(), 64, cat.quest(64), frozenset({2290}))
         )
 
 
@@ -320,7 +380,7 @@ class AChestThatOpenedNothingIsLeftForAWhile(unittest.TestCase):
     """A use the module read back as `unchanged` (the chest opened and nothing
     reached the quest log) was written again every pass: eight rows in
     forty-five minutes for one quester on the dev realm, each one a walk back
-    to the same chest. Three such rows inside CHEST_UNCHANGED_MINUTES leave
+    to the same chest. Three such rows inside OBJECT_UNCHANGED_MINUTES leave
     the chest for that long."""
 
     def test_the_row_reads_which_chest_it_used(self):
@@ -343,13 +403,13 @@ class AChestThatOpenedNothingIsLeftForAWhile(unittest.TestCase):
         tried = (used(5), used(12), used(20))
         cat = heirloom_world()
         self.assertEqual(
-            questers.unchanged_chest_spawns(cat, "Mirra", tried), frozenset({2290})
+            questers.unchanged_object_spawns(cat, "Mirra", tried), frozenset({2290})
         )
         p = questers.plan(cat, holder(), questers.Clock(), 0.0, tried=tried)
         self.assertTrue(p.move is None or p.move.kind != classquest.USE)
 
     def test_the_chest_is_tried_again_once_the_hold_is_over(self):
-        old = questers.CHEST_UNCHANGED_MINUTES + 1
+        old = questers.OBJECT_UNCHANGED_MINUTES + 1
         tried = (used(old), used(old + 5), used(old + 9))
         p = questers.plan(
             heirloom_world(), holder(), questers.Clock(), 0.0, tried=tried
@@ -359,7 +419,7 @@ class AChestThatOpenedNothingIsLeftForAWhile(unittest.TestCase):
     def test_a_use_that_took_since_clears_the_count(self):
         tried = (used(2, "applied"), used(5), used(12), used(20))
         self.assertEqual(
-            questers.unchanged_chest_spawns(heirloom_world(), "Mirra", tried),
+            questers.unchanged_object_spawns(heirloom_world(), "Mirra", tried),
             frozenset(),
         )
 
@@ -371,7 +431,7 @@ class AChestThatOpenedNothingIsLeftForAWhile(unittest.TestCase):
             for a in (5, 12, 20)
         ]
         self.assertEqual(
-            questers.unchanged_chest_spawns(heirloom_world(), "Mirra", other),
+            questers.unchanged_object_spawns(heirloom_world(), "Mirra", other),
             frozenset(),
         )
 
@@ -380,17 +440,122 @@ class AChestThatOpenedNothingIsLeftForAWhile(unittest.TestCase):
         # nothing about the chest.
         tried = tuple(used(a, "error") for a in (5, 12, 20))
         self.assertEqual(
-            questers.unchanged_chest_spawns(heirloom_world(), "Mirra", tried),
+            questers.unchanged_object_spawns(heirloom_world(), "Mirra", tried),
             frozenset(),
         )
 
     def test_the_stall_clock_does_not_treat_a_left_chest_as_work(self):
         tried = (used(5), used(12), used(20))
-        left = questers.unchanged_chest_spawns(heirloom_world(), "Mirra", tried)
+        left = questers.unchanged_object_spawns(heirloom_world(), "Mirra", tried)
         working = questers._working(
             heirloom_world(), holder(), last_quest=0, object_left=left
         )
         self.assertIn(64, working)
+
+
+class TheRescueWorksGameobjectObjectives(unittest.TestCase):
+    def test_the_fixture_has_world_objectives_and_test_spawns(self):
+        rescue = rescue_world().quest(RESCUE)
+        self.assertEqual(rescue.objects, ((1721, 1), (1722, 1)))
+        self.assertTrue(questers._object_sourced(rescue))
+        self.assertFalse(questers._chested(rescue))
+        self.assertEqual(
+            [(u.item, u.targets, [s.guid for s in u.spots]) for u in rescue.uses],
+            [(0, (1721,), [9991]), (0, (1722,), [9992])],
+        )
+
+    def test_a_quester_can_take_use_both_objects_and_hand_in(self):
+        cat = rescue_world()
+        take = questers.plan(
+            cat,
+            mirra(level=22, race=ORC, zone_id=HILLSBRAD),
+            questers.Clock(),
+            0.0,
+        )
+        self.assertEqual((take.move.kind, take.move.quest), (classquest.TAKE, RESCUE))
+
+        first = questers.plan(cat, rescue_holder(), questers.Clock(), 0.0)
+        self.assertEqual((first.move.kind, first.move.quest), (classquest.USE, RESCUE))
+        self.assertEqual(first.move.spot.entry, 1721)
+        step = questers.step_for(rescue_holder(), first.move, 0, cat.quest(RESCUE))
+        self.assertEqual(step.rows[0].command, "use-gameobject 1721")
+        self.assertTrue(step.walk.command.startswith("walk-to-spawn gameobject:9991"))
+
+        one_done = rescue_holder(
+            quest_progress={RESCUE: 1},
+            quest_objectives={RESCUE: {1721: 1, 1722: 0}},
+        )
+        second = questers.plan(cat, one_done, questers.Clock(), 0.0)
+        self.assertEqual(
+            (second.move.kind, second.move.quest), (classquest.USE, RESCUE)
+        )
+        self.assertEqual(second.move.spot.entry, 1722)
+
+        complete = rescue_holder(
+            quest_progress={RESCUE: 2},
+            quest_objectives={RESCUE: {1721: 1, 1722: 1}},
+        )
+        hand_in = questers.plan(cat, complete, questers.Clock(), 0.0)
+        self.assertEqual(
+            (hand_in.move.kind, hand_in.move.quest), (classquest.TURN_IN, RESCUE)
+        )
+        self.assertEqual(hand_in.broken, ())
+
+    def test_a_waiting_objective_does_not_run_the_stall_clock(self):
+        self.assertNotIn(
+            RESCUE,
+            questers._working(rescue_world(), rescue_holder(), last_quest=0),
+        )
+
+    def test_a_worked_objective_stalls_without_claiming_no_objectives(self):
+        clock = questers.Clock()
+        for minute in range(0, 121, 5):
+            plan = questers.plan(
+                rescue_world(),
+                rescue_holder(),
+                clock,
+                minute * 60.0,
+                last_quest=RESCUE,
+            )
+        self.assertEqual(
+            [(b.quest, b.reason) for b in plan.broken],
+            [(RESCUE, questers.STALLED)],
+        )
+
+    def test_an_unspawned_objective_explains_the_missing_source(self):
+        clock = questers.Clock()
+        for minute in range(0, 121, 5):
+            plan = questers.plan(
+                rescue_world(spawned=False),
+                rescue_holder(),
+                clock,
+                minute * 60.0,
+                last_quest=RESCUE,
+            )
+        self.assertEqual(
+            [(b.quest, b.reason) for b in plan.broken],
+            [(RESCUE, questers.STALLED_UNSOURCED)],
+        )
+
+    def test_log_rows_keep_each_gameobject_objective_counter(self):
+        # QUEST_STATUS_SQL reads these fields from character_queststatus. The
+        # partial counts below are a test case, not a live character row.
+        _log, _progress, objectives, _items, _done = questers._logs_by_guid(
+            [
+                {
+                    "guid": 1,
+                    "quest": RESCUE,
+                    "status": questers.STATUS_INCOMPLETE,
+                    "progress": 1,
+                    "npc1": -1721,
+                    "npc2": -1722,
+                    "mobcount1": 1,
+                    "mobcount2": 0,
+                }
+            ],
+            [],
+        )
+        self.assertEqual(objectives[1][RESCUE], {1721: 1, 1722: 0})
 
 
 if __name__ == "__main__":

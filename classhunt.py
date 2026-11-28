@@ -181,9 +181,13 @@ def plain_form(row) -> str:
 
 
 def wanted(quest: classquest.Quest) -> int:
-    """The sum of every kill and item count the quest requires: what the
-    counters of character_queststatus add up to when the objective is done."""
-    return sum(n for _e, n in quest.kills) + sum(n for _i, n in quest.items)
+    """The sum of every kill, item and gameobject count the quest requires:
+    what the counters of character_queststatus add up to when it is done."""
+    return (
+        sum(n for _e, n in quest.kills)
+        + sum(n for _i, n in quest.items)
+        + sum(n for _e, n in quest.objects)
+    )
 
 
 def finished(quest: classquest.Quest, status, progress, held=None) -> bool:
@@ -194,7 +198,7 @@ def finished(quest: classquest.Quest, status, progress, held=None) -> bool:
     try:
         if int(status) == classquest.STATUS_COMPLETE:
             return True
-        if held and quest.items and not quest.kills:
+        if held and quest.items and not quest.kills and not quest.objects:
             if all(int(held.get(i, 0)) >= n for i, n in quest.items):
                 return True
         return 0 < wanted(quest) <= int(progress)

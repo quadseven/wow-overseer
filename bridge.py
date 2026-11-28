@@ -45392,11 +45392,13 @@ def _quester_catalogue():
         # An item no creature drops may sit in a chest: read the chests that
         # hold a required item and where they stand, so the questers open them.
         chests = _class_rows(cur, "quester quest chests", classquest.CHEST_SQL, "items", items)
-        objects = _class_rows(cur, "quester quest chest spawns",
-                              classquest.OBJECT_SPAWNS_SQL, "entries",
-                              {int(r["entry"]) for r in chests})
+        objects = ({int(r["entry"]) for r in chests}
+                   | {-int(r[f"npc{i}"]) for r in quests for i in range(1, 5)
+                      if (r.get(f"npc{i}") or 0) < 0})
+        object_rows = _class_rows(cur, "quester quest object spawns",
+                                  classquest.OBJECT_SPAWNS_SQL, "entries", objects)
     _QUESTER_CATALOGUE = questers.catalogue(quests, givers, spawns, loot, starts, ends,
-                                            links, chests, objects, conditions)
+                                            links, chests, object_rows, conditions)
     log.info("questers: read %d quest(s) a quester may take from the world database",
              len(_QUESTER_CATALOGUE.facts))
     return _QUESTER_CATALOGUE
