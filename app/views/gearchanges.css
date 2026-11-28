@@ -1,13 +1,42 @@
-.gc-head { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin:1rem 0; }
-.gc-head p { margin:0; }
-.gc-member { margin:1.5rem 0; }
-.gc-member h2 { font-size:1.15rem; margin:.5rem 0; }
-.gc-row { display:grid; grid-template-columns:auto 1fr; gap:.35rem .75rem; margin:.5rem 0; }
-.gc-row time { grid-column:2; color:var(--color-neutral-400); font-size:.8rem; }
-.gc-label { color:var(--color-accent-300); font-size:.8rem; }
-.gc-row > .gc-diff { grid-column:2; font-size:.9rem; line-height:1.45; }
-.gc-row > .gc-diff::before { content:"Stat changes: "; color:var(--color-neutral-400); }
-@media (max-width: 520px) {
-  .gc-row { grid-template-columns:1fr; gap:.4rem; }
-  .gc-row time, .gc-row > .gc-diff { grid-column:1; }
+/* Gear changes: the summary head, the sticky filter bar, sticky member
+   headers, and one rail row per change. Colours and type sizes are tokens
+   from tokens.css. The few bare numbers left (the rail width, the sticky
+   offsets) mirror values the shared styles set without a token: the
+   offsets are the shared chip heights in app.css. */
+
+.gc-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-6); margin: var(--space-6) 0; }
+.gc-head p { margin: 0; }
+
+/* The filter bar sticks while the feed scrolls under it. Its height is the
+   chip height plus its own padding; the member headers stick below it at
+   exactly that offset. */
+.gc-bar { position: sticky; top: 0; z-index: 4; background: var(--color-bg); padding: var(--space-3) 0; }
+.gc-chips { display: flex; gap: var(--space-3); flex-wrap: nowrap; overflow-x: auto; }
+
+.gc-member { margin: var(--space-8) 0; }
+.gc-member-head {
+  position: sticky; top: calc(36px + 2 * var(--space-3)); z-index: 3;
+  background: var(--color-bg); padding: var(--space-2) 0;
+  display: flex; align-items: baseline; gap: var(--space-3);
 }
+@media (pointer: coarse) {
+  .gc-member-head { top: calc(44px + 2 * var(--space-3)); }
+}
+.gc-name { font-size: var(--fs-3); font-weight: 700; color: var(--color-text); text-decoration: none; }
+
+/* A change is a card laid out as a rail row: the rail carries the verdict
+   colour, the main column the item, the meta line and the stat comparison. */
+.gc-row { flex-direction: row; gap: var(--space-3); margin: var(--space-2) 0; }
+.gc-rail { flex: none; width: 3px; border-radius: var(--radius-sm); background: var(--color-neutral-600); }
+.gc-rail.ok { background: var(--ok); }
+.gc-rail.bad { background: var(--bad); }
+.gc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.gc-top { display: flex; align-items: baseline; gap: var(--space-3); }
+.gc-delta { margin-left: auto; font-size: var(--fs-2); font-weight: 700; }
+.gc-delta.ok { color: var(--ok); }
+.gc-delta.bad { color: var(--bad); }
+.gc-delta.dim { color: var(--color-neutral-500); font-weight: 400; }
+.gc-meta { font-size: var(--fs-1); color: var(--color-neutral-400); }
+.gc-meta .bad { color: var(--bad); }
+.gc-main > .gc-diff { font-size: var(--fs-2); line-height: 1.45; }
+.gc-main > .gc-diff::before { content: "Stat changes: "; color: var(--color-neutral-400); }

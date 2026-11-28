@@ -25,8 +25,8 @@ import { byName, stuckFor } from "../models/roster.js";
 import { nowSeconds } from "../models/time.js";
 import { guildSlug } from "../families.js";
 import { badgesCard, CSS as ACH_CSS } from "./_achievements.js";
-import { pageKey, since, markSeen } from "../models/gearchanges.js";
-import { renderFeed } from "./gearchanges.js";
+import { changesPath, pageKey } from "../models/gearchanges.js";
+import { bindMarkSeen, renderFeed } from "./gearchanges.js";
 import { spellName, wowheadSpellUrl } from "../models/spelllookup.js";
 
 const TABS = [["overview", "Overview"], ["gear", "Gear"], ["quests", "Quests"], ["bags", "Inventory"], ["activity", "Activity"]];
@@ -38,7 +38,7 @@ function q(name) { return "?name=" + encodeURIComponent(name); }
 export function readsFor(name, tab) {
   const n = q(name);
   switch (tab) {
-    case "gear": return ["/api/armory/member" + n, "/api/v2/training" + n, "/api/v2/gear/changes?since=" + encodeURIComponent(since(pageKey(name))) + "&member=" + encodeURIComponent(name)];
+    case "gear": return ["/api/armory/member" + n, "/api/v2/training" + n, changesPath(pageKey(name), name)];
     case "upgrades": return ["/api/v2/upgrades" + n];
     case "quests": return ["/api/v2/classchain" + n, "/api/client/quests" + n];
     case "bags": return ["/api/client/bags" + n];
@@ -177,7 +177,7 @@ export function gearTab(ctx, m) {
   const arm = read(ctx, "/api/armory/member" + n);
   const tr = read(ctx, "/api/v2/training" + n);
   const key = pageKey(m.name);
-  const changes = read(ctx, "/api/v2/gear/changes?since=" + encodeURIComponent(since(key)) + "&member=" + encodeURIComponent(m.name));
+  const changes = read(ctx, changesPath(key, m.name));
   const wait = pendingRead(arm, 3);
   const data = arm.data || {};
   const card = wait || paperdoll(data.member, data.doll, { bare: true });
@@ -304,10 +304,7 @@ export default {
     bindWatch(main);
     bindTrees(main);
     mountModels(main);
-    main.querySelectorAll("[data-mark-seen]").forEach((button) => button.addEventListener("click", () => {
-      markSeen(button.getAttribute("data-mark-seen"));
-      window.location.reload();
-    }));
+    bindMarkSeen(main);
     if (ctx.params.tab === "upgrades") {
       const up = ctx.get("/api/v2/upgrades" + q(ctx.params.name)).data;
       if (up) bindUpgrades(main, up);

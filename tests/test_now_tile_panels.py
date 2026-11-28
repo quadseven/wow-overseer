@@ -241,6 +241,55 @@ class ThePanels(unittest.TestCase):
             src, r"location\.(hash|href)\s*=|location\.(assign|replace)\("
         )
 
+    def test_mark_seen_reads_the_gear_panel_again_without_reloading(self):
+        got = run(
+            "views/now/panel.js",
+            r"""
+const cache = new Map();
+const reads = [];
+let reloads = 0;
+window.localStorage = {getItem: key => cache.get(key) ?? null,
+                       setItem: (key, value) => cache.set(key, value)};
+window.location = {reload: () => reloads++};
+const row = {
+  event_id: '19', occurrences: 1, at: '2026-01-01 12:30:00',
+  kind: 'worn', character: 'Grug', item: 'Observed blade', entry: 122,
+};
+globalThis.fetch = async (url) => {
+  if (!url.startsWith('/api/v2/gear/changes?')) return {ok: false, status: 404};
+  reads.push(url);
+  const data = {limited: false, changes: url.includes('include_boundary=1')
+    ? [row, {...row, event_id: '9', item: 'Later blade'}] : [row]};
+  return {ok: true, status: 200, text: async () => JSON.stringify(data)};
+};
+let mark = null;
+El.prototype.querySelectorAll = function(selector) {
+  if (selector !== '[data-mark-seen]' || this.className !== 'np-body') return [];
+  const tag = this.innerHTML?.match(/<button [^>]*data-mark-seen[^>]*>/);
+  if (!tag) return [];
+  mark = new El('button');
+  for (const [_, key, value] of tag[0].matchAll(/(data-[\w-]+)="([^"]*)"/g)) {
+    mark.setAttribute(key, value.replaceAll('&quot;', '"').replaceAll('&amp;', '&'));
+  }
+  return [mark];
+};
+const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+M.openPanel('Grug', 'gear', null);
+await settle();
+if (mark) mark.fire('click');
+await settle();
+const body = document.body.firstChild.firstChild.lastChild.innerHTML;
+process.stdout.write(JSON.stringify({reads, body, reloads, open: M.isOpen()}));
+""",
+        )
+        self.assertEqual(len(got["reads"]), 2)
+        self.assertNotIn("include_boundary", got["reads"][0])
+        self.assertIn("include_boundary=1&member=Grug", got["reads"][1])
+        self.assertIn("Later blade", got["body"])
+        self.assertNotIn("Observed blade", got["body"])
+        self.assertEqual(got["reloads"], 0)
+        self.assertTrue(got["open"])
+
 
 FULL = r"""
 const call = [];
