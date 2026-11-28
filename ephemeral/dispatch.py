@@ -19,6 +19,12 @@ has waited `head_wait_seconds` nothing may skip it. Runs after the first pair of
 a batch start only when the first pair came out control FAIL, treatment PASS;
 any other first pair stops the batch and its waiting Jobs are removed.
 
+A batch withdrawn with `eph withdraw` (a request ConfigMap this dispatcher reads)
+loses its suspended Jobs, each with an INVALID result naming the withdrawal. A
+suspended Job that has waited longer than `queue_max_age_seconds` is removed the
+same way, so an abandoned batch cannot hold the queue head. A run ConfigMap whose
+Job is gone and whose result exists is deleted.
+
 A started world whose pod has waited on an image pull failure for longer than
 `image_pull_grace_seconds` gets an INVALID result naming the image and is
 deleted, so one bad image cannot hold a node slot and the queue head until the
@@ -53,6 +59,27 @@ RESULT_PREFIX = "eph-result-"
 PULL_FAILURES = frozenset(
     {"ErrImagePull", "ImagePullBackOff", "InvalidImageName", "ErrImageNeverPull"}
 )
+
+
+# What the dispatcher asks of the cluster API, as (verb, resource). The Role that
+# grants the dispatcher's ServiceAccount access lives with the cluster manifests,
+# outside this repository; a test holds every call the code makes inside this set.
+DISPATCHER_RULES = frozenset(
+    {
+        ("get", "leases.coordination.k8s.io"),
+        ("create", "leases.coordination.k8s.io"),
+        ("update", "leases.coordination.k8s.io"),
+        ("get", "nodes/proxy"),
+        ("list", "resourcequotas"),
+        ("list", "jobs"),
+        ("patch", "jobs"),
+        ("delete", "jobs"),
+        ("list", "pods"),
+        ("list", "configmaps"),
+        ("create", "configmaps"),
+        ("delete", "configmaps"),
+    }
+)  # fmt: skip
 
 
 class DispatchError(Exception):
@@ -293,9 +320,82 @@ class Dispatcher:
         )
         verdicts = self._verdicts()
         self._synthesize(jobs, verdicts)
+        jobs = self._withdraw(jobs, verdicts)
+        jobs = self._age_out(jobs, verdicts)
         jobs = self._clear_stuck_pulls(jobs, verdicts)
         jobs = self._early_stop(jobs, verdicts)
-        return self._admit(jobs)
+        started = self._admit(jobs)
+        self._sweep_run_configmaps(jobs, verdicts)
+        return started
+
+    @staticmethod
+    def _waiting(job):
+        return job["spec"].get("suspend") is True and not finished(job)
+
+    def _drop_waiting(self, j, rid, why, verdicts):
+        """INVALID result first, then delete the Job; True once the Job is gone."""
+        if rid not in verdicts and not self._record_invalid(j, rid, why, verdicts):
+            return False
+        self.kube.delete("jobs", j["metadata"]["name"])
+        return True
+
+    def _withdraw(self, jobs, verdicts):
+        """Remove the suspended Jobs of every batch a withdraw request names."""
+        gone = set()
+        for req in self.kube.list("configmaps", selector=runids.LABEL_WITHDRAW):
+            meta = req["metadata"]
+            batch = (meta.get("labels") or {}).get(runids.LABEL_WITHDRAW, "")
+            if not runids.BATCH_RE.match(batch):
+                self.log(f"{meta['name']}: ignored, not a batch id")
+                continue
+            why = f"withdrawn: batch {batch} was withdrawn before this run started"
+            clean = True
+            for j in jobs:
+                rid = runids.run_of_job(j)
+                parsed = runids.parse_run(rid) if rid else None
+                if not parsed or parsed[0] != batch or not self._waiting(j):
+                    continue
+                if self._drop_waiting(j, rid, why, verdicts):
+                    gone.add(j["metadata"]["name"])
+                    self.log(f"{rid}: removed, its batch was withdrawn")
+                else:
+                    clean = False
+            if clean:
+                self.kube.delete("configmaps", meta["name"])
+        return [j for j in jobs if j["metadata"]["name"] not in gone]
+
+    def _age_out(self, jobs, verdicts):
+        """Remove suspended Jobs that have waited past `queue_max_age_seconds`."""
+        limit, now, gone = self.cfg.queue_max_age_seconds, self.clock(), set()
+        for j in jobs:
+            rid = runids.run_of_job(j)
+            if not rid or not self._waiting(j):
+                continue
+            try:
+                waited = now - _ts(j["metadata"]["creationTimestamp"])
+            except (KeyError, ValueError):
+                continue
+            if waited <= limit:
+                continue
+            why = (
+                f"queue wait: waited {int(waited)}s without starting, "
+                f"over queue_max_age_seconds ({int(limit)}s)"
+            )
+            if self._drop_waiting(j, rid, why, verdicts):
+                gone.add(j["metadata"]["name"])
+                self.log(f"{rid}: removed, it waited too long in the queue")
+        return [j for j in jobs if j["metadata"]["name"] not in gone]
+
+    def _sweep_run_configmaps(self, jobs, verdicts):
+        """Delete run-input ConfigMaps whose Job is gone and whose result exists."""
+        live = {runids.run_of_job(j) for j in jobs}
+        for cm in self.kube.list("configmaps", selector=runids.JOB_LABEL_RUN):
+            name = cm["metadata"]["name"]
+            rid = (cm["metadata"].get("labels") or {}).get(runids.JOB_LABEL_RUN)
+            gone = rid and rid not in live and rid in verdicts
+            if gone and name == runids.run_cm_name(rid):
+                self.kube.delete("configmaps", name)
+                self.log(f"{rid}: run inputs removed, its Job is gone")
 
     def _verdicts(self):
         out = {}

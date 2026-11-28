@@ -371,6 +371,7 @@ digest-pinned tools image. A missing or malformed file is an error.
     python3 -m ephemeral submit --control auto --control-history FILE data/decrees/<name>.yaml
     python3 -m ephemeral dispatch [--once] [--owner NAME]
     python3 -m ephemeral dispatch --stop --owner NAME
+    python3 -m ephemeral withdraw <batch-id>
     python3 -m ephemeral collect [--dry-run]
     python3 -m ephemeral report <batch-id> [batch-id ...] [--dry-run]
 
@@ -414,6 +415,31 @@ runner setting `image_pull_grace_seconds` (default 600) gets an INVALID result
 naming the container and image, and is deleted, so its node slot and quota come
 back on the same pass instead of at the Job's deadline. This reads the
 namespace's pods; if they cannot be read, the pass goes on without the check.
+
+`withdraw` drops a batch that should not run (a wrong decree, a superseded fix
+commit, a batch submitted twice) without `kubectl delete`. It creates one request
+ConfigMap, `eph-withdraw-<batch-id>`, labelled `eph/withdraw`. On its next pass the
+dispatcher deletes that batch's suspended Jobs, writes an INVALID result for each
+run naming the withdrawal, then deletes the request. Runs already started are not
+touched. A repeated request says "already requested".
+
+The dispatcher also cleans up after itself. A suspended Job that has waited longer
+than the runner setting `queue_max_age_seconds` (default 86400) is deleted with an
+INVALID result naming the wait, so an abandoned batch cannot hold the queue head. A
+run ConfigMap (`eph-run-<run-id>`) whose Job is gone and whose result exists is
+deleted. Finished Jobs are left to the Job's own `ttlSecondsAfterFinished`.
+
+The dispatcher's ServiceAccount Role is part of the cluster manifests, outside this
+repository. `dispatch.DISPATCHER_RULES` lists what the code asks of the API, and a
+test holds every call inside it. Compared with the earlier dispatcher, the new
+permission is `delete` on `configmaps`, in the ephemeral namespace only. The Role
+must grant exactly these verbs and no others:
+
+- `leases.coordination.k8s.io`: `get`, `create`, `update`
+- `jobs`: `list`, `patch`, `delete`
+- `configmaps`: `list`, `create`, `delete`
+- `pods`, `resourcequotas`: `list`
+- `nodes/proxy`: `get`
 
 Each dispatcher also takes a local owner lock (`~/.ephemeral/dispatch.lock`, or
 `EPH_LOCK`) recording the owner, pid and start time; the cluster Lease holder
@@ -525,6 +551,19 @@ own `config:`) with that prefix; the treatment arm is untouched, and a fidelity
 delta records it. Any other key the control dist lacks still fails closed; a key a
 module added after the control build (its dist predates it) is removed from the control
 arm's override files with `--control-drop-keys A,B,C`, which records a delta naming them.
+
+`submit` also does this for the harness baseline keys on its own. When
+`--control-worldserver` and `--control-pin` name the control build (or `--control auto`
+selects a history entry without a `dist_inventory`, which supplies the entry's `pin`),
+`submit` reads the module's `conf/mod_overseer.conf.dist` from the module repository at that
+commit. A baseline key in the module's own group that the dist does not define (for example
+`Overseer.Raid.RequireHeadClient` on a build that predates it) is removed from the control
+arm's override files only, and one fidelity delta names the keys and the pin. The treatment
+arm keeps them. A pin whose dist cannot be read refuses the submit and names the pin. Only
+baseline keys are dropped this way: a key the decree's own `config:` sets, or one from the
+base realm's override files, still fails closed in `seed-conf`, and keys of other modules'
+dists or of a bridge-code fix's manual `--control-pin` (a bridge commit) are not checked.
+`--control-drop-keys` still works and wins for the keys it names.
 
 `--control auto` finds the control images instead of taking them by hand.
 `--control-history FILE` is a JSON list of past image sets, newest first, that the deploy
