@@ -847,6 +847,43 @@ class Broken(unittest.TestCase):
             )
         self.assertEqual(reason, questers.NO_OBJECTIVES)
 
+    def test_failed_trial_of_the_lake_explains_its_missing_objectives(self):
+        # Fixture values are the ticket's world rows; quest() defaults all
+        # required objective columns to empty.
+        cat = world(
+            extra_quests=[
+                quest(
+                    29,
+                    NORTHSHIRE,
+                    -1,
+                    min_level=16,
+                    prev=26,
+                    title="Trial of the Lake",
+                )
+            ],
+            extra_givers=[
+                giver(29, "start", 1029, 129, 0, 0),
+                giver(29, "end", 1029, 129, 0, 0),
+            ],
+        )
+        member = mirra(
+            level=16,
+            quests_done=frozenset({26}),
+            quest_log={29: questers.STATUS_FAILED},
+        )
+
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.ABANDON, 29))
+        self.assertEqual(
+            [(b.quest, b.reason) for b in p.broken],
+            [(29, questers.FAILED + "; " + questers.NO_OBJECTIVES)],
+        )
+        self.assertEqual(
+            questers.LEDGER_STALLED,
+            questers.ledger_state("broken", p.broken[0].reason),
+        )
+
     def test_a_stalled_remote_quest_names_its_refused_objective_crossing(self):
         cat = world()
         member = mirra(map_id=1, quest_log={1: 3})
@@ -2439,7 +2476,7 @@ class ASummonedObjectEnder(unittest.TestCase):
         self.assertEqual(
             [row.command for row in step.rows],
             [
-                "hunt-spawn creature:1002 item:1080 count:1 max:%d"
+                "hunt-spawn creature:1002 item:1080 count:5 max:%d"
                 % classhunt.MAX_SECONDS
             ],
         )

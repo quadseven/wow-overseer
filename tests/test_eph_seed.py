@@ -4,6 +4,7 @@ import copy
 import pathlib
 import re
 import unittest
+from unittest.mock import Mock
 
 from ephemeral import anchors as anchors_mod
 from ephemeral import dbschema, guard, lint, resolve, sqlgen
@@ -310,6 +311,28 @@ class FakeCursor:
         pass
 
 
+class TravelGuardConn(FakeConn):
+    def __init__(self, rows, update_count=1):
+        super().__init__()
+        self.rows = rows
+        self.update_count = update_count
+        self.queries = []
+
+    def cursor(self):
+        cursor = super().cursor()
+        execute = cursor.execute
+
+        def record(sql, params=()):
+            execute(sql, params)
+            if sql != guard.MARKER_SQL:
+                self.queries.append((sql, params))
+                cursor.rowcount = self.update_count
+
+        cursor.execute = record
+        cursor.fetchall = lambda: self.rows
+        return cursor
+
+
 GOOD_INPUTS = guard.GuardInputs("127.0.0.1", "ephemeral", "grants: enabled")
 
 
@@ -456,6 +479,8 @@ class GuardTest(unittest.TestCase):
             guard.apply_plan(compile_(doc()), bare)
         with self.assertRaises(guard.GuardError):
             bare.query("SELECT 1")
+        with self.assertRaises(guard.GuardError):
+            bare.enqueue_molten_core_order("Grug")
         self.assertEqual(bare._conn.executed, [])
 
     def test_the_minting_token_is_not_reachable_from_the_class(self):
@@ -498,6 +523,258 @@ class GuardTest(unittest.TestCase):
         )
         with self.assertRaises(SeedError):
             g.run([evil])
+        self.assertEqual(conn.executed, [])
+
+    def test_travel_guard_binds_only_the_named_enabled_row_and_owned_aim(self):
+        conn = TravelGuardConn([(None, 0, -6513.62, -1183.78, 309.338)])
+        g, _, _ = self.open(conn=conn)
+        aimed = "guard:0:-6513.6,-1183.8,309.3"
+        self.assertEqual(g.write_travel_guard("Grug", True), aimed)
+        self.assertTrue(conn.committed)
+        read, write = conn.queries
+        self.assertIn("JOIN `acore_characters`.`character_homebind`", read[0])
+        self.assertIn("AND r.`enabled` = 1", read[0])
+        self.assertEqual(read[1], ("Grug", "Grug"))
+        self.assertEqual(
+            write,
+            (
+                "UPDATE `acore_characters`.`overseer_roster` SET `travel_npc` = %s "
+                "WHERE `name` = %s AND CAST(`name` AS BINARY) = CAST(%s AS BINARY) "
+                "AND `enabled` = 1 AND CAST(`travel_npc` AS BINARY) <=> CAST(%s AS BINARY)",
+                (aimed, "Grug", "Grug", None),
+            ),
+        )
+
+        conn.rows = [(aimed, None, None, None, None)]
+        conn.committed = False
+        self.assertEqual(g.write_travel_guard("Grug", False, expected=aimed), "")
+        self.assertEqual(conn.queries[-1], (write[0], ("", "Grug", "Grug", aimed)))
+        self.assertTrue(conn.committed)
+
+    def test_travel_guard_fit_uses_whole_yards_for_a_long_aim(self):
+        conn = TravelGuardConn([("", 65535, -98765.4, -98765.4, -98765.4)])
+        g, _, _ = self.open(conn=conn)
+        self.assertEqual(
+            g.write_travel_guard("Grug", True), "guard:65535:-98765,-98765,-98765"
+        )
+
+    def test_travel_guard_refuses_invalid_targets_modes_and_unminted_connections(self):
+        conn = TravelGuardConn([])
+        g, _, _ = self.open(conn=conn)
+        for name, enabled, expected in (
+            ("Grug\n", True, None),
+            ("Grug", 1, None),
+            ("Grug", False, None),
+            ("Grug", False, "vendor"),
+            ("Grug", True, "guard:0:1,2,3"),
+        ):
+            with (
+                self.subTest(name=name, enabled=enabled, expected=expected),
+                self.assertRaises(guard.GuardError),
+            ):
+                g.write_travel_guard(name, enabled, expected=expected)
+        bare = object.__new__(guard.GuardedConnection)
+        with self.assertRaises(guard.GuardError):
+            bare.write_travel_guard("Grug", True)
+        self.assertEqual(conn.queries, [])
+
+    def test_travel_guard_refuses_missing_ambiguous_or_invalid_homebind(self):
+        good = ("", 0, 1.0, 2.0, 3.0)
+        for rows in (
+            [],
+            [good, good],
+            [("", None, None, None, None)],
+            [("", True, 1.0, 2.0, 3.0)],
+            [("", 65536, 1.0, 2.0, 3.0)],
+            [("", 0, float("nan"), 2.0, 3.0)],
+            [("", 0, 1e20, 1e20, 1e20)],
+        ):
+            with self.subTest(rows=rows):
+                conn = TravelGuardConn(rows)
+                g, _, _ = self.open(conn=conn)
+                with self.assertRaises(guard.GuardError):
+                    g.write_travel_guard("Grug", True)
+                self.assertEqual(len(conn.queries), 1)
+                self.assertTrue(conn.rolled_back)
+                self.assertFalse(conn.committed)
+
+    def test_travel_guard_leaves_existing_nonowned_aims_alone(self):
+        for previous in ("innkeeper", "guard:0:1,2,3"):
+            conn = TravelGuardConn([(previous, 0, 1.0, 2.0, 3.0)])
+            g, _, _ = self.open(conn=conn)
+            with self.assertRaisesRegex(guard.GuardError, "blank travel aim"):
+                g.write_travel_guard("Grug", True)
+            with self.assertRaisesRegex(guard.GuardError, "does not match"):
+                g.write_travel_guard("Grug", False, expected="guard:1:1,2,3")
+            self.assertEqual(len(conn.queries), 2)
+            self.assertTrue(conn.rolled_back)
+            self.assertFalse(conn.committed)
+
+    def test_travel_guard_refuses_a_competing_change(self):
+        for previous, enabled, expected in (
+            ("", True, None),
+            ("guard:0:1,2,3", False, "guard:0:1,2,3"),
+        ):
+            with self.subTest(enabled=enabled):
+                conn = TravelGuardConn([(previous, 0, 1.0, 2.0, 3.0)], update_count=0)
+                g, _, _ = self.open(conn=conn)
+                with self.assertRaisesRegex(guard.GuardError, "changed before"):
+                    g.write_travel_guard("Grug", enabled, expected=expected)
+                self.assertEqual(conn.queries[-1][1][-1], previous)
+                self.assertTrue(conn.rolled_back)
+                self.assertFalse(conn.committed)
+
+    def test_travel_guard_rolls_back_if_cursor_close_fails(self):
+        conn = TravelGuardConn([("", 0, 1.0, 2.0, 3.0)])
+        g, _, _ = self.open(conn=conn)
+        cursor = conn.cursor()
+
+        def cannot_close():
+            raise OSError("close failed")
+
+        cursor.close = cannot_close
+        conn.cursor = lambda: cursor
+        with self.assertRaisesRegex(OSError, "close failed"):
+            g.write_travel_guard("Grug", True)
+        self.assertTrue(conn.rolled_back)
+        self.assertFalse(conn.committed)
+
+    def test_travel_guard_does_not_enable_generic_roster_writes(self):
+        with self.assertRaises(SeedError):
+            Builder(SCHEMA).update(
+                "overseer_roster", {"travel_npc": "guard:0:1,2,3"}, {"name": "Grug"}
+            )
+        g, conn, _ = self.open()
+        forbidden = sqlgen.Stmt(
+            "update",
+            "overseer_roster",
+            "UPDATE `acore_characters`.`overseer_roster` SET `travel_npc` = 'guard:0:1,2,3' WHERE `name` = 'Grug'",
+        )
+        with self.assertRaises(SeedError):
+            g.run([forbidden])
+        with self.assertRaises(guard.GuardError):
+            g.query(forbidden.sql)
+        self.assertEqual(conn.executed, [])
+
+    def raid_order_connection(self, heads=(("Grug", "Grug"),), conflict=None):
+        guarded, conn, _ = self.open()
+        cur = Mock(rowcount=1, lastrowid=42)
+        cur.fetchall.side_effect = [[(1,)], list(heads)]
+        cur.fetchone.return_value = conflict
+        conn.cursor = Mock(return_value=cur)
+        return guarded, conn, cur
+
+    def test_raid_order_locks_then_inserts_only_the_default_queue_entry(self):
+        guarded, conn, cur = self.raid_order_connection()
+        calls = Mock()
+        calls.attach_mock(cur.close, "close")
+        calls.attach_mock(Mock(wraps=conn.commit), "commit")
+        conn.commit = calls.commit
+
+        self.assertEqual(guarded.enqueue_molten_core_order("Grug"), 42)
+
+        marker, head, conflict, insert = [c.args for c in cur.execute.call_args_list]
+        self.assertIn("`ephemeral_world` FOR UPDATE", marker[0])
+        self.assertIn("`overseer_roster`", head[0])
+        self.assertIn("`enabled` = 1", head[0])
+        self.assertTrue(head[0].endswith("FOR UPDATE"))
+        self.assertEqual(head[1], ("Grug", "Grug"))
+        self.assertIn(
+            "(`family` = %s AND `status` IN ('queued', 'active'))", conflict[0]
+        )
+        self.assertIn("OR `source` = %s", conflict[0])
+        self.assertTrue(conflict[0].endswith("FOR UPDATE"))
+        self.assertEqual(conflict[1], ("Grug", "eph-raid-order"))
+        self.assertEqual(
+            insert,
+            (
+                "INSERT INTO `acore_characters`.`overseer_dungeon_queue` "
+                "(`family`, `position`, `keyword`, `runs_wanted`, `status`, `source`) "
+                "VALUES (%s, 1, %s, 1, 'queued', %s)",
+                ("Grug", "moltencore", "eph-raid-order"),
+            ),
+        )
+        self.assertEqual([c[0] for c in calls.mock_calls], ["close", "commit"])
+        self.assertTrue(conn.committed)
+
+    def test_raid_order_refuses_invalid_names_and_missing_columns_before_sql(self):
+        guarded, conn, _ = self.raid_order_connection()
+        for family in ("", "grug", "Grug\n", "family:grug", "cast[0]", "G'ug", None):
+            with self.subTest(family=family), self.assertRaises(guard.GuardError):
+                guarded.enqueue_molten_core_order(family)
+        for table, missing in (
+            ("overseer_roster", "lead"),
+            ("overseer_dungeon_queue", "source"),
+        ):
+            with self.subTest(table=table, column=missing):
+                tables = copy.deepcopy(SCHEMA.tables)
+                tables["acore_characters"][table].remove(missing)
+                guarded.use_schema(dbschema.Schema(tables))
+                with self.assertRaisesRegex(guard.GuardError, table):
+                    guarded.enqueue_molten_core_order("Grug")
+        conn.cursor.assert_not_called()
+
+    def test_raid_order_refuses_missing_or_ambiguous_exact_family_head(self):
+        for heads in (
+            (),
+            (("Grug", ""),),
+            (("Grug", "grug"),),
+            (("Ugga", "Grug"),),
+            (("Grug", "Grug"), ("Ugga", "Grug")),
+        ):
+            with self.subTest(heads=heads):
+                guarded, conn, cur = self.raid_order_connection(heads=heads)
+                with self.assertRaisesRegex(guard.GuardError, "family head"):
+                    guarded.enqueue_molten_core_order("Grug")
+                self.assertEqual(cur.execute.call_count, 2)
+                self.assertTrue(conn.rolled_back)
+                self.assertFalse(conn.committed)
+
+    def test_raid_order_rolls_back_when_prior_order_is_found(self):
+        guarded, conn, cur = self.raid_order_connection(conflict=(11,))
+        with self.assertRaisesRegex(guard.GuardError, "prior"):
+            guarded.enqueue_molten_core_order("Grug")
+        self.assertEqual(cur.execute.call_count, 3)
+        self.assertTrue(conn.rolled_back)
+        self.assertFalse(conn.committed)
+
+    def test_raid_order_rolls_back_when_marker_is_no_longer_unique(self):
+        guarded, conn, cur = self.raid_order_connection()
+        cur.fetchall.side_effect = [[(1,), (1,)]]
+        with self.assertRaisesRegex(guard.GuardError, "marker"):
+            guarded.enqueue_molten_core_order("Grug")
+        cur.execute.assert_called_once()
+        self.assertTrue(conn.rolled_back)
+        self.assertFalse(conn.committed)
+
+    def test_raid_order_rolls_back_if_insert_or_cursor_close_fails(self):
+        for rowcount, order_id in ((0, 42), (1, 0)):
+            with self.subTest(rowcount=rowcount, order_id=order_id):
+                guarded, conn, cur = self.raid_order_connection()
+                cur.rowcount = rowcount
+                cur.lastrowid = order_id
+                with self.assertRaisesRegex(guard.GuardError, "insert"):
+                    guarded.enqueue_molten_core_order("Grug")
+                self.assertTrue(conn.rolled_back)
+                self.assertFalse(conn.committed)
+        guarded, conn, cur = self.raid_order_connection()
+        cur.close.side_effect = OSError("close failed")
+        with self.assertRaisesRegex(OSError, "close failed"):
+            guarded.enqueue_molten_core_order("Grug")
+        self.assertTrue(conn.rolled_back)
+        self.assertFalse(conn.committed)
+
+    def test_raid_order_stays_unavailable_through_the_generic_seed_writer(self):
+        guarded, conn, _ = self.open()
+        stmt = sqlgen.Stmt(
+            "insert",
+            "overseer_dungeon_queue",
+            "INSERT INTO `acore_characters`.`overseer_dungeon_queue` "
+            "(`family`, `position`, `keyword`, `runs_wanted`, `source`) "
+            "VALUES ('Grug', 1, 'moltencore', 1, 'eph-raid-order')",
+        )
+        with self.assertRaises(SeedError):
+            guarded.run([stmt])
         self.assertEqual(conn.executed, [])
 
     def test_apply_executes_in_one_commit(self):
@@ -756,6 +1033,21 @@ class CompileTest(unittest.TestCase):
         with self.assertRaises(SeedError) as ctx:
             compile_(d)
         self.assertIn("arranges no instance", str(ctx.exception))
+
+    def test_group_can_include_two_individually_seeded_members(self):
+        d = doc()
+        d["cast"] = [{"who": "Grug", "set": {}}, {"who": "Ugga", "set": {}}]
+        d["arrange"] = [{"group": {"leader": "Grug", "members": ["Grug", "Ugga"]}}]
+        plan = compile_(d)
+        members = [
+            s.sql
+            for s in plan.statements
+            if s.table == "group_member" and s.op == "insert"
+        ]
+        expected = f"VALUES ({plan.variables['group']}, "
+        self.assertEqual(len(members), 2)
+        self.assertIn(expected + "1, 0, 0, 0)", members[0])
+        self.assertIn(expected + "2, 0, 0, 0)", members[1])
 
     def test_instance_group_and_bind(self):
         d = doc()

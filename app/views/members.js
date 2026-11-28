@@ -95,7 +95,7 @@ function badges(m, g) {
 }
 
 function cards(rows, ilvl, at, cam, hideBlocker = false) {
-  return html`<div class="ro-cards">${rows.map((m) => html`<div class="card ro-card stretch-card"><a class="stretch-link ro-link" href="${"#/m/" + encodeURIComponent(m.name)}"><span class="row ro-top"><span class="mname" style="color:${classVar(m.class)}">${m.name}</span>${stateLabel(m, at)}</span><span class="ro-meta">L${m.level} ${m.class} · ${m.guild || "no guild"} · ${m.zone || "zone not measured"}</span><span>${m.step || notMeasured("step not measured")}</span>${badges(m, ilvl.get(m.name))}${!hideBlocker && m.stuck && m.blocker ? html`<span class="muted ro-blocker">${m.blocker}</span>` : ""}</a>${charButton(m.name, cam.sp, cam.op)}</div>`)}</div>`;
+  return html`<div class="ro-cards">${rows.map((m) => html`<div class="card ro-card stretch-card"><a class="stretch-link ro-link" href="${"#/m/" + encodeURIComponent(m.name)}"><span class="row ro-top"><span class="mname" style="color:${classVar(m.class)}">${m.name}</span>${stateLabel(m, at)}</span><span class="ro-meta">L${m.level} ${m.class} \u00b7 ${m.guild || "no guild"} \u00b7 ${m.zone || "zone not measured"}</span><span>${m.step || notMeasured("step not measured")}</span>${badges(m, ilvl.get(m.name))}${!hideBlocker && m.stuck && m.blocker ? html`<span class="muted ro-blocker">${m.blocker}</span>` : ""}</a>${charButton(m.name, cam.sp, cam.op)}</div>`)}</div>`;
 }
 
 const HEADS = [["Watch"], ["Name", "name"], ["Lvl", "level"], ["Class"], ["Guild"], ["iLvl", "ilvl"], ["XP/h", "xp"], ["Current step"], ["Blocker"], ["Stuck for", "stuck"]];
@@ -195,7 +195,7 @@ function controls(roster, gg, q) {
   const fam = all.filter((m) => m.family).length;
   const prob = all.filter((m) => flagged(gear.get(m.name))).length;
   const emptyFlagged = all.filter((m) => (gear.get(m.name)?.flags || []).some((x) => /^\d+ empty$/.test(x))).length;
-  return html`<div class="ro-triage"><p class="ro-summary"><b>${stuck} stuck</b> · <b>${ghosts}</b> dead or ghost · <b>${emptyFlagged}</b> flagged for empty slots · of ${all.length}</p>
+  return html`<div class="ro-triage"><p class="ro-summary"><b>${stuck} stuck</b> \u00b7 <b>${ghosts}</b> dead or ghost \u00b7 <b>${emptyFlagged}</b> flagged for empty slots \u00b7 of ${all.length}</p>
 <div class="ro-chips">${chip("Stuck", "stuck", f.stuck, stuck)}${chip("Ghosts", "ghost", f.ghost, ghosts)}${chip("Families", "family", f.family, fam)}${chip("Gear problems", "gear", f.gear, prob)}${rosterGuilds(all).map((g) => chip(g.name, g.slug, f.guild === g.slug))}${BANDS.map((b) => bandChip(b, f))}</div>
 <div class="row ro-controls"><label class="ro-filter"><i class="ph ph-funnel" aria-hidden="true"></i><input class="input" id="ro-filter" type="search" placeholder="Filter by name, class, zone" value="${q.q || ""}" aria-label="Filter members" autocomplete="off"></label>
 <label class="ro-sort"><i class="ph ph-sort-descending" aria-hidden="true"></i><span class="sr-only">Sort members</span><select class="input" id="ro-sort" aria-label="Sort members">${SORTS.map(([k, label]) => html`<option value="${k}"${f.sort === k ? raw(" selected") : ""}>${label}</option>`)}</select></label></div>
