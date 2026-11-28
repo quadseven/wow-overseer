@@ -480,6 +480,8 @@ class GuardTest(unittest.TestCase):
         with self.assertRaises(guard.GuardError):
             bare.query("SELECT 1")
         with self.assertRaises(guard.GuardError):
+            bare.write_quest_aim("Grug", 42)
+        with self.assertRaises(guard.GuardError):
             bare.enqueue_molten_core_order("Grug")
         self.assertEqual(bare._conn.executed, [])
 
@@ -775,6 +777,90 @@ class GuardTest(unittest.TestCase):
         )
         with self.assertRaises(SeedError):
             guarded.run([stmt])
+        self.assertEqual(conn.executed, [])
+
+    def quest_aim_connection(self, rowcount=1):
+        g, conn, _ = self.open()
+        cur = Mock(rowcount=rowcount)
+        conn.cursor = Mock(return_value=cur)
+        return g, conn, cur
+
+    def test_quest_aim_uses_one_bound_update_and_closes_before_commit(self):
+        g, conn, cur = self.quest_aim_connection()
+        conn.commit = Mock(wraps=conn.commit)
+        calls = Mock()
+        calls.attach_mock(cur.close, "close")
+        calls.attach_mock(conn.commit, "commit")
+
+        self.assertIsNone(g.write_quest_aim("Grug", 4294967295))
+
+        cur.execute.assert_called_once()
+        sql, params = cur.execute.call_args.args
+        self.assertEqual(params, (4294967295, "Grug", "Grug", 4294967295, 1, 3))
+        self.assertEqual(sql.count("%s"), len(params))
+        self.assertRegex(sql, r"^UPDATE `acore_characters`\.`overseer_roster` ")
+        self.assertIn("SET r.`drive_quest` = %s", sql)
+        self.assertEqual([call[0] for call in calls.mock_calls], ["close", "commit"])
+        self.assertFalse(conn.rolled_back)
+
+    def test_quest_aim_refuses_invalid_input_before_accessing_a_cursor(self):
+        g, conn, _ = self.quest_aim_connection()
+        for target, quest in (
+            ("Grug", True),
+            ("Grug", 0),
+            ("Grug", -1),
+            ("Grug", 4294967296),
+            ("Grug", "42"),
+            ("Grug", 42.0),
+            ("grug", 42),
+            ("family:grug", 42),
+            ("cast[0]", 42),
+            ("Grug\n", 42),
+            (None, 42),
+        ):
+            with self.subTest(target=target, quest=quest):
+                with self.assertRaises(guard.GuardError):
+                    g.write_quest_aim(target, quest)
+        conn.cursor.assert_not_called()
+
+    def test_quest_aim_refuses_any_update_count_but_one_and_rolls_back(self):
+        for rowcount in (0, 2):
+            with self.subTest(rowcount=rowcount):
+                g, conn, cur = self.quest_aim_connection(rowcount)
+                with self.assertRaises(guard.GuardError):
+                    g.write_quest_aim("Grug", 42)
+                cur.close.assert_called_once_with()
+                self.assertFalse(conn.committed)
+                self.assertTrue(conn.rolled_back)
+
+    def test_quest_aim_rolls_back_if_the_cursor_cannot_close(self):
+        g, conn, cur = self.quest_aim_connection()
+        cur.close.side_effect = OSError("close failed")
+        with self.assertRaisesRegex(OSError, "close failed"):
+            g.write_quest_aim("Grug", 42)
+        self.assertFalse(conn.committed)
+        self.assertTrue(conn.rolled_back)
+
+    def test_quest_aim_keeps_the_write_error_when_cleanup_also_fails(self):
+        g, conn, cur = self.quest_aim_connection()
+        cur.execute.side_effect = ValueError("write failed")
+        cur.close.side_effect = OSError("close failed")
+        conn.rollback = Mock(side_effect=OSError("rollback failed"))
+        with self.assertRaisesRegex(ValueError, "write failed"):
+            g.write_quest_aim("Grug", 42)
+        conn.rollback.assert_called_once_with()
+        self.assertFalse(conn.committed)
+
+    def test_generic_seed_update_still_cannot_write_quest_aim(self):
+        g, conn, _ = self.open()
+        update = sqlgen.Stmt(
+            "update",
+            "overseer_roster",
+            "UPDATE `acore_characters`.`overseer_roster` "
+            "SET `drive_quest` = 42 WHERE `name` = 'Grug'",
+        )
+        with self.assertRaises(SeedError):
+            g.run([update])
         self.assertEqual(conn.executed, [])
 
     def test_apply_executes_in_one_commit(self):

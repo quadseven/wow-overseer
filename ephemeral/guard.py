@@ -91,6 +91,21 @@ _RAID_ORDER_INSERT = (
     "(`family`, `position`, `keyword`, `runs_wanted`, `status`, `source`) "
     "VALUES (%s, 1, %s, 1, 'queued', %s)"
 )
+_QUEST_AIM_UPDATE = (
+    "UPDATE `acore_characters`.`overseer_roster` AS r "
+    "SET r.`drive_quest` = %s "
+    "WHERE r.`name` = %s AND CAST(r.`name` AS BINARY) = CAST(%s AS BINARY) "
+    "AND r.`enabled` = 1 AND r.`drive_quest` = 0 "
+    "AND EXISTS ("
+    "SELECT 1 FROM `acore_characters`.`characters` AS c "
+    "JOIN `acore_characters`.`character_queststatus` AS q ON q.`guid` = c.`guid` "
+    "WHERE c.`name` = r.`name` "
+    "AND CAST(c.`name` AS BINARY) = CAST(r.`name` AS BINARY) "
+    "AND q.`quest` = %s AND q.`status` IN (%s, %s) "
+    "AND NOT EXISTS ("
+    "SELECT 1 FROM `acore_characters`.`character_queststatus_rewarded` AS qr "
+    "WHERE qr.`guid` = c.`guid` AND qr.`quest` = q.`quest`))"
+)
 
 
 class GuardError(SeedError):
@@ -336,6 +351,44 @@ class GuardedConnection:
             columns = self._schema.columns(table, "acore_characters") or ()
             if not required.issubset(columns):
                 raise GuardError(f"{table} lacks a column required by the raid order")
+
+    def write_quest_aim(self, target: str, quest: int) -> None:
+        """Set an idle roster member's aim to a quest still in the quest log."""
+        self._require_opened()
+        if not isinstance(target, str) or _CHARACTER_NAME.fullmatch(target) is None:
+            raise GuardError("quest aim needs a character name")
+        if type(quest) is not int or not 0 < quest <= 0xFFFFFFFF:
+            raise GuardError("quest aim needs a positive unsigned 32-bit quest ID")
+
+        try:
+            cur = self._conn.cursor()
+            try:
+                cur.execute(
+                    _QUEST_AIM_UPDATE,
+                    (
+                        quest,
+                        target,
+                        target,
+                        quest,
+                        gamedata.QUEST_STATES["complete"],
+                        gamedata.QUEST_STATES["incomplete"],
+                    ),
+                )
+                if cur.rowcount != 1:
+                    raise GuardError(
+                        "quest aim needs one enabled roster member with no aim "
+                        "and the unrewarded quest in their log"
+                    )
+            except Exception:
+                # A cursor cleanup failure must not replace the write error.
+                with contextlib.suppress(Exception):
+                    cur.close()
+                raise
+            cur.close()
+            self._conn.commit()
+        except Exception:
+            self._rollback_quietly()
+            raise
 
     def run(self, statements):
         """Verify every statement, then execute them in one transaction."""
