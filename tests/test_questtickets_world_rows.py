@@ -413,6 +413,71 @@ class WorldRows(unittest.TestCase):
         )
         self.assertNotIn("stored rows confirm the creature relation", ticket)
 
+    def test_young_crocolisk_ticket_counts_spawns_of_its_item_dropper(self):
+        # Quest, item and creature-entry values mirror the ticket's world rows.
+        # The spawn counts below use SPAWN_COUNTS_SQL's map-grouped shape as a
+        # rendering fixture; they are not a live-world claim. Quest and giver
+        # rows come from questcatalogue.QUESTS_SQL and GIVERS_SQL, and the item
+        # source comes from DROP_SQL.
+        row = quest_row(
+            quest=484,
+            title="Young Crocolisk Skins",
+            level=22,
+            min_level=18,
+            sort=11,
+            item1=3397,
+            item_count1=4,
+        )
+        catalogue = self.catalogue(
+            row,
+            {
+                qc.ITEM_NAMES_SQL.format(ids="3397"): [
+                    {"entry": 3397, "name": "Young Crocolisk Skin"}
+                ],
+                qc.DROP_SQL.format(ids="3397"): [{"item": 3397, "entry": 1417}],
+                qc.REWARD_SQL.format(ids="3397"): [],
+                qc.VENDOR_SQL.format(ids="3397"): [],
+                qc.SPAWN_COUNTS_SQL.format(ids="1417"): [
+                    {"entry": 1417, "map": 0, "n": 3},
+                    {"entry": 1417, "map": 1, "n": 2},
+                ],
+            },
+        )
+        reason = qt.NO_GIVER_IN_REACH
+        ticket = qt.body(
+            484,
+            catalogue[0],
+            [
+                {
+                    "quest": 484,
+                    "guid": guid,
+                    "character_name": "Quester %s" % label,
+                    "state": "broken",
+                    "reason": reason if label == "A" else questers.STALLED,
+                }
+                for guid, label in enumerate(("A", "B", "C", "D"), start=7)
+            ],
+            [],
+            "",
+        )
+
+        self.assertIn("QuestLevel: 22; MinLevel: 18", ticket)
+        self.assertIn(
+            "Required item 3397 x4 (Young Crocolisk Skin): dropped by creature entries 1417",
+            ticket,
+        )
+        self.assertIn(
+            "creature source spawns: entry 1417 has 3 spawn(s) on a quest giver or ender map, 5 total",
+            ticket,
+        )
+        self.assertIn("Reason: " + reason, ticket)
+        self.assertEqual(ticket.count("Reason: " + questers.STALLED), 3)
+        self.assertIn(
+            "The creature entries listed above are required-item drop sources, "
+            "not evidence of which creature starts the quest.",
+            ticket,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

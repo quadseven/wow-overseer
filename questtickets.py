@@ -288,6 +288,19 @@ def _world_rows(info) -> list[str]:
             source.append(
                 "dropped by creature entries " + ", ".join(map(str, item["droppers"]))
             )
+        if item.get("dropper_spawns"):
+            source.append(
+                "creature source spawns: "
+                + "; ".join(
+                    "entry %d has %d spawn(s) on a quest giver or ender map, %d total"
+                    % (
+                        spawn["entry"],
+                        spawn["map_count"],
+                        spawn["total_count"],
+                    )
+                    for spawn in item["dropper_spawns"]
+                )
+            )
         if item["rewards"]:
             source.append("rewarded by quests " + ", ".join(map(str, item["rewards"])))
         if item.get("objects"):

@@ -348,7 +348,8 @@ def load(read) -> tuple:
         rewards = rows_for(REWARD_SQL, item_ids)
         vendors = rows_for(VENDOR_SQL, item_ids)
         object_loot = rows_for(OBJECT_LOOT_SQL, item_ids)
-        spawns = rows_for(SPAWN_COUNTS_SQL, objective_ids)
+        dropper_ids = {int(r["entry"]) for r in drops}
+        spawns = rows_for(SPAWN_COUNTS_SQL, sorted(set(objective_ids) | dropper_ids))
         object_spawns = rows_for(OBJECT_COUNTS_SQL, objective_ids)
         by_id = {int(r["quest"]): r for r in quest_rows}
 
@@ -367,6 +368,9 @@ def load(read) -> tuple:
         vendor_by_item = evidence(vendors, "item")
         object_by_item = evidence(object_loot, "item")
         spawn_by_entry = {}
+        creature_spawns_by_entry = {}
+        for row in spawns:
+            creature_spawns_by_entry.setdefault(int(row["entry"]), []).append(row)
         for kind, rows in (("creature", spawns), ("object", object_spawns)):
             for row in rows:
                 spawn_by_entry.setdefault((int(row["entry"]), kind), []).append(row)
@@ -384,6 +388,25 @@ def load(read) -> tuple:
                             "name": item_names.get(item, ""),
                             "provided": int(source.get("provided_item") or 0) == item,
                             "droppers": sorted(drop_by_item.get(item, ())),
+                            "dropper_spawns": [
+                                {
+                                    "entry": entry,
+                                    "map_count": sum(
+                                        int(spawn["n"])
+                                        for spawn in creature_spawns_by_entry.get(
+                                            entry, ()
+                                        )
+                                        if int(spawn["map"]) in quest.maps
+                                    ),
+                                    "total_count": sum(
+                                        int(spawn["n"])
+                                        for spawn in creature_spawns_by_entry.get(
+                                            entry, ()
+                                        )
+                                    ),
+                                }
+                                for entry in sorted(drop_by_item.get(item, ()))
+                            ],
                             "rewards": sorted(reward_by_item.get(item, ())),
                             "vendors": sorted(vendor_by_item.get(item, ())),
                             "objects": sorted(object_by_item.get(item, ())),
