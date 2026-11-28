@@ -1,4 +1,4 @@
-"""`python3 -m ephemeral <lint|acts|seed|judge|submit|dispatch|collect|due> ...`: the `eph` command line."""
+"""`python3 -m ephemeral <lint|acts|seed|judge|submit|dispatch|collect|report|withdraw|due> ...`: the `eph` command line."""
 
 import argparse
 import json
@@ -89,7 +89,7 @@ def _runner(args):
 
 
 def _guarded(fn):
-    from . import collect, dispatch, ghx, kube, report, runcfg, submit
+    from . import collect, dispatch, ghx, kube, report, runcfg, submit, withdraw
 
     def run(args):
         try:
@@ -99,7 +99,7 @@ def _guarded(fn):
             return 3
         except (
             runcfg.ConfigError, submit.SubmitError, dispatch.DispatchError,
-            collect.CollectError, kube.KubeError, ghx.GhError, report.ReportError, OSError,
+            collect.CollectError, kube.KubeError, withdraw.WithdrawError, ghx.GhError, report.ReportError, OSError,
         ) as exc:  # fmt: skip
             print(f"error: {exc}")
             return 2
@@ -164,6 +164,14 @@ def _report(args):
     cfg, k, gh = _runner(args)
     reporter = report.Reporter(cfg, k, gh, env=os.environ)
     reporter.run(args.batches, dry_run=args.dry_run)
+    return 0
+
+
+def _withdraw(args):
+    from . import withdraw
+
+    cfg, k, _gh = _runner(args)
+    print(f"{args.batch}: {withdraw.request(cfg, k, args.batch)}")
     return 0
 
 
@@ -331,6 +339,13 @@ def main(argv=None):
         "--dry-run", action="store_true", help="print the comment and proposed box edit"
     )
     rp.set_defaults(func=_guarded(_report))
+    wd = sub.add_parser(
+        "withdraw",
+        help="ask the dispatcher to drop a batch's suspended Jobs, each with an INVALID result",
+    )
+    wd.add_argument("batch", help="the six-character batch id from eph submit")
+    wd.add_argument("--config", help=cfg_help)
+    wd.set_defaults(func=_guarded(_withdraw))
     du = sub.add_parser(
         "due",
         help="list open awaiting-live-check issues whose Proof line names a runnable decree",
