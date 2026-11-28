@@ -343,7 +343,33 @@ class TheUsesAreReadFromTheWorld(unittest.TestCase):
         self.assertIn("SourceTypeOrReferenceId = 17", classquest.USE_ITEMS_SQL)
         self.assertIn("ConditionTypeOrReference = 31", classquest.USE_ITEMS_SQL)
         self.assertIn("spelltrigger_1 = 0", classquest.USE_ITEMS_SQL)
-        self.assertIn("g.type = 3", classquest.CHEST_SQL)
+
+        # Item 3418 and loot Entry 1673 come from the ticket. The object
+        # templates are independent fixtures: type 3 uses Data1 as the loot
+        # entry, while the other types make Data1 decoys.
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("ATTACH DATABASE ':memory:' AS acore_world")
+        db.execute(
+            "CREATE TABLE acore_world.gameobject_loot_template "
+            "(Entry INTEGER, Item INTEGER)"
+        )
+        db.execute(
+            "CREATE TABLE acore_world.gameobject_template "
+            "(entry INTEGER, type INTEGER, Data1 INTEGER)"
+        )
+        db.execute(
+            "INSERT INTO acore_world.gameobject_loot_template VALUES (1673, 3418)"
+        )
+        db.executemany(
+            "INSERT INTO acore_world.gameobject_template VALUES (?, ?, ?)",
+            [(90003, 3, 1673), (90004, 5, 1673), (90005, 10, 1673)],
+        )
+        rows = [
+            dict(row) for row in db.execute(classquest.CHEST_SQL.format(items="3418"))
+        ]
+        db.close()
+        self.assertEqual(rows, [{"item": 3418, "entry": 90003}])
 
     def test_the_book_names_the_items_to_read_from_a_bag_and_the_targets(self):
         b = taming()

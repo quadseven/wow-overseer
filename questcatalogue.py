@@ -93,8 +93,8 @@ DROP_SQL = (
     "JOIN acore_world.creature_template c ON c.lootid = l.Entry "
     "WHERE l.Reference <> 0 AND r.Item IN ({ids})"
 )
-# Chests and other lootable gameobjects that hold an item: a required item with one
-# of these is not "without a source" (#2735, #2736).
+# Chests that hold an item: a required item with one of these is not
+# "without a source" (#2735, #2736).
 OBJECT_LOOT_SQL = (
     "SELECT DISTINCT l.Item AS item, g.entry AS entry "
     "FROM acore_world.gameobject_loot_template l "
