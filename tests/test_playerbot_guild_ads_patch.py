@@ -58,7 +58,10 @@ class GuildAdsPatchTest(unittest.TestCase):
         self.assertTrue(PATCH.name.startswith("0023-"))
         self.text.encode("ascii")
 
+    # AI-REVIEW 2026-11-28 [claude-haiku-5-5] 4725277070 (Elder, PR #3381):
+    # Document which SQL engine the row-selection fixture exercises.
     def seed(self, *rows):
+        """Use SQLite as a stand-in to exercise row selection for the MySQL patch."""
         db = sqlite3.connect(":memory:")
         self.addCleanup(db.close)
         db.execute(
