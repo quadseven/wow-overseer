@@ -831,6 +831,73 @@ class Broken(unittest.TestCase):
         self.assertEqual((p.move.kind, p.move.quest), (classquest.ABANDON, 1))
         self.assertIn(questers.STALLED, p.move.said)
 
+    def test_look_to_the_stars_can_hunt_a_bronze_tube_drop(self):
+        # The ticket's world rows list these creature loot sources for Bronze
+        # Tube (item 4371). Its NPC objective columns are empty, but the item
+        # objective can be completed by hunting one of its creature sources.
+        droppers = (
+            3374,
+            3375,
+            3377,
+            3993,
+            4073,
+            4074,
+            6206,
+            6207,
+            6222,
+            6225,
+            6226,
+            6227,
+            6230,
+            6231,
+            6232,
+            6233,
+            6234,
+            6329,
+            7603,
+            9676,
+            11684,
+        )
+        look_to_the_stars = quest(174, 10, 25, title="Look To The Stars")
+        look_to_the_stars.update(item1=4371, item_count1=1)
+        cat = world(
+            extra_quests=[look_to_the_stars],
+            extra_givers=[
+                giver(174, "start", 1740, 174, 0, 0),
+                giver(174, "end", 1740, 174, 0, 0),
+            ],
+            # These fixture rows use the shapes read by classquest.LOOT_SQL
+            # and classquest.SPAWNS_SQL. The ticket's world rows do not include
+            # spawn locations, so the fixture supplies one reachable source.
+            extra_spawns=[spawn(17400, droppers[0], 100, 0, level=25)],
+            extra_loot=[{"item": 4371, "entry": entry} for entry in droppers],
+        )
+        member = mirra(
+            level=25,
+            zone_id=10,
+            quest_log={174: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({2, 3}),
+            quest_progress={174: 0},
+            quest_item_objectives={174: {4371: 0}},
+        )
+        plan = questers.plan(cat, member, questers.Clock(), 0.0, last_quest=174)
+
+        self.assertEqual((plan.move.kind, plan.move.quest), (classquest.HUNT, 174))
+        self.assertEqual(plan.move.spot.entry, droppers[0])
+        step = questers.step_for(member, plan.move, 0, cat.quest(174))
+        self.assertIn("item:4371 count:1", step.rows[0].command)
+
+        completed = mirra(
+            level=25,
+            zone_id=10,
+            quest_log={174: questers.STATUS_INCOMPLETE},
+            quests_done=frozenset({2, 3}),
+            quest_progress={174: 1},
+            quest_item_objectives={174: {4371: 1}},
+        )
+        plan = questers.plan(cat, completed, questers.Clock(), 1.0, last_quest=174)
+        self.assertEqual((plan.move.kind, plan.move.quest), (classquest.TURN_IN, 174))
+
     def test_a_quest_with_no_required_objectives_explains_why_it_stalls(self):
         row = quest(273, ELWYNN, 15, prev=302, title="Resupplying the Excavation")
         row["npc_count1"] = 0
