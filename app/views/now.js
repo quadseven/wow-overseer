@@ -20,7 +20,7 @@ import { reportSection } from "./now/report.js";
 import * as stage from "./now/stage.js";
 import { pickStaged, connectPlan } from "./now/stagechoice.js";
 import { swapKeeping } from "./now/keepslots.js";
-import { savedStage } from "../store.js";
+import { savedStage, saveStage } from "../store.js";
 import { stage as watchStage, bind as bindWatch, CSS as WATCH_CSS, READ as WATCH_READ, OPERATOR as WATCH_OPERATOR } from "./_spectate.js";
 import { section as liveSection, READ as LIVE_READ } from "./now/live.js";
 
@@ -32,13 +32,6 @@ const READS = ["/api/eye", "/api/v2/roll", "/api/wall", "/api/guildruns", "/api/
 // (3 statements) but about 170KB a read, so it stays at 15s for a phone's sake.
 const QUICK = { reads: ["/api/eye", "/api/v2/roll"], every: 5000 };
 let foldOpen = null; // null: the default (open on desktop, closed on phone)
-
-function readLayout() {
-  try { return window.localStorage.getItem("overseer.wall") === "stacked" ? "stacked" : "side"; } catch (e) { return "side"; }
-}
-function saveLayout(v) {
-  try { window.localStorage.setItem("overseer.wall", v); } catch (e) { /* storage off */ }
-}
 
 // ---- status chips -----------------------------------------------------------
 // `n` is the count the chip says (0 draws it quiet: nothing needs the
@@ -203,17 +196,61 @@ function narrowFamilies(ctx, agendas, aloud) {
   return html`<section class="fams" aria-labelledby="fams-title"><div class="families" data-wall="stacked">${units[0] || ""}${row}${units.slice(1)}</div></section>`;
 }
 
+// The featured family's player when it has no head on the wall: a designed
+// offline block at 16:9, saying the same words the wall state says.
+function offlineFeatured(fam) {
+  return html`<div class="st st-offline"><div class="st-slot-off"><i class="ph ph-video-camera-slash" aria-hidden="true"></i><span class="st-off-t">Not streaming</span><span class="st-off-b">${fam}'s family is not on the wall. No member of this family has a stream tile.</span></div></div>`;
+}
+
+function featuredLive(fam, w, wall) {
+  if (!w.ready) return familyLive(fam, w, wall);
+  const m = w.head(fam);
+  return m ? streams.tileHtml(m, w.tile(m.name)) : offlineFeatured(fam);
+}
+
+function featuredFam(fam, i, agendas, w, wall) {
+  return html`<div class="fam fam-featured" data-family="${fam}">${featuredLive(fam, w, wall)}<div class="fam-under">${agendaCard(fam, agendas[i])}${miniMap(fam)}</div></div>`;
+}
+
+// One rail card per family not on the player. The whole card is the stage
+// button: its thumbnail is the family's own slot (or the offline thumb when
+// it has no head), and its lines are the agenda read's, the same data the
+// featured family's card shows in full.
+function railCard(fam, i, agendas, w, wall) {
+  const m = w.ready ? w.head(fam) : null;
+  // A wall still loading has not said whether this family has a head, so
+  // its thumb waits rather than claiming the family is not streaming.
+  const thumb = m
+    ? html`<div class="st-slot" data-stream="${m.name}"></div>`
+    : !w.ready && readState(wall) === "loading"
+      ? html`<div class="st-slot skeleton" aria-hidden="true"></div>`
+      : html`<span class="rail-off"><i class="ph ph-video-camera-slash" aria-hidden="true"></i>Not streaming</span>`;
+  const read = agendas[i];
+  let meta;
+  if (!D.ok(read)) {
+    meta = readState(read) === "loading" ? skeletons(1) : state("unmeasured", fam + "'s family: agenda not measured", "The agenda read did not answer.");
+  } else {
+    const a = read.data;
+    const detail = D.detailLines(a);
+    const moved = a.moved_seconds === null || a.moved_seconds === undefined ? "not measured" : ago(a.moved_seconds);
+    meta = html`<span class="rail-top"><span class="rail-fam">${fam}'s family</span>${a.stalled ? html`<span class="tag tag-warn">STALLED</span>` : ""}</span><span class="rail-head">${a.headline || "No headline reported"}</span>${a.queue && a.queue.line ? html`<span class="rail-line">${a.queue.line}</span>` : ""}${detail.length ? html`<span class="rail-line">${detail.join(" ")}</span>` : ""}<span class="rail-foot">last moved ${moved}</span>`;
+  }
+  return html`<div class="fam fam-rail-card" data-family="${fam}"><button type="button" class="rail-stage" data-stage-fam="${fam}" aria-label="Put ${fam}'s family on the main player"><span class="rail-thumb">${thumb}</span><span class="rail-meta">${meta}</span></button></div>`;
+}
+
 function familiesSection(ctx, agendas) {
   const wall = ctx.get("/api/wall");
   const w = wallModel(wall);
   const hs = heads(ctx);
-  const layout = readLayout();
   const aloud = streams.canReadAloud() ? readAloudButton(streams.readingAloud()) : "";
   if (stage.isNarrow()) return narrowFamilies(ctx, agendas, aloud);
-  const seg = html`<div class="seg live-seg" role="radiogroup" aria-label="Stream layout">${[["side", "Side by side"], ["stacked", "Stacked"]].map(([k, label]) => html`<button type="button" role="radio" aria-checked="${String(layout === k)}" data-layout="${k}">${label}</button>`)}</div>`;
+  const keys = D.familyKeys();
+  const saved = savedStage();
+  const featured = pickStaged(stageOptions(ctx), saved) || (keys.includes(saved) ? saved : keys[0]);
   const streamed = hs ? hs.filter((m) => (w.tile(m.name) || {}).url || m.broadcast_url).length : null;
-  return html`<section class="fams" aria-labelledby="fams-title"><div class="sec-row"><h2 class="kicker" id="fams-title">Families, live</h2><span class="dim small">${streamed === null ? "" : streamed + " of " + hs.length + " streamed"}</span>${aloud}${seg}</div>
-<div class="families" data-wall="${layout}">${D.familyKeys().map((f, i) => html`<div class="fam" data-family="${f}">${agendaCard(f, agendas[i])}<div class="fam-live">${familyLive(f, w, wall)}</div>${miniMap(f)}</div>`)}</div>
+  const rail = keys.map((f, i) => (f === featured ? null : railCard(f, i, agendas, w, wall))).filter(Boolean);
+  return html`<section class="fams" aria-labelledby="fams-title"><div class="sec-row"><h2 class="kicker" id="fams-title">Families, live</h2><span class="dim small">${streamed === null ? "" : streamed + " of " + hs.length + " streamed"}</span>${aloud}</div>
+<div class="families" data-wall="player">${featured ? featuredFam(featured, keys.indexOf(featured), agendas, w, wall) : ""}<div class="fam-rail">${rail}</div></div>
 </section>`;
 }
 
@@ -418,14 +455,9 @@ ${reportSection(ctx, allGuilds())}`;
     drawMiniMaps(main, ctx);
     // A new achievement since the last visit: a brief toast, once per device.
     announce(ctx.get("/api/v2/achievements"), ctx.previousVisit);
-    main.querySelectorAll("button[data-layout]").forEach((b) => b.addEventListener("click", () => {
-      saveLayout(b.getAttribute("data-layout"));
-      const tilesEl = main.querySelector(".families");
-      if (tilesEl) tilesEl.setAttribute("data-wall", readLayout());
-      main.querySelectorAll("button[data-layout]").forEach((x) => {
-        const on = x.getAttribute("data-layout") === readLayout();
-        x.setAttribute("aria-checked", String(on));
-      });
+    main.querySelectorAll("button[data-stage-fam]").forEach((b) => b.addEventListener("click", () => {
+      saveStage(b.getAttribute("data-stage-fam"));
+      window.dispatchEvent(new Event("overseer:redraw"));
     }));
     const det = main.querySelector(".nfold");
     if (det) det.addEventListener("toggle", () => { foldOpen = det.open; });

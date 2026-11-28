@@ -6,9 +6,11 @@ it came out indented with a second state bar. The app's Now view draws one
 card per family the realm reports. These tests render that view under node
 with three families and check the markup it returns:
 
-- each family is one `.fam` unit, a direct child of the one `.families` row,
-  holding its status card, then its live picture, then its map, so what a
-  family is doing, what it looks like and where it is read together;
+- on a wide screen the staged family is the featured player (its live
+  picture, then its status card and map under it) and every other family is
+  a rail card beside it; on a phone each family is one `.fam` unit holding
+  its status card, then its live picture, then its map, so what a family is
+  doing, what it looks like and where it is read together;
 - the cards are never one inside another, including while a family's read
   is still loading;
 - each card says one fact per line (whose family, the headline, the queue,
@@ -46,7 +48,10 @@ const noop = () => {};
 globalThis.window = globalThis;
 globalThis.addEventListener = noop;
 globalThis.matchMedia = () => ({ matches: false, addEventListener: noop });
-globalThis.localStorage = { getItem: () => null, setItem: noop };
+globalThis.localStorage = {
+  getItem: (k) => (k === "overseer.stage" ? (fixture.saved ?? null) : null),
+  setItem: noop,
+};
 globalThis.document = {
   addEventListener: noop, removeEventListener: noop,
   querySelector: () => null, querySelectorAll: () => [], getElementById: () => null,
@@ -60,6 +65,7 @@ learn({ families: fixture.families.map((key) => ({ key })), guilds: [] });
 const now = (await import("./app/views/now.js")).default;
 const waiting = { data: null, at: 0, error: null, loading: true };
 const get = (path) => {
+  if (path === "/api/wall" && fixture.wall) return fixture.wall;
   const m = /^\/api\/agenda\?family=(.*)$/.exec(path);
   if (!m) return waiting;
   const a = fixture.agendas[decodeURIComponent(m[1])];
@@ -90,7 +96,7 @@ def agenda(fam, stalled=False, headline=None):
     }
 
 
-def render(families, agendas):
+def render(families, agendas, wall=None, saved=None):
     """The Now view's markup for these families and agenda payloads."""
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
@@ -101,7 +107,14 @@ def render(families, agendas):
             [
                 NODE,
                 str(root / "run.js"),
-                json.dumps({"families": families, "agendas": agendas}),
+                json.dumps(
+                    {
+                        "families": families,
+                        "agendas": agendas,
+                        "wall": wall,
+                        "saved": saved,
+                    }
+                ),
             ],
             capture_output=True,
             text=True,
@@ -111,6 +124,26 @@ def render(families, agendas):
     if out.returncode != 0:
         raise AssertionError(out.stderr)
     return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def wall_read(*specs):
+    """A ready /api/wall read: one head per (family, streamed) spec."""
+    members = [
+        {"name": fam + "ling", "family": fam, "class": "mage"} for fam, _ in specs
+    ]
+    tiles = [
+        {
+            "name": fam + "ling",
+            "url": "https://stream.example/" + fam if streamed else "",
+        }
+        for fam, streamed in specs
+    ]
+    return {
+        "data": {"members": members, "wall": {"tiles": tiles}},
+        "at": 1,
+        "error": None,
+        "loading": False,
+    }
 
 
 class Node:
@@ -181,6 +214,16 @@ def units(row):
     return [c for c in row.children if "fam" in c.classes]
 
 
+def featured(row):
+    (node,) = [c for c in row.children if "fam-featured" in c.classes]
+    return node
+
+
+def rail_cards(row):
+    (rail,) = [c for c in row.children if "fam-rail" in c.classes]
+    return [c for c in rail.children if "fam-rail-card" in c.classes]
+
+
 @needs_node
 class EachFamilyIsItsOwnCard(unittest.TestCase):
     @classmethod
@@ -192,21 +235,33 @@ class EachFamilyIsItsOwnCard(unittest.TestCase):
             )
         )
         (cls.row,) = cls.tree.find("families")
-        cls.cards = [n for n in cls.row.walk() if is_card(n)]
+        cls.featured = featured(cls.row)
+        cls.rail = rail_cards(cls.row)
+        (cls.card,) = [n for n in cls.row.walk() if is_card(n)]
 
-    def test_one_card_per_family_each_in_its_own_unit_of_the_one_row(self):
-        self.assertEqual(len(self.cards), len(self.families))
-        self.assertEqual(len(units(self.row)), len(self.families))
-        for unit, card in zip(units(self.row), self.cards, strict=True):
-            self.assertIs(card.parent, unit)
-            self.assertEqual([c for c in unit.children if is_card(c)], [card])
+    def test_one_featured_unit_and_a_rail_card_for_each_other_family(self):
+        self.assertEqual(self.row.attrs.get("data-wall"), "player")
+        self.assertEqual(self.featured.attrs.get("data-family"), "Grug")
+        self.assertEqual(
+            [c.attrs.get("data-family") for c in self.rail], ["Zug", "Mok"]
+        )
+        # The featured family holds the one full agenda card; the rail cards
+        # carry their family's name and headline instead.
+        self.assertIs(self.card.parent.parent, self.featured)
+        heads = ["Walking to Razorfen Kraul", "Running The Deadmines"]
+        for fam, card, headline in zip(["Zug", "Mok"], self.rail, heads, strict=True):
+            (head,) = [n for n in card.walk() if "rail-head" in n.classes]
+            self.assertIn(fam + "'s family", card.all_text())
+            self.assertEqual(head.all_text(), headline)
 
-    def test_a_unit_is_the_card_then_the_live_picture_then_the_map(self):
-        for fam, unit in zip(self.families, units(self.row), strict=True):
-            self.assertEqual(unit.attrs.get("data-family"), fam)
-            parts = [c.classes[0] for c in unit.children]
-            self.assertEqual(parts, ["agenda", "fam-live", "minimap"])
-            self.assertEqual(unit.children[2].attrs.get("data-minimap"), fam)
+    def test_the_featured_unit_is_the_player_then_the_card_and_map_under_it(self):
+        # The wall read has not answered in this fixture, so the player slot
+        # holds the stream state; with a ready wall it holds the tile.
+        parts = [c.classes[0] for c in self.featured.children]
+        self.assertEqual(parts, ["state", "fam-under"])
+        under = self.featured.children[1]
+        self.assertEqual([c.classes[0] for c in under.children], ["agenda", "minimap"])
+        self.assertEqual(under.children[1].attrs.get("data-minimap"), "Grug")
 
     def test_the_families_lead_and_the_guild_ladders_follow(self):
         order = [
@@ -221,39 +276,36 @@ class EachFamilyIsItsOwnCard(unittest.TestCase):
         self.assertNotIn("Coming soon", self.tree.root.all_text())
 
     def test_no_card_sits_inside_another(self):
-        for card in self.cards:
-            self.assertFalse(
-                [a for a in card.ancestors() if is_card(a)],
-                "a family card is nested inside another card",
-            )
-            self.assertFalse(
-                [n for n in card.walk() if n.tag == "a"], "a link inside a card link"
-            )
+        self.assertFalse(
+            [a for a in self.card.ancestors() if is_card(a)],
+            "a family card is nested inside another card",
+        )
+        self.assertFalse(
+            [n for n in self.card.walk() if n.tag == "a"], "a link inside a card link"
+        )
 
-    def test_the_cards_follow_the_realms_family_order_and_link_to_their_family(self):
-        for fam, card in zip(self.families, self.cards, strict=True):
-            self.assertEqual(card.attrs.get("href"), "#/now/family/" + fam.lower())
-            self.assertIn(fam + "'s family", card.all_text())
+    def test_the_featured_card_links_to_its_family(self):
+        self.assertEqual(self.card.attrs.get("href"), "#/now/family/grug")
+        self.assertIn("Grug's family", self.card.all_text())
 
     def test_one_fact_per_line(self):
-        for card in self.cards:
-            parts = [c.classes[0] for c in card.children]
-            self.assertEqual(parts[0], "agenda-label")
-            self.assertEqual(parts[1], "agenda-head")
-            self.assertEqual(parts[-1], "agenda-foot")
-            lines = [c.all_text() for c in card.children if "agenda-line" in c.classes]
-            self.assertIn("Queue: The Deadmines x3, Wailing Caverns x2", lines)
-            self.assertIn("0 of 10 runs done.", lines)
-            self.assertIn("last moved", card.children[-1].all_text())
+        card = self.card
+        parts = [c.classes[0] for c in card.children]
+        self.assertEqual(parts[0], "agenda-label")
+        self.assertEqual(parts[1], "agenda-head")
+        self.assertEqual(parts[-1], "agenda-foot")
+        lines = [c.all_text() for c in card.children if "agenda-line" in c.classes]
+        self.assertIn("Queue: The Deadmines x3, Wailing Caverns x2", lines)
+        self.assertIn("0 of 10 runs done.", lines)
+        self.assertIn("last moved", card.children[-1].all_text())
 
     def test_only_the_stalled_family_says_stalled(self):
-        by_fam = dict(zip(self.families, self.cards, strict=True))
+        by_fam = {"Grug": self.featured, "Zug": self.rail[0], "Mok": self.rail[1]}
         zug = by_fam["Zug"]
-        self.assertIn("is-stalled", zug.classes)
         self.assertIn("STALLED", zug.all_text())
-        self.assertIn("No progress for 2 hours", zug.all_text())
+        (tag,) = [n for n in zug.walk() if "tag" in n.classes]
+        self.assertEqual(tag.all_text(), "STALLED")
         for fam in ("Grug", "Mok"):
-            self.assertNotIn("is-stalled", by_fam[fam].classes)
             self.assertNotIn("STALLED", by_fam[fam].all_text())
 
 
@@ -307,23 +359,30 @@ class CardsStaySiblingsInEveryState(unittest.TestCase):
     def test_a_family_still_loading_is_a_sibling_too(self):
         tree = Tree(render(["Grug", "Zug"], {"Zug": agenda("Zug")}))
         (row,) = tree.find("families")
-        cards = [n for n in row.walk() if is_card(n)]
-        self.assertEqual([c.classes[0] for c in cards], ["agenda-wait", "agenda"])
-        for unit, card in zip(units(row), cards, strict=True):
-            self.assertIs(card.parent, unit)
+        (wait,) = tree.find("agenda-wait")
+        self.assertIs(wait.parent.parent, featured(row))
+        (card,) = rail_cards(row)
+        (head,) = [n for n in card.walk() if "rail-head" in n.classes]
+        self.assertEqual(head.all_text(), "Running The Deadmines")
 
     def test_realm_text_that_looks_like_markup_stays_text(self):
         sneaky = '</a><a class="agenda" href="#/x">'
         tree = Tree(
             render(
                 ["Grug", "Zug"],
-                {"Grug": agenda("Grug", headline=sneaky), "Zug": agenda("Zug")},
+                {
+                    "Grug": agenda("Grug", headline=sneaky),
+                    "Zug": agenda("Zug", headline=sneaky),
+                },
             )
         )
         (row,) = tree.find("families")
         cards = [n for n in row.walk() if is_card(n)]
-        self.assertEqual(len(cards), 2)
+        self.assertEqual(len(cards), 1)
         self.assertIn(sneaky, cards[0].all_text())
+        (card,) = rail_cards(row)
+        self.assertIn(sneaky, card.all_text())
+        self.assertEqual(len(tree.find("rail-stage")), 1)
 
 
 class TheRowFitsAPhone(unittest.TestCase):
@@ -333,75 +392,276 @@ class TheRowFitsAPhone(unittest.TestCase):
         return m.group(1)
 
     def test_a_card_never_asks_for_more_than_the_screen(self):
-        # A fixed minimum column wider than the phone would scroll sideways.
-        self.assertIn("minmax(min(100%,", self.rule(".families").replace(" ", ""))
+        # The player column gives up its width first; only the rail is fixed.
+        self.assertIn("minmax(0,1fr)340px", self.rule(".families").replace(" ", ""))
 
     def test_the_foot_wraps(self):
         self.assertIn("flex-wrap: wrap", self.rule(".agenda-foot"))
 
 
-# Side by side, the two family columns share one set of rows, so every band
-# (card, video, name, Doing, Hear, actions, map) starts at the same height in
-# both columns. These rules pin that layout; they fail without the change.
-class TheFamilyColumnsShareRows(unittest.TestCase):
+NOW_JS = (APP / "views" / "now.js").read_text(encoding="utf-8")
+
+
+# The wide families wall is a player: one featured family large, the rest in
+# a rail beside it. These rules pin that layout; they fail without the change.
+class ThePlayerLayout(unittest.TestCase):
     def rule(self, selector):
         m = re.search(r"(?m)^\s*" + re.escape(selector) + r"\s*\{([^}]*)\}", NOW_CSS)
         self.assertIsNotNone(m, selector + " has no rule in now.css")
         return m.group(1)
 
-    def test_side_by_side_defines_seven_shared_rows(self):
-        body = self.rule('.families[data-wall="side"]')
-        self.assertIn("grid-template-rows", body)
-        self.assertIn("repeat(7,auto)", body.replace(" ", ""))
-        self.assertIn("gap:8px20px", body.replace(" ", ""))
+    def test_the_grid_is_the_player_and_a_340px_rail(self):
+        body = self.rule(".families")
+        self.assertIn("minmax(0,1fr)340px", body.replace(" ", ""))
+        self.assertIn("align-items: start", body)
 
-    def test_each_family_is_a_subgrid_spanning_the_rows(self):
-        body = self.rule('.families[data-wall="side"] .fam')
-        self.assertIn("display: grid", body)
-        self.assertIn("grid-template-rows: subgrid", body)
-        self.assertIn("grid-row: span 7", body)
+    def test_the_old_walls_and_the_layout_toggle_are_gone(self):
+        self.assertNotIn('data-wall="side"', NOW_CSS)
+        self.assertNotIn("subgrid", NOW_CSS)
+        self.assertNotIn(".live-seg", NOW_CSS)
+        self.assertNotIn("data-layout", NOW_JS)
+        self.assertNotIn("readLayout", NOW_JS)
+        self.assertNotIn("overseer.wall", NOW_JS)
 
-    def test_the_card_video_and_map_each_own_a_row(self):
-        self.assertIn(
-            "grid-row: 1", self.rule('.families[data-wall="side"] .fam > .agenda')
-        )
-        self.assertIn(
-            "grid-row: 2 / span 5",
-            self.rule('.families[data-wall="side"] .fam > .fam-live'),
-        )
-        self.assertIn(
-            "grid-row: 7", self.rule('.families[data-wall="side"] .fam > .minimap')
-        )
+    def test_the_rail_stacks_under_the_player_when_the_window_narrows(self):
+        css = NOW_CSS.replace(" ", "")
+        self.assertIn("@media(max-width:900px)", css)
+        self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr))", css)
+        self.assertIn("@media(max-width:560px)", css)
 
-    def test_the_caption_bands_share_rows_between_columns(self):
-        self.assertIn(
-            "grid-template-rows: subgrid",
-            self.rule('.families[data-wall="side"] .fam-live > .st'),
+    def test_the_live_badge_is_a_red_pill_at_the_top_left(self):
+        self.assertIn("left: 8px", self.rule(".st-badge"))
+        body = self.rule('.st-pic[data-state="live"] .st-badge')
+        self.assertIn("oklch(0.55 0.19 25)", body)
+        self.assertIn("color: #fff", body)
+
+    def test_the_picture_has_a_bottom_scrim_under_its_controls(self):
+        body = self.rule(".st-pic::after")
+        self.assertIn("linear-gradient", body)
+        self.assertIn("rgba(10,10,16,.55)", body.replace(" ", ""))
+        self.assertIn("pointer-events: none", body)
+        self.assertIn("z-index: 2", self.rule(".st-full"))
+        self.assertIn("z-index: 2", self.rule(".st-badge"))
+
+    def test_the_featured_name_is_larger(self):
+        self.assertIn("font-size: var(--fs-4)", self.rule(".fam-featured .st-name"))
+
+    def test_the_under_row_pairs_the_card_with_a_shorter_map(self):
+        self.assertIn("300px", self.rule(".fam-under"))
+        self.assertIn("height: 180px", self.rule(".fam-under .wm-compact"))
+
+    def test_the_rail_is_a_column_of_whole_card_buttons(self):
+        self.assertIn("flex-direction: column", self.rule(".fam-rail"))
+        body = self.rule(".rail-stage")
+        self.assertIn("cursor: pointer", body)
+        self.assertIn("width: 100%", body)
+
+    def test_rail_thumbs_hide_the_fullscreen_button(self):
+        self.assertIn("display: none", self.rule(".rail-thumb .st-full"))
+
+    def test_rail_thumbs_keep_the_picture_ratio(self):
+        self.assertIn("aspect-ratio: 16 / 9", self.rule(".rail-thumb .st-slot"))
+
+    def test_the_rail_headline_clamps_to_two_lines(self):
+        body = self.rule(".rail-head")
+        self.assertIn("-webkit-line-clamp: 2", body)
+        self.assertIn("overflow: hidden", body)
+
+
+@needs_node
+class ThePlayerWall(unittest.TestCase):
+    def test_the_saved_stage_is_the_featured_family(self):
+        wall = wall_read(("Grug", True), ("Zug", True), ("Mok", True))
+        tree = Tree(
+            render(
+                ["Grug", "Zug", "Mok"],
+                {f: agenda(f) for f in ("Grug", "Zug", "Mok")},
+                wall=wall,
+                saved="Zug",
+            )
         )
-        self.assertIn(
-            "grid-row: 1",
-            self.rule('.families[data-wall="side"] .fam-live > .st > .st-slot'),
+        (row,) = tree.find("families")
+        self.assertEqual(featured(row).attrs.get("data-family"), "Zug")
+        self.assertEqual(
+            [c.attrs.get("data-family") for c in rail_cards(row)], ["Grug", "Mok"]
         )
-        self.assertIn(
-            "grid-row: 2 / span 4",
-            self.rule('.families[data-wall="side"] .fam-live > .st > .st-cap'),
+        (slot,) = [n for n in featured(row).walk() if "data-stream" in n.attrs]
+        self.assertEqual(slot.attrs.get("data-stream"), "Zugling")
+
+    def test_the_first_family_is_featured_when_nothing_is_staged(self):
+        wall = wall_read(("Grug", True), ("Zug", True))
+        tree = Tree(
+            render(
+                ["Grug", "Zug"],
+                {f: agenda(f) for f in ("Grug", "Zug")},
+                wall=wall,
+            )
         )
-        self.assertIn(
-            "grid-template-rows: subgrid",
-            self.rule('.families[data-wall="side"] .fam-live > .st > .st-cap'),
+        (row,) = tree.find("families")
+        self.assertEqual(featured(row).attrs.get("data-family"), "Grug")
+
+    def test_a_family_with_no_stream_gets_the_offline_player(self):
+        tree = Tree(
+            render(["Mok"], {"Mok": agenda("Mok")}, wall=wall_read(("Grug", True)))
         )
-        self.assertIn(
-            "grid-row: 1", self.rule('.families[data-wall="side"] .st-cap > .st-head')
+        (row,) = tree.find("families")
+        feat = featured(row)
+        (off,) = [n for n in feat.walk() if "st-offline" in n.classes]
+        text = off.all_text()
+        self.assertIn("Not streaming", text)
+        self.assertIn("Mok's family is not on the wall", text)
+        self.assertIn("No member of this family has a stream tile.", text)
+        self.assertFalse(tree.find("fam-live"))
+        self.assertFalse([n for n in feat.walk() if "data-stream" in n.attrs])
+
+    def test_a_rail_family_with_no_head_gets_the_offline_thumb(self):
+        wall = wall_read(("Grug", True))
+        tree = Tree(
+            render(
+                ["Grug", "Mok"],
+                {f: agenda(f) for f in ("Grug", "Mok")},
+                wall=wall,
+            )
         )
-        self.assertIn(
-            "grid-row: 2", self.rule('.families[data-wall="side"] .st-cap > .st-doing')
+        (row,) = tree.find("families")
+        (card,) = rail_cards(row)
+        (off,) = [n for n in card.walk() if "rail-off" in n.classes]
+        self.assertIn("Not streaming", off.all_text())
+        self.assertFalse([n for n in card.walk() if "data-stream" in n.attrs])
+
+    def test_a_rail_thumb_waits_while_the_wall_is_still_loading(self):
+        # No data yet: readState calls this loading, and the thumb must not
+        # claim the family is not streaming before the wall has answered.
+        loading = {"at": 0, "error": None, "loading": True}
+        tree = Tree(
+            render(
+                ["Grug", "Zug"],
+                {f: agenda(f) for f in ("Grug", "Zug")},
+                wall=loading,
+            )
         )
-        self.assertIn(
-            "grid-row: 3", self.rule('.families[data-wall="side"] .st-cap > .st-bar')
+        (row,) = tree.find("families")
+        (card,) = rail_cards(row)
+        self.assertNotIn("Not streaming", card.all_text())
+        (thumb,) = [n for n in card.walk() if "st-slot" in n.classes]
+        self.assertIn("skeleton", thumb.classes)
+        self.assertNotIn("data-stream", thumb.attrs)
+
+    def test_each_rail_card_is_a_stage_button_for_its_family(self):
+        wall = wall_read(("Grug", True), ("Zug", True))
+        tree = Tree(
+            render(
+                ["Grug", "Zug"],
+                {f: agenda(f) for f in ("Grug", "Zug")},
+                wall=wall,
+            )
         )
-        self.assertIn(
-            "grid-row: 4", self.rule('.families[data-wall="side"] .st-cap > .st-acts')
+        (row,) = tree.find("families")
+        (card,) = rail_cards(row)
+        (button,) = [n for n in card.walk() if "rail-stage" in n.classes]
+        self.assertEqual(button.tag, "button")
+        self.assertEqual(button.attrs.get("data-stage-fam"), "Zug")
+        self.assertEqual(
+            button.attrs.get("aria-label"), "Put Zug's family on the main player"
         )
+        (slot,) = [n for n in card.walk() if "data-stream" in n.attrs]
+        self.assertEqual(slot.attrs.get("data-stream"), "Zugling")
+
+
+# Clicking a rail card stages that family: after() binds the button, the
+# pick is saved, and a redraw is asked for. The harness gives now.js just
+# enough of a browser to run after() with unstreamed heads (no player starts).
+CLICK = r"""
+const noop = () => {};
+function makeEl(tag) {
+  const node = {
+    tagName: String(tag).toUpperCase(),
+    children: [], style: {}, dataset: {}, className: "", hidden: false,
+    textContent: "", attrs: {}, listeners: {},
+    classList: { toggle: noop, add: noop, remove: noop },
+    setAttribute(k, v) { this.attrs[k] = String(v); },
+    getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; },
+    hasAttribute(k) { return k in this.attrs; },
+    removeAttribute(k) { delete this.attrs[k]; },
+    append(...kids) { this.children.push(...kids); },
+    appendChild(k) { this.children.push(k); return k; },
+    addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); },
+    remove: noop,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    get firstChild() { return this.children[0] || null; },
+    get lastChild() { return this.children[this.children.length - 1] || null; },
+  };
+  return node;
+}
+const store = {};
+const dispatched = [];
+globalThis.window = globalThis;
+globalThis.addEventListener = noop;
+globalThis.dispatchEvent = (e) => { dispatched.push(e.type); return true; };
+globalThis.matchMedia = () => ({ matches: false, addEventListener: noop });
+globalThis.localStorage = {
+  getItem: (k) => (k in store ? store[k] : null),
+  setItem: (k, v) => { store[k] = String(v); },
+};
+const stageEl = makeEl("section");
+stageEl.hidden = true;
+globalThis.document = {
+  addEventListener: noop, removeEventListener: noop, hidden: false,
+  querySelector: () => null, querySelectorAll: () => [],
+  getElementById: (id) => (id === "stage" ? stageEl : null),
+  createElement: (tag) => makeEl(tag),
+  documentElement: { setAttribute: noop, getAttribute: () => null, toggleAttribute: noop },
+  head: { appendChild: noop }, body: { appendChild: noop },
+};
+const { learn } = await import("./app/families.js");
+learn({ families: [{ key: "Grug" }, { key: "Zug" }], guilds: [] });
+const now = (await import("./app/views/now.js")).default;
+const wall = {
+  data: {
+    members: [
+      { name: "Grugling", family: "Grug", class: "mage" },
+      { name: "Zugling", family: "Zug", class: "mage" },
+    ],
+    wall: { tiles: [{ name: "Grugling", url: "" }, { name: "Zugling", url: "" }] },
+  },
+  at: 1, error: null, loading: false,
+};
+const waiting = { data: null, at: 0, error: null, loading: true };
+const get = (path) => (path === "/api/wall" ? wall : waiting);
+const zugBtn = makeEl("button");
+zugBtn.setAttribute("data-stage-fam", "Zug");
+const main = {
+  querySelectorAll: (sel) => (sel === "button[data-stage-fam]" ? [zugBtn] : []),
+  querySelector: () => null,
+};
+now.after(main, { get, previousVisit: 0, isPhone: false, params: {}, query: {} });
+(zugBtn.listeners.click || []).forEach((f) => f());
+console.log(JSON.stringify({ saved: store["overseer.stage"] ?? null, dispatched }));
+process.exit(0);
+"""
+
+
+@needs_node
+class ARailClickStagesTheFamily(unittest.TestCase):
+    def test_clicking_a_rail_card_saves_the_stage_and_asks_for_a_redraw(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            shutil.copytree(APP, root / "app")
+            (root / "package.json").write_text('{"type": "module"}', encoding="utf-8")
+            (root / "run.js").write_text(CLICK, encoding="utf-8")
+            out = subprocess.run(
+                [NODE, str(root / "run.js")],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        if out.returncode != 0:
+            raise AssertionError(out.stderr)
+        got = json.loads(out.stdout.strip().splitlines()[-1])
+        self.assertEqual(got["saved"], "Zug")
+        self.assertIn("overseer:redraw", got["dispatched"])
 
 
 if __name__ == "__main__":
