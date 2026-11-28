@@ -343,7 +343,7 @@ class TheUsesAreReadFromTheWorld(unittest.TestCase):
         self.assertIn("SourceTypeOrReferenceId = 17", classquest.USE_ITEMS_SQL)
         self.assertIn("ConditionTypeOrReference = 31", classquest.USE_ITEMS_SQL)
         self.assertIn("spelltrigger_1 = 0", classquest.USE_ITEMS_SQL)
-        self.assertIn("g.type = 3", classquest.CHEST_SQL)
+        self.assertIn("g.Data1 = l.Entry", classquest.CHEST_SQL)
 
     def test_the_book_names_the_items_to_read_from_a_bag_and_the_targets(self):
         b = taming()

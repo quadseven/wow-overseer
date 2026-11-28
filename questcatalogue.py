@@ -94,11 +94,12 @@ DROP_SQL = (
     "WHERE l.Reference <> 0 AND r.Item IN ({ids})"
 )
 # Chests and other lootable gameobjects that hold an item: a required item with one
-# of these is not "without a source" (#2735, #2736).
+# of these is not "without a source" (#2735, #2736). Any gameobject with Data1
+# pointing to a loot template is included.
 OBJECT_LOOT_SQL = (
     "SELECT DISTINCT l.Item AS item, g.entry AS entry "
     "FROM acore_world.gameobject_loot_template l "
-    "JOIN acore_world.gameobject_template g ON g.type = 3 AND g.Data1 = l.Entry "
+    "JOIN acore_world.gameobject_template g ON g.Data1 = l.Entry "
     "WHERE l.Item IN ({ids})"
 )
 REWARD_SQL = (

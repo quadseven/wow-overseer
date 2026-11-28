@@ -1252,7 +1252,7 @@ def _fetch_item_sources(entry: int) -> dict | None:
                 " WHERE s.Entry = l.Entry AND s.GroupId = l.GroupId AND s.Reference = 0) AS explicit, "
                 "MIN(go.map) AS map, MIN(go.zoneId) AS zone "
                 "FROM acore_world.gameobject_loot_template l "
-                "JOIN acore_world.gameobject_template got ON got.type = 3 AND got.Data1 = l.Entry "
+                "JOIN acore_world.gameobject_template got ON got.Data1 = l.Entry "
                 "LEFT JOIN acore_world.gameobject go ON go.id = got.entry "
                 "WHERE l.Item = %s AND l.Reference = 0 "
                 "GROUP BY got.entry, got.name, l.Entry, l.Chance, l.GroupId LIMIT 40",

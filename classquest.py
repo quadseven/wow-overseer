@@ -868,12 +868,14 @@ HELD_SQL = (
     "FROM acore_world.item_loot_template l WHERE l.Entry IN ({items})"
 )
 
-# The chests (gameobject type 3) whose loot holds a required item, or an item a
-# use needs that the take does not hand over (a source item, a FOCUS_ITEMS item).
+# The gameobjects whose loot holds a required item, or an item a use needs that
+# the take does not hand over (a source item, a FOCUS_ITEMS item). Any
+# gameobject with Data1 pointing to a loot template is included; the join on
+# Data1 = l.Entry naturally filters to lootable objects.
 CHEST_SQL = (
     "SELECT l.Item AS item, g.entry AS entry "
     "FROM acore_world.gameobject_loot_template l "
-    "JOIN acore_world.gameobject_template g ON g.type = 3 AND g.Data1 = l.Entry "
+    "JOIN acore_world.gameobject_template g ON g.Data1 = l.Entry "
     "WHERE l.Item IN ({items})"
 )
 
