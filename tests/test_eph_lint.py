@@ -454,6 +454,35 @@ class PreconditionAndCeilingTest(unittest.TestCase):
         self.assertIn("schema", rules(d))
 
 
+class QuestAimActTest(unittest.TestCase):
+    def test_quest_aim_accepts_one_named_actor_and_a_bounded_quest_id(self):
+        d = doc()
+        step = {"at": "0s", "quest_aim": {"who": "Grug", "quest": 4294967295}}
+        d["act"] = [step]
+        self.assertEqual(errors(d), [])
+        for bad in (
+            {"who": "family:grug"}, {"who": "grug"}, {"who": "Ugga"},
+            {"quest": True}, {"quest": 0}, {"quest": 4294967296}, {"quest": "42"},
+        ):  # fmt: skip
+            with self.subTest(bad=bad):
+                d["act"] = [{**step, "quest_aim": {**step["quest_aim"], **bad}}]
+                self.assertTrue(errors(d))
+        d["act"] = [{**step, "travel_guard": {"who": "Grug", "enabled": True}}]
+        self.assertTrue(errors(d))
+
+    def test_by_is_a_duration_on_conditional_acts(self):
+        d = doc()
+        aim = {"quest_aim": {"who": "Grug", "quest": 42}}
+        d["act"] = [{"when": "nobody-died", "by": "5m", **aim}]
+        self.assertEqual(errors(d), [])
+        d["act"][0]["by"] = "later"
+        self.assertTrue(errors(d))
+        d["act"][0]["by"] = "999h"
+        self.assertTrue(errors(d))
+        d["act"] = [{"at": "0s", "by": "5m", **aim}]
+        self.assertTrue(errors(d))
+
+
 class BridgeAndActTest(unittest.TestCase):
     def test_wow_overseer_fix_needs_the_bridge(self):
         d = doc()
