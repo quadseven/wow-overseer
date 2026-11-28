@@ -413,6 +413,93 @@ class WorldRows(unittest.TestCase):
         )
         self.assertNotIn("stored rows confirm the creature relation", ticket)
 
+    def test_mindless_ones_rows_explain_the_stored_stall_without_claiming_a_defect(
+        self,
+    ):
+        # The quest row mirrors questcatalogue.QUESTS_SQL and its spawn counts
+        # mirror questcatalogue.SPAWN_COUNTS_SQL. The ledger reason is produced
+        # by questers.failures and written by bridge._record_quest_broken via
+        # questers.BROKEN_SQL; objective counters mirror questers.LOG_SQL.
+        row = quest_row(
+            quest=364,
+            title="The Mindless Ones",
+            level=2,
+            min_level=1,
+            sort=85,
+            objective1=1501,
+            objective_count1=5,
+            objective2=1502,
+            objective_count2=5,
+        )
+        catalogue = self.catalogue(
+            row,
+            {
+                qc.CREATURE_NAMES_SQL.format(ids="1501, 1502"): [
+                    {"entry": 1501, "name": "Mindless Zombie"},
+                    {"entry": 1502, "name": "Wretched Ghoul"},
+                ],
+                qc.SPAWN_COUNTS_SQL.format(ids="1501, 1502"): [
+                    {"entry": 1501, "map": 0, "n": 28},
+                    {"entry": 1502, "map": 0, "n": 35},
+                ],
+            },
+        )
+        rows = [
+            {
+                "quest": 364,
+                "guid": guid,
+                "character_name": "Quester %s" % letter,
+                "reason": questers.STALLED,
+            }
+            for guid, letter in ((7, "A"), (8, "B"), (9, "C"))
+        ]
+        objectives = [
+            {"guid": row["guid"], "mobcount1": 0, "mobcount2": 0} for row in rows
+        ]
+
+        text = qt.body(364, catalogue[0], rows, objectives, "")
+
+        self.assertIn("QuestLevel: 2; MinLevel: 1", text)
+        self.assertIn("Required creature/object 1501 x5 (Mindless Zombie)", text)
+        self.assertIn("28 spawn(s) on the quest's map, 28 total", text)
+        self.assertIn("Required creature/object 1502 x5 (Wretched Ghoul)", text)
+        self.assertIn("35 spawn(s) on the quest's map, 35 total", text)
+        self.assertEqual(text.count("Reason: " + questers.STALLED), 3)
+        self.assertEqual(text.count("Last objective counts: all zero"), 3)
+        self.assertEqual(
+            text.count(
+                "The stored reason records one quester's two hours without objective "
+                "progress. The world rows list required objectives and their spawn "
+                "counts, so it does not establish that the quest cannot be finished; "
+                "they do not record why that attempt stalled."
+            ),
+            1,
+        )
+
+    def test_a_stall_without_objective_rows_is_not_called_reachable(self):
+        info = types.SimpleNamespace(
+            title="The Mindless Ones",
+            zone_name="Tirisfal",
+            level=2,
+            min_level=1,
+            items=(),
+            objectives=(),
+        )
+        rows = [
+            {
+                "quest": 364,
+                "guid": 7,
+                "character_name": "Quester A",
+                "reason": questers.STALLED,
+            }
+        ]
+
+        text = qt.body(364, info, rows, [], "")
+
+        self.assertNotIn(
+            "The world rows list required objectives and their spawn", text
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
