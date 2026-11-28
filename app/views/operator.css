@@ -25,6 +25,16 @@
   display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: var(--radius-md);
   box-shadow: inset 0 0 0 1px var(--color-accent);
 }
+.op-confirm[data-danger="1"] { box-shadow: inset 0 0 0 1px var(--bad-line); }
+.op-confirm .btn-danger { color: var(--bad); border-color: var(--bad-line); }
+.op-confirm .btn-danger:hover { background: color-mix(in srgb, var(--bad) 12%, transparent); }
+.op-confirm .btn-danger:active { background: color-mix(in srgb, var(--bad) 22%, transparent); }
+.op-consequence, .op-invalid { font-size: var(--fs-2); color: var(--bad); text-wrap: pretty; }
+.op-blocked {
+  display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px var(--color-divider); font-size: var(--fs-2); color: var(--color-neutral-300);
+}
+.op-blocked .t { font-weight: 500; color: var(--color-text); }
 .op-confirm .t { font-weight: 500; }
 .op-sent { list-style: none; margin: 0; padding: 0; font-size: var(--fs-2); overflow-wrap: anywhere; }
 .op-sending { display: flex; gap: 8px; align-items: center; min-height: 44px; color: var(--color-neutral-300); }
@@ -73,5 +83,10 @@
 .op-rank-label { font-weight: 500; }
 .op-rank-sentence { font-size: var(--fs-1); color: var(--color-neutral-400); text-wrap: pretty; overflow-wrap: anywhere; }
 .op-rank-moves { display: flex; gap: 2px; flex-shrink: 0; }
-.op-rank-btn { min-width: 40px; min-height: 40px; padding: 0; justify-content: center; }
+.op-rank-btn { min-width: 44px; min-height: 44px; padding: 0; justify-content: center; }
+/* The drag hint is dropped where the pointer is a finger: there is no
+   drag to hint at, and the arrows say the rest by being on screen. */
+@media (pointer: coarse) {
+  .op-hint-fine { display: none; }
+}
 .op-unsaved { color: var(--warn); }
