@@ -498,7 +498,7 @@ function sortedBlockers(d) {
 }
 
 function verdictBlocker(ctx, b, gates) {
-  return html`<div class="verdict-blocker"><span>${b.text} · ${plural(b.seats_short, "seat")} short</span>${blockerNext(ctx, b, gates)}</div>`;
+  return html`<div class="verdict-blocker"><span>${b.text} \u00b7 ${plural(b.seats_short, "seat")} short</span>${blockerNext(ctx, b, gates)}</div>`;
 }
 
 // The one answer, first: can this guild raid yet, the biggest reason it
