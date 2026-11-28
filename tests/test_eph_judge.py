@@ -222,7 +222,7 @@ class ActDeadlineTest(unittest.TestCase):
                 decree["act"][1]["by"] = "60s"
                 decree["act"][1]["roster"]["who"] = "Grug"
 
-                def witness(now):
+                def witness(now, *, clock=clock, read_delay=read_delay):
                     if now < 60:
                         return [(0,)]
                     clock.sleep(read_delay)
@@ -230,7 +230,15 @@ class ActDeadlineTest(unittest.TestCase):
 
                 record = world.insert_command
 
-                def insert_command(target, kind, text):
+                def insert_command(
+                    target,
+                    kind,
+                    text,
+                    *,
+                    clock=clock,
+                    order_delay=order_delay,
+                    record=record,
+                ):
                     if text == "quest":
                         clock.sleep(order_delay)
                     return record(target, kind, text)
