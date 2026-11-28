@@ -110,6 +110,87 @@ class WorldRows(unittest.TestCase):
             "no source in the world rows", qt.body(116, catalogue[0], [], [], "")
         )
 
+    def test_beren_peril_ticket_explains_a_stall_as_an_observation(self):
+        # The quest row and creature counts come from the ticket's world rows
+        # in the shape questcatalogue.QUESTS_SQL and SPAWN_COUNTS_SQL reads.
+        # The ledger reason is written by questers.BROKEN_SQL and read by
+        # questtickets.BROKEN_SQL; counters are read by OBJECTIVES_SQL.
+        world_row = quest_row(
+            516,
+            title="Beren's Peril",
+            level=21,
+            min_level=16,
+            sort=130,
+            objective1=1974,
+            objective_count1=6,
+            objective2=1973,
+            objective_count2=6,
+        )
+        info = self.catalogue(
+            world_row,
+            {
+                qc.CREATURE_NAMES_SQL.format(ids="1973, 1974"): [
+                    {"entry": 1973, "name": "Ravenclaw Guardian"},
+                    {"entry": 1974, "name": "Ravenclaw Drudger"},
+                ],
+                qc.SPAWN_COUNTS_SQL.format(ids="1973, 1974"): [
+                    {"entry": 1973, "map": 0, "n": 12},
+                    {"entry": 1974, "map": 0, "n": 11},
+                ],
+            },
+        )[0]
+        reason = questers.STALLED
+        text = qt.body(
+            516,
+            info,
+            [
+                {
+                    "quest": 516,
+                    "guid": 7,
+                    "character_name": "Quester A",
+                    "reason": reason,
+                }
+            ],
+            [
+                {
+                    "guid": 7,
+                    "mobcount1": 0,
+                    "mobcount2": 0,
+                    "mobcount3": 0,
+                    "mobcount4": 0,
+                    "itemcount1": 0,
+                    "itemcount2": 0,
+                    "itemcount3": 0,
+                    "itemcount4": 0,
+                    "itemcount5": 0,
+                    "itemcount6": 0,
+                }
+            ],
+            "",
+        )
+
+        self.assertIn("QuestLevel: 21; MinLevel: 16", text)
+        self.assertIn(
+            "Required creature/object 1974 x6 (Ravenclaw Drudger): "
+            "11 spawn(s) on the quest's map, 11 total",
+            text,
+        )
+        self.assertIn(
+            "Required creature/object 1973 x6 (Ravenclaw Guardian): "
+            "12 spawn(s) on the quest's map, 12 total",
+            text,
+        )
+        self.assertIn("Reason: " + reason, text)
+        self.assertIn("Last objective counts: all zero", text)
+        self.assertIn(
+            "The ledger's stall reason is an observation, not a diagnosis: "
+            "the quester's objectives did not move for two hours of play. "
+            "The world rows above list the required objectives and the source "
+            "data read for them, but the stored rows do not say why progress "
+            "did not happen.",
+            text,
+        )
+
     def test_pyrewood_ambush_ticket_explains_the_event_reason(self):
         # This quest_template row mirrors the ticket's read-only world snapshot.
         # Its ledger reason is written by bridge._record_quest_broken; the

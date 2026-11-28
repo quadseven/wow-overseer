@@ -9,6 +9,7 @@ from test_questers import DUROTAR, REDRIDGE, giver, mirra, quest, spawn
 
 DUSKWOOD = 10
 DUN_MOROGH = 1
+SILVERPINE = 130
 
 
 class HeldRemoteItemObjectives(unittest.TestCase):
@@ -100,6 +101,121 @@ class HeldRemoteItemObjectives(unittest.TestCase):
         )
 
         self.assertEqual((plan.move.kind, plan.move.quest), (classquest.TAKE, 181))
+
+
+class BerensPerilObjectives(unittest.TestCase):
+    def _catalogue(self):
+        peril = quest(
+            516,
+            SILVERPINE,
+            21,
+            min_level=16,
+            title="Beren's Peril",
+        )
+        peril.update(npc1=1974, npc_count1=6, npc2=1973, npc_count2=6)
+        spawns = [
+            spawn(
+                15160 + i,
+                1974,
+                100.0 + i * 10,
+                0.0,
+                level=0,
+                map_id=0,
+                name="Ravenclaw Drudger",
+            )
+            for i in range(11)
+        ] + [
+            spawn(
+                15180 + i,
+                1973,
+                500.0 + i * 10,
+                0.0,
+                level=0,
+                map_id=0,
+                name="Ravenclaw Guardian",
+            )
+            for i in range(12)
+        ]
+        # The brief gives spawn counts, but not creature levels, locations,
+        # or giver locations. These rows mirror questers.QUESTS_SQL,
+        # classquest.SPAWNS_SQL, and the quester giver/ender reads; the
+        # placements and unknown levels are fixture data, not live claims.
+        return questers.catalogue(
+            [peril],
+            [
+                giver(516, "start", 8516, 8516, 0, 0, map_id=0),
+                giver(516, "end", 8517, 8517, 0, 0, map_id=0),
+            ],
+            spawns,
+            [],
+            [{"quest": 516, "kind": "creature", "entry": 8516}],
+            [{"quest": 516, "kind": "creature", "entry": 8517}],
+        )
+
+    def test_quester_can_hunt_both_objectives_and_hand_in_quest_516(self):
+        cat = self._catalogue()
+        self.assertEqual(cat.quest(516).kills, ((1974, 6), (1973, 6)))
+        self.assertEqual(
+            [
+                sum(s.entry == entry for s in cat.quest(516).fields)
+                for entry in (1974, 1973)
+            ],
+            [11, 12],
+        )
+        member = mirra(
+            name="Quester A",
+            level=21,
+            race=2,
+            map_id=0,
+            zone_id=SILVERPINE,
+            x=0.0,
+            y=0.0,
+        )
+        take = questers.plan(cat, member, questers.Clock(), 0.0).move
+        self.assertEqual((take.kind, take.quest), (classquest.TAKE, 516))
+        objectives = {1974: 0, 1973: 0}
+        member = questers.Member(
+            **{
+                **member.__dict__,
+                "quest_log": {516: questers.STATUS_INCOMPLETE},
+                "quest_progress": {516: 0},
+                "quest_objectives": {516: objectives},
+            }
+        )
+        clock = questers.Clock()
+        hunted = {1974: 0, 1973: 0}
+
+        for target in (1974, 1973):
+            move = questers.plan(cat, member, clock, 0.0).move
+            self.assertEqual((move.kind, move.quest), (classquest.HUNT, 516))
+            self.assertEqual(move.spot.entry, target)
+            step = questers.step_for(member, move, 0.0, cat.quest(516))
+            self.assertEqual(
+                [row.command for row in step.rows],
+                ["hunt-spawn creature:%d count:6 max:480" % target],
+            )
+            hunted[target] += 6
+            objectives = dict(member.quest_objectives[516])
+            objectives[target] = 6
+            progress = sum(objectives.values())
+            member = questers.Member(
+                **{
+                    **member.__dict__,
+                    "quest_log": {
+                        516: (
+                            questers.STATUS_COMPLETE
+                            if progress == 12
+                            else questers.STATUS_INCOMPLETE
+                        )
+                    },
+                    "quest_progress": {516: progress},
+                    "quest_objectives": {516: objectives},
+                }
+            )
+
+        hand_in = questers.plan(cat, member, clock, 0.0).move
+        self.assertEqual(hunted, {1974: 6, 1973: 6})
+        self.assertEqual((hand_in.kind, hand_in.quest), (classquest.TURN_IN, 516))
 
     def _worgen_catalogue(self, spawn_map):
         # Fixture of the ticket's world rows for quest 173 (Worgen in the

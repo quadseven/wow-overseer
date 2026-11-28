@@ -87,6 +87,14 @@ SCRIPTED_EVENT_NOTE = (
     "The world rows list no required item or creature/object objectives, "
     "so the stored reason is the only evidence of how it completes: a scripted event."
 )
+# Both the plain stall and its source details share this reason prefix.
+STALL_REASON_PREFIX = "its objectives did not move for 2 hours of play"
+STALL_NOTE = (
+    "The ledger's stall reason is an observation, not a diagnosis: the quester's "
+    "objectives did not move for two hours of play. The world rows above list "
+    "the required objectives and the source data read for them, but the stored "
+    "rows do not say why progress did not happen."
+)
 # The stored take reason from questers._giver_failure and the module's
 # QuestErrandRefusal. The module uses different reasons for an object
 # starter and for a quest without a starter relation.
@@ -349,12 +357,14 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
     no_giver_in_reach = False
     already_in_log = False
     scripted_event = False
+    stalled = False
     for row in rows:
         name = str(row.get("character_name") or "")
         reason = str(row.get("reason") or "no reason recorded")
         no_giver_in_reach |= reason == NO_GIVER_IN_REACH
         already_in_log |= reason.endswith(": " + ALREADY_IN_LOG_REFUSAL)
         scripted_event |= reason == SCRIPTED_EVENT_REASON
+        stalled |= reason.startswith(STALL_REASON_PREFIX)
         lines += [
             "- Quester: %s (%s)" % (name, party_of(name)),
             "  - Reason: %s" % reason,
@@ -386,6 +396,12 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
         ]
     if already_in_log:
         lines += ["", ALREADY_IN_LOG_NOTE]
+    if (
+        stalled
+        and info is not None
+        and (getattr(info, "items", ()) or getattr(info, "objectives", ()))
+    ):
+        lines += ["", STALL_NOTE]
     lines += [
         "",
         "## Acceptance criteria",
