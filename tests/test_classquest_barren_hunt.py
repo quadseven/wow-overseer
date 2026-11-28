@@ -1,12 +1,7 @@
-"""A run of hunts at one pack that kill stops restarting the stall clock (#2188).
+"""The class hunt's stall clock follows objective progress (#2188).
 
-A seat past level 40 repeated one class quest hunt for hours: every row ended
-applied with kills and no change in the quest's counters. The kills made
-`_class_move` call `Hunts.productive`, which restarts the 30 minute stall clock,
-so the pack was never rerolled and the quest never given up for help. One or two
-such rows are still the ground being worked (a full bag): see
-test_classquest_tried_memory. Loot is no evidence: the module counts every item
-looted, greys included, so a pack that drops only greys looted something each time.
+Kills show a pack can be reached. Quest counters and loot of the objective's
+item keep the hunt there. The module's total includes unrelated loot.
 """
 
 import unittest
@@ -14,8 +9,8 @@ from unittest import mock
 
 import classquest
 import guildjobs
-from test_classquest import who
-from test_classquest_tried_memory import HUNTER, hunt, recent, two_packs
+from test_classquest import book, qrow, who
+from test_classquest_tried_memory import HUNTER, PACK_A, PACK_B, hunt, recent, two_packs
 
 STALL_SECONDS = classquest.HUNT_STALL_MINUTES * 60
 
@@ -24,8 +19,18 @@ def barren(rid, age):
     return hunt(rid, "Aa", "applied", age, "timeout", "the clock ran out", 4, 0)
 
 
-def looted(rid, age):
-    return hunt(rid, "Aa", "applied", age, "timeout", "the clock ran out", 4, 2)
+def looted(rid, age, *items):
+    return hunt(
+        rid,
+        "Aa",
+        "applied",
+        age,
+        "timeout",
+        "the clock ran out",
+        4,
+        2,
+        loot_items=items,
+    )
 
 
 def hunts_after_a_stall(*rows):
@@ -41,17 +46,56 @@ def hunts_after_a_stall(*rows):
 
 @mock.patch.object(classquest, "TRIED_EPOCH", 0)
 class BarrenHunt(unittest.TestCase):
+    def test_staggered_kill_rows_cannot_postpone_the_original_deadline(self):
+        hunts = classquest.Hunts()
+        member = who("Aa", **HUNTER)
+        book = two_packs()
+
+        first, _ = guildjobs._class_move(member, book, recent(barren(1, 2)), hunts, 0.0)
+        before_deadline, _ = guildjobs._class_move(
+            member, book, recent(barren(1, 16)), hunts, 14 * 60.0
+        )
+        at_deadline, _ = guildjobs._class_move(
+            member, book, recent(barren(1, 32), barren(2, 4)), hunts, STALL_SECONDS
+        )
+
+        self.assertEqual(first.spot.guid, PACK_A["guid"])
+        self.assertEqual(before_deadline.spot, first.spot)
+        self.assertEqual(at_deadline.spot.guid, PACK_B["guid"])
+        self.assertEqual(len(hunts.get("Aa").tried), 1)
+
+    def test_verified_quest_loot_refreshes_the_clock_only_once(self):
+        hunts = classquest.Hunts()
+        member = who("Aa", **HUNTER)
+        book = two_packs()
+        first, _ = guildjobs._class_move(member, book, recent(), hunts, 0.0)
+        loot_seen = STALL_SECONDS - 60.0
+
+        guildjobs._class_move(
+            member, book, recent(looted(1, 1, 6486)), hunts, loot_seen
+        )
+        at_old_deadline, _ = guildjobs._class_move(
+            member, book, recent(looted(1, 2, 6486)), hunts, STALL_SECONDS
+        )
+
+        self.assertEqual(at_old_deadline.spot, first.spot)
+        self.assertEqual(hunts.get("Aa").since, loot_seen)
+        at_new_deadline, _ = guildjobs._class_move(
+            member, book, recent(looted(1, 31, 6486)), hunts, loot_seen + STALL_SECONDS
+        )
+        self.assertEqual(at_new_deadline.spot.guid, PACK_B["guid"])
+
     def test_a_run_of_barren_hunts_lets_the_stall_clock_run_out(self):
         hunts = hunts_after_a_stall(barren(1, 20), barren(2, 12), barren(3, 4))
         self.assertEqual(len(hunts.get("Aa").tried), 1)
 
-    def test_fewer_barren_hunts_than_the_bound_still_restart_the_clock(self):
+    def test_two_barren_hunts_also_let_the_stall_clock_run_out(self):
         hunts = hunts_after_a_stall(barren(1, 12), barren(2, 4))
-        self.assertEqual(hunts.get("Aa").tried, ())
+        self.assertEqual(len(hunts.get("Aa").tried), 1)
 
     def test_grey_loot_does_not_hide_the_run(self):
         # Each row looted something (a grey), the quest's counters never moved.
-        hunts = hunts_after_a_stall(looted(1, 20), looted(2, 12), looted(3, 4))
+        hunts = hunts_after_a_stall(looted(1, 20, 2589), looted(2, 12, 64860))
         self.assertEqual(len(hunts.get("Aa").tried), 1)
 
     def test_a_delayed_kill_row_does_not_undo_a_pack_reroll(self):
@@ -97,18 +141,62 @@ class BarrenHunt(unittest.TestCase):
         guildjobs._class_move(moved, book, rows, hunts, float(STALL_SECONDS + 60))
         self.assertEqual(hunts.get("Aa").tried, ())
 
-    def test_a_kill_row_at_another_pack_starts_its_own_count(self):
-        other = hunt(5, "Aa", "applied", 4, "timeout", "the clock ran out", 4, 0)
-        other = dict(other, command=other["command"].replace("3130", "3131"))
-        rows = recent(barren(1, 20), barren(2, 12), other)
-        self.assertEqual(guildjobs.barren_hunt_rows("Aa", rows), 1)
+    def test_a_loot_row_at_another_pack_does_not_restart_the_clock(self):
+        other = hunt(
+            5,
+            "Aa",
+            "applied",
+            4,
+            "timeout",
+            "the clock ran out",
+            4,
+            1,
+            entry=PACK_B["entry"],
+            loot_items=(6486,),
+        )
         hunts = hunts_after_a_stall(barren(1, 20), barren(2, 12), other)
+        self.assertEqual(len(hunts.get("Aa").tried), 1)
+
+    def test_a_newer_refusal_does_not_hide_verified_objective_loot(self):
+        refused = hunt(9, "Aa", "error", 2, "refused", "no living creature", 0, 0)
+        hunts = hunts_after_a_stall(barren(1, 20), looted(3, 4, 6486), refused)
+        self.assertEqual(hunts.get("Aa").tried, ())
+        self.assertEqual(hunts.get("Aa").since, STALL_SECONDS + 60)
+
+    def test_a_timeout_without_a_kill_can_still_loot_the_quest_item(self):
+        row = dict(looted(1, 4, 6486), status="unchanged")
+        row["result"] = row["result"].replace('"kills":4', '"kills":0')
+        hunts = hunts_after_a_stall(row)
+        self.assertEqual(hunts.get("Aa").tried, ())
+        self.assertEqual(hunts.get("Aa").since, STALL_SECONDS + 60)
+
+    def test_the_loot_array_before_a_truncated_result_tail_is_enough(self):
+        row = looted(1, 4, 6486)
+        row["result"] = (row["result"][:-1] + ',"request":"' + "x" * 400)[:400]
+        hunts = hunts_after_a_stall(row)
         self.assertEqual(hunts.get("Aa").tried, ())
 
-    def test_the_run_is_counted_newest_first_and_only_for_rows_that_killed(self):
-        refused = hunt(9, "Aa", "error", 2, "refused", "no living creature", 0, 0)
-        rows = recent(barren(1, 20), barren(2, 12), barren(3, 4), refused)
-        self.assertEqual(guildjobs.barren_hunt_rows("Aa", rows), 3)
+    def test_a_quest_kill_credit_restarts_the_clock(self):
+        quest = 2000
+        kill_book = book(
+            quest_rows=[
+                qrow(quest, "Cull Lizards", reward=8121, npc1=3130, npc_count1=5)
+            ],
+            spawn_rows=[PACK_A, dict(PACK_B, entry=PACK_A["entry"])],
+            loot_rows=[],
+        )
+        hunts = classquest.Hunts()
+        member = who("Aa", quest_log={quest: 3})
+        first, _ = guildjobs._class_move(member, kill_book, recent(), hunts, 0.0)
+        credited = who("Aa", quest_log={quest: 3}, quest_progress={quest: 1})
+
+        move, _ = guildjobs._class_move(
+            credited, kill_book, recent(), hunts, STALL_SECONDS
+        )
+
+        self.assertEqual(move.spot, first.spot)
+        self.assertEqual(hunts.get("Aa").progress, 1)
+        self.assertEqual(hunts.get("Aa").since, STALL_SECONDS)
 
     def test_a_barren_run_tries_every_pack_and_then_has_no_move_left(self):
         # With two packs, two stalls try both; the member then has no hunt move
