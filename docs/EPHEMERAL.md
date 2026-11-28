@@ -109,7 +109,7 @@ SQL are checked against a snapshot of the game databases
     duration: 20m
     cast:      # characters in the template, by name, family:<name> or guild:<Guild>:<role>
     arrange:   # instances, groups, creatures, raid seats, before the world loads
-    act:       # after load: roster, command, travel_guard or raid_order, at a time or on an observation
+    act:       # after load: roster, command, travel_guard, raid_order or quest_aim
     observe:   # preconditions and checks: SQL or a log pattern
 
 ## Rules lint enforces
@@ -242,6 +242,14 @@ failed precondition makes that run INVALID, never a pass.
 
     python3 -m ephemeral judge data/decrees/<name>.yaml --log <worldserver log>
 
+Use `quest_aim: {who: <named cast entry>, quest: <id>}` to aim an actor at a
+quest already in their log. The run stops if that actor has an active aim,
+does not hold the quest, or has already received its reward. The module owns
+the hand-in and aim release. A conditional act can set `by: 5m` to require
+the observation and the act to finish within five minutes of the act clock
+starting. The deadline must fit within the decree duration. A missed
+deadline makes the run INVALID.
+
 Meant to run as the world pod's last step, after the seed. In the pod it needs no
 flags: `seed` and `judge` both default `EPH_VARS_FILE` to `/tmp/eph-vars.json` (the
 volume both containers mount), and the judge reads the worldserver log from
@@ -316,9 +324,10 @@ violates or passes; a violation outranks a later clean look.
 
 The judge writes `overseer_command` rows for ordinary acts, a named cast
 member's operator guard for `travel_guard`, one tagged Molten Core order in the
-world's campaign queue for `raid_order`, and one ConfigMap, `eph-result-<run-id>`,
-in its own namespace. The guard accepts at most one rehearsal order per
-disposable world, including across families. It locks the world's singleton
+world's campaign queue for `raid_order`, a named member's idle quest aim for
+`quest_aim`, and one ConfigMap, `eph-result-<run-id>`, in its own namespace.
+The guard accepts at most one rehearsal order per disposable world, including
+across families. It locks the world's singleton
 marker row before reading the queue and holds the lock through commit or
 rollback. The guard rejects `gm` commands and re-checks every observation as a
 single SELECT against the live schema.
