@@ -2874,13 +2874,15 @@ REROLL, GIVE_UP = "reroll", "giveup"
 class Hunt:
     """One member's current hunt: the quest, its progress when last seen, when
     that last changed, the packs tried without progress, and (when set) the
-    moment the quest is given up until."""
+    moment the quest is given up until. A verified loot row can refresh the
+    clock once while the saved quest counters catch up."""
 
     quest: int
     progress: int
     since: float
     tried: tuple = ()
     until: float | None = None
+    loot_row: int = 0
 
 
 class Hunts:
@@ -2915,10 +2917,13 @@ class Hunts:
         off = frozenset({hunt.quest}) if hunt.until is not None else frozenset()
         return {hunt.quest: hunt.tried}, off
 
-    def observe(self, name, quest, progress, spot, now, failed=False) -> str:
+    def observe(
+        self, name, quest, progress, spot, now, failed=False, *, loot_row=0
+    ) -> str:
         """Record one pass of a hunt toward `spot`; REROLL when it has stalled
         and another pack is to be tried, GIVE_UP when it stalled through every
-        retry, else ""."""
+        retry, else "". Verified quest loot refreshes the clock once per row
+        and keeps the tried packs until the quest counters change."""
         hunt = self._by.get(name)
         fresh = hunt is None or hunt.quest != quest
         if not fresh and hunt.until is not None:
@@ -2926,29 +2931,23 @@ class Hunts:
                 return ""
             fresh = True
         if fresh:
-            hunt = Hunt(quest, progress, now)
+            hunt = Hunt(quest, progress, now, loot_row=loot_row)
         elif progress != hunt.progress:
-            hunt = Hunt(quest, progress, now)
+            hunt = Hunt(quest, progress, now, loot_row=max(hunt.loot_row, loot_row))
+        elif loot_row > hunt.loot_row:
+            hunt = replace(hunt, since=now, loot_row=loot_row)
         idle = now - hunt.since >= HUNT_STALL_MINUTES * 60
         if not (idle or failed):
             self._by[name] = hunt
             return ""
         tried = hunt.tried + ((int(spot.map_id), float(spot.x), float(spot.y)),)
         if len(tried) > MAX_REROLLS:
-            self._by[name] = Hunt(
-                quest, progress, now, tried, now + GIVE_UP_MINUTES * 60
+            self._by[name] = replace(
+                hunt, since=now, tried=tried, until=now + GIVE_UP_MINUTES * 60
             )
             return GIVE_UP
-        self._by[name] = Hunt(quest, progress, now, tried)
+        self._by[name] = replace(hunt, since=now, tried=tried)
         return REROLL
-
-    def productive(self, name, now) -> None:
-        """Kill-only evidence can restart the clock before the first reroll.
-        Keep tried packs and hold-offs until quest progress or the existing
-        expiry rule changes them."""
-        hunt = self._by.get(name)
-        if hunt is not None and not hunt.tried and hunt.until is None:
-            self._by[name] = replace(hunt, since=now)
 
     def give_up(self, name, quest, now) -> None:
         """Give a quest up for GIVE_UP_MINUTES at once: the world refused its
