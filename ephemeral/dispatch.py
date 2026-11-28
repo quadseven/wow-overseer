@@ -18,6 +18,17 @@ Smaller Jobs may skip a head that does not fit (backfill), but once the head
 has waited `head_wait_seconds` nothing may skip it. Runs after the first pair of
 a batch start only when the first pair came out control FAIL, treatment PASS;
 any other first pair stops the batch and its waiting Jobs are removed.
+
+A batch withdrawn with `eph withdraw` (a request ConfigMap this dispatcher reads)
+loses its suspended Jobs, each with an INVALID result naming the withdrawal. A
+suspended Job that has waited longer than `queue_max_age_seconds` is removed the
+same way, so an abandoned batch cannot hold the queue head. A run ConfigMap whose
+Job is gone and whose result exists is deleted.
+
+A started world whose pod has waited on an image pull failure for longer than
+`image_pull_grace_seconds` gets an INVALID result naming the image and is
+deleted, so one bad image cannot hold a node slot and the queue head until the
+Job's deadline. A pod list that cannot be read skips only this check.
 """
 
 import json
@@ -43,6 +54,32 @@ _OPTIONAL_QUOTA = (
     "pods",
 )
 RESULT_PREFIX = "eph-result-"
+# Kubelet waiting reasons that mean a container's image will not arrive by
+# itself. A slow pull reads ContainerCreating or PodInitializing instead.
+PULL_FAILURES = frozenset(
+    {"ErrImagePull", "ImagePullBackOff", "InvalidImageName", "ErrImageNeverPull"}
+)
+
+
+# What the dispatcher asks of the cluster API, as (verb, resource). The Role that
+# grants the dispatcher's ServiceAccount access lives with the cluster manifests,
+# outside this repository; a test holds every call the code makes inside this set.
+DISPATCHER_RULES = frozenset(
+    {
+        ("get", "leases.coordination.k8s.io"),
+        ("create", "leases.coordination.k8s.io"),
+        ("update", "leases.coordination.k8s.io"),
+        ("get", "nodes/proxy"),
+        ("list", "resourcequotas"),
+        ("list", "jobs"),
+        ("patch", "jobs"),
+        ("delete", "jobs"),
+        ("list", "pods"),
+        ("list", "configmaps"),
+        ("create", "configmaps"),
+        ("delete", "configmaps"),
+    }
+)  # fmt: skip
 
 
 class DispatchError(Exception):
@@ -283,8 +320,82 @@ class Dispatcher:
         )
         verdicts = self._verdicts()
         self._synthesize(jobs, verdicts)
+        jobs = self._withdraw(jobs, verdicts)
+        jobs = self._age_out(jobs, verdicts)
+        jobs = self._clear_stuck_pulls(jobs, verdicts)
         jobs = self._early_stop(jobs, verdicts)
-        return self._admit(jobs)
+        started = self._admit(jobs)
+        self._sweep_run_configmaps(jobs, verdicts)
+        return started
+
+    @staticmethod
+    def _waiting(job):
+        return job["spec"].get("suspend") is True and not finished(job)
+
+    def _drop_waiting(self, j, rid, why, verdicts):
+        """INVALID result first, then delete the Job; True once the Job is gone."""
+        if rid not in verdicts and not self._record_invalid(j, rid, why, verdicts):
+            return False
+        self.kube.delete("jobs", j["metadata"]["name"])
+        return True
+
+    def _withdraw(self, jobs, verdicts):
+        """Remove the suspended Jobs of every batch a withdraw request names."""
+        gone = set()
+        for req in self.kube.list("configmaps", selector=runids.LABEL_WITHDRAW):
+            meta = req["metadata"]
+            batch = (meta.get("labels") or {}).get(runids.LABEL_WITHDRAW, "")
+            if not runids.BATCH_RE.match(batch):
+                self.log(f"{meta['name']}: ignored, not a batch id")
+                continue
+            why = f"withdrawn: batch {batch} was withdrawn before this run started"
+            clean = True
+            for j in jobs:
+                rid = runids.run_of_job(j)
+                parsed = runids.parse_run(rid) if rid else None
+                if not parsed or parsed[0] != batch or not self._waiting(j):
+                    continue
+                if self._drop_waiting(j, rid, why, verdicts):
+                    gone.add(j["metadata"]["name"])
+                    self.log(f"{rid}: removed, its batch was withdrawn")
+                else:
+                    clean = False
+            if clean:
+                self.kube.delete("configmaps", meta["name"])
+        return [j for j in jobs if j["metadata"]["name"] not in gone]
+
+    def _age_out(self, jobs, verdicts):
+        """Remove suspended Jobs that have waited past `queue_max_age_seconds`."""
+        limit, now, gone = self.cfg.queue_max_age_seconds, self.clock(), set()
+        for j in jobs:
+            rid = runids.run_of_job(j)
+            if not rid or not self._waiting(j):
+                continue
+            try:
+                waited = now - _ts(j["metadata"]["creationTimestamp"])
+            except (KeyError, ValueError):
+                continue
+            if waited <= limit:
+                continue
+            why = (
+                f"queue wait: waited {int(waited)}s without starting, "
+                f"over queue_max_age_seconds ({int(limit)}s)"
+            )
+            if self._drop_waiting(j, rid, why, verdicts):
+                gone.add(j["metadata"]["name"])
+                self.log(f"{rid}: removed, it waited too long in the queue")
+        return [j for j in jobs if j["metadata"]["name"] not in gone]
+
+    def _sweep_run_configmaps(self, jobs, verdicts):
+        """Delete run-input ConfigMaps whose Job is gone and whose result exists."""
+        live = {runids.run_of_job(j) for j in jobs}
+        for cm in self.kube.list("configmaps", selector=runids.JOB_LABEL_RUN):
+            name = cm["metadata"]["name"]
+            rid = (cm["metadata"].get("labels") or {}).get(runids.JOB_LABEL_RUN)
+            gone = rid and rid not in live and rid in verdicts
+            if gone and name == runids.run_cm_name(rid):
+                self.kube.delete("configmaps", name)
+                self.log(f"{rid}: run inputs removed, its Job is gone")
 
     def _verdicts(self):
         out = {}
@@ -302,33 +413,94 @@ class Dispatcher:
             if not rid or not done or rid in verdicts:
                 continue
             reason = f"no result was written: job {done['type']} ({done.get('reason', '')}: {done.get('message', '')})"
-            labels = j["metadata"].get("labels", {})
-            cm = {
-                "apiVersion": "v1", "kind": "ConfigMap",
-                "metadata": {
-                    "name": runids.result_name(rid), "namespace": self.cfg.namespace,
-                    "labels": {
-                        "eph/decree": labels.get(runids.JOB_LABEL_DECREE, ""),
-                        "eph/arm": labels.get(runids.JOB_LABEL_ARM, ""),
-                        "eph/verdict": "INVALID",
-                    },
-                },
-                "data": {
-                    "verdict": "INVALID",
-                    "result.json": json.dumps({
-                        "verdict": "INVALID", "reasons": [reason], "run_id": rid,
-                        "arm": labels.get(runids.JOB_LABEL_ARM, ""), "synthesized": True,
-                        "assertions": [], "acts": [],
-                    }),
-                },
-            }  # fmt: skip
-            try:
-                self.kube.create(cm)
-            except KubeError as exc:
-                self.log(f"could not record INVALID for {rid}: {exc}")
+            self._record_invalid(j, rid, reason, verdicts)
+
+    @staticmethod
+    def _pull_failure(pod):
+        """(container, image, reason, message) of the first container stuck on its image."""
+        status = pod.get("status") or {}
+        for key in ("initContainerStatuses", "containerStatuses"):
+            for c in status.get(key) or []:
+                waiting = (c.get("state") or {}).get("waiting") or {}
+                if waiting.get("reason") in PULL_FAILURES:
+                    return (
+                        c.get("name", ""),
+                        c.get("image", ""),
+                        waiting["reason"],
+                        waiting.get("message", ""),
+                    )
+        return None
+
+    def _clear_stuck_pulls(self, jobs, verdicts):
+        """Record INVALID for, and delete, started worlds whose image never arrives."""
+        running = {j["metadata"]["name"]: j for j in jobs if is_running(j)}
+        if not running:
+            return jobs
+        try:
+            pods = self.kube.list("pods", selector="job-name")
+        except KubeError as exc:
+            self.log(f"pods unreadable, image pull check skipped: {exc}")
+            return jobs
+        now, grace = self.clock(), self.cfg.image_pull_grace_seconds
+        gone = set()
+        for pod in pods:
+            meta = pod.get("metadata") or {}
+            name = (meta.get("labels") or {}).get("job-name")
+            j = running.get(name)
+            rid = runids.run_of_job(j) if j else None
+            stuck = self._pull_failure(pod) if rid else None
+            if not stuck or name in gone:
                 continue
-            verdicts[rid] = "INVALID"
-            self.log(f"{rid}: INVALID, {reason}")
+            try:
+                age = now - _ts(meta["creationTimestamp"])
+            except (KeyError, ValueError):
+                continue
+            if age <= grace:
+                continue
+            container, image, reason, message = stuck
+            why = (
+                f"image never pulled: container {container} image {image} "
+                f"{reason} for over {int(grace)}s ({message})"
+            )
+            if rid not in verdicts and not self._record_invalid(
+                j, rid, why, verdicts, image_pull_failed=True
+            ):
+                continue
+            self.kube.delete("jobs", name)
+            gone.add(name)
+            self.log(f"{rid}: removed, its image never pulled")
+        return [j for j in jobs if j["metadata"]["name"] not in gone]
+
+    def _record_invalid(self, j, rid, reason, verdicts, **extra):
+        """Write the run's INVALID result ConfigMap; True once it exists."""
+        labels = j["metadata"].get("labels", {})
+        cm = {
+            "apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {
+                "name": runids.result_name(rid), "namespace": self.cfg.namespace,
+                "labels": {
+                    "eph/decree": labels.get(runids.JOB_LABEL_DECREE, ""),
+                    "eph/arm": labels.get(runids.JOB_LABEL_ARM, ""),
+                    "eph/verdict": "INVALID",
+                },
+            },
+            "data": {
+                "verdict": "INVALID",
+                "result.json": json.dumps({
+                    "verdict": "INVALID", "reasons": [reason], "run_id": rid,
+                    "arm": labels.get(runids.JOB_LABEL_ARM, ""), "synthesized": True,
+                    "assertions": [], "acts": [], **extra,
+                }),
+            },
+        }  # fmt: skip
+        try:
+            self.kube.create(cm)
+        except KubeError as exc:
+            self.log(f"could not record INVALID for {rid}: {exc}")
+            return False
+        verdicts[rid] = "INVALID"
+        self.log(f"{rid}: INVALID, {reason}")
+        return True
 
     @staticmethod
     def _batches(jobs, verdicts):

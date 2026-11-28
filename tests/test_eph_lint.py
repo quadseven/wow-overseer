@@ -377,6 +377,39 @@ class GmAndAuctionTest(unittest.TestCase):
 
 
 class PreconditionAndCeilingTest(unittest.TestCase):
+    def test_a_travel_guard_act_accepts_one_named_member_and_a_boolean(self):
+        d = doc()
+        step = {"at": "1m", "travel_guard": {"who": "Grug", "enabled": True}}
+        d["act"] = [step]
+        self.assertEqual(errors(d), [])
+        self.assertEqual(
+            errors(
+                {
+                    **d,
+                    "act": [
+                        {"at": "1m", "travel_guard": {"who": "Grug", "enabled": False}}
+                    ],
+                }
+            ),
+            [],
+        )
+        for bad in ({"who": "Ugga"}, {"who": "family:grug"}, {"enabled": 1}):
+            with self.subTest(bad=bad):
+                d["act"] = [{**step, "travel_guard": {**step["travel_guard"], **bad}}]
+                self.assertTrue(errors(d))
+        d["act"] = [{**step, "roster": {"who": "Grug", "job": "quest"}}]
+        self.assertTrue(errors(d))
+
+    def test_a_group_can_include_two_individually_seeded_members(self):
+        d = doc()
+        d["cast"].append({"who": "Ugga", "set": {}})
+        d["arrange"] = [{"group": {"leader": "Grug", "members": ["Grug", "Ugga"]}}]
+        self.assertEqual(errors(d), [])
+        for members in ([], ["Grug", "Grug"], ["Grug", "Zug"], ["Grug", []]):
+            with self.subTest(members=members):
+                d["arrange"][0]["group"]["members"] = members
+                self.assertTrue(errors(d))
+
     def test_needs_a_precondition(self):
         d = doc()
         d["observe"] = [d["observe"][1]]
@@ -419,6 +452,35 @@ class PreconditionAndCeilingTest(unittest.TestCase):
         d = doc()
         d["cast"][0]["set"]["alive"] = False
         self.assertIn("schema", rules(d))
+
+
+class QuestAimActTest(unittest.TestCase):
+    def test_quest_aim_accepts_one_named_actor_and_a_bounded_quest_id(self):
+        d = doc()
+        step = {"at": "0s", "quest_aim": {"who": "Grug", "quest": 4294967295}}
+        d["act"] = [step]
+        self.assertEqual(errors(d), [])
+        for bad in (
+            {"who": "family:grug"}, {"who": "grug"}, {"who": "Ugga"},
+            {"quest": True}, {"quest": 0}, {"quest": 4294967296}, {"quest": "42"},
+        ):  # fmt: skip
+            with self.subTest(bad=bad):
+                d["act"] = [{**step, "quest_aim": {**step["quest_aim"], **bad}}]
+                self.assertTrue(errors(d))
+        d["act"] = [{**step, "travel_guard": {"who": "Grug", "enabled": True}}]
+        self.assertTrue(errors(d))
+
+    def test_by_is_a_duration_on_conditional_acts(self):
+        d = doc()
+        aim = {"quest_aim": {"who": "Grug", "quest": 42}}
+        d["act"] = [{"when": "nobody-died", "by": "5m", **aim}]
+        self.assertEqual(errors(d), [])
+        d["act"][0]["by"] = "later"
+        self.assertTrue(errors(d))
+        d["act"][0]["by"] = "999h"
+        self.assertTrue(errors(d))
+        d["act"] = [{"at": "0s", "by": "5m", **aim}]
+        self.assertTrue(errors(d))
 
 
 class BridgeAndActTest(unittest.TestCase):
