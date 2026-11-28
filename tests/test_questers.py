@@ -2687,3 +2687,67 @@ class ASummonedObjectEnder(unittest.TestCase):
         p = questers.plan(cat, mirra(quest_log={40: 1}), questers.Clock(), 0.0)
         self.assertEqual([b.quest for b in p.broken], [40])
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
+
+
+# Quest 547: Humbert's Sword (Hillsbrad Foothills, level 30)
+# Requires item 3693 (Humbert's Sword) from creatures 2344, 2345, 2346, 14275.
+# The quest giver is not in reach and the item droppers have no spawns in the
+# quest zone, so the quest cannot be finished.
+HUMBERTS_SWORD = 547
+HUMBERTS_SWORD_ITEM = 3693
+HUMBERTS_SWORD_DROPPERS = (2344, 2345, 2346, 14275)
+HILLSBRAD_FOOTHILLS = 267
+HILLSBRAD_LEVEL = 30
+HILLSBRAD_MIN_LEVEL = 26
+
+
+def humberts_sword_world():
+    q = quest(
+        HUMBERTS_SWORD,
+        HILLSBRAD_FOOTHILLS,
+        HILLSBRAD_LEVEL,
+        min_level=HILLSBRAD_MIN_LEVEL,
+        title="Humbert's Sword",
+    )
+    q.update(item1=HUMBERTS_SWORD_ITEM, item_count1=1)
+    # The loot table names the droppers, but they have no spawns in the quest zone.
+    # This simulates the real world where creatures 2344, 2345, 2346, 14275 drop
+    # the item but are not found in Hillsbrad Foothills.
+    loot = [{"item": HUMBERTS_SWORD_ITEM, "entry": e} for e in HUMBERTS_SWORD_DROPPERS]
+    return world(
+        extra_quests=[q],
+        extra_givers=[
+            giver(HUMBERTS_SWORD, "start", 20000, 2000, 0, 0),
+            giver(HUMBERTS_SWORD, "end", 20001, 2001, 400, 0),
+        ],
+        extra_spawns=[],  # No spawns for the droppers in the quest zone
+        extra_loot=loot,
+    )
+
+
+class Quest547HumbertsSword(unittest.TestCase):
+    def test_quest_547_is_broken_because_item_droppers_not_in_zone(self):
+        cat = humberts_sword_world()
+        member = mirra(
+            level=30,
+            zone_id=HILLSBRAD_FOOTHILLS,
+            quest_log={HUMBERTS_SWORD: questers.STATUS_INCOMPLETE},
+            quest_progress={HUMBERTS_SWORD: 0},
+            quest_objectives={HUMBERTS_SWORD: {}},
+            quest_item_objectives={HUMBERTS_SWORD: {HUMBERTS_SWORD_ITEM: 0}},
+        )
+        clock = questers.Clock()
+        # First pass: observe the quest at time 0
+        p = questers.plan(cat, member, clock, 0.0)
+        # Simulate 2 hours of play (13 passes of 10 minutes each = 2 hours)
+        for i in range(1, 14):
+            p = questers.plan(cat, member, clock, 600.0 * i)
+        broken = [b for b in p.broken if b.quest == HUMBERTS_SWORD]
+        self.assertTrue(broken, "quest 547 should be broken")
+        reason = broken[0].reason
+        self.assertIn("3693", reason, "reason should mention item 3693")
+        self.assertIn("2344", reason, "reason should mention creature 2344")
+
+
+if __name__ == "__main__":
+    unittest.main()
