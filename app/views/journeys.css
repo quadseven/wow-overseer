@@ -17,4 +17,16 @@
 .ej-cand { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .ej-filter { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .ej-who { min-height: 44px; min-width: 0; max-width: 100%; font: inherit; }
+.ej-count { margin: 0 0 12px; font-size: var(--fs-2); }
+.ej-people { font-size: var(--fs-2); color: var(--color-neutral-300); }
+/* A flagged journey is the section's point: its end tag carries weight, and
+   a sold epic that is also flagged reads as the loss it is. */
+.ej-card[data-flagged="true"] .ej-end { font-weight: 500; }
+.ej-card[data-flagged="true"] .ej-end[data-gt="warn"] { background: color-mix(in srgb, var(--warn) 20%, transparent); }
+/* On a phone the step's time goes under its sentence, so the sentence
+   keeps the full width. */
+@media (max-width: 759.98px) {
+  .ej-step { grid-template-columns: 18px minmax(0, 1fr); }
+  .ej-when { grid-column: 2; }
+}
 .ej-council summary, .ej-more summary { min-height: 44px; display: flex; align-items: center; }
