@@ -18,10 +18,15 @@ cast:
     set: {alive: true, at: {creature: "Gazlowe"}}
     ceiling: "nothing granted but position"
 arrange:
-  - group: {members: family:zug, leader: Zug}
+  # Zork is cast on his own, so `family:zug` no longer names him; list him so
+  # the stranded member is in the family group, as on the live realm.
+  - group: {members: [family:zug, Zork], leader: Zug}
 act:
   - at: 0s
     roster: {who: family:zug, job: "dungeon:blackrock-depths"}
+  # The family job reaches every member on the live realm, the stranded one too.
+  - at: 0s
+    roster: {who: Zork, job: "dungeon:blackrock-depths"}
 observe:
   - name: zork-starts-on-kalimdor
     role: precondition
