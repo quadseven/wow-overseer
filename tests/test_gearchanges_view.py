@@ -10,6 +10,35 @@ import unittest
 HERE = pathlib.Path(__file__).resolve().parent.parent
 APP = HERE / "app"
 
+# Drive the rendered form's public click handler from its actual HTML. The
+# stub only supplies the browser's attribute decoding and storage boundary.
+MARK_ACTION = r"""
+const store = new Map([['overseer.gear-since.site', '1767266000000']]);
+const ROOT_MARK = 'overseer.gear-since.v1:%2F:site';
+const events = [];
+Date.now = () => 1767268000000;
+globalThis.window = {
+    localStorage: {getItem: key => store.get(key) ?? null,
+                   setItem: (key, value) => store.set(key, value)},
+    dispatchEvent: event => { events.push(event.type); return true; },
+    addEventListener: () => {},
+    location: {reload: () => events.push('reload')},
+};
+function clickMarked(view, markup, ctx = {get: () => ({data: null})}) {
+    const tag = markup.match(/<button [^>]*data-mark-seen[^>]*>/);
+    if (!tag) return;
+    const attrs = Object.fromEntries(Array.from(tag[0].matchAll(/(data-[\w-]+)="([^"]*)"/g),
+        ([_, key, value]) => [key, value.replaceAll('&quot;', '"').replaceAll('&amp;', '&')]));
+    let click = null;
+    const button = {getAttribute: key => attrs[key] ?? null,
+                    addEventListener: (_name, handler) => { click = handler; }};
+    const main = {querySelector: () => null,
+                  querySelectorAll: selector => selector === '[data-mark-seen]' ? [button] : []};
+    view.after(main, ctx);
+    if (click) click();
+}
+"""
+
 
 class TestGearChangesView(unittest.TestCase):
     def test_feed_items_are_tooltip_links_and_comparison_names_gains_and_losses(self):
@@ -84,17 +113,19 @@ class TestGearChangesView(unittest.TestCase):
         self.assertEqual(got["text"], ["Stat changes unavailable"] * 3)
         self.assertEqual(got["unhandled"], [])
 
-    def _run_view(self, body):
+    def _run_view(self, body, mount=""):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp) / "app"
             shutil.copytree(APP, root)
             (root / "package.json").write_text('{"type":"module"}', encoding="utf-8")
             module = (root / "views/gearchanges.js").as_uri()
             code = (
-                "globalThis.document = {querySelector: () => null, addEventListener: () => {}};\n"
+                "const mount = %s;\n"
+                "globalThis.document = {querySelector: selector => selector === 'meta[name=\"overseer-base\"]' "
+                "? {getAttribute: () => mount} : null, addEventListener: () => {}};\n"
                 "globalThis.window = {sessionStorage: {getItem: () => null, setItem: () => {}}};\n"
-                "const V = await import(%s);\n"
-            ) % json.dumps(module) + body
+                "const viewUrl = %s; const V = await import(viewUrl);\n"
+            ) % (json.dumps(mount), json.dumps(module)) + body
             result = subprocess.run(
                 [shutil.which("node"), "--input-type=module", "-e", code],
                 capture_output=True,
@@ -308,9 +339,9 @@ class TestGearChangesView(unittest.TestCase):
         import datetime
 
         changes = [
-            self._row(at="2026-01-01 10:00:00"),
-            self._row(at="2026-01-01 12:30:00"),
-            self._row(at="2026-01-01 11:15:00"),
+            self._row(at="2026-01-01 10:00:00", event_id="31", occurrences=1),
+            self._row(at="2026-01-01 12:30:00", event_id="19", occurrences=2),
+            self._row(at="2026-01-01 11:15:00", event_id="89", occurrences=1),
         ]
         newest_ms = int(
             datetime.datetime(
@@ -318,32 +349,208 @@ class TestGearChangesView(unittest.TestCase):
             ).timestamp()
             * 1000
         )
-        code = (
-            "const changes = %s;\n"
-            "const html = String(V.renderFeed({changes}, 'site'));\n"
-            "process.stdout.write(JSON.stringify({html, newest: V.newestChangeMs(changes)}));\n"
-        ) % json.dumps(changes)
-        got = self._run_view(code)
-        self.assertEqual(got["newest"], newest_ms)
-        self.assertIn('data-newest="%d"' % newest_ms, got["html"])
+        got = self._run_view(
+            MARK_ACTION
+            + "const changes = %s;\n" % json.dumps(changes)
+            + "clickMarked(V.default, String(V.renderFeed({changes, limited: false}, 'site')));\n"
+            + "process.stdout.write(store.get(ROOT_MARK));"
+        )
+        self.assertEqual(got, {"v": 1, "at": newest_ms, "seen": [["19", 2]]})
+
+    def test_marking_an_empty_feed_does_not_hide_a_change_arriving_during_render(self):
+        got = self._run_view(
+            MARK_ACTION
+            + "const before = String(V.renderFeed({changes: [], limited: false}, 'site'));\n"
+            + "clickMarked(V.default, before);\n"
+            + "process.stdout.write(JSON.stringify({stored: store.get('overseer.gear-since.site'), saved: store.has(ROOT_MARK), events}));"
+        )
+        self.assertEqual(got["stored"], "1767266000000")
+        self.assertFalse(got["saved"])
+        self.assertEqual(got["events"], [])
+
+    def test_mark_seen_keeps_unseen_and_revised_older_ids_at_the_same_timestamp(self):
+        at = "2026-01-01 12:30:00"
+        shown = [
+            self._row(event_id="19", occurrences=1, item="Already seen", at=at),
+            self._row(event_id="17", occurrences=3, item="Old revision", at=at),
+        ]
+        refreshed = [
+            shown[0],
+            dict(shown[1], occurrences=4, item="Updated equipment"),
+            self._row(event_id="12", occurrences=1, item="New arrival", at=at),
+        ]
+        got = self._run_view(
+            MARK_ACTION
+            + "const shown = %s; const refreshed = %s;\n"
+            % (json.dumps(shown), json.dumps(refreshed))
+            + "const before = V.default.reads()[0];\n"
+            + "clickMarked(V.default, String(V.renderFeed({changes: shown, limited: false}, 'site')));\n"
+            + "const url = V.default.reads()[0];\n"
+            + "const after = String(V.renderFeed({changes: refreshed, limited: false}, 'site'));\n"
+            + "const stale = String(V.renderFeed({changes: [{...shown[1], occurrences: 2}], limited: false}, 'site'));\n"
+            + "process.stdout.write(JSON.stringify({before, url, after, stale, events}));"
+        )
+        self.assertEqual(
+            got["before"],
+            "/api/v2/gear/changes?since=2026-01-01T11%3A13%3A20.000Z&oldest_first=1",
+        )
+        self.assertIn("include_boundary=1", got["url"])
+        self.assertNotIn("Already seen", got["after"])
+        self.assertIn("Updated equipment", got["after"])
+        self.assertIn("New arrival", got["after"])
+        self.assertNotIn("Old revision", got["stale"])
+        self.assertEqual(got["events"], ["overseer:redraw"])
 
     def test_mark_seen_stores_the_newest_change_and_redraws_in_place(self):
-        code = (
-            "const store = new Map(); const events = [];\n"
-            "globalThis.window = {localStorage: {getItem: (k) => store.has(k) ? store.get(k) : null, "
-            "setItem: (k, v) => store.set(k, String(v))}, "
-            "dispatchEvent: (e) => { events.push(e.type); return true; }};\n"
-            "let handler = null;\n"
-            "const button = {getAttribute: (n) => n === 'data-mark-seen' ? 'site' : "
-            "n === 'data-newest' ? '1767267000000' : null, "
-            "addEventListener: (ev, fn) => { handler = fn; }};\n"
-            "const main = {querySelectorAll: (sel) => sel === '[data-mark-seen]' ? [button] : []};\n"
-            "V.default.after(main, {get: () => ({data: null})});\n"
-            "handler();\n"
-            "process.stdout.write(JSON.stringify({stored: store.get('overseer.gear-since.site'), events}));\n"
+        changes = [
+            self._row(event_id="19", occurrences=3, at="2026-01-01 12:30:00"),
+        ]
+        got = self._run_view(
+            MARK_ACTION
+            + "const changes = %s;\n" % json.dumps(changes)
+            + "clickMarked(V.default, String(V.renderFeed({changes, limited: false}, 'site')));\n"
+            + "process.stdout.write(JSON.stringify({stored: JSON.parse(store.get(ROOT_MARK)), events}));"
         )
-        got = self._run_view(code)
-        self.assertEqual(got["stored"], "1767267000000")
+        self.assertEqual(
+            got["stored"], {"v": 1, "at": 1767270600000, "seen": [["19", 3]]}
+        )
+        self.assertEqual(got["events"], ["overseer:redraw"])
+
+    def test_uncertain_coverage_leaves_the_marker_alone(self):
+        good = self._row(event_id="19", occurrences=3, at="2026-01-01 12:30:00")
+        got = self._run_view(
+            MARK_ACTION
+            + "const good = %s;\n" % json.dumps(good)
+            + """const examples = [
+                {changes: [good], limited: true},
+                {changes: [good, {...good, event_id: ''}], limited: false},
+                {changes: [good]},
+            ];
+            for (const data of examples) clickMarked(V.default, String(V.renderFeed(data, 'site')));
+            process.stdout.write(JSON.stringify({stored: store.get('overseer.gear-since.site'), saved: store.has(ROOT_MARK), events}));
+            """
+        )
+        self.assertEqual(got, {"stored": "1767266000000", "saved": False, "events": []})
+
+    def test_prefixed_realm_does_not_adopt_or_overwrite_the_root_cursor(self):
+        change = self._row(event_id="19", occurrences=1)
+        got = self._run_view(
+            MARK_ACTION
+            + "const changes = [%s];\n" % json.dumps(change)
+            + """const M = await import(new URL('../models/gearchanges.js', viewUrl));
+            const before = M.since('site');
+            clickMarked(V.default, String(V.renderFeed({changes, limited: false}, 'site')));
+            process.stdout.write(JSON.stringify({before, after: M.since('site'), stores: Object.fromEntries(store)}));
+            """,
+            mount="/second-world",
+        )
+        self.assertEqual(got["before"], "2025-12-31T11:46:40.000Z")
+        self.assertEqual(got["after"], "2026-01-01T10:00:00.000Z")
+        self.assertEqual(got["stores"]["overseer.gear-since.site"], "1767266000000")
+        self.assertIn("overseer.gear-since.v1:%2Fsecond-world:site", got["stores"])
+
+    def test_root_keeps_the_versioned_cursor_when_an_old_tab_writes_its_marker(self):
+        change = self._row(event_id="19", occurrences=1, at="2026-01-01 12:30:00")
+        got = self._run_view(
+            MARK_ACTION
+            + "const changes = [%s];\n" % json.dumps(change)
+            + """const M = await import(new URL('../models/gearchanges.js', viewUrl));
+            const before = M.since('site');
+            clickMarked(V.default, String(V.renderFeed({changes, limited: false}, 'site')));
+            store.set('overseer.gear-since.site', '1767276000000');
+            process.stdout.write(JSON.stringify({before, after: M.since('site'), url: V.default.reads()[0]}));
+            """
+        )
+        self.assertEqual(got["before"], "2026-01-01T11:13:20.000Z")
+        self.assertEqual(got["after"], "2026-01-01T12:30:00.000Z")
+        self.assertIn("include_boundary=1", got["url"])
+
+    def test_exact_limit_and_later_changes_remain_acknowledgeable(self):
+        change = self._row(event_id="19", occurrences=1, at="2026-01-01 12:30:00")
+        got = self._run_view(
+            MARK_ACTION
+            + "const row = %s;\n" % json.dumps(change)
+            + """const M = await import(new URL('../models/gearchanges.js', viewUrl));
+            const changes = Array.from({length: 500}, (_, i) => ({...row, event_id: String(i + 1)}));
+            clickMarked(V.default, String(V.renderFeed({changes, limited: false}, 'site')));
+            const prior = M.since('site');
+            const next = {...row, event_id: '501', item: 'Later item', at: '2026-01-01 12:31:00'};
+            const html = String(V.renderFeed({changes: [...changes, next], limited: false}, 'site'));
+            clickMarked(V.default, html);
+            process.stdout.write(JSON.stringify({prior, after: M.since('site'), events, html}));
+            """
+        )
+        self.assertEqual(got["prior"], "2026-01-01T12:30:00.000Z")
+        self.assertEqual(got["after"], "2026-01-01T12:31:00.000Z")
+        self.assertEqual(got["events"], ["overseer:redraw", "overseer:redraw"])
+        self.assertIn("Later item", got["html"])
+        self.assertNotIn("Boots of the Fang", got["html"])
+
+    def test_a_capped_batch_marks_only_the_complete_prefix(self):
+        change = self._row(event_id="19", occurrences=1, at="2026-01-01 12:30:00")
+        got = self._run_view(
+            MARK_ACTION
+            + "const complete = %s;\n" % json.dumps(change)
+            + """const M = await import(new URL('../models/gearchanges.js', viewUrl));
+            const partial = {...complete, event_id: '20', item: 'Partial cohort', at: '2026-01-01 12:31:00'};
+            const batch = {limited: true, complete_through: complete.at, changes: [complete, partial]};
+            const html = String(V.renderFeed(batch, 'site'));
+            clickMarked(V.default, html);
+            const remainder = String(V.renderFeed(batch, 'site'));
+            const blocked = String(V.renderFeed({...batch, complete_through: null}, 'site'));
+            process.stdout.write(JSON.stringify({seen: M.since('site'), events, html, remainder, blocked}));
+            """
+        )
+        self.assertEqual(got["seen"], "2026-01-01T12:30:00.000Z")
+        self.assertEqual(got["events"], ["overseer:redraw"])
+        self.assertIn("Mark batch seen", got["html"])
+        self.assertIn("Partial cohort", got["remainder"])
+        self.assertNotIn("data-mark-seen", got["remainder"])
+        self.assertIn("500 changes", got["blocked"])
+        self.assertNotIn("data-mark-seen", got["blocked"])
+
+    def test_malformed_timestamp_cannot_crash_or_advance_the_feed(self):
+        good = self._row(event_id="19", occurrences=1)
+        got = self._run_view(
+            MARK_ACTION
+            + "const good = %s;\n" % json.dumps(good)
+            + """const malformed = {...good, event_id: '20', at: {toString: null}};
+            const html = String(V.renderFeed({changes: [good, malformed], limited: false}, 'site'));
+            clickMarked(V.default, html);
+            process.stdout.write(JSON.stringify({html, events}));
+            """
+        )
+        self.assertIn("Boots of the Fang", got["html"])
+        self.assertNotIn("data-mark-seen", got["html"])
+        self.assertEqual(got["events"], [])
+
+    def test_member_gear_marks_only_its_current_read_without_reloading(self):
+        changes = [
+            self._row(event_id="19", occurrences=3, at="2026-01-01 12:30:00"),
+        ]
+        got = self._run_view(
+            MARK_ACTION
+            + "const changes = %s;\n" % json.dumps(changes)
+            + """const member = await import(new URL('./member.js', viewUrl));
+            const name = 'Jug';
+            const ctx = {
+                params: {tab: 'gear'},
+                get: path => ({data: path.startsWith('/api/v2/gear/changes?')
+                    ? {changes, limited: false} : undefined, loading: true}),
+            };
+            clickMarked(member.default, String(member.gearTab(ctx, {name})), ctx);
+            process.stdout.write(JSON.stringify({
+                stored: JSON.parse(store.get('overseer.gear-since.v1:%2F:member:jug')),
+                site: store.get('overseer.gear-since.site'),
+                url: member.readsFor(name, 'gear')[2], events,
+            }));
+            """
+        )
+        self.assertEqual(
+            got["stored"], {"v": 1, "at": 1767270600000, "seen": [["19", 3]]}
+        )
+        self.assertEqual(got["site"], "1767266000000")
+        self.assertIn("include_boundary=1&member=Jug", got["url"])
         self.assertEqual(got["events"], ["overseer:redraw"])
 
     def test_a_chip_click_refilters_the_feed_region_in_place(self):
@@ -416,7 +623,8 @@ class TestGearChangesView(unittest.TestCase):
                 "const M = await import(%s);\n"
                 "const a = M.since('site', storage, 200000000);\n"
                 "const b = M.since('member:tharn', storage, 300000000);\n"
-                "M.markSeen('site', storage, 400000000);\n"
+                "M.markSeen('site', storage, M.observedMarker({limited: false, "
+                "changes: [{event_id: '19', occurrences: 1, at: 400000}]}));\n"
                 "process.stdout.write(JSON.stringify([a, b, M.since('site', storage), "
                 "M.since('member:tharn', storage)]));\n"
             ) % json.dumps(module)

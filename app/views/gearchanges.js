@@ -1,15 +1,15 @@
-import { html, raw, pendingRead, state, item, plural, memberHref } from "../ui.js";
+import { html, pendingRead, state, item, plural, memberHref } from "../ui.js";
 import { load, peek } from "../api.js";
-import { pageKey, since, markSeen } from "../models/gearchanges.js";
+import { CHANGE_LIMIT, changeTime, changesPath, markSeen, observedMarker, pageKey, since, unreadChanges } from "../models/gearchanges.js";
 import { toSeconds, since as timeSince } from "../models/time.js";
 import { liveQuery, setQuery } from "./_members.js";
 
-const pathFor = (key, member) => "/api/v2/gear/changes?since=" + encodeURIComponent(since(key)) + (member ? "&member=" + encodeURIComponent(member) : "");
+const SEP = " \u00b7 ";
 
 export function grouped(changes) {
   const rows = (changes || []).slice().sort((a, b) => {
     const rank = (x) => x.kind === "worn" && x.item_level_change > 0 ? 0 : x.kind === "worn" ? 1 : 2;
-    return rank(a) - rank(b) || String(b.at).localeCompare(String(a.at));
+    return rank(a) - rank(b) || (changeTime(b.at) || 0) - (changeTime(a.at) || 0);
   });
   const groups = new Map();
   rows.forEach((row) => groups.set(row.character, [...(groups.get(row.character) || []), row]));
@@ -33,7 +33,9 @@ function itemRow(row) {
     : row.replaced === "not recorded"
       ? "previous item not recorded"
       : html`replaced ${item({ entry: row.prior_entry, name: row.replaced, quality: row.prior_quality })} (ilvl ${row.prior_item_level})`;
-  const meta = worn ? html`Worn · ${replaced} · ${timeSince(row.at)}${change < 0 ? html` · <span class="bad">a downgrade</span>` : ""}` : html`Not recorded as worn · ${timeSince(row.at)}`;
+  const at = changeTime(row.at);
+  const ago = timeSince(at === null ? null : at / 1000);
+  const meta = worn ? html`Worn${SEP}${replaced}${SEP}${ago}${change < 0 ? html`${SEP}<span class="bad">a downgrade</span>` : ""}` : html`Not recorded as worn${SEP}${ago}`;
   const diff = worn && row.prior_entry && row.entry
     ? html`<span class="gc-diff" data-compare="${row.prior_entry},${row.entry}">Loading stat changes</span>` : "";
   return html`<div class="card gc-row"><span class="gc-rail${tone}"></span><div class="gc-main"><div class="gc-top"><strong>${item({ entry: row.entry, name: row.item, quality: row.quality })}</strong>${delta}</div><div class="gc-meta">${meta}</div>${diff}</div></div>`;
@@ -106,14 +108,14 @@ function sinceLabel(iso) {
 
 function summaryLine(data, key) {
   const counts = summarize(data && data.changes);
-  return "Since " + sinceLabel(since(key)) + " · " + plural(counts.equips, "equip") + ", " + plural(counts.upgrades, "upgrade") + ", " + counts.looted + " looted, " + plural(counts.members, "member");
+  return "Since " + sinceLabel(since(key)) + SEP + plural(counts.equips, "equip") + ", " + plural(counts.upgrades, "upgrade") + ", " + counts.looted + " looted, " + plural(counts.members, "member");
 }
 
 // A member's header over their changes: their name links to their page, and
 // the aside carries the guild and how many changes the group holds.
 function memberHead(name, rows) {
   const guild = rows[0] && rows[0].guild;
-  const aside = (guild ? guild + " · " : "") + plural(rows.length, "change");
+  const aside = (guild ? guild + SEP : "") + plural(rows.length, "change");
   return html`<div class="gc-member-head"><a class="gc-name" href="${memberHref(name)}">${name}</a><span class="dim">${aside}</span></div>`;
 }
 
@@ -146,39 +148,41 @@ function filterBar(data, filter) {
 
 const NO_MATCH = { worn: "No equips since then", upgrades: "No upgrades since then", looted: "No loot since then" };
 
-// The newest change in the fetched feed, as the milliseconds the seen
-// marker stores. Mark all seen advances to this, never to the moment of
-// the click: a change that lands while the page renders is after the
-// newest shown one, so it stays unseen and shows on the next visit.
-export function newestChangeMs(changes) {
-  let newest = null;
-  (changes || []).forEach((row) => {
-    const t = toSeconds(row.at);
-    if (t !== null && (newest === null || t > newest)) newest = t;
-  });
-  return newest === null ? null : newest * 1000;
+export function bindMarkSeen(main, redraw = () => window.dispatchEvent(new Event("overseer:redraw"))) {
+  main.querySelectorAll("[data-mark-seen]").forEach((button) => button.addEventListener("click", () => {
+    if (markSeen(button.getAttribute("data-mark-seen"), undefined, button.getAttribute("data-seen-marker"))) {
+      redraw();
+    }
+  }));
 }
 
 export function renderFeed(data, key, member = "", filter = null) {
-  const all = grouped(data && data.changes);
-  const groups = filter ? grouped(visible(data && data.changes, filter)) : all;
+  const changes = unreadChanges(data, key);
+  const all = grouped(changes);
+  const groups = filter ? grouped(visible(changes, filter)) : all;
   const body = groups.length
     ? groups.map(([name, rows]) => html`<section class="gc-member">${memberHead(name, rows)}${rows.map(itemRow)}</section>`)
     : filter && all.length
       ? state("empty", NO_MATCH[filter.kind], "The feed has changes, but none match the filters on. The summary above counts everything in the feed.")
       : state("empty", "No gear changes since then", member ? "This character has no recorded loot or equips in this period." : "The guilds have no recorded loot or equips in this period.");
-  const newest = newestChangeMs(data && data.changes);
-  return html`<div class="gc-head"><p class="dim">${summaryLine(data, key)}</p><button type="button" data-mark-seen="${key}"${newest === null ? "" : raw(' data-newest="' + newest + '"')}>Mark all seen</button></div>${filter ? filterBar(data, filter) : ""}${body}`;
+  const marker = changes.length ? observedMarker(data, key) : null;
+  const limited = data?.limited === true;
+  const notice = limited ? html`<p class="dim">${marker
+    ? "More gear changes follow. Mark the complete part of this batch seen to continue."
+    : `This batch cannot be marked seen. The read covers up to ${CHANGE_LIMIT} changes at one timestamp.`}</p>` : "";
+  const action = marker ? html`<button type="button" data-mark-seen="${key}" data-seen-marker="${marker}">${limited ? "Mark batch seen" : "Mark all seen"}</button>` : "";
+  const unread = { changes };
+  return html`<div class="gc-head"><p class="dim">${summaryLine(unread, key)}</p>${action}</div>${notice}${filter ? filterBar(unread, filter) : ""}${body}`;
 }
 
 export default {
   css: ["views/gearchanges.css"],
-  reads: () => { const key = pageKey(); return [pathFor(key)]; },
+  reads: () => [changesPath(pageKey())],
   every: 30000,
   title: () => "Gear changes",
   render(ctx) {
     const key = pageKey();
-    const read = ctx.get(pathFor(key));
+    const read = ctx.get(changesPath(key));
     const wait = pendingRead(read, 1);
     if (wait) return html`<h1>Gear changes</h1>${wait}`;
     return html`<h1>Gear changes</h1><div data-region="gc-feed">${renderFeed(read.data, key, "", filterFromQuery(liveQuery()))}</div>`;
@@ -187,13 +191,7 @@ export default {
     const region = main.querySelectorAll("[data-region=gc-feed]")[0] || null;
     const bind = () => {
       fillComparisons(main);
-      main.querySelectorAll("[data-mark-seen]").forEach((button) => button.addEventListener("click", () => {
-        const key = button.getAttribute("data-mark-seen");
-        const newest = Number(button.getAttribute("data-newest"));
-        if (Number.isFinite(newest) && newest > 0) markSeen(key, undefined, newest);
-        else markSeen(key);
-        window.dispatchEvent(new Event("overseer:redraw"));
-      }));
+      bindMarkSeen(main);
     };
     bind();
     if (!region) return;
@@ -205,8 +203,8 @@ export default {
         : { guild: liveQuery().guild === chip.getAttribute("data-gc-guild") ? "" : chip.getAttribute("data-gc-guild") };
       const q = setQuery(patch);
       const key = pageKey();
-      const read = ctx.get(pathFor(key));
-      region.innerHTML = renderFeed(read && read.data, key, "", filterFromQuery(q)).s;
+      const read = ctx.get(changesPath(key));
+      region.innerHTML = html`${renderFeed(read && read.data, key, "", filterFromQuery(q))}`.s;
       bind();
     });
   },
