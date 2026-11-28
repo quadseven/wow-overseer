@@ -325,8 +325,8 @@ body is read.
 
 ## `GET /api/v2/gear/changes`
 
-- Query: `since`, `member`, `guild`
-- Answers: recent loot and equips.
+- Query: `since`, `member`, `guild`, `oldest_first`, `include_boundary`
+- Answers: recent loot and equips with event revisions and an optional acknowledgment batch that reports its latest complete timestamp.
 - Example: `overseer get /api/v2/gear/changes since=X`
 
 ## `GET /api/v2/goal`
