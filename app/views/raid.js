@@ -1,12 +1,17 @@
 // Raid: Molten Core, one guild at a time (#/raid/mc/<guild>).
 //
-// Every sentence, tile, blocker, table cell and goal is the server's
-// (/api/raidgoals: raidready, raidsupply, raidgoals, raidrun, preraid). The
-// seats are the approved lineup (/api/v2/raidteams): an open seat is drawn
-// open, never filled with a guess. Each family member's next upgrades come
-// from /api/upgrades. The page owns layout, the tone a server tone is drawn
-// in, and the count of who clears each readiness gate, from numbers the
-// server reports; a number it does not report is "not measured".
+// The page answers once, first, in a verdict card; everything after it
+// is the working the answer came from. Every sentence, blocker, table
+// cell and goal below the verdict is the server's (/api/raidgoals:
+// raidready, raidsupply, raidgoals, raidrun, preraid; /api/v2/ragnaros
+// for the road). The verdict card's own short lines are the page's,
+// composed only from numbers the server reports and the server's own
+// blocker texts, the same licence as the counts of who clears each
+// readiness gate. The seats are the approved lineup (/api/v2/raidteams):
+// an open seat is drawn open, never filled with a guess. Each family
+// member's next upgrades come from /api/upgrades. The page owns layout
+// and the tone a server tone is drawn in; a number the server does not
+// report is "not measured".
 //
 // View state lives in the URL: ?view=group|gate&gate=<key>.
 
@@ -68,30 +73,30 @@ function gateList(card) {
   return [
     { key: "seat", noun: "seats", label: "Seats filled", rule: "a member in the approved seat", tone: "bad" },
     {
-      key: "level", noun: "level", label: min ? "Level " + min + "+" : "Level", tone: "bad",
+      key: "level", noun: "level", chip: "Level", label: min ? "Level " + min + "+" : "Level", tone: "bad",
       rule: min ? "the lowest level the instance's own access row lets in" : "the instance's lowest level was not read",
       test: (m) => (min && m.level != null ? m.level >= min : null),
       have: (m) => (m.level == null ? null : "L" + m.level),
       gap: (m) => min - m.level, need: (m) => plural(min - m.level, "level"),
     },
     {
-      key: "attune", noun: "attunement", label: "Attuned", tone: "warn", rule: "Attunement to the Core rewarded",
+      key: "attune", noun: "attunement", chip: "Attunement", label: "Attuned", tone: "warn", rule: "Attunement to the Core rewarded",
       test: (m) => m.attuned, have: () => "not attuned", gap: () => 1, need: () => "the quest",
     },
     {
-      key: "fr", noun: "fire resistance", label: "Fire resistance", tone: "warn", rule: "the role's target, from worn gear",
+      key: "fr", noun: "fire resistance", chip: "Fire resistance", label: "Fire resistance", tone: "warn", rule: "the role's target, from worn gear",
       test: (m, r) => (m.fire_resistance == null || !r ? null : m.fire_resistance >= (r.fire_target || 0)),
       have: (m, r) => m.fire_resistance + " of " + r.fire_target + " FR",
       gap: (m, r) => r.fire_target - m.fire_resistance, need: (m, r) => (r.fire_target - m.fire_resistance) + " more FR",
     },
     {
-      key: "supply", noun: "supplies", label: "Supplies carried", tone: "warn", rule: "the night's consumables for the role, in bags",
+      key: "supply", noun: "supplies", chip: "Supplies", label: "Supplies carried", tone: "warn", rule: "the night's consumables for the role, in bags",
       test: (m, r) => (r ? r.supplies_carried >= r.supplies_wanted : null),
       have: (m, r) => r.supplies_carried + " of " + r.supplies_wanted + " supplies",
       gap: (m, r) => r.supplies_wanted - r.supplies_carried, need: (m, r) => (r.supplies_wanted - r.supplies_carried) + " more",
     },
     {
-      key: "gear", noun: "pre-raid gear", label: "Pre-raid gear", tone: "warn",
+      key: "gear", noun: "pre-raid gear", chip: "Pre-raid gear", label: "Pre-raid gear", tone: "warn",
       rule: share != null ? Math.round(share * 100) + "% of slots at or near pre-raid best" : "the gear bar was not read",
       test: (m, r) => (r && r.gear != null && share != null ? r.gear >= share : null),
       have: (m, r) => Math.round(r.gear * 100) + "% gear",
@@ -116,40 +121,43 @@ function gateCount(gate, teams, raiders) {
   return out;
 }
 
-// The first gate a seated raider falls short of: {text, tone}.
-function firstFail(gates, m, r) {
-  let unread = false;
+// Every gate a seated raider falls short of, and every gate no read
+// measures for them, each in gate order: {fail: [gate], unread: [gate]}.
+// A seat row shows all of them as chips, so a seat short on four gates
+// never reads as one fix away.
+function memberGates(gates, m, r) {
+  const fail = [];
+  const unread = [];
   for (const g of gates) {
     if (!g.test) continue;
     const ok = g.test(m, r);
-    if (ok === false) return { text: g.have(m, r), tone: g.tone };
-    if (ok == null) unread = true;
+    if (ok === false) fail.push(g);
+    else if (ok == null) unread.push(g);
   }
-  return unread ? { text: "not measured", tone: "dim" } : { text: "ready", tone: "ok" };
+  return { fail, unread };
 }
 
 // ---- pieces ----------------------------------------------------------------
 
-function tiles(card) {
-  return html`<div class="raid-tiles">${(card.tiles || []).map((t) => html`<div class="raid-tile" data-tone="${tone(t.tone)}"><span class="v">${t.value}</span><span class="k">${t.label}</span></div>`)}</div>`;
-}
-
-function headCard(card) {
-  return html`<div class="card raid-head-card"><span class="raid-headline">${card.headline}</span>${tiles(card)}${card.roster_line ? html`<span class="muted">${card.roster_line}</span>` : ""}${card.gear_line ? html`<span class="muted">${card.gear_line}</span>` : ""}</div>`;
-}
-
 function gateTable(ctx, gates, teams, raiders, view, picked) {
   const total = (teams.seats || []).flat().length;
+  const seated = seatedOf(teams).length;
   const rows = gates.map((g) => {
     const c = gateCount(g, teams, raiders);
-    const pct = total ? Math.round((100 * c.pass) / total) : 0;
-    const t = c.pass >= total ? "ok" : c.pass === 0 ? "bad" : "warn";
+    const isSeat = g.key === "seat";
+    // A member gate divides by the seated raiders and says so; the seat
+    // gate itself counts filled and open against every approved seat.
+    const denom = isSeat ? total : seated;
+    const pct = denom ? Math.round((100 * c.pass) / denom) : 0;
+    const t = denom && c.pass >= denom ? "ok" : c.pass === 0 ? "bad" : "warn";
     const on = view === "gate" ? picked === g.key : g.key === "seat";
     const href = hrefFor(ctx, g.key === "seat" ? { view: "group" } : { view: "gate", gate: g.key });
-    const unread = c.unread ? html`<span class="dim"> | ${c.unread} not measured</span>` : "";
-    return html`<a class="gate" href="${href}"${on ? raw(' aria-current="true"') : ""}><span class="gate-label">${g.label}<span class="gate-rule">${g.rule}</span></span><span class="gate-count ${t}">${c.pass} / ${total}${unread}</span><span class="gate-bar" aria-hidden="true"><span style="width:${pct}%" data-tone="${t}"></span></span></a>`;
+    const count = isSeat
+      ? html`${c.pass} filled<span class="dim"> | ${c.fail} open</span>`
+      : html`${c.pass} pass<span class="dim"> | ${c.fail} short${c.unread ? " | " + c.unread + " not measured" : ""} (of ${seated} seated)</span>`;
+    return html`<a class="gate" href="${href}"${on ? raw(' aria-current="true"') : ""}><span class="gate-label">${g.label}<span class="gate-rule">${g.rule}</span></span><span class="gate-count ${t}">${count}</span><span class="gate-bar" aria-hidden="true"><span style="width:${pct}%" data-tone="${t}"></span></span></a>`;
   });
-  return html`<div class="card raid-gates"><span class="card-title">Readiness gates</span><span class="muted">Who clears each bar, of the ${total} seats. Pick one to see who falls short.</span><div class="gate-list">${rows}</div></div>`;
+  return html`<div class="card raid-gates"><span class="card-title">Readiness gates</span><span class="muted">Who clears each bar. Pick one to see who falls short.</span><div class="gate-list">${rows}</div></div>`;
 }
 
 function viewSwitch(ctx, view, picked) {
@@ -157,15 +165,71 @@ function viewSwitch(ctx, view, picked) {
   return html`<div class="seg" role="group" aria-label="Lineup view">${items.map(([k, label, q]) => html`<a href="${hrefFor(ctx, q)}"${view === k ? raw(' aria-current="page"') : ""}>${label}</a>`)}</div>`;
 }
 
+// The chips under a seat's name: every failing gate, then every
+// unmeasured one, three named and the rest counted. No failing or
+// unmeasured gate at all is the one "ready" chip.
+function seatChips(gates, m, r) {
+  const { fail, unread } = memberGates(gates, m, r);
+  if (!fail.length && !unread.length) return html`<span class="gate-chip" data-tone="ok">ready</span>`;
+  const shown = [
+    ...fail.map((g) => ({ text: g.chip, tone: g.tone })),
+    ...unread.map((g) => ({ text: g.chip + " not measured", tone: "dim" })),
+  ];
+  const chips = shown.slice(0, 3).map((c) => html`<span class="gate-chip" data-tone="${c.tone}">${c.text}</span>`);
+  const more = shown.length > 3 ? html`<span class="gate-chip">${shown.length - 3} more</span>` : "";
+  return html`${chips}${more}`;
+}
+
 function seatRow(ctx, seat, teams, raiders, gates) {
   if (!seat.name) {
     return html`<div class="seat open"><span class="seat-name"><i class="ph ph-circle-dashed" aria-hidden="true"></i>open seat</span><span class="seat-sub">${seat.class} ${ROLE_WORD[seat.seat] || ""}, approved as ${seat.approved}</span></div>`;
   }
   const m = teams.members[seat.name] || {};
-  const f = firstFail(gates, m, raiders.get(seat.name));
   const renamed = seat.approved !== seat.name ? html`<span class="dim"> (to be ${seat.approved})</span>` : "";
   const aura = seat.fire_aura ? html`<i class="ph-fill ph-fire aura" aria-hidden="true" title="Fire resistance aura or totem for the group"></i><span class="sr-only">, carries the group's fire resistance aura</span>` : "";
-  return html`<a class="seat" href="${memberHref(seat.name)}"><span class="seat-name" style="color:${classVar(seat.class)}"><i class="${ROLE_ICON[seat.seat] || ROLE_ICON.dps}" aria-hidden="true" title="${ROLE_WORD[seat.seat] || ""}"></i>${seat.name}${renamed}${aura}</span><span class="seat-sub ${f.tone}">${f.text}</span></a>`;
+  return html`<a class="seat" href="${memberHref(seat.name)}"><span class="seat-main"><span class="seat-name" style="color:${classVar(seat.class)}"><i class="${ROLE_ICON[seat.seat] || ROLE_ICON.dps}" aria-hidden="true" title="${ROLE_WORD[seat.seat] || ""}"></i>${seat.name}${renamed}${aura}</span><span class="seat-chips">${seatChips(gates, m, raiders.get(seat.name))}</span></span><span class="seat-sub">${m.level != null ? "L" + m.level : ""}</span></a>`;
+}
+
+// The project's seat target, named beside the split the server placed:
+// the two differ today, and the page says both so the difference is
+// visible rather than argued about elsewhere. No read carries the
+// target, so it lives in this one constant; a deployment aiming at a
+// different split changes it here.
+const ROLE_TARGET_LINE = "Target split: 8 tanks, 11 healers, 21 damage.";
+
+function roleLine(teams, raiders) {
+  const placed = { tank: 0, healer: 0, dps: 0 };
+  const ready = { tank: 0, healer: 0, dps: 0 };
+  seatedOf(teams).forEach((s) => {
+    const k = s.seat in placed ? s.seat : "dps";
+    placed[k] += 1;
+    const r = raiders.get(s.name);
+    if (r && r.ready) ready[k] += 1;
+  });
+  const part = (k, word) => word + " " + placed[k] + " (" + ready[k] + " ready)";
+  return "Placed: " + part("tank", "tanks") + ", " + part("healer", "healers") + ", " + part("dps", "damage") + ". " + ROLE_TARGET_LINE + " The placed split is the server's; the target is the project's.";
+}
+
+// One group's subtotal: how many of its seated raiders are ready, how
+// many are short, and the gate the most of them fall short of.
+function groupSubtotal(group, teams, raiders, gates) {
+  const seated = group.filter((s) => s.name);
+  let ready = 0;
+  const fails = new Map();
+  seated.forEach((s) => {
+    const r = raiders.get(s.name);
+    if (r && r.ready) ready += 1;
+    memberGates(gates, teams.members[s.name] || {}, r).fail.forEach((g) => fails.set(g.noun, (fails.get(g.noun) || 0) + 1));
+  });
+  let worst = "";
+  let worstN = 0;
+  fails.forEach((n, noun) => {
+    if (n > worstN) {
+      worstN = n;
+      worst = noun;
+    }
+  });
+  return ready + " ready, " + (seated.length - ready) + " short" + (worst ? ", worst gap " + worst : "");
 }
 
 function groupsView(ctx, card, teams, raiders, gates) {
@@ -175,9 +239,9 @@ function groupsView(ctx, card, teams, raiders, gates) {
     ? "Short " + plural(gaps.tanks || 0, "tank") + ", " + plural(gaps.healers || 0, "healer") + " and " + (gaps.damage || 0) + " damage. Open seats stay open; they are never filled with characters the guild does not have."
     : "Every approved seat has its member. Open seats would stay open; they are never filled with characters the guild does not have.";
   const cards = (teams.seats || []).map((group, i) => {
-    return html`<div class="card raid-group"><span class="group-label">Group ${i + 1}${i === 0 ? " | the family" : ""}</span>${group.map((s) => seatRow(ctx, s, teams, raiders, gates))}</div>`;
+    return html`<div class="card raid-group"><span class="group-label">Group ${i + 1}${i === 0 ? " | the family" : ""}</span><span class="group-sub">${groupSubtotal(group, teams, raiders, gates)}</span>${group.map((s) => seatRow(ctx, s, teams, raiders, gates))}</div>`;
   });
-  return html`<span class="${short ? "warn" : "muted"}">${gapLine}</span>${card.gap_line ? html`<span class="muted">${card.gap_line}</span>` : ""}<div class="raid-groups">${cards}</div>`;
+  return html`<span class="role-line">${roleLine(teams, raiders)}</span><span class="${short ? "warn" : "muted"}">${gapLine}</span>${card.gap_line ? html`<span class="muted">${card.gap_line}</span>` : ""}<div class="raid-groups">${cards}</div>`;
 }
 
 function gateView(gate, teams, raiders) {
@@ -198,17 +262,32 @@ function gateView(gate, teams, raiders) {
   return html`<div class="card raid-gap"><span class="muted">${plural(rows.length, "raider")} short, sorted by the gap.</span>${rows.map(line)}${notRead}</div>`;
 }
 
-function blockersCard(card) {
-  const list = (card.blockers || []).map((b) => {
-    const hard = b.tone === "hard";
-    return html`<div class="blocker"><i class="${hard ? "ph-fill ph-x-circle bad" : "ph ph-warning warn"}" aria-hidden="true"></i><span><span class="sr-only">${hard ? "Stops the raid: " : "Makes it harder: "}</span>${b.text}</span></div>`;
-  });
-  return html`<div class="card raid-block"><span class="card-title">What stands in the way</span>${card.blockers_line ? html`<span class="muted">${card.blockers_line}</span>` : ""}${list}</div>`;
+// The attunement card opens with its verdict, counted over the whole
+// raid from the road's attunement milestone (the card's own member list
+// covers the family only). At none attuned the verdict says what that
+// means before a single name is drawn.
+function attuneVerdict(card, road) {
+  const e = road && (road.milestones || []).find((m) => m.key === "E");
+  let have = null;
+  let want = 0;
+  if (e && e.measured) {
+    have = e.have;
+    want = e.want;
+  } else {
+    const members = (card.attunement && card.attunement.members) || [];
+    if (members.length) {
+      have = members.filter((m) => m.status === "attuned").length;
+      want = members.length;
+    }
+  }
+  if (have == null) return "";
+  return have + " of " + want + " attuned." + (have === 0 ? " Nobody can zone in." : "");
 }
 
-function attuneCard(card) {
+function attuneCard(card, road) {
   const a = card.attunement || {};
-  return html`<div class="card raid-block"><span class="card-title">Attunement to the Core</span>${a.line ? html`<span class="muted">${a.line}</span>` : ""}<div class="row">${(a.members || []).map((m) => html`<span class="tag ${m.status === "attuned" ? "tag-outline" : "tag-neutral"}">${m.line}</span>`)}</div><ol class="raid-steps">${(a.steps || []).map((s) => html`<li>${s}</li>`)}</ol>${a.unproven ? html`<span class="small dim">${a.unproven}</span>` : ""}${a.bots ? html`<span class="small dim">${a.bots}</span>` : ""}<span class="card-title raid-sub">The raid run</span>${card.run_line ? html`<span class="muted">${card.run_line}</span>` : ""}${card.clearing_line ? html`<span class="small dim">${card.clearing_line}</span>` : ""}${card.first_kill && card.first_kill.line ? html`<span class="small dim">${card.first_kill.line}</span>` : ""}${card.healer_levels && card.healer_levels.line ? html`<span class="small dim">${card.healer_levels.line}</span>` : ""}${card.healer_levels && card.healer_levels.projection ? html`<span class="small dim">${card.healer_levels.projection.line}</span>` : ""}</div>`;
+  const verdict = attuneVerdict(card, road);
+  return html`<div class="card raid-block"><span class="card-title">Attunement to the Core</span>${verdict ? html`<span class="attune-verdict">${verdict}</span>` : ""}${a.line ? html`<span class="muted">${a.line}</span>` : ""}<div class="row">${(a.members || []).map((m) => html`<span class="tag ${m.status === "attuned" ? "tag-outline" : "tag-neutral"}">${m.line}</span>`)}</div><ol class="raid-steps">${(a.steps || []).map((s) => html`<li>${s}</li>`)}</ol>${a.unproven ? html`<span class="small dim">${a.unproven}</span>` : ""}${a.bots ? html`<span class="small dim">${a.bots}</span>` : ""}<span class="card-title raid-sub">The raid run</span>${card.run_line ? html`<span class="muted">${card.run_line}</span>` : ""}${card.clearing_line ? html`<span class="small dim">${card.clearing_line}</span>` : ""}${card.first_kill && card.first_kill.line ? html`<span class="small dim">${card.first_kill.line}</span>` : ""}${card.healer_levels && card.healer_levels.line ? html`<span class="small dim">${card.healer_levels.line}</span>` : ""}${card.healer_levels && card.healer_levels.projection ? html`<span class="small dim">${card.healer_levels.projection.line}</span>` : ""}</div>`;
 }
 
 // A table on desktop, one card per row on phone: every cell carries its
@@ -235,9 +314,16 @@ function herbShortfall(hs) {
   return html`<details class="fold"><summary>${hs.line || "Herb shortfall for the night (" + hs.herbs.length + ")"}</summary><div class="raid-lines">${hs.herbs.map((r) => html`<span class="small dim">${itemLine(r.entry, r.name, r.line)}</span>`)}${hs.lotus_note ? html`<span class="small dim">${hs.lotus_note}</span>` : ""}</div></details>`;
 }
 
+// The detail zone below the groups: one closed fold per card, its
+// summary carrying the card's headline line so nothing below the fold
+// is a surprise when opened.
+function detailFold(title, line, body) {
+  return html`<details class="card raid-fold"><summary><span class="fold-body"><span class="card-title">${title}</span>${line ? html`<span class="muted">${line}</span>` : ""}</span></summary><div class="fold-detail">${body}</div></details>`;
+}
+
 function supplyCard(card) {
   const s = card.supply;
-  if (!s) return html`<div class="card raid-block"><span class="card-title">Supply for a night in the Core</span>${notMeasured()}</div>`;
+  if (!s) return detailFold("Supply for a night in the Core", "", notMeasured());
   // The last column ("how it closes") is a sentence, drawn under the name.
   const cols = (s.supply_columns || []).slice(0, 4);
   const cell = (r, i) => {
@@ -264,12 +350,12 @@ function supplyCard(card) {
   const drinkFold = (s.seat_drink || []).length
     ? html`<details class="fold"><summary>Drink per mana seat (${s.seat_drink.filter((d) => d.short).length} short)</summary>${table(s.drink_columns || [], s.seat_drink, seatCell)}</details>`
     : "";
-  return html`<div class="card raid-block"><span class="card-title">Supply for a night in the Core</span>${s.line ? html`<span class="muted">${s.line}</span>` : ""}${s.budget_line ? html`<span class="small dim">${s.budget_line}</span>` : ""}${(s.pace || []).map((p) => html`<span class="small dim">${p.line}</span>`)}${s.level_60_line ? html`<span class="small dim">${s.level_60_line}</span>` : ""}${(s.unobtainable || []).map((u) => html`<span class="small warn">${u}</span>`)}${top}${table(cols, s.supplies || [], cell)}${reagentsFold}${drinkFold}${herbShortfall(s.herb_shortfall)}</div>`;
+  return detailFold("Supply for a night in the Core", s.line || "", html`${s.budget_line ? html`<span class="small dim">${s.budget_line}</span>` : ""}${(s.pace || []).map((p) => html`<span class="small dim">${p.line}</span>`)}${s.level_60_line ? html`<span class="small dim">${s.level_60_line}</span>` : ""}${(s.unobtainable || []).map((u) => html`<span class="small warn">${u}</span>`)}${top}${table(cols, s.supplies || [], cell)}${reagentsFold}${drinkFold}${herbShortfall(s.herb_shortfall)}`);
 }
 
 function fireCard(card, teams) {
   const s = card.supply;
-  if (!s) return html`<div class="card raid-block"><span class="card-title">Fire resistance, tanks first</span>${notMeasured()}</div>`;
+  if (!s) return detailFold("Fire resistance, tanks first", "", notMeasured());
   const cls = (n) => ((teams && teams.members && teams.members[n]) || {}).class;
   const cols = s.fire_columns || [];
   const shortAt = cols.indexOf("short") >= 0 ? cols.indexOf("short") : cols.length - 1;
@@ -279,7 +365,10 @@ function fireCard(card, teams) {
     if (i === shortAt) return html`<span class="num ${r.short ? "warn" : "ok"}">${text}</span>`;
     return i >= 2 && i < shortAt ? html`<span class="num">${text}</span>` : text;
   };
-  return html`<div class="card raid-block"><span class="card-title">Fire resistance, tanks first</span>${table(cols, s.fire || [], cell)}${s.fire_line ? html`<span class="small dim">${s.fire_line}</span>` : ""}</div>`;
+  const fireRows = s.fire || [];
+  const under = fireRows.filter((r) => r.short).length;
+  const head = fireRows.length ? under + " of " + plural(fireRows.length, "raider") + " under their fire target" : "";
+  return detailFold("Fire resistance, tanks first", head, html`${table(cols, fireRows, cell)}${s.fire_line ? html`<span class="small dim">${s.fire_line}</span>` : ""}`);
 }
 
 // ---- next upgrades -----------------------------------------------------------
@@ -320,7 +409,8 @@ function upgradesSection(ctx, card, teams) {
     ? members.map((m) => preraidMember(m, pre.columns || [], teams))
     : familyNames(card).map((n) => upgradesFromRead(n, ctx.get(UPS(n)), teams));
   const notes = [...(pre.runs || []), ...(pre.progress || []), ...(pre.closed || [])];
-  return html`<section class="section"><h2 class="raid-h2">Next upgrades and where they drop</h2>${pre.line ? html`<span class="muted">${pre.line}${members.length ? "" : " Until then, each member's next upgrades from the gear lists:"}</span>` : ""}<div class="raid-stack">${body}</div>${notes.map((n) => html`<span class="small dim">${n}</span>`)}</section>`;
+  const line = pre.line ? pre.line + (members.length ? "" : " Until then, each member's next upgrades from the gear lists:") : "";
+  return detailFold("Next upgrades and where they drop", line, html`<div class="raid-stack">${body}</div>${notes.map((n) => html`<span class="small dim">${n}</span>`)}`);
 }
 
 // ---- consumables -----------------------------------------------------------------
@@ -351,13 +441,14 @@ function goalCard(g) {
 
 function consumablesSection(card) {
   const gl = card.goals || {};
-  return html`<section class="section"><h2 class="raid-h2">Consumables, per guild</h2>${gl.line ? html`<span class="muted">${gl.line}${gl.roster_line ? ", " + gl.roster_line : ""}.</span>` : ""}${gl.order ? html`<span class="small dim">${gl.order}</span>` : ""}<div class="raid-stack">${(gl.goals || []).map(goalCard)}</div>${gl.empty_note ? html`<span class="muted">${gl.empty_note}</span>` : ""}</section>`;
+  const line = gl.line ? gl.line + (gl.roster_line ? ", " + gl.roster_line : "") + "." : "";
+  return detailFold("Consumables, per guild", line, html`${gl.order ? html`<span class="small dim">${gl.order}</span>` : ""}<div class="raid-stack">${(gl.goals || []).map(goalCard)}</div>${gl.empty_note ? html`<span class="muted">${gl.empty_note}</span>` : ""}`);
 }
 
 function tierSection(card) {
   const gl = card.goals || {};
   const others = (gl.others || []).filter((o) => !o.modelled);
-  return html`<section class="section"><h2 class="raid-h2">The rest of the tier</h2>${gl.others_line ? html`<span class="muted">${gl.others_line}</span>` : ""}<div class="raid-tier">${others.map((o) => html`<div class="card"><span class="card-title">${o.name}</span><span class="muted">${o.line}</span></div>`)}</div></section>`;
+  return detailFold("The rest of the tier", gl.others_line || "", html`<div class="raid-tier">${others.map((o) => html`<div class="card"><span class="card-title">${o.name}</span><span class="muted">${o.line}</span></div>`)}</div>`);
 }
 
 function basis(goals, card) {
@@ -365,74 +456,135 @@ function basis(goals, card) {
   return html`<details class="fold raid-basis"><summary>How this is counted</summary><div class="raid-lines">${lines.map((l) => html`<span class="small dim">${l}</span>`)}<span class="small dim">Seats come from /api/v2/raidteams. Open seats are shown as open, never filled in.</span></div></details>`;
 }
 
-// ---- the road to Ragnaros ------------------------------------------------------
+// ---- the verdict and the road to Ragnaros --------------------------------------
 //
-// One card above everything else: the server total (/api/v2/ragnaros), the
-// eight goal checkpoints as seats passing, every blocker with the seats it
-// holds back, and the Molten Core attempts. A milestone the server could not
-// measure says so with its reason; it is never drawn as zero.
+// The page answers once, first: a verdict card built from the server
+// total (/api/v2/ragnaros), the seats (/api/v2/raidteams) and the ready
+// flags (/api/raidgoals). Below it the road card groups the eight goal
+// checkpoints under plain subheads and carries the one blocker list,
+// sorted by seats short, that the whole page shares. A milestone the
+// server could not measure says so with its reason; it is never drawn
+// as zero.
 
 function roadTone(m) {
   if (m.percent == null) return "";
   return m.percent >= 100 ? "ok" : m.percent === 0 ? "bad" : "warn";
 }
 
-function roadRow(m) {
+function milestonesByKey(d) {
+  return Object.fromEntries((d.milestones || []).map((m) => [m.key, m]));
+}
+
+// Which gate view a road blocker drills into, by its server key first
+// and its milestone second: one decision, two lookup tables. A blocker
+// with no gate view (dungeon clears, coverage) names its next step in
+// words instead of linking.
+const BLOCKER_GATE = { unattuned: "attune", supplies: "supply", "fire-resistance": "fr", "level-60": "level", "level-40": "level", "class-quest": "level" };
+const MILESTONE_GATE = { A: "level", B: "level", C: "level", E: "attune", F: "supply" };
+
+function blockerNext(ctx, b, gates, inRoad) {
+  const key = BLOCKER_GATE[b.key] || MILESTONE_GATE[b.milestone] || null;
+  if (!key) return inRoad ? "" : html`<span class="dim">Next: tracked on the road below</span>`;
+  const g = (gates || []).find((x) => x.key === key);
+  const what = b.key === "class-quest" ? "who is short on the road to 40" : "who is short on " + (g ? g.noun : key);
+  return html`<a class="blocker-next" href="${hrefFor(ctx, { view: "gate", gate: key })}">Next: ${what}</a>`;
+}
+
+// The one blocker list, most seats first. The server sends it sorted;
+// the sort is repeated here so the page's own order does not depend on
+// the read having kept that promise.
+function sortedBlockers(d) {
+  return [...(d.blockers || [])].sort((x, y) => (y.seats_short || 0) - (x.seats_short || 0));
+}
+
+function verdictBlocker(ctx, b, gates) {
+  return html`<div class="verdict-blocker"><span>${b.text} \u00b7 ${plural(b.seats_short, "seat")} short</span>${blockerNext(ctx, b, gates)}</div>`;
+}
+
+// The one answer, first: can this guild raid yet, the biggest reason it
+// cannot, how far along the road it is with the counting rule in normal
+// text, four figures, and the top three blockers with next actions. The
+// placement tiles the headline card used to draw are gone: placed is
+// not ready, and a green tile above a gate at zero said otherwise.
+function verdictCard(ctx, card, teams, raiders, gates, roadRead) {
+  const wait = pendingRead(roadRead, 2);
+  if (wait) return html`<section class="card raid-verdict"><span class="card-title">Road to Ragnaros</span>${wait}</section>`;
+  const d = roadRead.data;
+  const name = guildName(ctx.params.guild) || cap(ctx.params.guild);
+  if (!d || !d.milestones) {
+    return html`<section class="card raid-verdict"><span class="verdict-line">${card.headline}</span>${card.roster_line ? html`<span class="muted">${card.roster_line}</span>` : ""}${card.gear_line ? html`<span class="muted">${card.gear_line}</span>` : ""}</section>`;
+  }
+  const byKey = milestonesByKey(d);
+  const total = (teams ? (teams.seats || []).flat().length : 0) || (byKey.A && byKey.A.want) || (card.raiders || []).length;
+  const seated = teams ? seatedOf(teams).length : null;
+  const ready = (card.raiders || []).filter((r) => r.ready).length;
+  const canRaid = total > 0 && seated === total && ready >= total;
+  const blockers = sortedBlockers(d);
+  const top = blockers[0];
+  const pct = d.total.percent;
+  const bar = pct == null ? "" : html`<span class="gate-bar" aria-hidden="true"><span style="width:${pct}%" data-tone="${pct >= 100 ? "ok" : ""}"></span></span>`;
+  const fig = (value, label) => html`<div class="verdict-fig"><span class="v">${value}</span><span class="k">${label}</span></div>`;
+  const figVal = (m) => (m && m.measured ? m.have + " of " + m.want : notMeasured());
+  const top3 = blockers.slice(0, 3);
+  return html`<section class="card raid-verdict"><span class="verdict-line">${canRaid ? name + " can raid" : name + " cannot raid yet"}</span>${!canRaid && top ? html`<span class="verdict-reason">Biggest reason: ${top.text}.</span>` : ""}<div class="road-total"><span>${pct == null ? notMeasured() : html`<span class="road-total-n">${pct}%</span>`}<span class="muted"> on the road to Ragnaros</span></span>${bar}</div><span class="verdict-how">${d.total.how}</span><div class="verdict-figs">${fig(seated == null ? notMeasured() : seated + " of " + total, "Seats placed")}${fig(figVal(byKey.C), "At level 60")}${fig(figVal(byKey.E), "Attuned")}${fig(ready + " of " + total, "Ready tonight")}</div>${top3.length ? html`<div class="verdict-blockers">${top3.map((b) => verdictBlocker(ctx, b, gates))}</div>` : ""}</section>`;
+}
+
+function roadRow(m, counted, attempts) {
+  const key = html`<span class="road-key">${m.key}</span>`;
+  const tag = m.unit !== "kill" && counted && !counted.includes(m.key) ? html` <span class="tag tag-neutral">not in the total</span>` : "";
   if (m.unit === "kill") {
-    const text = !m.measured ? notMeasured() : m.have ? "fallen" : "not yet";
-    return html`<div class="road-row"><span class="road-label"><b>${m.key}</b> ${m.label}</span><span class="road-count ${m.have ? "ok" : ""}">${text}</span></div>`;
+    const text = !m.measured ? notMeasured() : m.have ? "fallen" : attempts && attempts.entered ? "not yet" : "Not attempted yet";
+    return html`<div class="road-row"><span class="road-label">${key} ${m.label}</span><span class="road-count ${m.have ? "ok" : ""}">${text}</span></div>`;
   }
   if (!m.measured) {
-    return html`<div class="road-row"><span class="road-label"><b>${m.key}</b> ${m.label}<span class="gate-rule">${m.reason || ""}</span></span><span class="road-count">${notMeasured()}</span></div>`;
+    return html`<div class="road-row"><span class="road-label">${key} ${m.label}${tag}<span class="gate-rule">${m.reason || ""}</span></span><span class="road-count">${notMeasured()}</span></div>`;
   }
   const t = roadTone(m);
   const unread = m.unread ? html`<span class="dim"> | ${m.unread} not measured</span>` : "";
-  return html`<div class="road-row"><span class="road-label"><b>${m.key}</b> ${m.label}<span class="gate-rule">${m.rule}${m.note ? ". " + m.note : ""}</span></span><span class="road-count ${t}">${m.have} / ${m.want}${unread}</span><span class="gate-bar" aria-hidden="true"><span style="width:${m.percent}%" data-tone="${t}"></span></span></div>`;
+  return html`<div class="road-row"><span class="road-label">${key} ${m.label}${tag}<span class="gate-rule">${m.rule}${m.note ? ". " + m.note : ""}</span></span><span class="road-count ${t}">${m.have} of ${m.want} ${m.unit}${unread}</span><span class="gate-bar" aria-hidden="true"><span style="width:${m.percent}%" data-tone="${t}"></span></span></div>`;
 }
 
-function roadBlocker(b, milestones) {
+function roadBlocker(ctx, b, milestones, gates) {
   const m = milestones.find((x) => x.key === b.milestone);
   const names = (b.names || []).length ? html`<span class="dim"> ${b.names.join(", ")}${b.seats_short > b.names.length ? " and " + (b.seats_short - b.names.length) + " more" : ""}</span>` : "";
-  return html`<div class="road-blocker"><span><b>${b.milestone}</b> ${b.text}${names}</span><span class="${roadTone(m || {}) || "warn"}">${plural(b.seats_short, "seat")} short</span></div>`;
+  return html`<div class="road-blocker"><span><span class="road-key">${b.milestone}</span> ${b.text}${names} ${blockerNext(ctx, b, gates, true)}</span><span class="${roadTone(m || {}) || "warn"}">${plural(b.seats_short, "seat")} short</span></div>`;
 }
 
-function roadCard(read) {
+// The milestones in their three plain groups, the attempt as an outcome
+// row of its own, and the one blocker list the page shares (the verdict
+// card's top three are this list's head, not a second list).
+const ROAD_GROUPS = [
+  ["Getting to 60", ["A", "B", "C"]],
+  ["Getting in", ["D", "E"]],
+  ["Ready for the night", ["F", "G"]],
+];
+
+function roadCard(ctx, read, gates) {
   const wait = pendingRead(read, 2);
-  if (wait) return html`<section class="card raid-road"><span class="card-title">Road to Ragnaros</span>${wait}</section>`;
+  if (wait) return html`<section class="card raid-road"><span class="card-title">The road to Ragnaros</span>${wait}</section>`;
   const d = read.data;
   if (!d || !d.milestones) return "";
-  const pct = d.total.percent;
+  const byKey = milestonesByKey(d);
+  // Null when the read does not name its counted set: then no milestone
+  // is tagged either way, rather than every one drawing the tag.
+  const counted = d.total && Array.isArray(d.total.counted) ? d.total.counted : null;
   const a = d.attempts || {};
   const best = a.best ? a.best.bosses_done + (a.best.bosses_total ? " of " + a.best.bosses_total : "") + " bosses" : "no boss yet";
   const attempts = !a.measured
-    ? html`Ragnaros attempts: ${notMeasured()}.`
-    : html`Ragnaros attempts: ${plural(a.entered, "run")} went in, ${plural(a.wiped, "wipe")}, best ${best}.`;
-  const sixty = d.projected_60 ? "Level 60 for the 30th seat is projected for " + d.projected_60 + "." : "";
-  const total = pct == null ? notMeasured() : html`<span class="road-total-n">${pct}%</span>`;
-  const bar = pct == null ? "" : html`<span class="gate-bar" aria-hidden="true"><span style="width:${pct}%" data-tone="${pct >= 100 ? "ok" : ""}"></span></span>`;
-  const blockers = d.blockers.length
-    ? html`<div class="road-blockers">${d.blockers.map((b) => roadBlocker(b, d.milestones))}</div>`
+    ? html`Attempts: ${notMeasured()}.`
+    : a.entered
+      ? html`Ragnaros attempts: ${plural(a.entered, "run")} went in, ${plural(a.wiped, "wipe")}, best ${best}.`
+      : "No Molten Core attempt yet.";
+  const sixty = d.projected_60 ? " Level 60 for the 30th seat is projected for " + d.projected_60 + "." : "";
+  const groups = ROAD_GROUPS.map(([head, keys]) => html`<p class="road-group-head">${head}</p><div class="road-rows">${keys.map((k) => (byKey[k] ? roadRow(byKey[k], counted, a) : ""))}</div>`);
+  const sorted = sortedBlockers(d);
+  const blockers = sorted.length
+    ? html`<div class="road-blockers">${sorted.map((b) => roadBlocker(ctx, b, d.milestones, gates))}</div>`
     : html`<span class="muted">No measured blocker.</span>`;
-  return html`<section class="card raid-road"><span class="card-title">Road to Ragnaros</span><div class="road-total"><span>${total}<span class="muted"> of the way to an attempt</span></span>${bar}</div><span class="small dim">${d.total.how}</span><div class="road-rows">${d.milestones.map(roadRow)}</div><span class="card-title">Blockers, most seats first</span>${blockers}<span class="muted">${attempts} ${sixty}</span></section>`;
+  return html`<section class="card raid-road"><span class="card-title">The road to Ragnaros</span>${groups}<p class="road-group-head">The attempt</p><div class="road-rows">${byKey.H ? roadRow(byKey.H, counted, a) : ""}</div><span class="muted">${attempts}${sixty}</span><span class="card-title">Blockers, most seats first</span>${blockers}</section>`;
 }
 
 // ---- the page --------------------------------------------------------------------
-
-function summaryLine(card, teams, gates, raiders) {
-  if (!teams) return card.headline;
-  const total = (teams.seats || []).flat().length;
-  const seated = seatedOf(teams).length;
-  const ready = (card.raiders || []).filter((r) => r.ready).length;
-  const short = gates.filter((g) => g.test)
-    .map((g) => ({ g, n: gateCount(g, teams, raiders).fail }))
-    .filter((x) => x.n > 0)
-    .sort((a, b) => b.n - a.n)
-    .slice(0, 3)
-    .map((x) => x.g.noun);
-  const readyText = ready ? ready + " of them are ready" : "none of them is ready yet";
-  const why = short.length ? ": most fall short on " + (short.length > 1 ? short.slice(0, -1).join(", ") + " and " + short[short.length - 1] : short[0]) + ", in that order." : ".";
-  return seated + " of " + total + " seats have a member, and " + readyText + why;
-}
 
 function header(ctx, line, seats) {
   const pick = guildSlugs().map((g) => html`<a href="#/raid/mc/${g}"${g === ctx.params.guild ? raw(' aria-current="page"') : ""}>${guildName(g)}</a>`);
@@ -472,13 +624,14 @@ export default {
     const teams = teamsRead.data;
     const raiders = new Map((card.raiders || []).map((r) => [r.name, r]));
     const gates = gateList(card);
+    const roadRead = ctx.get(ROAD(ctx.params.guild));
     const seats = teams ? plural((teams.seats || []).flat().length, "seat") : "";
-    return html`${header(ctx, summaryLine(card, teams, gates, raiders), seats)}
-${roadCard(ctx.get(ROAD(ctx.params.guild)))}
-${headCard(card)}
+    return html`${header(ctx, "", seats)}
+${verdictCard(ctx, card, teams, raiders, gates, roadRead)}
+${roadCard(ctx, roadRead, gates)}
 ${card.encounter_line ? html`<section class="card raid-block"><h2 class="raid-h2">Encounter capabilities</h2><p class="muted">${card.encounter_line}</p></section>` : ""}
 ${lineupSection(ctx, card, teamsRead, raiders, gates)}
-<div class="raid-two">${blockersCard(card)}${attuneCard(card)}</div>
+${attuneCard(card, roadRead.data)}
 ${raidersFold(card, teams)}
 <div class="raid-two">${supplyCard(card)}${fireCard(card, teams)}</div>
 ${upgradesSection(ctx, card, teams)}

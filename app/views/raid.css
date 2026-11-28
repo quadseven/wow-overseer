@@ -13,21 +13,22 @@
 }
 .raid-sub { padding-top: 6px; font-size: var(--fs-2); }
 
-/* The readiness card. */
-.raid-head-card { padding: 14px 16px; gap: 10px; }
-.raid-headline { font-size: var(--fs-3); font-weight: 500; text-wrap: pretty; }
-.raid-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
-.raid-tile {
-  display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; border-radius: var(--radius-md);
-  box-shadow: inset 0 0 0 1px var(--color-neutral-800);
+/* The verdict card: the page's one answer, first. */
+.raid-verdict { padding: 14px 16px; gap: 10px; }
+.verdict-line { font-size: var(--fs-4); font-weight: 600; text-wrap: pretty; }
+.verdict-reason { font-size: var(--fs-2); }
+.verdict-how { font-size: var(--fs-2); color: var(--color-neutral-300); }
+.verdict-figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+.verdict-fig { display: flex; flex-direction: column; gap: 1px; }
+.verdict-fig .v { font-size: var(--fs-4); font-weight: 500; font-variant-numeric: tabular-nums; }
+.verdict-fig .k { font-size: var(--fs-1); color: var(--color-neutral-400); }
+.verdict-blockers { display: flex; flex-direction: column; }
+.verdict-blocker {
+  display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
+  min-height: 44px; padding: 6px 0; font-size: var(--fs-2);
+  box-shadow: 0 -1px 0 var(--color-neutral-900);
 }
-.raid-tile .v { font-size: var(--fs-4); font-weight: 500; font-variant-numeric: tabular-nums; }
-.raid-tile .k { font-size: var(--fs-1); color: var(--color-neutral-400); }
-.raid-tile[data-tone="bad"] { box-shadow: inset 0 0 0 1px var(--bad-line); }
-.raid-tile[data-tone="bad"] .v { color: var(--bad); }
-.raid-tile[data-tone="warn"] { box-shadow: inset 0 0 0 1px var(--warn-line); }
-.raid-tile[data-tone="warn"] .v { color: var(--warn); }
-.raid-tile[data-tone="ok"] .v { color: var(--ok); }
+.blocker-next { white-space: nowrap; }
 
 /* Readiness gates. */
 .raid-gates { gap: 8px; }
@@ -56,24 +57,33 @@
 @media (pointer: fine) { .raid-viewhead .seg > a { min-height: 36px; } }
 
 /* The eight groups. */
+.role-line { font-size: var(--fs-2); }
 .raid-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr)); gap: 8px; }
 .raid-group { padding: 10px 12px; gap: 0; }
 .group-label { font-size: var(--fs-1); color: var(--color-neutral-500); padding-bottom: 4px; }
+.group-sub { font-size: var(--fs-1); color: var(--color-neutral-400); padding-bottom: 4px; }
 .seat {
   display: flex; justify-content: space-between; align-items: center; gap: 6px; min-height: 44px;
   font-size: var(--fs-2); text-decoration: none; color: var(--color-text);
   box-shadow: 0 -1px 0 var(--color-neutral-900);
 }
 a.seat:hover .seat-name { text-decoration: underline; text-underline-offset: 3px; }
+.seat-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 4px 0; }
 .seat-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-weight: 500; }
 .seat-name i { font-size: 12px; color: var(--color-neutral-400); flex-shrink: 0; }
 .seat-name i.aura { color: var(--warn); font-size: 11px; }
 .seat-sub { font-size: var(--fs-1); color: var(--color-neutral-400); text-align: right; white-space: nowrap; }
 .seat.open .seat-name { color: var(--color-neutral-500); font-weight: 400; }
 .seat.open .seat-sub { white-space: normal; }
-.seat-sub.bad { color: var(--bad); }
-.seat-sub.warn { color: var(--warn); }
-.seat-sub.ok { color: var(--ok); }
+.seat-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.gate-chip {
+  font-size: var(--fs-0); padding: 1px 6px; border-radius: 999px; white-space: nowrap;
+  box-shadow: inset 0 0 0 1px var(--color-neutral-700); color: var(--color-neutral-200);
+}
+.gate-chip[data-tone="bad"] { box-shadow: inset 0 0 0 1px var(--bad-line); color: var(--bad); }
+.gate-chip[data-tone="warn"] { box-shadow: inset 0 0 0 1px var(--warn-line); color: var(--warn); }
+.gate-chip[data-tone="ok"] { box-shadow: inset 0 0 0 1px var(--ok); color: var(--ok); }
+.gate-chip[data-tone="dim"] { color: var(--color-neutral-400); }
 
 /* Who falls short of one gate. */
 .raid-gap { gap: 0; }
@@ -87,10 +97,10 @@ a.seat:hover .seat-name { text-decoration: underline; text-underline-offset: 3px
 /* Two cards side by side on desktop. */
 .raid-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 12px; align-items: start; }
 .raid-block { gap: 8px; }
-.blocker { display: flex; gap: 8px; align-items: flex-start; font-size: var(--fs-2); }
-.blocker i { margin-top: 3px; flex-shrink: 0; }
+.attune-verdict { font-size: var(--fs-3); font-weight: 600; }
 .raid-steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; color: var(--color-neutral-300); }
 .raid-block .tag { white-space: normal; font-size: var(--fs-1); }
+.fold-detail { display: flex; flex-direction: column; gap: 8px; padding-top: 6px; }
 
 /* Folds: every raider, each member's upgrades. */
 .raid-fold > summary {
@@ -160,8 +170,17 @@ a.seat:hover .seat-name { text-decoration: underline; text-underline-offset: 3px
 .raid-tier { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 10px; }
 .raid-basis { font-size: var(--fs-1); }
 
-/* Road to Ragnaros: total, eight checkpoints, blockers. */
+/* Road to Ragnaros: grouped checkpoints, the attempt, blockers. */
 .raid-road { gap: 8px; }
+.road-group-head {
+  margin: 8px 0 0; font-size: var(--fs-1); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--color-neutral-500); font-weight: 500;
+}
+.road-key {
+  display: inline-block; padding: 0 6px; border-radius: var(--radius-sm);
+  background: var(--color-neutral-800); color: var(--color-neutral-200);
+  font-size: var(--fs-1); font-weight: 600;
+}
 .road-total { display: grid; grid-template-columns: minmax(0, 1fr) minmax(80px, 1fr); gap: 4px 12px; align-items: center; }
 .road-total-n { font-size: var(--fs-5); font-weight: 600; font-variant-numeric: tabular-nums; }
 .road-rows, .road-blockers { display: flex; flex-direction: column; }

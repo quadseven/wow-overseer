@@ -232,10 +232,6 @@
   content: "\e4dc";
 }
 
-.ph.ph-warning:before {
-  content: "\e4e0";
-}
-
 .ph.ph-warning-circle:before {
   content: "\e4e2";
 }
