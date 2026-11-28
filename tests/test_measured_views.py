@@ -147,7 +147,9 @@ class TheMembersTable(unittest.TestCase):
         self.assertIn(
             '<td class="num"><span class="unmeasured">not measured</span></td>', out
         )
-        self.assertIn("XP/h 1,874", out)
+        # The card no longer prints XP per hour (ticket 3369's card anatomy);
+        # the rate lives in the table column above and the footnote below.
+        self.assertNotIn("XP/h 1,874", out)
         self.assertIn("1 of 2 members have a level change on record", out)
         self.assertNotIn("XP per hour is not measured yet", out)
 
