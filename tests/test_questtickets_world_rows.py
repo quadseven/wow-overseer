@@ -209,6 +209,91 @@ class WorldRows(unittest.TestCase):
             self.assertNotIn("zoneId", sql)
             self.assertIn("map", sql)
 
+    def test_down_the_coast_stall_ticket_explains_the_stored_reason(self):
+        # The quest row and spawn totals mirror questcatalogue.QUESTS_SQL and
+        # SPAWN_COUNTS_SQL; catalogue() supplies its GIVERS_SQL fixture rows.
+        row = quest_row(
+            536,
+            title="Down the Coast",
+            level=30,
+            min_level=25,
+            sort=267,
+            objective1=2377,
+            objective_count1=10,
+            objective2=2376,
+            objective_count2=10,
+        )
+        info = self.catalogue(
+            row,
+            {
+                qc.CREATURE_NAMES_SQL.format(ids="2376, 2377"): [
+                    {"entry": 2376, "name": "Torn Fin Oracle"},
+                    {"entry": 2377, "name": "Torn Fin Tidehunter"},
+                ],
+                qc.SPAWN_COUNTS_SQL.format(ids="2376, 2377"): [
+                    {"entry": 2376, "map": 0, "n": 20},
+                    {"entry": 2377, "map": 0, "n": 20},
+                ],
+            },
+        )[0]
+        ticket = qt.body(
+            536,
+            info,
+            iter(
+                [
+                    {
+                        "quest": 536,
+                        "guid": 7,
+                        "character_name": "Quester A",
+                        "state": "broken",
+                        "reason": questers.STALLED,
+                    }
+                ]
+            ),
+            [],
+            "",
+        )
+
+        self.assertEqual(
+            qt.title(536, info, [dict(reason=questers.STALLED)]),
+            "Quest 536 stalled: Down the Coast",
+        )
+        self.assertEqual(
+            qt.title(
+                536,
+                info,
+                [dict(reason=questers.STALLED + "; objective route is blocked: wall")],
+            ),
+            "Quest 536 stalled: Down the Coast",
+        )
+        self.assertEqual(
+            qt.title(536, info, [dict(reason=questers.STALLED_UNSOURCED)]),
+            "Quest 536 is broken: Down the Coast",
+        )
+        self.assertEqual(
+            qt.title(
+                536,
+                info,
+                [
+                    dict(reason=questers.STALLED),
+                    dict(reason=questers.SOURCE_MISSING),
+                ],
+            ),
+            "Quest 536 is broken: Down the Coast",
+        )
+        self.assertIn(
+            "One quester's objectives did not move for 2 hours of play. That "
+            "stall does not establish that the quest cannot be finished.",
+            ticket,
+        )
+        self.assertIn("Required creature/object 2377 x10", ticket)
+        self.assertIn("20 spawn(s) on the quest's map, 20 total", ticket)
+        self.assertIn(
+            "The stored stall reason records one quester's attempt; it does not "
+            "show that the quest cannot be finished.",
+            ticket,
+        )
+
     def test_previous_quest_and_levels_are_in_world_rows(self):
         info = types.SimpleNamespace(
             title="Quest title",
