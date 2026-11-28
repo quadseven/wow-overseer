@@ -161,6 +161,7 @@ class TheCatalogueReadsTheChest(unittest.TestCase):
         )
         self.assertEqual([s.guid for s in use.spots], [2290])
         self.assertTrue(questers._object_sourced(quest64))
+        self.assertTrue(questers._chested(quest64))
 
     def test_with_no_chest_rows_the_quest_has_no_use(self):
         self.assertEqual(heirloom_world(chests=False).quest(64).uses, ())
@@ -180,6 +181,7 @@ class TheCatalogueReadsTheChest(unittest.TestCase):
             (use.verb, use.item, use.spots), (classquest.USE_OBJECT, WORG_HEART, ())
         )
         self.assertFalse(questers._object_sourced(wild_hearts))
+        self.assertFalse(questers._chested(wild_hearts))
         member = mirra(level=11, zone_id=SILVERPINE)
         self.assertNotIn(WILD_HEARTS, questers.in_reach(cat, member, SILVERPINE))
         self.assertFalse(questers.open_to(cat, member, WILD_HEARTS))
@@ -312,6 +314,7 @@ class TheQuesterOpensTheChest(unittest.TestCase):
         cat = heirloom_world()
         far = holder(map_id=1)
         self.assertIsNone(questers._nearest_object(far, 64, cat.quest(64)))
+        self.assertIsNone(questers._nearest_chest(far, 64, cat.quest(64)))
 
     def test_a_chest_the_walk_left_is_passed_over(self):
         cat = heirloom_world()
@@ -454,6 +457,8 @@ class TheRescueWorksGameobjectObjectives(unittest.TestCase):
     def test_the_fixture_has_world_objectives_and_test_spawns(self):
         rescue = rescue_world().quest(RESCUE)
         self.assertEqual(rescue.objects, ((1721, 1), (1722, 1)))
+        self.assertTrue(questers._object_sourced(rescue))
+        self.assertFalse(questers._chested(rescue))
         self.assertEqual(
             [(u.item, u.targets, [s.guid for s in u.spots]) for u in rescue.uses],
             [(0, (1721,), [9991]), (0, (1722,), [9992])],

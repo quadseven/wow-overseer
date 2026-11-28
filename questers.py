@@ -1796,9 +1796,51 @@ def _over_level(spawns, within) -> tuple:
     return tuple(s for s in spawns if s.guid not in kept)
 
 
+def _chested(quest) -> bool:
+    """True when a spawned chest holds an item the quest asks for."""
+    return any(
+        use.verb == classquest.USE_OBJECT and use.item and use.spots
+        for use in quest.uses
+    )
+
+
 def _object_sourced(quest) -> bool:
     """True when a spawned gameobject supplies an item or objective."""
-    return any(u.verb == classquest.USE_OBJECT and u.spots for u in quest.uses)
+    return _chested(quest) or any(
+        use.verb == classquest.USE_OBJECT and not use.item and use.spots
+        for use in quest.uses
+    )
+
+
+def chest_spots(member, qid: int, quest: classquest.Quest) -> tuple:
+    """(Use, spawn) for each spawned chest holding an item the quester still
+    needs, using that item's own objective counter."""
+    progress = member.quest_item_objectives.get(qid, {})
+    wanted = dict(quest.items)
+    out = []
+    for use in quest.uses:
+        if use.verb != classquest.USE_OBJECT or not use.item:
+            continue
+        if int(progress.get(use.item, 0)) >= wanted.get(use.item, use.count):
+            continue
+        out.extend((use, _object_spawn(spot)) for spot in use.spots)
+    return tuple(out)
+
+
+def objective_spots(member, qid: int, quest: classquest.Quest) -> tuple:
+    """(Use, spawn) for each spawned gameobject objective still incomplete."""
+    progress = member.quest_objectives.get(qid, {})
+    short = {
+        entry for entry, count in quest.objects if int(progress.get(entry, 0)) < count
+    }
+    out = []
+    for use in quest.uses:
+        if use.verb != classquest.USE_OBJECT or use.item:
+            continue
+        if not any(entry in short for entry in use.targets):
+            continue
+        out.extend((use, _object_spawn(spot)) for spot in use.spots)
+    return tuple(out)
 
 
 def object_spots(member, qid: int, quest: classquest.Quest) -> tuple:
@@ -1813,25 +1855,7 @@ def object_spots(member, qid: int, quest: classquest.Quest) -> tuple:
     filed it broken. A negative RequiredNpcOrGo is the same kind of work: the
     class quests already click its gameobject (`use-gameobject`,
     classquest.USE_OBJECT); the questers now do the same."""
-    item_progress = member.quest_item_objectives.get(qid, {})
-    objective_progress = member.quest_objectives.get(qid, {})
-    wanted = dict(quest.items)
-    short_objects = {
-        entry
-        for entry, count in quest.objects
-        if int(objective_progress.get(entry, 0)) < count
-    }
-    out = []
-    for use in quest.uses:
-        if use.verb != classquest.USE_OBJECT:
-            continue
-        if use.item:
-            if int(item_progress.get(use.item, 0)) >= wanted.get(use.item, use.count):
-                continue
-        elif not any(entry in short_objects for entry in use.targets):
-            continue
-        out.extend((use, _object_spawn(s)) for s in use.spots)
-    return tuple(out)
+    return chest_spots(member, qid, quest) + objective_spots(member, qid, quest)
 
 
 def _object_spawn(spot) -> ObjectSpawn:
@@ -1846,9 +1870,26 @@ def _object_spawn(spot) -> ObjectSpawn:
 
 def _nearest_object(member, qid, quest, object_left=frozenset()):
     """(Use, spawn) of the nearest gameobject the quester can walk to, or None."""
+    candidates = (
+        _nearest_chest(member, qid, quest, object_left),
+        _nearest_gameobject(member, objective_spots(member, qid, quest), object_left),
+    )
+    reachable = tuple(candidate for candidate in candidates if candidate is not None)
+    if not reachable:
+        return None
+    return min(reachable, key=lambda pair: (_yards(member, pair[1]), pair[1].guid))
+
+
+def _nearest_chest(member, qid, quest, object_left=frozenset()):
+    """(Use, spawn) for the nearest chest the quester can walk to, or None."""
+    return _nearest_gameobject(member, chest_spots(member, qid, quest), object_left)
+
+
+def _nearest_gameobject(member, candidates, object_left):
+    """(Use, spawn) for the nearest allowed gameobject, or None."""
     here = [
         (use, spot)
-        for use, spot in object_spots(member, qid, quest)
+        for use, spot in candidates
         if spot.guid not in object_left
         and member.placed
         and int(spot.map_id) == int(member.map_id)
