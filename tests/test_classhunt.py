@@ -164,6 +164,23 @@ class TheCounters(unittest.TestCase):
         quest = warrior_book().quests[1498]
         self.assertFalse(classhunt.finished(quest, None, None))
 
+    def test_gameobject_objectives_count_toward_completion(self):
+        quest = classquest.Quest(
+            498,
+            "The Rescue",
+            0,
+            17,
+            0,
+            0,
+            0,
+            0,
+            0,
+            objects=((1721, 1), (1722, 1)),
+        )
+        self.assertEqual(classhunt.wanted(quest), 2)
+        self.assertFalse(classhunt.finished(quest, classquest.STATUS_INCOMPLETE, 1))
+        self.assertTrue(classhunt.finished(quest, classquest.STATUS_INCOMPLETE, 2))
+
 
 def answer(status, detail="", **body):
     return status, detail, json.dumps(body)
