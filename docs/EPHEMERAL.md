@@ -526,6 +526,19 @@ delta records it. Any other key the control dist lacks still fails closed; a key
 module added after the control build (its dist predates it) is removed from the control
 arm's override files with `--control-drop-keys A,B,C`, which records a delta naming them.
 
+`submit` also does this for the harness baseline keys on its own. When
+`--control-worldserver` and `--control-pin` name the control build (or `--control auto`
+selects a history entry without a `dist_inventory`, which supplies the entry's `pin`),
+`submit` reads the module's `conf/mod_overseer.conf.dist` from the module repository at that
+commit. A baseline key in the module's own group that the dist does not define (for example
+`Overseer.Raid.RequireHeadClient` on a build that predates it) is removed from the control
+arm's override files only, and one fidelity delta names the keys and the pin. The treatment
+arm keeps them. A pin whose dist cannot be read refuses the submit and names the pin. Only
+baseline keys are dropped this way: a key the decree's own `config:` sets, or one from the
+base realm's override files, still fails closed in `seed-conf`, and keys of other modules'
+dists or of a bridge-code fix's manual `--control-pin` (a bridge commit) are not checked.
+`--control-drop-keys` still works and wins for the keys it names.
+
 `--control auto` finds the control images instead of taking them by hand.
 `--control-history FILE` is a JSON list of past image sets, newest first, that the deploy
 side writes (never a file in this repository): each entry has `worldserver` and `dbimport`
