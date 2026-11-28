@@ -8938,10 +8938,10 @@ def _class_move(m, book, recent, hunts, now):
     """(move or None, blocked sentences): classquest.next_move, with a hunt
     that has stalled sent to another pack, or given up (HUNT_STALL_MINUTES).
 
-    A hunt that killed restarts the stall clock, except after BARREN_HUNT_ROWS
-    of them in a row at one pack: then the clock runs, and the pack is rerolled
-    or the quest given up (Hunts.observe, which restarts the clock by itself
-    when the quest's counters move)."""
+    Before the first reroll, a hunt that killed can restart the stall clock.
+    After BARREN_HUNT_ROWS at one pack the clock runs and the pack is rerolled
+    or the quest given up. Hunts.observe restarts the clock when the quest's
+    counters move."""
     if (
         hunts
         and productive_entries(m.name, recent, classquest.HUNT_STALL_MINUTES)

@@ -14,18 +14,20 @@ is listed here beside the format string of each call that writes its line, and:
 - the pattern must match the line as the source formats it, and must not match
   the sibling line the same code writes when the thing did not happen.
 
-The pinned sources are the mod-overseer submodule and the test copies of the
-playerbots patches under patches/. Lines of the bridge, of the core and of the
-dungeon module are not in this repo or not in the log the judge reads; the
-decrees whose criteria rest on them are listed in STILL_NARROWED.
+The pinned sources are the mod-overseer submodule, the immutable raid fix in
+its history, the playerbots patch copies under patches/, and the headless
+bridge. Decrees that narrow criteria based on unavailable logs are listed in
+STILL_NARROWED.
 """
 
 import pathlib
 import re
+import tempfile
 import unittest
 from typing import NamedTuple
 
 import modsource
+import raidrun
 from ephemeral import judge, lint, podpaths, submit
 from ephemeral.miniyaml import loads
 
@@ -46,6 +48,7 @@ _CALL = re.compile(
     r"LOG_(" + "|".join(LEVELS) + r")\(\s*(" + _LITERAL + r")\s*,\s*"
     r"((?:" + _LITERAL + r"\s*)+)"
 )
+_BRIDGE_INFO = re.compile(r"\blog\.info\(\s*((?:" + _LITERAL + r"\s*)+)")
 _PLACEHOLDER = re.compile(r"\{[^{}]*\}")
 
 
@@ -74,13 +77,15 @@ def patch_added_text(text):
 class Line(NamedTuple):
     """One logging call: where it is, what it formats, and sample arguments."""
 
-    source: str  # "module" or "reflect-patch"
+    source: str  # "module", "raid-door-fix", "reflect-patch", or "bridge"
     level: str
     logger: str
     fmt: str
     args: tuple
 
     def rendered(self):
+        if self.source == "bridge":
+            return f"{self.logger} {self.level} " + self.fmt % self.args
         holes = _PLACEHOLDER.findall(self.fmt)
         if len(holes) != len(self.args):
             raise AssertionError(
@@ -94,6 +99,10 @@ def module(level, fmt, *args):
     return Line("module", level, "module.overseer", fmt, args)
 
 
+def bridge_info(fmt, *args):
+    return Line("bridge", "INFO", "wow-overseer", fmt, args)
+
+
 class Pin(NamedTuple):
     """The calls that write a check's line, and the sibling lines it must ignore."""
 
@@ -102,6 +111,10 @@ class Pin(NamedTuple):
 
 
 SHIP = "Ship (The Lady Mehley)"
+RAID_DOOR = "raid-under-quorum-at-door"
+# RaidQuorumShortfall in the decree's exact fix produces this with five DPS
+# assembled and the decree's 36-seat, 3-tank, 8-healer floor.
+RAID_SHORTFALL = "5 of 5, short 31 seats, 3 tanks, 8 healers"
 
 # (decree id, observation name) -> the code that writes the line.
 PINS = {
@@ -113,6 +126,39 @@ PINS = {
                 "playerbots",
                 "[MC] majordomo: {} casters holding, magic reflection on {}",
                 (3, "Flamewaker Healer"),
+            ),
+        ),
+    ),
+    (RAID_DOOR, "the-hold-warned-about-the-shortfall"): Pin(
+        writers=(
+            Line(
+                "raid-door-fix",
+                "WARN",
+                "module.overseer",
+                "overseer: raid run for family '{}' holds at the door - {}",
+                ("Grug", RAID_SHORTFALL),
+            ),
+        ),
+    ),
+    (RAID_DOOR, "the-shortfall-was-logged"): Pin(
+        writers=(
+            # AI-REVIEW 2026-11-27 [nemotron-3.5-super-vl] 90f35a03 (Elder, PR #3344):
+            # Verify the dedicated quorum warning in the decree's exact fix.
+            Line(
+                "raid-door-fix",
+                "WARN",
+                "module.overseer",
+                "overseer: raid run for family '{}' ends the order - no quorum at the door ({})",
+                ("Grug", RAID_SHORTFALL),
+            ),
+        ),
+        ignores=(
+            module(
+                "INFO",
+                "overseer: raid run for family '{}' released at {} - {}",
+                "Grug",
+                "ASSEMBLE",
+                "no raid is ordered",
             ),
         ),
     ),
@@ -480,11 +526,47 @@ PINS = {
     ),
 }
 
+
+def under_level_refusal():
+    members = [
+        {"name": "Grug", "class_id": 1, "level": 60, "online": 1},
+        {"name": "Ugga", "class_id": 5, "level": 49, "online": 1},
+    ]
+    lineup, _short = raidrun.lineup_for_order("moltencore", members, ["Grug", "Ugga"])
+    return raidrun.seat_eligibility_refusal("moltencore", lineup, members)
+
+
+ORDER_DECREE = "molten-core-order-refuses-unavailable"
+QUEUE_LINE = "queue: %s: %s"
+ACCEPTED_LINE = (
+    "raid: %s ordered into %s - %d seats written in %d groups, %d job row(s) of %d. %s"
+)
+WITHHELD_ORDER = "withheld: " + under_level_refusal()
+REFUSED_ORDER = bridge_info(QUEUE_LINE, "Grug's family", WITHHELD_ORDER)
+ACCEPTED_ORDER = bridge_info(
+    ACCEPTED_LINE, "Grug's family", "moltencore", 2, 1, 2, 2, ""
+)
+NO_JOBS_WRITTEN = bridge_info(
+    ACCEPTED_LINE, "Grug's family", "moltencore", 2, 1, 0, 2, ""
+)
+OTHER_SEAT_REFUSED = bridge_info(
+    QUEUE_LINE, "Grug's family", WITHHELD_ORDER.replace("Ugga", "Grog")
+)
+BRIDGE_PINS = {
+    (ORDER_DECREE, "bridge-consumed-the-fixture-order"): Pin(
+        writers=(REFUSED_ORDER, ACCEPTED_ORDER),
+        ignores=(NO_JOBS_WRITTEN, OTHER_SEAT_REFUSED),
+    ),
+    (ORDER_DECREE, "refusal-names-the-under-level-approved-member"): Pin(
+        writers=(REFUSED_ORDER,), ignores=(ACCEPTED_ORDER, OTHER_SEAT_REFUSED)
+    ),
+}
+ALL_PINS = PINS | BRIDGE_PINS
+
 # Decrees whose header still says a criterion was narrowed for want of a
 # positive log check, and why `at_least` does not restore it from this repo.
 STILL_NARROWED = {
-    # The line is bridge text. The judge reads one file, the worldserver's own
-    # appender, and the bridge does not write to it.
+    # These bridge lines were narrowed before the judge read the sidecar log.
     "guild-brd-keyed-wing": "bridge log",
     "raid-order-seats-arrive-at-door": "bridge log",
     "raid-prep-mail-and-bank-cycle": "bridge log",
@@ -503,15 +585,13 @@ STILL_NARROWED = {
 }
 
 # Bounded log checks that main gained after the pinning above was written and
-# whose emitter is not in a source this file reads (the wording is not in the
-# pinned module source, or the line is written by the core, the bridge or the
-# dungeon module). Each is listed so a new unpinned check is a red test, not a
-# silent one; pin an entry (and delete it here) when its emitter is reachable.
+# whose emitter is outside these source pins. Each is listed so a new
+# unpinned check is a red test. Pin an entry and delete it here when its
+# emitter is reachable.
 UNPINNED = {
     "alliance-brd-campaign-home": "emitter not in the pinned module source",
     "brd-core-fragment-chest": "emitter not in the pinned module source",
     "brd-fineous-ironfel-pickup": "dungeon module source not here",
-    "class-trainer-crosses-map-and-learns": "emitter not in the pinned module source",
     "cross-map-party-split-is-reported": "emitter not in the pinned module source",
     "cross-map-stranded-member-names-its-way": "emitter not in the pinned module source",
     "deadmines-early-entrant-barrier": "emitter not in the pinned module source",
@@ -535,12 +615,14 @@ def shipped_decrees():
 
 
 def bounded_checks():
-    """(decree id, observation name) -> the log block, for every at_least or at_most."""
+    """Log blocks for bounds that need an emitter, including scenario witnesses."""
     found = {}
     for _path, decree in shipped_decrees():
         for o in decree.get("observe") or []:
             expect = (o.get("log") or {}).get("expect") or {}
-            if any(key in expect for key in lint.LOG_RANGE_KEYS):
+            if ("log" in o and o.get("role") == "precondition") or any(
+                key in expect for key in lint.LOG_RANGE_KEYS
+            ):
                 found[(decree["id"], o["name"])] = o["log"]
     return found
 
@@ -601,23 +683,32 @@ class RequiredLinesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.checks = bounded_checks()
+        cls.bridge_source = (ROOT / "bridge.py").read_text(encoding="utf-8")
         cls.calls = {
             "module": log_calls(modsource.read(modsource.MODULE, errors="replace")),
             "reflect-patch": log_calls(
                 patch_added_text(REFLECT_PATCH.read_text(encoding="utf-8"))
             ),
+            "bridge": {
+                (
+                    "INFO",
+                    "wow-overseer",
+                    "".join(s[1:-1] for s in re.findall(_LITERAL, fmt)),
+                )
+                for fmt in _BRIDGE_INFO.findall(cls.bridge_source)
+            },
         }
 
     def lines(self):
-        for key, pin in sorted(PINS.items()):
+        for key, pin in sorted(ALL_PINS.items()):
             for line in (*pin.writers, *pin.ignores):
                 yield key, line
 
     def test_every_bounded_log_check_is_pinned_to_its_emitter(self):
         self.assertEqual(
             sorted(self.checks),
-            sorted({*PINS, *((d, n) for (d, n) in self.checks if d in UNPINNED)}),
-            "a log check with at_least or at_most needs an entry in PINS naming "
+            sorted({*ALL_PINS, *((d, n) for (d, n) in self.checks if d in UNPINNED)}),
+            "a log precondition or a check with at_least or at_most needs an entry in PINS naming "
             "the call that writes its line (and a stale entry must go)",
         )
         self.assertEqual(
@@ -632,12 +723,31 @@ class RequiredLinesTest(unittest.TestCase):
 
     def test_each_pinned_wording_is_what_the_source_logs(self):
         for key, line in self.lines():
+            if line.source == "raid-door-fix":
+                continue  # checked against the exact fix, not the test checkout
             self.assertIn(
                 (line.level, line.logger, line.fmt),
                 self.calls[line.source],
                 f"{key}: the {line.source} source no longer logs this at {line.level} "
                 f"on {line.logger}; read the new wording and fix the decree's pattern",
             )
+
+    def test_raid_door_warnings_are_emitted_at_hold_and_end(self):
+        raid = loads((DECREE_DIR / f"{RAID_DOOR}.yaml").read_text(encoding="utf-8"))
+        source = modsource.read_revision(raid["fix"]["commit"], modsource.MODULE)
+        before_end, _, after_end = source.partition("if (step.quorumEnds)")
+        _, hold, hold_block = before_end.rpartition(
+            "else if (run.quorumShortSaid != step.shortfall)"
+        )
+        end_block, release, _ = after_end.partition("if (step.release)")
+        self.assertTrue(hold, "the hold warning must use the measured shortfall")
+        self.assertTrue(release, "the quorum-end block no longer precedes raid release")
+        for name, block in (
+            ("the-hold-warned-about-the-shortfall", hold_block),
+            ("the-shortfall-was-logged", end_block),
+        ):
+            (line,) = PINS[(RAID_DOOR, name)].writers
+            self.assertIn((line.level, line.logger, line.fmt), log_calls(block))
 
     def test_each_writer_reaches_the_log_the_judge_reads(self):
         appender = "EphModule"
@@ -652,8 +762,25 @@ class RequiredLinesTest(unittest.TestCase):
                 self.assertIn(appender, appenders.split(), key)
                 self.assertGreaterEqual(int(level), LEVELS[line.level], key)
 
+    def test_the_raid_witnesses_use_the_headless_bridge_log(self):
+        path = DECREE_DIR / (ORDER_DECREE + ".yaml")
+        decree = loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(decree["world"]["bridge"], "on")
+        self.assertIn('log = logging.getLogger("wow-overseer")', self.bridge_source)
+        self.assertIn("logging.basicConfig(level=logging.INFO,", self.bridge_source)
+        self.assertIn("%(name)s %(levelname)s %(message)s", self.bridge_source)
+        with tempfile.TemporaryDirectory() as directory:
+            env = {"EPH_LOGS_DIR": directory}
+            world_log = pathlib.Path(podpaths.log_path(None, env))
+            bridge_log = pathlib.Path(podpaths.bridge_log_path(env))
+            world_log.write_text("world started\n", encoding="utf-8")
+            bridge_log.write_text(REFUSED_ORDER.rendered() + "\n", encoding="utf-8")
+            read = judge.log_reader(decree, world_log, bridge_log)
+            key = (ORDER_DECREE, "bridge-consumed-the-fixture-order")
+            self.assertRegex(read(), self.checks[key]["pattern"])
+
     def test_the_pattern_holds_on_the_line_as_logged_and_not_without_it(self):
-        for key, pin in sorted(PINS.items()):
+        for key, pin in sorted(ALL_PINS.items()):
             log = self.checks.get(key)
             if log is None:
                 continue  # reported by the pinning test
@@ -675,7 +802,7 @@ class RequiredLinesTest(unittest.TestCase):
                     )
 
     def test_the_pattern_ignores_the_sibling_lines(self):
-        for key, pin in sorted(PINS.items()):
+        for key, pin in sorted(ALL_PINS.items()):
             log = self.checks.get(key)
             if log is None:
                 continue
@@ -687,7 +814,7 @@ class RequiredLinesTest(unittest.TestCase):
 
     def test_a_restored_decree_no_longer_says_the_line_is_not_asserted(self):
         restored = {decree_id for decree_id, _name in PINS} - set(STILL_NARROWED)
-        self.assertEqual(len(restored), 9)
+        self.assertEqual(len(restored), 10)
         for path, decree in shipped_decrees():
             if decree["id"] not in restored:
                 continue

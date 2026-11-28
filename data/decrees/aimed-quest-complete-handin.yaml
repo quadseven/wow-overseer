@@ -4,7 +4,7 @@
 decree: v1
 id: aimed-quest-complete-handin
 proves:
-  - {repo: quadseven/mod-overseer, issue: 180, criterion: "a COMPLETE aimed quest is handed in and rewarded, then a genuinely new errand naming a quest already being worked causes one reissue; repeated reissues stay in single figures over 30 minutes"}
+  - {repo: quadseven/mod-overseer, issue: 180, criterion: "Ugga hands in a COMPLETE aimed quest, receives its reward and clears the aim. Grug reissues a quest already being worked exactly once for a genuinely new errand. Reissues stay in single figures over a 30-minute observation."}
 fix: {repo: quadseven/mod-overseer, commit: "b4a8d52ed13fc02cd3d1415a5d97d47004b5cd85"}
 world: {class: lean, image: follow-dev, bridge: "off", random_bots: 0, config: {}}
 runs: {control: 3, treatment: 3}

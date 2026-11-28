@@ -51,7 +51,9 @@ class Config:
     lease_seconds: int = 60
     head_wait_seconds: int = 30 * 60
     settle_seconds: int = 180
+    image_pull_grace_seconds: int = 10 * 60
     result_keep_days: int = 14
+    queue_max_age_seconds: int = 24 * 3600
     template_pull_secret: str = ""
 
 
@@ -93,6 +95,8 @@ def _check(cfg):
         raise ConfigError("source_namespace (the base realm's namespace) is required")
     if not cfg.results_dir:
         raise ConfigError("results_dir is required")
+    if int(cfg.queue_max_age_seconds) < 1:
+        raise ConfigError("queue_max_age_seconds must be at least 1")
     if not 1 <= int(cfg.min_free_percent) <= 90:
         raise ConfigError("min_free_percent must be between 1 and 90")
 

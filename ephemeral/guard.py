@@ -37,7 +37,8 @@ GRANTS_ENABLED = "grants: enabled"
 MARKER_TABLE = "ephemeral_world"
 MARKER_SQL = "SELECT COUNT(*) FROM `acore_characters`.`ephemeral_world`"
 
-# Queue an operator's order as the bridge writes it, using bound parameters.
+# The judge queues an operator's order as the bridge writes it. A fixed
+# statement with bound parameters, so nothing in a decree can reshape it.
 COMMAND_TABLE = "overseer_command"
 COMMAND_COLUMNS = ("target_name", "command", "kind", "source")
 COMMAND_SQL = (
@@ -64,6 +65,31 @@ _TRAVEL_GUARD_UPDATE = (
     "UPDATE `acore_characters`.`overseer_roster` SET `travel_npc` = %s "
     "WHERE `name` = %s AND CAST(`name` AS BINARY) = CAST(%s AS BINARY) "
     "AND `enabled` = 1 AND CAST(`travel_npc` AS BINARY) <=> CAST(%s AS BINARY)"
+)
+RAID_ORDER_SOURCE = "eph-raid-order"
+_RAID_ORDER_COLUMNS = {
+    "overseer_roster": {"name", "family", "enabled", "lead"},
+    "overseer_dungeon_queue": {
+        "id", "family", "position", "keyword", "runs_wanted", "status", "source",
+    },
+}  # fmt: skip
+_RAID_ORDER_MARKER_LOCK = (
+    "SELECT 1 FROM `acore_characters`.`ephemeral_world` FOR UPDATE"
+)
+_RAID_ORDER_HEAD_LOCK = (
+    "SELECT `name`, `family` FROM `acore_characters`.`overseer_roster` "
+    "WHERE `enabled` = 1 AND TRIM(`family`) = %s "
+    "AND (`name` = %s OR `lead` = 1) FOR UPDATE"
+)
+_RAID_ORDER_CONFLICT = (
+    "SELECT `id` FROM `acore_characters`.`overseer_dungeon_queue` "
+    "WHERE (`family` = %s AND `status` IN ('queued', 'active')) "
+    "OR `source` = %s LIMIT 1 FOR UPDATE"
+)
+_RAID_ORDER_INSERT = (
+    "INSERT INTO `acore_characters`.`overseer_dungeon_queue` "
+    "(`family`, `position`, `keyword`, `runs_wanted`, `status`, `source`) "
+    "VALUES (%s, 1, %s, 1, 'queued', %s)"
 )
 _QUEST_AIM_UPDATE = (
     "UPDATE `acore_characters`.`overseer_roster` AS r "
@@ -275,6 +301,56 @@ class GuardedConnection:
             self._rollback_quietly()
             raise
         return aim
+
+    def enqueue_molten_core_order(self, family: str) -> int:
+        """Submit one default Molten Core order to the disposable bridge queue."""
+        self._require_opened()
+        if not isinstance(family, str) or _CHARACTER_NAME.fullmatch(family) is None:
+            raise GuardError("raid order needs a named family head")
+        self._require_raid_order_columns()
+
+        try:
+            cur = self._conn.cursor()
+            try:
+                # All rehearsal orders share the marker lock, even across families.
+                cur.execute(_RAID_ORDER_MARKER_LOCK)
+                if len(cur.fetchall()) != 1:
+                    raise GuardError(
+                        "raid order needs exactly one ephemeral marker row"
+                    )
+                cur.execute(_RAID_ORDER_HEAD_LOCK, (family, family))
+                heads = cur.fetchall()
+                if len(heads) != 1 or heads[0] != (family, family):
+                    raise GuardError("raid order needs one enabled self-family head")
+                cur.execute(_RAID_ORDER_CONFLICT, (family, RAID_ORDER_SOURCE))
+                if cur.fetchone() is not None:
+                    raise GuardError(
+                        "raid order needs no pending family or prior rehearsal order"
+                    )
+                cur.execute(
+                    _RAID_ORDER_INSERT, (family, "moltencore", RAID_ORDER_SOURCE)
+                )
+                order_id = cur.lastrowid
+                if cur.rowcount != 1 or type(order_id) is not int or order_id <= 0:
+                    raise GuardError(
+                        "raid order did not insert exactly one row with an ID"
+                    )
+            except Exception:
+                with contextlib.suppress(Exception):
+                    cur.close()
+                raise
+            cur.close()
+            self._conn.commit()
+        except Exception:
+            self._rollback_quietly()
+            raise
+        return order_id
+
+    def _require_raid_order_columns(self) -> None:
+        for table, required in _RAID_ORDER_COLUMNS.items():
+            columns = self._schema.columns(table, "acore_characters") or ()
+            if not required.issubset(columns):
+                raise GuardError(f"{table} lacks a column required by the raid order")
 
     def write_quest_aim(self, target: str, quest: int) -> None:
         """Set an idle roster member's aim to a quest still in the quest log."""

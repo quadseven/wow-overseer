@@ -8,13 +8,14 @@ Three verdicts, never two:
   step never fired, a query timed out, the guard refused, the seed handoff is
   missing). INVALID never counts as a pass and never closes anything.
 
-What the judge may write, in total: `overseer_command` rows, typed travel
-guards and typed quest aims in the world's own database, and one ConfigMap
-named `eph-result-<run-id>` in its own namespace. Every read goes
-through the same guard the seed uses (loopback MySQL only, ephemeral namespace,
-one marker row), and every observation is re-checked as a single SELECT against
-the world's live schema before it runs. A job goes in as a command row, never a
-direct roster write (measured: a roster UPDATE has no effect).
+The judge writes `overseer_command` rows for ordinary acts, named cast members'
+operator guards for `travel_guard`, at most one tagged Molten Core order in the
+world's campaign queue for `raid_order`, and one ConfigMap named
+`eph-result-<run-id>` in its own namespace. Database access goes through the
+seed guard (loopback MySQL, ephemeral namespace, one marker row). The guard
+locks that row before reading the campaign queue and holds the lock through
+the write's commit or rollback. Every observation is re-checked as a single
+SELECT against the world's live schema before it runs.
 
 Seams: `Judge` takes the world, the clock and the log as arguments, so the
 whole verdict logic runs in unit tests with no database and no cluster.
@@ -39,6 +40,15 @@ from .sqlgen import SeedError
 PASS, FAIL, INVALID = "PASS", "FAIL", "INVALID"
 POLL_SECONDS = 10
 CREDIT_DB, CREDIT_TABLE = "acore_characters", "log_encounter"
+_MASK_BOSSES = frozenset(
+    boss
+    for boss, (map_name, _) in gamedata.INSTANCE_ENCOUNTERS.items()
+    if map_name in gamedata.ENCOUNTER_MASK_MAPS
+)
+_DATA_SAVE_SQL = "SELECT data FROM instance WHERE id = @instance_id AND map = @map_id"
+_MASK_SAVE_SQL = (
+    "SELECT completedEncounters FROM instance WHERE id = @instance_id AND map = @map_id"
+)
 QUERY_TIMEOUT_SECONDS = 30
 # The world's port opens before the family has logged in (measured: one to two
 # minutes later), so `start` preconditions are polled for up to this long.
@@ -105,6 +115,9 @@ class GuardedWorldDb:
 
     def write_travel_guard(self, target, enabled, *, expected=None):
         return self._g.write_travel_guard(target, enabled, expected=expected)
+
+    def enqueue_molten_core_order(self, family):
+        return self._g.enqueue_molten_core_order(family)
 
     def write_quest_aim(self, target, quest):
         return self._g.write_quest_aim(target, quest)
@@ -264,6 +277,51 @@ def _run_bound_problems(bare, maps, alias=None, sole=True):
     return problems
 
 
+def _encounter_done(rows, boss):
+    """Read the selected encounter slots from the pinned core's instance save."""
+    map_name, slots = gamedata.INSTANCE_ENCOUNTERS[boss]
+    if map_name in gamedata.ENCOUNTER_MASK_MAPS:
+        return _encounter_mask_done(rows, map_name)
+    if len(rows) != 1 or len(rows[0]) != 1 or not isinstance(rows[0][0], str):
+        raise JudgeError(f"expected one {map_name} instance save")
+    save = rows[0][0]
+    if not save:
+        return False, "instance save is empty"
+    fields = save.split()
+    if map_name == "Blackrock Depths":
+        if len(fields) not in (7, 8, 9) or any(
+            not re.fullmatch(r"[0-9]+", f) for f in fields
+        ):
+            raise JudgeError("malformed Blackrock Depths instance save")
+        # The six encounter states come first. Magmus sets TYPE_IRON_HALL.
+        state = fields[slots[0]]
+        return state == "3", f"Iron Hall state={state}"
+
+    # Both supported core pins serialize the MC header one character at a time
+    # and write ten boss states. Unsummoned bosses can remain TO_BE_DECIDED (5).
+    states = fields[2:]
+    if (
+        fields[:2] != ["M", "C"]
+        or len(states) != 10
+        or any(state not in {"0", "1", "2", "3", "4", "5"} for state in states)
+    ):
+        raise JudgeError("malformed Molten Core instance save")
+    selected = [states[slot] for slot in slots]
+    return "3" in selected, f"{boss} state={' '.join(selected)}"
+
+
+def _encounter_mask_done(rows, map_name):
+    """Read the core's completed-encounter mask for an instance with no boss save."""
+    if len(rows) != 1 or len(rows[0]) != 1:
+        raise JudgeError(f"expected one {map_name} instance row")
+    mask = rows[0][0]
+    if isinstance(mask, str) and re.fullmatch(r"[0-9]+", mask):
+        mask = int(mask)
+    if type(mask) is not int or not 0 <= mask < 1 << 32:
+        raise JudgeError(f"malformed {map_name} completed-encounter mask")
+    return mask != 0, f"completedEncounters={mask}"
+
+
 class Judge:
     def __init__(
         self,
@@ -349,6 +407,17 @@ class Judge:
                 self._observe(name, started)
         if any(self._unheld_precondition(r) for r in self.records.values()):
             return self._invalid_reasons()
+        for name, observation in self.observes.items():
+            if "encounter" in observation:
+                rec = self._evaluate(name)
+                if rec["status"] == "held":
+                    return [
+                        f"precondition {name}: {observation['encounter']['boss']} was already complete before the first act"
+                    ]
+                if rec["status"] != "violated":
+                    return [
+                        f"precondition {name}: {self._phrase(rec)} reading starting instance state"
+                    ]
         self._window(steps, duration, started)
         for name, o in self.observes.items():
             if o.get("when") == "end" or "log" in o:
@@ -400,7 +469,7 @@ class Judge:
         if duration is None:
             raise JudgeError("decree has no valid duration")
         rendered = self._render(observes, variables)
-        steps = self._plan_acts(observes)
+        steps = self._plan_acts(observes, duration)
         self.observes, self.rendered = observes, rendered
         return duration, steps
 
@@ -409,40 +478,62 @@ class Judge:
         for name, o in observes.items():
             if "sql" in o:
                 sql = render_sql(o["sql"], variables)
-                problems = dbschema.check_select(sql, self.schema)
-                if problems:
-                    raise JudgeError(f"observation {name}: " + "; ".join(problems))
-                rendered[name] = sql
             elif o.get("online") == "cast":
                 sql = render_sql(
                     "SELECT guid FROM characters WHERE guid IN (@cast) AND online = 1",
                     variables,
                 )
-                problems = dbschema.check_select(sql, self.schema)
-                if problems:
-                    raise JudgeError(f"observation {name}: " + "; ".join(problems))
-                rendered[name] = sql
+            elif "encounter" in o:
+                source = lint.encounter_instance(self.decree, o)
+                if source is None:
+                    raise JudgeError(
+                        f"observation {name}: needs a cast-bound seed instance"
+                    )
+                alias, map_id = source
+                instance_id = variables.get(alias)
+                if type(instance_id) is not int or instance_id <= 0:
+                    raise JudgeError(
+                        f"observation {name}: needs a positive instance ID for {alias}"
+                    )
+                sql = render_sql(
+                    _MASK_SAVE_SQL
+                    if o["encounter"]["boss"] in _MASK_BOSSES
+                    else _DATA_SAVE_SQL,
+                    {
+                        "instance_id": instance_id,
+                        "map_id": map_id,
+                    },
+                )
+            else:
+                continue
+            problems = dbschema.check_select(sql, self.schema)
+            if problems:
+                raise JudgeError(f"observation {name}: " + "; ".join(problems))
+            rendered[name] = sql
         return rendered
 
     def _window(self, steps, duration, started):
         """The measured window: fire due acts, sample continuous observations."""
         pending = list(steps)
         while True:
-            elapsed = self.clock() - started
+            final_sample = self.clock() - started >= duration
             for step in list(pending):
-                if self._due(step, elapsed):
-                    self._fire(step, elapsed)
+                if self._due(step, started):
+                    self._fire(step, started)
                     pending.remove(step)
             for name, o in self.observes.items():
                 if o.get("when") == "continuous":
                     self._observe(name, started)
-            if elapsed >= duration:
+            if final_sample:
                 return
+            elapsed = self.clock() - started
             next_deadline = min(
-                (row["by_s"] for row, _at in pending if "by_s" in row),
+                (row["by_s"] for row, _ in pending if "by_s" in row),
                 default=duration,
             )
-            self.sleep(min(self.poll, duration - elapsed, next_deadline - elapsed))
+            self.sleep(
+                max(0, min(self.poll, duration - elapsed, next_deadline - elapsed))
+            )
 
     def _invalid_reasons(self):
         why = []
@@ -472,27 +563,33 @@ class Judge:
     def _credit_reasons(self):
         """A run that arranges an instance needs the core's own credited encounter record.
 
-        The evidence is a held precondition that reads `log_encounter` (the core
-        writes it when an encounter is credited), never a run's own completion
-        flag, and the observation must be POSITIVE and bounded to THIS run:
+        The evidence is a held encounter observation of the fresh bound instance,
+        or a held precondition that reads `log_encounter`. The observation must be
+        positive and bounded to this run:
         an expectation that holds at zero credits, or a query that could count
         an earlier run's credits, proves nothing. A decree that arranges an
         instance without such an observation cannot PASS.
         """
-        maps = {
-            gamedata.INSTANCE_MAPS[step["instance"]["map"]]
+        instances = [
+            step["instance"]
             for step in self.decree.get("arrange") or []
             if "instance" in step
-            and step["instance"].get("map") in gamedata.INSTANCE_MAPS
-        }
-        if not any("instance" in step for step in self.decree.get("arrange") or []):
+        ]
+        if not instances:
             return []
+        maps = {
+            gamedata.INSTANCE_MAPS[instance["map"]]
+            for instance in instances
+            if instance.get("map") in gamedata.INSTANCE_MAPS
+        }
         problems = []
         for name, sql in self.rendered.items():
-            rec = self.records.get(name)
+            rec = self.records.get(name, {})
+            if "encounter" in self.observes[name] and rec.get("status") == "held":
+                return []
             if (CREDIT_DB, CREDIT_TABLE) not in dbschema.tables_read(sql, self.schema):
                 continue
-            if not rec or rec["role"] != "precondition":
+            if rec.get("role") != "precondition":
                 problems.append(
                     f"{name} reads {CREDIT_TABLE} but is not a precondition"
                 )
@@ -508,8 +605,8 @@ class Judge:
         if problems:
             return ["no encounter credit evidence: " + "; ".join(problems)]
         return [
-            "no encounter credit evidence: a precondition reading log_encounter "
-            "must hold before an instance run can pass"
+            "no encounter credit evidence: a bound encounter observation or a "
+            "run-scoped log_encounter precondition must hold"
         ]
 
     def _credit_shape_problems(self, obs, maps, rendered):
@@ -546,60 +643,68 @@ class Judge:
         }.get(r["status"], r["status"])
 
     # -- acts --
-    def _plan_acts(self, observes):
+    def _plan_acts(self, observes, duration):
         steps = []
         for i, cmd in enumerate(acts.act_commands(self.decree)):
-            targets, payload_field = self._validate_act(cmd, i, observes)
-            at, by = self._act_timing(cmd, i)
+            kind = cmd["kind"]
+            payload_field = {
+                acts.TRAVEL_GUARD: "guard_enabled",
+                acts.QUEST_AIM: "quest_id",
+            }.get(kind)
+            if payload_field is not None and payload_field not in cmd:
+                payload_field = None
+            if kind not in guard.COMMAND_KINDS and not (
+                payload_field or cmd.get(acts.RAID_ORDER)
+            ):
+                raise JudgeError(f"act step {i}: command kind {kind!r} is not allowed")
+            if "when" in cmd and cmd["when"] not in observes:
+                raise JudgeError(
+                    f"act step {i}: waits for unknown observation {cmd['when']!r}"
+                )
+            who = cmd["who"]
+            targets = self._act_targets(cmd, i)
+            if payload_field and not self._is_named_target(who, targets):
+                raise JudgeError(f"act step {i}: {kind} needs one named cast member")
+            at = lint.duration_seconds(cmd["at"]) if "at" in cmd else None
+            if "at" in cmd and at is None:
+                raise JudgeError(f"act step {i}: bad time {cmd['at']!r}")
             row = {
-                "index": i, "who": cmd["who"], "targets": targets, "kind": cmd["kind"],
+                "index": i, "who": who, "targets": targets, "kind": cmd["kind"],
                 "text": cmd["text"], "fired": False,
             }  # fmt: skip
-            if payload_field is not None:
+            if payload_field:
                 row[payload_field] = cmd[payload_field]
-            if by is not None:
-                row["by_s"] = by
+            if "by" in cmd:
+                deadline = lint.duration_seconds(cmd["by"])
+                if at is not None or deadline is None:
+                    raise JudgeError(
+                        f"act step {i}: bad conditional deadline {cmd['by']!r}"
+                    )
+                if deadline > duration:
+                    raise JudgeError(
+                        f"act step {i}: deadline exceeds the decree duration"
+                    )
+                row["by_s"] = deadline
             row["at" if "at" in cmd else "when"] = cmd.get("at", cmd.get("when"))
             self.act_rows.append(row)
             steps.append((row, at))
         return steps
 
-    def _validate_act(self, cmd, i, observes):
-        kind = cmd["kind"]
-        payload_field = None
-        if kind == acts.TRAVEL_GUARD and "guard_enabled" in cmd:
-            payload_field = "guard_enabled"
-        elif kind == acts.QUEST_AIM and "quest_id" in cmd:
-            payload_field = "quest_id"
-        elif kind not in guard.COMMAND_KINDS:
-            raise JudgeError(f"act step {i}: command kind {kind!r} is not allowed")
-
-        if "when" in cmd and cmd["when"] not in observes:
-            raise JudgeError(
-                f"act step {i}: waits for unknown observation {cmd['when']!r}"
-            )
-        who = cmd["who"]
-        targets = self._targets(who, i)
-        if payload_field is not None and not self._is_named_target(who, targets):
-            raise JudgeError(f"act step {i}: {kind} needs one named cast member")
-        return targets, payload_field
-
-    @staticmethod
-    def _act_timing(cmd, i):
-        at = lint.duration_seconds(cmd["at"]) if "at" in cmd else None
-        if "at" in cmd and at is None:
-            raise JudgeError(f"act step {i}: bad time {cmd['at']!r}")
-        by = lint.duration_seconds(cmd["by"]) if "by" in cmd else None
-        if "by" in cmd and (at is not None or by is None):
-            raise JudgeError(
-                f"act step {i}: by needs a conditional act and a valid time"
-            )
-        return at, by
-
     def _is_named_target(self, who, targets):
         return targets == [who] and any(
             member["who"] == who for member in self.handoff.get("members", [])
         )
+
+    def _act_targets(self, cmd, i):
+        if cmd.get(acts.RAID_ORDER):
+            family = cmd["who"]
+            members = self.handoff.get("members") or []
+            if self.decree.get("world", {}).get("bridge") != "on":
+                raise JudgeError(f"act step {i}: raid order needs the headless bridge")
+            if [m["name"] for m in members if m["who"] == family] != [family]:
+                raise JudgeError(f"act step {i}: raid order needs one named cast head")
+            return [family]
+        return self._targets(cmd["who"], i)
 
     def _targets(self, who, i):
         members = self.handoff.get("members") or []
@@ -613,22 +718,31 @@ class Judge:
             raise JudgeError(f"act step {i}: {who!r} is not in the seeded cast")
         return names
 
-    def _due(self, step, elapsed):
+    def _due(self, step, started):
         row, at = step
+        elapsed = self.clock() - started
         if at is not None:
             return elapsed >= at
         deadline = row.get("by_s")
-        if deadline is None or elapsed <= deadline:
-            if self._evaluate(row["when"])["status"] == "held":
+        if deadline is None:
+            return self._evaluate(row["when"])["status"] == "held"
+        if elapsed <= deadline:
+            held = self._evaluate(row["when"])["status"] == "held"
+            elapsed = self.clock() - started
+            if held and elapsed <= deadline:
                 return True
-        if deadline is not None and elapsed >= deadline:
-            raise JudgeError(
-                f"act step {row['index']}: {row['when']} did not hold by {deadline}s"
-            )
-        return False
+            if elapsed < deadline:
+                return False
+        raise JudgeError(
+            f"act step {row['index']}: {row['when']} did not hold by {deadline}s"
+        )
 
-    def _fire(self, step, elapsed):
+    def _fire(self, step, started):
         row, _ = step
+        deadline = row.get("by_s")
+        elapsed = self.clock() - started
+        if deadline is not None and elapsed > deadline:
+            raise JudgeError(f"act step {row['index']} could not start by {deadline}s")
         if "guard_enabled" in row:
             self._fire_travel_guard(row)
         elif "quest_id" in row:
@@ -636,11 +750,17 @@ class Judge:
                 self.world.write_quest_aim(row["who"], row["quest_id"])
             except guard.GuardError as exc:
                 raise JudgeError(f"quest aim for {row['who']}: {exc}") from exc
+        elif row["kind"] == acts.RAID_ORDER:
+            self.world.enqueue_molten_core_order(row["targets"][0])
         else:
             for name in row["targets"]:
                 self.world.insert_command(name, row["kind"], row["text"])
         row["fired"] = True
+        if deadline is not None:
+            elapsed = self.clock() - started
         row["fired_s"] = int(elapsed)
+        if deadline is not None and elapsed > deadline:
+            raise JudgeError(f"act step {row['index']} finished after {deadline}s")
 
     def _fire_travel_guard(self, row):
         name = row["who"]
@@ -673,9 +793,9 @@ class Judge:
         rec = {
             "name": name,
             "role": role,
-            "expect": o["expect"] if "expect" in o else o["log"]["expect"],
         }
         if "log" in o:
+            rec["expect"] = o["log"]["expect"]
             rec["when"] = "log"
             pattern = re.compile(o["log"]["pattern"])
             try:
@@ -696,9 +816,17 @@ class Judge:
             return rec
         rec["when"] = o["when"]
         rec["sql"] = self.rendered[name]
+        encounter = o.get("encounter")
+        rec["expect"] = (
+            {"encounter": f"{encounter['boss']} DONE"} if encounter else o["expect"]
+        )
         try:
             rows = self.world.select(rec["sql"])
-            held, observed = expectation_holds(o["expect"], rows)
+            held, observed = (
+                _encounter_done(rows, encounter["boss"])
+                if encounter
+                else expectation_holds(o["expect"], rows)
+            )
             rec["status"] = "held" if held else "violated"
             rec["observed"] = observed
             rec["sample"] = _sample(rows)

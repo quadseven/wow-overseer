@@ -11,6 +11,8 @@ bridge sidecar (or whose sidecar could reach a secret or the API), a fix that is
 template whose tokens this code does not know.
 """
 
+import base64
+import binascii
 import hashlib
 import json
 import pathlib
@@ -20,6 +22,7 @@ from urllib.parse import quote
 
 from . import anchors as anchors_mod
 from . import confmerge, controlauto, dbschema, imagecommit, lint, podpaths, runids
+from .ghx import GhError
 from .kube import KubeError
 from .miniyaml import YamlError, loads
 
@@ -42,6 +45,9 @@ _DURATION = re.compile(r"^(\d+)([smh])$")
 _DIGEST_REF = re.compile(r"^[^\s@]+@sha256:[a-f0-9]{64}$")
 _SHA = re.compile(r"^[a-f0-9]{40}$")
 _LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+# The module repository and the path of its dist, read at the control build's pin.
+MODULE_REPO = "quadseven/mod-overseer"
+MODULE_DIST = "conf/mod_overseer.conf.dist"
 BASELINE = {
     "Overseer.RequireClient": 0,
     "Overseer.Raid.RequireHeadClient": 0,
@@ -393,7 +399,115 @@ def _control_auto(gh, decree, args, resolves, deltas):
         f"control arm: chosen by --control auto from the history: pin {pin}, "
         f"worldserver {entry['worldserver']}"
     )
-    return {**args, **filled}
+    return {**args, **filled}, entry
+
+
+def _module_dist(gh, pin):
+    """The module's dist text at `pin`, or a refusal that names the pin."""
+    if not _SHA.match(str(pin or "")):
+        raise SubmitError(
+            f"the control pin {pin!r} is not a full commit sha, so the module dist cannot be read"
+        )
+    try:
+        doc = gh.api(
+            f"repos/{MODULE_REPO}/contents/{MODULE_DIST}?ref={pin}", missing_ok=True
+        )
+        if not isinstance(doc, dict) or doc.get("encoding") != "base64":
+            raise ValueError("no file content in the answer")
+        return base64.b64decode(doc["content"]).decode("utf-8")
+    except (GhError, ValueError, KeyError, TypeError, binascii.Error) as exc:
+        raise SubmitError(
+            f"the module dist {MODULE_DIST} at control pin {pin} cannot be read: {exc}"
+        ) from exc
+
+
+def _baseline_drops(gh, args, module_pin, decree_keys):
+    """Harness baseline keys the control build's module dist does not define, sorted.
+
+    Only baseline keys count: a key the decree sets, or one the base realm's
+    override files carry, still fails closed in seed-conf. Only the module's own
+    group is checked, because its dist is the one this reads.
+    """
+    if not args.get("control_worldserver"):
+        return []  # the control arm runs the live images, which know every baseline key
+    pin = module_pin
+    if not pin:
+        return []  # nothing says which module build the control image holds
+    baseline = {
+        k
+        for k in BASELINE
+        if confmerge.group_of(k) == "overseer" and k not in decree_keys
+    }
+    if not baseline:
+        return []
+    return sorted(baseline - controlauto.dist_keys(_module_dist(gh, pin)))
+
+
+def _control_config(
+    args, entry, files, required, deltas, gh=None, decree_keys=(), module_pin=None
+):
+    prefix = args.get("control_playerbots_prefix")
+    dropped = args.get("control_drop_keys")
+    if "dist_inventory" in entry:
+        if prefix is not None or dropped is not None:
+            raise SubmitError(
+                "a selected dist_inventory cannot be combined with "
+                "--control-drop-keys or --control-playerbots-prefix"
+            )
+        try:
+            control_files, changes = controlauto.inventory_overrides(
+                entry, files, required
+            )
+        except controlauto.AutoError as exc:
+            raise SubmitError(f"--control auto: {exc}") from exc
+        deltas.extend(changes)
+        return control_files
+
+    control_files = files
+    if dropped is not None:
+        names = dropped.split(",")
+        if not all(_KEY.match(n) for n in names):
+            raise SubmitError(
+                "--control-drop-keys must be a comma-separated list of config keys such as Overseer.Raid.QuorumSeats"
+            )
+    # A build whose module dist predates a harness baseline key would fail
+    # seed-conf, so those keys leave the control arm automatically.
+    auto = [
+        k
+        for k in _baseline_drops(gh, args, module_pin, set(decree_keys))
+        if k not in (dropped or "").split(",")
+    ]
+    if auto:
+        control_files = {
+            g: confmerge.drop_keys(t, set(auto)) for g, t in control_files.items()
+        }
+        deltas.append(
+            "control arm: harness baseline keys dropped (the control build's module dist at pin "
+            f"{module_pin} predates them): " + ", ".join(auto)
+        )
+    if dropped is not None:
+        control_files = {
+            g: confmerge.drop_keys(t, set(names)) for g, t in control_files.items()
+        }
+        deltas.append(
+            "control arm: override keys dropped (the control image's dist predates them): "
+            + ", ".join(names)
+        )
+    if prefix is not None:
+        if not _PREFIX.match(prefix):
+            raise SubmitError(
+                "--control-playerbots-prefix must be a bare name such as AiPlayerbot (no dot, no space)"
+            )
+        control_files = {
+            g: confmerge.rename_prefix(t, "Playerbots.", prefix + ".")
+            if g == "playerbots"
+            else t
+            for g, t in control_files.items()
+        }
+        deltas.append(
+            f"control arm: playerbots keys written as {prefix}.* (the control image predates the rename to Playerbots.*)"
+        )
+    return control_files
 
 
 def default_template_image(cfg, kube):
@@ -451,41 +565,20 @@ def submit(
         raise SubmitError(f"the template has no numbers for class {klass}")
     live_images, pins, base_files = read_live(cfg, kube)
     live_bridge = read_bridge_image(cfg, kube) if bridge_on else None
-    files, deltas = _config_for(world, base_files, bridge_on)
-    prefix = args.get("control_playerbots_prefix")
-    control_files = files
-    dropped = args.get("control_drop_keys")
-    if dropped is not None:
-        names = dropped.split(",")
-        if not all(_KEY.match(n) for n in names):
-            raise SubmitError(
-                "--control-drop-keys must be a comma-separated list of config keys such as Overseer.Raid.QuorumSeats"
-            )
-        control_files = {
-            g: confmerge.drop_keys(t, set(names)) for g, t in control_files.items()
-        }
-        deltas.append(
-            "control arm: override keys dropped (the control image's dist predates them): "
-            + ", ".join(names)
-        )
-    if prefix is not None:
-        if not _PREFIX.match(prefix):
-            raise SubmitError(
-                "--control-playerbots-prefix must be a bare name such as AiPlayerbot (no dot, no space)"
-            )
-        control_files = {
-            g: confmerge.rename_prefix(t, "Playerbots.", prefix + ".")
-            if g == "playerbots"
-            else t
-            for g, t in control_files.items()
-        }
-        deltas.append(
-            f"control arm: playerbots keys written as {prefix}.* (the control image predates the rename to Playerbots.*)"
-        )
+    files, deltas, required = _config_for(world, base_files, bridge_on)
     arms = ["control", "treatment"] if arm_arg == "both" else [arm_arg]
+    entry = {}
     if args.get("control") is not None and "control" in arms:
         resolves = resolves or default_resolves(cfg, kube)
-        args = _control_auto(gh, decree, args, resolves, deltas)
+        args, entry = _control_auto(gh, decree, args, resolves, deltas)
+    # The module pin: the selected history entry's, else --control-pin. For a fix
+    # in the bridge repository --control-pin is a bridge commit, not a module one.
+    bridge_fix = decree["fix"]["repo"].endswith("/wow-overseer")
+    module_pin = entry.get("pin") or (None if bridge_fix else args.get("control_pin"))
+    control_files = _control_config(
+        args, entry, files, required, deltas, gh, set(world.get("config") or {}),
+        module_pin,
+    )  # fmt: skip
     arm_bridge = {
         arm: _images_for(arm, live_images, args, live_bridge).get("bridge")
         for arm in arms
@@ -581,7 +674,7 @@ def _config_for(world, base_files, bridge_on=False):
         f"random bots: {bots}",
         "clients: none (every character is headless)",
     ]
-    return files, deltas
+    return files, deltas, set(changes)
 
 
 def _presence(cfg, gh, decree, arms, args, pins, arm_bridge=None, image_env=None):

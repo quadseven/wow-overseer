@@ -12,7 +12,7 @@ import unittest
 import uuid
 from unittest import mock
 
-from ephemeral import dbschema, guard, judge
+from ephemeral import anchors, dbschema, guard, judge, lint
 from ephemeral.miniyaml import loads
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -62,6 +62,7 @@ class FakeWorld:
         self.answers = []  # (fragment, fn(now) -> rows | Exception)
         self.selects = []
         self.commands = []
+        self.raid_orders = []
 
     def answer(self, fragment, rows):
         fn = rows if callable(rows) else (lambda _now, r=rows: r)
@@ -83,6 +84,10 @@ class FakeWorld:
     def insert_command(self, target, kind, text):
         self.commands.append((self.clock.now, target, kind, text))
         return len(self.commands)
+
+    def enqueue_molten_core_order(self, family):
+        self.raid_orders.append((self.clock.now, family))
+        return len(self.raid_orders)
 
 
 def guzzler_world(
@@ -173,6 +178,7 @@ class ChosenQuestProofTest(unittest.TestCase):
                 world.answer("FROM overseer_roster WHERE", [(int(fixed),)])
                 result = run(decree, world, clock, log=log, handoff=handoff, poll=11)
                 self.assertEqual(result["verdict"], verdict, result["reasons"])
+                self.assertTrue(aims, result["reasons"])
                 self.assertEqual(aims[0], (0, "Ugga", 783))
                 if verdict == "INVALID":
                     self.assertEqual(len(aims), 1)
@@ -182,6 +188,361 @@ class ChosenQuestProofTest(unittest.TestCase):
                         aims[1], (11 if observed == 10 else 300, "Grug", 233)
                     )
                     self.assertGreaterEqual(result["elapsed_s"] - aims[1][0], 1800)
+
+
+class ActDeadlineTest(unittest.TestCase):
+    def test_a_deadline_beyond_the_window_is_refused_before_any_write(self):
+        clock = Clock()
+        world = guzzler_world(clock)
+        decree = copy.deepcopy(GUZZLER)
+        decree["duration"] = "59s"
+        decree["act"][1]["by"] = "60s"
+
+        result = run(decree, world, clock)
+
+        self.assertEqual(result["verdict"], "INVALID")
+        self.assertIn("exceeds the decree duration", result["reasons"][0])
+        self.assertFalse(world.commands)
+
+    def test_read_and_order_must_finish_within_the_bound(self):
+        for read_delay, order_delay, verdict in (
+            (0, 0, "PASS"),
+            (1, 0, "INVALID"),
+            (0, 1, "INVALID"),
+        ):
+            with self.subTest(read_delay=read_delay, order_delay=order_delay):
+                clock = Clock()
+                world = guzzler_world(clock)
+                world.answers = [
+                    (fragment, fn)
+                    for fragment, fn in world.answers
+                    if fragment != "'Plugger Spazzring'"
+                ]
+                decree = copy.deepcopy(GUZZLER)
+                decree["act"][1]["by"] = "60s"
+                decree["act"][1]["roster"]["who"] = "Grug"
+
+                def witness(now):
+                    if now < 60:
+                        return [(0,)]
+                    clock.sleep(read_delay)
+                    return [(1,)]
+
+                record = world.insert_command
+
+                def insert_command(target, kind, text):
+                    if text == "quest":
+                        clock.sleep(order_delay)
+                    return record(target, kind, text)
+
+                world.answer("'Plugger Spazzring'", witness)
+                world.insert_command = insert_command
+                result = run(decree, world, clock, poll=11)
+                self.assertEqual(result["verdict"], verdict, result["reasons"])
+                orders = [write for write in world.commands if write[3] == "quest"]
+                if read_delay:
+                    self.assertFalse(orders)
+                    self.assertIn("did not hold by 60s", result["reasons"][0])
+                else:
+                    fired_s = 60 + order_delay
+                    self.assertEqual(orders, [(fired_s, "Grug", "job", "quest")])
+                    self.assertEqual(result["acts"][1]["fired_s"], fired_s)
+                    if order_delay:
+                        self.assertIn("finished after 60s", result["reasons"][0])
+
+
+class MagmusEncounterTest(unittest.TestCase):
+    @staticmethod
+    def decree():
+        decree = copy.deepcopy(GUZZLER)
+        decree["duration"] = "1m"
+        decree["act"] = [
+            {
+                "at": "0s",
+                "roster": {"who": "family:grug", "job": "dungeon:blackrock-depths"},
+            }
+        ]
+        decree["observe"] = [
+            {
+                "name": "magmus-died",
+                "role": "precondition",
+                "when": "end",
+                "encounter": {"instance": "brd", "boss": "Magmus"},
+            },
+            {
+                "name": "no-guardian-deaths",
+                "role": "check",
+                "when": "end",
+                "sql": "SELECT id FROM overseer_death WHERE killer_entry = 8982",
+                "expect": {"rows": 0},
+            },
+        ]
+        return decree
+
+    def run_with_save(self, save):
+        clock = Clock()
+        world = FakeWorld(clock)
+        world.answer("FROM instance WHERE id = 7 AND map = 230", save)
+        decree = self.decree()
+        return run(decree, world, clock), world
+
+    def test_lint_accepts_the_bound_magmus_observer(self):
+        findings = lint.lint_document(self.decree())
+        self.assertFalse([f for f in findings if f.level == "error"], findings)
+
+    def test_lint_refuses_other_encounter_sources(self):
+        for change in (
+            {"encounter": {"boss": "Emperor", "instance": "brd"}},
+            {"encounter": {"boss": "Magmus", "instance": "somewhere_else"}},
+            {"role": "check"},
+            {"when": "start"},
+            {"sql": "SELECT id FROM instance"},
+        ):
+            with self.subTest(change=change):
+                decree = self.decree()
+                decree["observe"][0].update(change)
+                self.assertTrue(
+                    any(
+                        f.level == "error" and ".encounter" in str(f)
+                        for f in lint.lint_document(decree)
+                    )
+                )
+
+    def test_observes_the_fresh_bound_instances_magmus_kill(self):
+        result, world = self.run_with_save(
+            lambda now: [("0 0 0 0 0 3 0 0 0" if now >= 10 else "",)]
+        )
+        self.assertEqual(result["verdict"], "PASS", result["reasons"])
+        self.assertEqual(named(result, "magmus-died")["status"], "held")
+        self.assertTrue(world.commands)
+        self.assertFalse(any("log_encounter" in sql for _, sql in world.selects))
+
+    def test_preexisting_done_state_invalidates_before_any_act(self):
+        result, world = self.run_with_save([("0 0 0 0 0 3 0 0 0",)])
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+        self.assertIn("already complete", " ".join(result["reasons"]))
+        self.assertFalse(world.commands)
+
+    def test_another_encounters_done_state_does_not_count(self):
+        result, _ = self.run_with_save(
+            lambda now: [("0 0 0 0 3 0 0 0 0" if now >= 10 else "",)]
+        )
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+        self.assertEqual(named(result, "magmus-died")["status"], "violated")
+
+    def test_missing_instance_or_invalid_save_does_not_count(self):
+        for save in ([], [("0 0 0 0 0 3 error 0 0",)]):
+            with self.subTest(save=save):
+                result, world = self.run_with_save(save)
+                self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+                self.assertFalse(world.commands)
+
+
+class MoltenCoreEncounterTest(unittest.TestCase):
+    @staticmethod
+    def decree(decree_name):
+        path = ROOT / "data" / "decrees" / f"{decree_name}.yaml"
+        decree = loads(path.read_text(encoding="utf-8"))
+        decree["duration"] = "1m"
+        return decree
+
+    def run_with_save(self, decree_name, end, *, start="", boss=None, bound=True):
+        decree = self.decree(decree_name)
+        if boss is not None:
+            credit = next(o for o in decree["observe"] if "encounter" in o)
+            credit["encounter"]["boss"] = boss
+        clock = Clock()
+        world = FakeWorld(clock)
+        world.answer("overseer_raid_seat", [(5,)])
+        world.answer("log_encounter", [(0,)])
+        world.answer("kind = 'boss'", [(1,)])
+        world.answer("kind = 'repair_skipped'", [(0,)])
+        world.answer("FROM overseer_dungeon_run WHERE", [(1,)])
+        world.answer("SELECT COUNT(*) FROM overseer_death", [(0,)])
+        if bound:
+            world.answer(
+                "FROM instance WHERE id = 42 AND map = 409",
+                lambda now: [(end if now >= 10 else start,)],
+            )
+        world.answer("FROM instance WHERE id = 41 AND map = 409", [(end,)])
+        world.answer("FROM instance WHERE id = 42 AND map = 230", [(end,)])
+        log = (
+            "[MC] majordomo: 2 casters holding, magic reflection on Flamewaker\n"
+            "raid run for family 'Grug': lowest durability Ugga 81%; "
+            "0 seat(s) under the 25% floor (before encounter 1)"
+        )
+        handoff = {**HANDOFF, "variables": {**HANDOFF["variables"], "mc": 42}}
+        return run(decree, world, clock, log=log, handoff=handoff), world
+
+    def test_majordomo_surrender_is_observed_in_the_fresh_bound_instance(self):
+        result, world = self.run_with_save(
+            "majordomo-reflect-hold", "M C 5 3 3 3 3 3 3 3 3 5 "
+        )
+        self.assertEqual(result["verdict"], "PASS", result["reasons"])
+        self.assertTrue(world.commands)
+        self.assertFalse(any("log_encounter" in sql for _, sql in world.selects))
+
+    def test_durability_can_prove_credit_from_the_first_boss(self):
+        result, _ = self.run_with_save(
+            "raid-durability-before-each-boss", "M C 3 5 5 5 5 5 5 5 5 5 "
+        )
+        self.assertEqual(result["verdict"], "PASS", result["reasons"])
+
+    def test_ragnaros_proof_requires_ragnaros_to_be_done(self):
+        for state, verdict in ((3, "PASS"), (4, "INVALID"), (5, "INVALID")):
+            with self.subTest(state=state):
+                result, _ = self.run_with_save(
+                    "majordomo-reflect-hold",
+                    f"M C 3 3 3 3 3 3 3 3 3 {state} ",
+                    boss="Ragnaros",
+                )
+                self.assertEqual(result["verdict"], verdict, result["reasons"])
+
+    def test_another_boss_does_not_count_as_majordomo_surrender(self):
+        result, _ = self.run_with_save(
+            "majordomo-reflect-hold", "M C 3 3 3 3 3 3 3 3 1 5 "
+        )
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+
+    def test_lint_refuses_wrong_map_or_unknown_selector(self):
+        for boss in ("Magmus", "Garr", ["Majordomo Executus"]):
+            with self.subTest(boss=boss):
+                decree = self.decree("majordomo-reflect-hold")
+                credit = next(o for o in decree["observe"] if "encounter" in o)
+                credit["encounter"]["boss"] = boss
+                self.assertTrue(
+                    any(
+                        f.level == "error" and ".encounter" in str(f)
+                        for f in lint.lint_document(decree)
+                    )
+                )
+
+    def test_saved_credit_from_the_wrong_instance_or_map_cannot_count(self):
+        result, world = self.run_with_save(
+            "majordomo-reflect-hold", "M C 3 3 3 3 3 3 3 3 3 5 ", bound=False
+        )
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+        self.assertFalse(world.commands)
+        self.assertIn(
+            (0.0, "SELECT data FROM instance WHERE id = 42 AND map = 409"),
+            world.selects,
+        )
+
+    def test_preexisting_credit_invalidates_before_the_roster_act(self):
+        for name, start in (
+            ("majordomo-reflect-hold", "M C 5 3 3 3 3 3 3 3 3 5 "),
+            ("raid-durability-before-each-boss", "M C 3 5 5 5 5 5 5 5 5 5 "),
+        ):
+            with self.subTest(decree=name):
+                result, world = self.run_with_save(name, start, start=start)
+                self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+                self.assertIn("already complete", " ".join(result["reasons"]))
+                self.assertFalse(world.commands)
+
+    def test_malformed_save_cannot_credit_the_raid(self):
+        for end in (
+            "B R 3 3 3 3 3 3 3 3 3 5 ",
+            "M C 3 3 3 3 3 3 3 3 3 ",
+            "M C 3 3 3 3 3 3 3 3 3 5 0 ",
+            "M C 3 3 3 3 3 3 3 3 3 6 ",
+        ):
+            with self.subTest(save=end):
+                result, _ = self.run_with_save("majordomo-reflect-hold", end)
+                self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+                self.assertIn("malformed Molten Core", " ".join(result["reasons"]))
+
+
+class RazorfenDownsEncounterTest(unittest.TestCase):
+    """Razorfen Downs keeps no boss states, so credit is the core's encounter mask."""
+
+    @staticmethod
+    def decree():
+        path = (
+            ROOT
+            / "data"
+            / "decrees"
+            / "razorfen-downs-exits-and-restarts-together.yaml"
+        )
+        decree = loads(path.read_text(encoding="utf-8"))
+        decree["duration"] = "2m"
+        keep = {"exactly-five-family-members-start-inside-rfd", "encounter-credited"}
+        decree["observe"] = [o for o in decree["observe"] if o["name"] in keep] + [
+            {
+                "name": "no-exit-hearth-was-used",
+                "role": "check",
+                "when": "end",
+                "sql": "SELECT id FROM overseer_dungeon_run_event WHERE kind = 'exit_hearth'",
+                "expect": {"rows": 0},
+            }
+        ]
+        return decree
+
+    def run_with_mask(self, mask, *, decree=None):
+        clock = Clock()
+        world = FakeWorld(clock)
+        world.answer("map_id = 129 AND instance_id = 11", [(5,)])
+        world.answer("FROM instance WHERE id = 11 AND map = 129", mask)
+        world.answer("overseer_dungeon_run_event", [])
+        handoff = {**HANDOFF, "variables": {**HANDOFF["variables"], "rfd": 11}}
+        result = run(decree or self.decree(), world, clock, handoff=handoff)
+        return result, world
+
+    def test_the_shipped_decree_lints_clean(self):
+        findings = lint.lint_document(self.decree())
+        self.assertFalse([f for f in findings if f.level == "error"], findings)
+
+    def test_a_credited_bit_in_the_fresh_instance_is_the_evidence(self):
+        result, world = self.run_with_mask(lambda now: [(8 if now >= 10 else 0,)])
+        self.assertEqual(result["verdict"], "PASS", result["reasons"])
+        self.assertEqual(named(result, "encounter-credited")["status"], "held")
+        self.assertIn(
+            (
+                0.0,
+                "SELECT completedEncounters FROM instance WHERE id = 11 AND map = 129",
+            ),
+            world.selects,
+        )
+        self.assertFalse(any("log_encounter" in sql for _, sql in world.selects))
+
+    def test_no_credited_bit_is_invalid(self):
+        result, world = self.run_with_mask([(0,)])
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+        self.assertEqual(named(result, "encounter-credited")["status"], "violated")
+        self.assertTrue(world.commands)
+
+    def test_a_mask_set_before_the_first_act_is_invalid(self):
+        result, world = self.run_with_mask([(1,)])
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+        self.assertIn("already complete", " ".join(result["reasons"]))
+        self.assertFalse(world.commands)
+
+    def test_a_missing_or_malformed_mask_does_not_count(self):
+        for mask in ([], [(None,)], [(-1,)], [(1 << 32,)], [("3 0",)], [(1,), (1,)]):
+            with self.subTest(mask=mask):
+                result, world = self.run_with_mask(mask)
+                self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+                self.assertFalse(world.commands)
+
+    def test_lint_refuses_the_selector_on_another_map(self):
+        decree = self.decree()
+        decree["arrange"] = [
+            {
+                "instance": {
+                    "map": "Blackrock Depths",
+                    "as": "rfd",
+                    "bind": "family:grug",
+                }
+            }
+            if "instance" in step
+            else step
+            for step in decree["arrange"]
+        ]
+        self.assertTrue(
+            any(
+                f.level == "error" and ".encounter" in str(f)
+                for f in lint.lint_document(decree)
+            )
+        )
 
 
 class VerdictTest(unittest.TestCase):
@@ -760,6 +1121,103 @@ class TimeoutTest(unittest.TestCase):
         self.assertLess(clock.now, 20 * 60 + 11)
 
 
+class RaidOrderActTest(unittest.TestCase):
+    def setUp(self):
+        self.clock = Clock()
+        self.world = guzzler_world(self.clock)
+        self.decree = copy.deepcopy(GUZZLER)
+        self.decree["world"]["bridge"] = "on"
+        self.decree["cast"][0]["who"] = "Grug"
+        self.decree["act"] = [{"at": "10s", "raid_order": {"family": "Grug"}}]
+        self.handoff = copy.deepcopy(HANDOFF)
+        self.handoff["members"][0]["who"] = "Grug"
+
+    def lint_errors(self):
+        return [
+            str(finding)
+            for finding in lint.lint_document(self.decree, anchors.Anchors({}), SCHEMA)
+            if finding.level == "error" and finding.path.startswith("decree.act")
+        ]
+
+    def test_named_family_uses_campaign_queue_at_the_scheduled_time(self):
+        self.assertEqual(self.lint_errors(), [])
+        result = run(self.decree, self.world, self.clock, handoff=self.handoff)
+        self.assertEqual(result["verdict"], "PASS", result["reasons"])
+        self.assertEqual(self.world.raid_orders, [(10, "Grug")])
+        self.assertEqual(self.world.commands, [])
+
+    def test_raid_order_requires_a_bridge_and_one_named_cast_family(self):
+        for bridge, family in (("off", "Grug"), ("on", "Ugga"), ("on", "family:grug")):
+            with self.subTest(bridge=bridge, family=family):
+                self.decree["world"]["bridge"] = bridge
+                self.decree["act"][0]["raid_order"]["family"] = family
+                self.assertTrue(self.lint_errors())
+
+    def test_two_raid_orders_are_rejected(self):
+        self.decree["act"] *= 2
+        self.assertIn("one raid order", "\n".join(self.lint_errors()))
+
+    def test_family_selected_only_by_group_never_gets_a_queue_order(self):
+        result = run(self.decree, self.world, self.clock)
+        self.assertEqual(result["verdict"], "INVALID")
+        self.assertEqual(self.world.raid_orders, [])
+
+    def test_command_kind_cannot_take_the_typed_queue_path(self):
+        self.decree["act"] = [
+            {
+                "at": "0s",
+                "command": {"who": "Grug", "kind": "raid_order", "text": "moltencore"},
+            }
+        ]
+        result = run(self.decree, self.world, self.clock, handoff=self.handoff)
+        self.assertEqual(result["verdict"], "INVALID")
+        self.assertEqual(self.world.raid_orders, [])
+
+    def test_rehearsal_distinguishes_refused_accepted_and_unconsumed_orders(self):
+        decree_file = ROOT / "data/decrees/molten-core-order-refuses-unavailable.yaml"
+        decree = loads(decree_file.read_text(encoding="utf-8"))
+        self.handoff["members"][1].update(who="Ugga", cast_index=1)
+        self.handoff["variables"]["cast1"] = 2
+        scenarios = (
+            (
+                "PASS",
+                "wow-overseer INFO queue: Grug's family: withheld: Molten Core refused: "
+                "1 of 40 approved members unavailable: Ugga (level 49; needs 50)",
+                0,
+            ),
+            (
+                "FAIL",
+                "wow-overseer INFO raid: Grug's family ordered into moltencore - "
+                "2 seats written in 1 groups, 2 job row(s) of 2.",
+                2,
+            ),
+            ("INVALID", "", 0),
+        )
+        for verdict, log, jobs_written in scenarios:
+            with self.subTest(verdict=verdict):
+                clock = Clock()
+                world = FakeWorld(clock)
+                world.answer("AND online = 1", [(1,), (2,)])
+                world.answer("JOIN guild_member", [(2,)])
+                world.answer("status IN ('queued', 'active')", [(0,)])
+                world.answer("status IN ('pending', 'claimed', 'verifying')", [(0,)])
+                world.answer(
+                    "AND written_at >= ",
+                    lambda _, w=world, jobs=jobs_written: [
+                        (2 if w.raid_orders and jobs else 0,)
+                    ],
+                )
+                world.answer(
+                    "runs_wanted = 1", lambda _, w=world: [(len(w.raid_orders),)]
+                )
+                world.answer("c.source = 'overseer:queue'", [(jobs_written,)])
+                world.answer("started_at IS NULL", [(int(jobs_written == 0),)])
+                result = run(decree, world, clock, log=log, handoff=self.handoff)
+                self.assertEqual(result["verdict"], verdict, result["reasons"])
+                self.assertEqual(world.raid_orders, [(0, "Grug")])
+                self.assertEqual(world.commands, [])
+
+
 class SafetyTest(unittest.TestCase):
     def test_paired_follower_guard_needs_continuously_observable_actors(self):
         for reaches_goal, outage, excursion, expected in (
@@ -977,6 +1435,26 @@ class LogAssertionTest(unittest.TestCase):
         clock = Clock()
         r = run(self.decree(0), guzzler_world(clock), clock, log="all quiet\n")
         self.assertEqual(r["verdict"], "PASS", r["reasons"])
+
+    def test_an_unwitnessed_scenario_is_invalid_even_when_an_outcome_check_fails(self):
+        d = self.bounded({"at_least": 1})
+        observation = d["observe"][-1]
+        observation.update(name="observed-encounter", role="precondition", when="end")
+        observation["log"]["pattern"] = "the family entered the hall"
+        for log, patrons, verdict in (
+            ("", [("Grim Patron", 5, 1234)], "INVALID"),
+            ("the family entered the hall", [("Grim Patron", 5, 1234)], "FAIL"),
+            ("the family entered the hall", [], "PASS"),
+        ):
+            with self.subTest(log=log, verdict=verdict):
+                clock = Clock()
+                world = guzzler_world(clock, patrons=patrons)
+                result = run(d, world, clock, log=log)
+                self.assertEqual(result["verdict"], verdict, result["reasons"])
+                if verdict == "INVALID":
+                    self.assertIn(
+                        "precondition observed-encounter", result["reasons"][0]
+                    )
 
     def bounded(self, expect):
         d = self.decree(0)

@@ -318,6 +318,112 @@ class TheNamedClipLinks(unittest.TestCase):
         self.assertIn("${clipLink(r)}${clipLinks(r)}", guild)
 
 
+@needs_node
+class TheMomentCard(unittest.TestCase):
+    def draw(self, read):
+        out = run(
+            'const C = await import("./views/_clips.js");\n'
+            "console.log(JSON.stringify({m: String(C.shelf(%s))}));\n"
+            % json.dumps(read)
+        )
+        return out["m"]
+
+    def test_the_meta_line_names_kind_character_filmer_and_when(self):
+        clip = {
+            "id": 3,
+            "kind": "boss_kill",
+            "character": "Bork",
+            "view_owner": "Grug",
+            "subject": "Emperor Dagran Thaurissan",
+            "at": "2026-11-17T22:15:00",
+            "url": "/clips/clip-3-boss_kill.mp4",
+        }
+        m = self.draw({"data": {"clips": [clip], "empty": "none"}, "loading": False})
+        self.assertIn("Emperor Dagran Thaurissan", m)
+        meta = m[m.index("clip-meta") :]
+        self.assertLess(meta.index("Boss kill"), meta.index("Bork"))
+        self.assertLess(meta.index("Bork"), meta.index("filmed by Grug"))
+        self.assertRegex(meta, r"\d{1,2}:\d{2}")
+
+    def test_no_filmed_by_when_the_view_is_the_characters_own(self):
+        clip = dict(CLIPS[0], view_owner="Otherchar")
+        m = self.draw({"data": {"clips": [clip], "empty": "none"}, "loading": False})
+        self.assertNotIn("filmed by", m)
+
+    def test_clips_group_under_a_head_for_each_day(self):
+        two_days = [dict(CLIPS[0], at="2026-11-10T09:00:00"), CLIPS[1]]
+        m = self.draw({"data": {"clips": two_days, "empty": "none"}, "loading": False})
+        self.assertEqual(m.count('class="clip-day"'), 2)
+        same_day = [CLIPS[0], dict(CLIPS[1], at="2026-11-09T12:00:00")]
+        m = self.draw({"data": {"clips": same_day, "empty": "none"}, "loading": False})
+        self.assertEqual(m.count('class="clip-day"'), 1)
+
+    def test_kind_chips_offer_all_and_each_kind_present(self):
+        m = self.draw({"data": {"clips": CLIPS, "empty": "none"}, "loading": False})
+        self.assertIn('data-clip-kind=""', m)
+        self.assertIn('data-clip-kind="loot"', m)
+        self.assertIn('data-clip-kind="boss_kill"', m)
+
+    def test_the_shelf_shows_twelve_then_offers_more(self):
+        many = [
+            dict(CLIPS[1], id=i + 1, url="/clips/clip-%d-loot.mp4" % (i + 1))
+            for i in range(13)
+        ]
+        m = self.draw({"data": {"clips": many, "empty": "none"}, "loading": False})
+        self.assertEqual(m.count('class="card clip-card"'), 12)
+        self.assertIn("data-clip-more", m)
+
+    def test_a_kind_chip_filters_the_shelf(self):
+        out = run(
+            'const C = await import("./views/_clips.js");\n'
+            "globalThis.window.dispatchEvent = () => {};\n"
+            "const read = {data: {clips: %s, empty: 'none'}, loading: false};\n"
+            "C.shelf(read);\n"
+            "const chips = ['loot', 'boss_kill'].map((k) => ({ k,"
+            " getAttribute: () => k, addEventListener(_t, f) { this.click = f; } }));\n"
+            "C.bindShelf({ querySelectorAll: (q) =>"
+            " (q === 'button[data-clip-kind]' ? chips : []) });\n"
+            "chips[0].click();\n"
+            "const m = String(C.shelf(read));\n"
+            "console.log(JSON.stringify({cards: m.split('class=\"card clip-card\"').length - 1,"
+            " loot: m.includes('Test Blade'), boss: m.includes('Test Warden')}));\n"
+            % json.dumps(CLIPS)
+        )
+        self.assertEqual(out, {"cards": 1, "loot": True, "boss": False})
+
+    def test_the_missed_footer_is_one_summary_card_with_the_days_folded(self):
+        missed = [
+            {"day": "2026-11-10", "no_view": 2, "failed": 1},
+            {"day": "2026-11-09", "no_view": 1, "failed": 0},
+        ]
+        m = self.draw(
+            {"data": {"clips": CLIPS, "missed": missed, "empty": "x"}, "loading": False}
+        )
+        self.assertIn("clip-missed-card", m)
+        self.assertIn("4 moments left no clip", m)
+        self.assertIn("most on", m)
+        self.assertIn("2026-11-10: 2 with no streamed member in view", m)
+
+
+@needs_node
+class TheClipLinkPlaysInPlace(unittest.TestCase):
+    def link(self, entry):
+        out = run(
+            'const C = await import("./views/_clips.js");\n'
+            "console.log(JSON.stringify({m: String(C.clipLink(%s))}));\n"
+            % json.dumps(entry)
+        )
+        return out["m"]
+
+    def test_the_link_is_a_play_button_with_the_file_offered_second(self):
+        m = self.link({"clip": {"url": "/clips/clip-9-loot.mp4", "kind": "loot"}})
+        self.assertIn('data-clip="/clips/clip-9-loot.mp4"', m)
+        self.assertIn("Watch the clip", m)
+        self.assertIn("Open the file", m)
+        self.assertIn('href="/m/clips/clip-9-loot.mp4"', m)
+        self.assertLess(m.index("Watch the clip"), m.index("Open the file"))
+
+
 class TheFeedDrawsFirstKillsAndSixtyClips(unittest.TestCase):
     def test_the_feed_row_draws_every_clip_shape_with_the_shared_helpers(self):
         guild = app_file("views/guild.js")

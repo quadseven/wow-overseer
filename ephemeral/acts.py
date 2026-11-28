@@ -5,10 +5,13 @@ row (kind `job`) is applied by the module within seconds with no bridge, while
 a direct UPDATE of `overseer_roster.job` showed no effect. So a `roster` step
 is shorthand for a command of kind `job`. A `travel_guard` step sets or clears
 only the named cast member's operator guard through the dedicated world guard.
-A `quest_aim` step sets a standing intent for a quest the named member holds.
+A typed raid order goes to the bridge's campaign queue to exercise its
+eligibility checks. A `quest_aim` step sets a standing intent for a quest
+the named member holds.
 """
 
 TRAVEL_GUARD = "travel_guard"
+RAID_ORDER = "raid_order"
 QUEST_AIM = "quest_aim"
 
 
@@ -37,12 +40,28 @@ def act_commands(decree):
                     "guard_enabled": g["enabled"],
                 }
             )
+        elif RAID_ORDER in step:
+            family = step[RAID_ORDER]["family"]
+            out.append(
+                {
+                    **when,
+                    "who": family,
+                    "kind": RAID_ORDER,
+                    "text": "moltencore",
+                    RAID_ORDER: True,
+                }
+            )
         elif QUEST_AIM in step:
             aim = step[QUEST_AIM]
-            out.append({
-                **when, "who": aim["who"], "kind": QUEST_AIM,
-                "text": str(aim["quest"]), "quest_id": aim["quest"],
-            })  # fmt: skip
+            out.append(
+                {
+                    **when,
+                    "who": aim["who"],
+                    "kind": QUEST_AIM,
+                    "text": str(aim["quest"]),
+                    "quest_id": aim["quest"],
+                }
+            )
         else:
             c = step["command"]
             out.append({**when, "who": c["who"], "kind": c["kind"], "text": c["text"]})

@@ -235,3 +235,83 @@ def plan(
         taken.update((holder.name, wearer.name))
         started += 1
     return Plan(tuple(fetches), tuple(notes))
+
+
+# --- what the bridge's fetch pass reads, turned into the planner's inputs ------
+
+
+def candidates(result) -> list:
+    """The routes the executor left waiting only because holder and wearer
+    stand apart with no mailbox under the holder, best gain first and report
+    order within a tie. A route waiting on anything else (room, a pass cap, a
+    stale or kept piece) is not a fetch's to fix, and the guild bank does not
+    walk."""
+    out = []
+    for step in getattr(result, "steps", ()) or ():
+        route = step.route
+        if step.status != gearroutingexec.WAITING:
+            continue
+        if route.holder == gearrouting.BANK_HOLDER:
+            continue
+        if not str(step.why or "").endswith(gearroutingexec.APART_NO_MAILBOX):
+            continue
+        out.append(route)
+    out.sort(key=lambda r: -gearroutingexec._percent(r.gain))
+    return out
+
+
+def _number(value, default=0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
+
+
+def members_from(rows, roster=(), family_of=None) -> dict:
+    """name -> Member from fresh snapshot rows (name, map_id, instance_id,
+    pos_x, pos_y, in_combat). A character with no fresh row is left out, so
+    the planner names it "not in the world"."""
+    roster, family_of = set(roster or ()), dict(family_of or {})
+    out = {}
+    for row in rows or ():
+        name = str(row.get("name") or "")
+        if not name:
+            continue
+        out[name] = Member(
+            name,
+            int(_number(row.get("map_id"))),
+            _number(row.get("pos_x")),
+            _number(row.get("pos_y")),
+            in_combat=bool(int(_number(row.get("in_combat")))),
+            in_instance=int(_number(row.get("instance_id"))) != 0,
+            roster=name in roster,
+            family=str(family_of.get(name) or ""),
+        )
+    return out
+
+
+def mailboxes_from(rows) -> list:
+    """Mailbox spawns from gameobject rows (spawn, map_id, x, y), once each."""
+    out, seen = [], set()
+    for row in rows or ():
+        spawn = int(_number(row.get("spawn")))
+        if spawn <= 0 or spawn in seen:
+            continue
+        seen.add(spawn)
+        out.append(
+            Mailbox(
+                int(_number(row.get("map_id"))),
+                spawn,
+                _number(row.get("x")),
+                _number(row.get("y")),
+            )
+        )
+    return out
+
+
+def disc_tuples(discs) -> list:
+    """(map, x, y, radius) for each deathcells.Disc the planner checks."""
+    return [
+        (int(d.map_id), float(d.x), float(d.y), float(d.radius)) for d in discs or ()
+    ]

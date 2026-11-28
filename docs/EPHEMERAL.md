@@ -108,8 +108,8 @@ SQL are checked against a snapshot of the game databases
     runs: {control: 3, treatment: 3}
     duration: 20m
     cast:      # characters in the template, by name, family:<name> or guild:<Guild>:<role>
-    arrange:   # instances, groups, creatures, before the world loads
-    act:       # after load: roster or command steps, at a time or when an observation holds
+    arrange:   # instances, groups, creatures, raid seats, before the world loads
+    act:       # after load: roster, command, travel_guard, raid_order or quest_aim
     observe:   # preconditions and checks: SQL or a log pattern
 
 ## Rules lint enforces
@@ -143,6 +143,11 @@ SQL are checked against a snapshot of the game databases
   `overseer_command` row. Measured on a hand-made world, such a row was applied
   within seconds with no bridge, while a direct update of `overseer_roster`
   showed no effect. `ephemeral/acts.py` turns the timeline into those rows.
+- `raid_order: {family: Grug}` uses the headless bridge's campaign queue in a
+  bridge-on world. The family head must be named explicitly in the cast and
+  resolve to the enabled head in the disposable roster. One act per decree may
+  queue one ordinary Molten Core run. The guard refuses a family with a
+  pending order or a world with a prior rehearsal order.
 - Observation SQL is one read-only SELECT. Every table and column must exist, a
   derived table (`FROM (SELECT ...)`) is not supported, and a database qualifier
   must lead to a table and column (`db.table.column`).
@@ -194,7 +199,7 @@ elsewhere would not start the tests.
 
     python3 -m ephemeral seed [--dry-run] data/decrees/<name>.yaml
 
-Meant to run inside the world pod before the worldserver starts (no pod runs it yet).
+Runs inside the world pod before the worldserver starts.
 It lints the decree, passes the guard, resolves every name and anchor in the world's own database
 (zero or several matches is INVALID), compiles the statements and applies them
 in one transaction. Settings come from the pod environment, never the decree:
@@ -221,6 +226,14 @@ Table and column names are checked against the live schema inside the world
 (the snapshot is the fallback for lint and tests). A character named on its own
 in `cast` overrides the same character inside a `family:` entry.
 
+An `arrange` entry `raid_seats` replaces the snapshot's lineup for one `family`
+and raid `keyword` in the disposable world. Its `seats` list names existing
+cast entries with `who` and `role` (`tank`, `healer` or `dps`). Each expanded
+member gets one seat. Groups get up to five seats in order, with a limit of 40
+across the raid. The fixture supplies the lineup before the world loads. Use an
+ordinary `roster` act to start the order. The core evaluates actual character
+roles for the door quorum.
+
 What the seed writes follows how the core stores each thing. Whether the core
 then plays the scenario as intended is shown by the first end-to-end run, and a
 failed precondition makes that run INVALID, never a pass.
@@ -233,7 +246,9 @@ Use `quest_aim: {who: <named cast entry>, quest: <id>}` to aim an actor at a
 quest already in their log. The run stops if that actor has an active aim,
 does not hold the quest, or has already received its reward. The module owns
 the hand-in and aim release. A conditional act can set `by: 5m` to require
-its observation by that time. A missed deadline makes the run INVALID.
+the observation and the act to finish within five minutes of the act clock
+starting. The deadline must fit within the decree duration. A missed
+deadline makes the run INVALID.
 
 Meant to run as the world pod's last step, after the seed. In the pod it needs no
 flags: `seed` and `judge` both default `EPH_VARS_FILE` to `/tmp/eph-vars.json` (the
@@ -283,19 +298,23 @@ bound on that count:
 - `{count: N}` or `{exactly: N}`: exactly N matching lines. `{count: 0}` forbids
   a line. Either key stands alone.
 - `{at_least: N}`: N or more matching lines, with N at least 1. This requires a
-  line: no match in the run's log is a violated check.
+  matching line in the run's log.
 - `{at_most: N}`: N or fewer matching lines.
 - `{at_least: N, at_most: M}`: a range, with N no greater than M.
 
-A check that requires or caps a line (`at_least` or `at_most`) is only as good as
-its pattern: a line no code writes fails every run when required and passes every
-run when capped. `tests/test_eph_required_lines.py` therefore lists each such
-check beside the format string of the call that writes its line, and fails when
-the pinned source no longer logs that wording, when the logger does not reach the
-log the judge reads, or when the pattern does not match the line as formatted. A
-new bounded check needs an entry there. The judge reads one file, so only a line
-of the module or of the bots can be required: the bridge's own log, and a core
-logger the world does not send to that file, are out of its reach.
+Use `role: precondition` and `when: end` for a log line that establishes the
+scenario happened in both arms. Its bound must require a positive match and
+its pattern must require nonempty text.
+An absent witness makes the arm INVALID even if an outcome check fails.
+Use `role: check` without `when` for logs that measure the outcome.
+
+A log precondition or a check that requires or caps a line (`at_least` or
+`at_most`) needs a pattern that the pinned build actually emits.
+`tests/test_eph_required_lines.py` lists these observations beside the format
+strings of their emitters. The guard fails if the pinned source changes the
+format, the emitter misses the logs that the judge reads, or the pattern misses
+the formatted line. A new witness or bounded check needs an entry there. The
+judge reads the worldserver log and, for `bridge: on`, the bridge sidecar log.
 
 Every bound is a whole number, zero or more; lint rejects a negative, missing or
 unknown bound, and a judge handed one anyway reports the check as an error
@@ -303,11 +322,16 @@ unknown bound, and a judge handed one anyway reports the check as an error
 a timeout or error is sticky and makes the run INVALID even if a later look
 violates or passes; a violation outranks a later clean look.
 
-What the judge may write, in total: `overseer_command` rows in the world's own
-database (through the same guard as the seed, and never kind `gm`), and one
-ConfigMap, `eph-result-<run-id>`, created in its own namespace. Every
-observation is re-checked as a single SELECT against the live schema before it
-runs. Settings come from the pod environment: the seed's variables plus
+The judge writes `overseer_command` rows for ordinary acts, a named cast
+member's operator guard for `travel_guard`, one tagged Molten Core order in the
+world's campaign queue for `raid_order`, a named member's idle quest aim for
+`quest_aim`, and one ConfigMap, `eph-result-<run-id>`, in its own namespace.
+The guard accepts at most one rehearsal order per disposable world, including
+across families. It locks the world's singleton
+marker row before reading the queue and holds the lock through commit or
+rollback. The guard rejects `gm` commands and re-checks every observation as a
+single SELECT against the live schema.
+Settings come from the pod environment: the seed's variables plus
 `EPH_RUN_ID`, `EPH_ARM` and `EPH_NAMESPACE`. The ConfigMap holds the verdict, the
 reasons, the rendered SQL and observed values per assertion, sample rows and
 matched log lines (cut to fit 256 KB, never the verdict). Exit 0 means a verdict
@@ -315,17 +339,40 @@ was written, whatever it was; exit 2 means the harness could not write one.
 
 Two rules keep a PASS honest. A scalar expectation needs exactly one row and one
 column; any other shape is INVALID, so row order can never hide a failing value.
-And a decree that arranges an instance cannot PASS without a held precondition
-that reads `log_encounter` (a real FROM or JOIN, not a name in a string), the
-core's own credited-encounter record. That observation must reject zero credits
+An instance run also needs a held precondition backed by a core encounter record.
+The core writes `log_encounter` for Wrath raids. A precondition using that source
+must read the table and reject zero credits
 (an expectation like `>= 0` is refused) and be bounded to this run, with
 `time >= @t0` and the arranged instance's map as conjuncts of a flat AND chain in
 a single plain SELECT (no OR, NOT, XOR, BETWEEN, parentheses, UNION or subquery,
 so no row from an earlier run can satisfy it). The observation reads
 `log_encounter` exactly once (no self-join) and both bounds apply to that one
-alias, or are unqualified when it is the only table; a run's
-completion flag is never evidence, and a run with no credit is INVALID. The
-judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
+alias, or are unqualified when it is the only table. A run with no core encounter
+evidence is INVALID.
+
+Use a typed `encounter` end precondition for the supported bosses in Blackrock
+Depths, Molten Core and Razorfen Downs. Its alias must identify the decree's only arranged
+instance, on the boss's map and bound to a member of the cast. The judge reads
+the same instance save before any act and again at the end. A missing or malformed
+save or a selected encounter that is already DONE before the first act makes
+the run INVALID. The precondition holds when a selected encounter reaches DONE
+in that instance.
+
+- `encounter: {instance: brd, boss: Magmus}` reads the Iron Hall state in Blackrock
+  Depths.
+- `encounter: {instance: mc, boss: "Majordomo Executus"}` requires the core state
+  set when the last add dies and Majordomo surrenders.
+- `encounter: {instance: mc, boss: Ragnaros}` requires the core state set on
+  Ragnaros's death.
+- `encounter: {instance: mc, boss: "Any Molten Core boss"}` accepts any of the ten
+  Molten Core encounters on an instance where all ten began incomplete.
+- `encounter: {instance: rfd, boss: "Any Razorfen Downs boss"}` reads the
+  instance's `completedEncounters` mask instead of its save, because the Razorfen
+  Downs instance script keeps no boss states. The core sets one bit of that mask
+  per DungeonEncounter.dbc credit, and which bit is which boss is not known here,
+  so any bit counts. The mask must start at zero.
+
+The judge finds the API server from the pod's `KUBERNETES_SERVICE_HOST` and
 `KUBERNETES_SERVICE_PORT`; without them it prints an INVALID verdict and exits 2,
 because there is nowhere to write the result.
 
@@ -342,6 +389,7 @@ digest-pinned tools image. A missing or malformed file is an error.
     python3 -m ephemeral submit --control auto --control-history FILE data/decrees/<name>.yaml
     python3 -m ephemeral dispatch [--once] [--owner NAME]
     python3 -m ephemeral dispatch --stop --owner NAME
+    python3 -m ephemeral withdraw <batch-id>
     python3 -m ephemeral collect [--dry-run]
     python3 -m ephemeral report <batch-id> [batch-id ...] [--dry-run]
 
@@ -368,12 +416,48 @@ refuses verification rather than declaring the commit off branch.
 enforced by a Kubernetes Lease. Each pass it unsuspends the oldest queued Job
 that fits: the node is allowed and under its world cap, the namespace quota has
 room, and the node would keep at least 20 percent of its disk free after the
-Job's disk and every recently started world's disk are counted. If the node's
-stats cannot be read it refuses. A small Job may skip a larger one that does not
+Job's disk and every recently started world's disk are counted. The dispatcher
+checks CPU and memory requests, plus pod count, memory limits, and ephemeral
+storage requests and limits when the quota sets them. It reserves quota for
+worlds started in the current pass and worlds whose Jobs have yet to report an
+active pod. A newly admitted pod can count twice until its Job catches up.
+Missing quota status or node disk statistics keep the Job suspended.
+A small Job may skip a larger one that does not
 fit, but nothing skips a head that has waited 30 minutes. Runs after the first
 control and treatment pair start only if the pair was control FAIL then
 treatment PASS; any other first pair stops the batch and removes its waiting
 Jobs. A finished Job with no result gets an INVALID result recorded for it.
+A started Job whose pod has waited on an image pull failure (`ErrImagePull`,
+`ImagePullBackOff`, `InvalidImageName`, `ErrImageNeverPull`) for longer than the
+runner setting `image_pull_grace_seconds` (default 600) gets an INVALID result
+naming the container and image, and is deleted, so its node slot and quota come
+back on the same pass instead of at the Job's deadline. This reads the
+namespace's pods; if they cannot be read, the pass goes on without the check.
+
+`withdraw` drops a batch that should not run (a wrong decree, a superseded fix
+commit, a batch submitted twice) without `kubectl delete`. It creates one request
+ConfigMap, `eph-withdraw-<batch-id>`, labelled `eph/withdraw`. On its next pass the
+dispatcher deletes that batch's suspended Jobs, writes an INVALID result for each
+run naming the withdrawal, then deletes the request. Runs already started are not
+touched. A repeated request says "already requested".
+
+The dispatcher also cleans up after itself. A suspended Job that has waited longer
+than the runner setting `queue_max_age_seconds` (default 86400) is deleted with an
+INVALID result naming the wait, so an abandoned batch cannot hold the queue head. A
+run ConfigMap (`eph-run-<run-id>`) whose Job is gone and whose result exists is
+deleted. Finished Jobs are left to the Job's own `ttlSecondsAfterFinished`.
+
+The dispatcher's ServiceAccount Role is part of the cluster manifests, outside this
+repository. `dispatch.DISPATCHER_RULES` lists what the code asks of the API, and a
+test holds every call inside it. Compared with the earlier dispatcher, the new
+permission is `delete` on `configmaps`, in the ephemeral namespace only. The Role
+must grant exactly these verbs and no others:
+
+- `leases.coordination.k8s.io`: `get`, `create`, `update`
+- `jobs`: `list`, `patch`, `delete`
+- `configmaps`: `list`, `create`, `delete`
+- `pods`, `resourcequotas`: `list`
+- `nodes/proxy`: `get`
 
 Each dispatcher also takes a local owner lock (`~/.ephemeral/dispatch.lock`, or
 `EPH_LOCK`) recording the owner, pid and start time; the cluster Lease holder
@@ -486,6 +570,19 @@ delta records it. Any other key the control dist lacks still fails closed; a key
 module added after the control build (its dist predates it) is removed from the control
 arm's override files with `--control-drop-keys A,B,C`, which records a delta naming them.
 
+`submit` also does this for the harness baseline keys on its own. When
+`--control-worldserver` and `--control-pin` name the control build (or `--control auto`
+selects a history entry without a `dist_inventory`, which supplies the entry's `pin`),
+`submit` reads the module's `conf/mod_overseer.conf.dist` from the module repository at that
+commit. A baseline key in the module's own group that the dist does not define (for example
+`Overseer.Raid.RequireHeadClient` on a build that predates it) is removed from the control
+arm's override files only, and one fidelity delta names the keys and the pin. The treatment
+arm keeps them. A pin whose dist cannot be read refuses the submit and names the pin. Only
+baseline keys are dropped this way: a key the decree's own `config:` sets, or one from the
+base realm's override files, still fails closed in `seed-conf`, and keys of other modules'
+dists or of a bridge-code fix's manual `--control-pin` (a bridge commit) are not checked.
+`--control-drop-keys` still works and wins for the keys it names.
+
 `--control auto` finds the control images instead of taking them by hand.
 `--control-history FILE` is a JSON list of past image sets, newest first, that the deploy
 side writes (never a file in this repository): each entry has `worldserver` and `dbimport`
@@ -494,9 +591,37 @@ build. `submit` takes the newest entry whose pin lacks the fix (the same ancesto
 above; for a fix in this repository's bridge code, the entry's `bridge_commit`) and whose
 digests the registry still serves, fills `--control-worldserver`, `--control-dbimport` and
 `--control-pin` (and `--control-bridge` from the set's `bridge` when the decree turns the bridge on) from it, and records the choice as
-a fidelity delta. It refuses a `TODO` fix commit, an empty or unreadable history, a history
-where every set carries the fix or no set without it still resolves, and explicit
-control image flags, `--control-bridge` included, given beside it. With the bridge on, a chosen set whose `bridge` is missing or no longer resolves is refused. `--control-drop-keys` is still given by hand.
+a fidelity delta. It refuses a `TODO` fix commit, an empty or unreadable history, and
+explicit control image flags, including `--control-bridge`. Before creating any
+Jobs, [submit](../ephemeral/submit.py) asks [the control selector](../ephemeral/controlauto.py)
+to check the registry. It skips an entry whose worldserver or db-import digest
+does not resolve, and also checks the bridge digest when the fix is in bridge code.
+Submit errors when no entry both lacks the fix and passes those checks. For a
+module fix with the bridge enabled, submit checks the selected entry's bridge
+separately and errors if that digest is missing or no longer resolves.
+
+A history entry can carry a `dist_inventory` from its exact worldserver image. It
+records the entry's complete `worldserver` digest reference, `platform: linux/amd64`,
+and `groups`, a mapping from override-group names to the configuration keys in
+each distribution file. An absent module file has no group entry. The inventory
+contains key names only.
+
+Build the inventory from a trusted filesystem export of that digest and platform:
+
+    crane export --platform linux/amd64 "$CONTROL_REF" "$CONTROL_TAR"
+    python3 -m ephemeral.controlconfig --worldserver "$CONTROL_REF" --archive "$CONTROL_TAR"
+
+Store the emitted JSON under `dist_inventory` in the matching history entry.
+The caller pairs the archive with its digest and platform when exporting it.
+The archive reader uses the reference configuration files inside the built image.
+
+For a selected entry with an inventory, `submit` uses the image's playerbots
+prefix and removes unsupported inherited overrides from the control. It refuses
+the submission when a baseline or decree key is unavailable, or when a configured
+module has no matching distribution file. Each drop records the image, group and
+key in the fidelity deltas. An inventory and manual drop or prefix flags cannot
+be combined. History entries without an inventory use the existing manual
+`--control-drop-keys` and `--control-playerbots-prefix` options.
 
 With `world.bridge: "on"` the template's bridge sidecar is kept, at the arm's own
 image: the control arm's is `--control-bridge` (the build before the fix), the

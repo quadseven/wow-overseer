@@ -1398,7 +1398,9 @@ def _mainhand_cast(qid, aims):
     if not foci:
         return None
     object_spawns = aims[3]
-    spots = tuple(s for g in foci for s in object_spawns.get(g, ()))
+    # The core requires a Runeforge within 10 yards. Finish at eight yards
+    # to leave room for movement between arrival and the cast.
+    spots = tuple(replace(s, near=8) for g in foci for s in object_spawns.get(g, ()))
     return Use(CAST_MAINHAND, 0, 1, foci, spots, spell=MAINHAND_CASTS[qid][0])
 
 
@@ -2941,12 +2943,11 @@ class Hunts:
         return REROLL
 
     def productive(self, name, now) -> None:
-        """A hunt that killed is reachable ground: forget the packs it tried
-        and any hold-off, and restart its stall clock."""
+        """Kill-only evidence can restart the clock before the first reroll.
+        Keep tried packs and hold-offs until quest progress or the existing
+        expiry rule changes them."""
         hunt = self._by.get(name)
-        if hunt is not None and (hunt.tried or hunt.until is not None):
-            self._by[name] = Hunt(hunt.quest, hunt.progress, now)
-        elif hunt is not None:
+        if hunt is not None and not hunt.tried and hunt.until is None:
             self._by[name] = replace(hunt, since=now)
 
     def give_up(self, name, quest, now) -> None:

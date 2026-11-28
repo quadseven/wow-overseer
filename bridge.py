@@ -6572,13 +6572,13 @@ def _job_story(names: list) -> str:
 #
 # dungeonstall's third shape. The reads are the watch's own evidence: the
 # leader's steps in overseer_now_step (the fold the Watch tab prints) and the
-# member states the module publishes in its intent book. The hold and death
-# clocks are kept here, keyed by the queue entry being judged: a hold timed
-# under one entry must not hang the next entry for the same door.
+# member states the module publishes in its intent book. Hold and death clocks
+# belong to the matching open run, or to the queue entry before a run opens.
 
 # The member-state words the wedge judges are named inside _door_wedge.
 
-# (leader, member) -> (queue head id, monotonic first seen). The same clock is
+# AI-REVIEW 2026-11-27 [Codex GPT-6/standards] 2191-clock-memo (PR #3316):
+# (leader, member) -> (clock id, monotonic first seen). The same clock is
 # stored in overseer_bridge_memo as a wall timestamp so a pod restart cannot
 # start the stand-down bound over.
 _DOOR_HOLD_SINCE: dict = {}
@@ -6593,10 +6593,11 @@ def _door_hold_subject(key: tuple[str, str]) -> str:
     return json.dumps(key, separators=(",", ":"))
 
 
-def _door_hold_memo_put(key: tuple[str, str], head_id: int,
+def _door_hold_memo_put(key: tuple[str, str], clock_id: int,
                         since: float, now: float) -> None:
     wall_now = time.time()
-    value = {"head_id": int(head_id)}
+    # Keep the stored field readable by a bridge rolled back to queue clocks.
+    value = {"head_id": int(clock_id)}
     args = (
         DOOR_HOLD_MEMO_KIND,
         _door_hold_subject(key),
@@ -6634,12 +6635,14 @@ def _restore_door_hold_memos(now: float) -> None:
             if not isinstance(pair, list) or len(pair) != 2:
                 raise ValueError("memo subject is not a leader/member pair")
             key = (str(pair[0]), str(pair[1]))
-            head_id = int(value["head_id"])
+            # A legacy memo carries queue evidence only. An open run gets its
+            # own observation window when first seen on this version.
+            clock_id = int(value["head_id"])
             since = min(now, float(since_wall) - offset)
             if now - since > DOOR_HOLD_MEMO_SECONDS:
                 _door_hold_memo_delete(key)
                 continue
-            _DOOR_HOLD_SINCE.setdefault(key, (head_id, since))
+            _DOOR_HOLD_SINCE.setdefault(key, (clock_id, since))
         except (KeyError, TypeError, ValueError):
             log.exception("bridge memo: invalid door-wedge hold memo for %s", subject)
     _DOOR_HOLD_MEMO_READ_AT = now
@@ -6720,12 +6723,13 @@ def _door_wedge_member_recovered(leader: str, member: str, positions: dict) -> b
     return distance_sq <= DOOR_HOLD_RECOVER_YARDS ** 2
 
 
-def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
+def _door_wedge_ages(leader: str, members, clock_id: int) -> dict:
     """name -> (state, seconds in the active hold) for wedged members.
 
     The clock belongs to the leader/member pair, not the published state. A
     transient state flip leaves the family just as split, so it does not stop
-    the clock. A different queue entry starts a new one.
+    the clock. An open run keeps it across queue entries. Before a run opens,
+    the queue entry owns the clock.
 
     The states are the module's member-state words (MemberStateWord):
     "dead", and the holds with no errand of the member's own choosing at
@@ -6774,17 +6778,17 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
             continue
         key = (leader, member.name)
         stamp = _DOOR_HOLD_SINCE.get(key)
-        if stamp is None or stamp[0] != head_id:
+        if stamp is None or stamp[0] != clock_id:
             start = globals().get("_errand_clock_start")
             since = (
-                start((leader, member.name, member.state), head_id, now)
+                start((leader, member.name, member.state), clock_id, now)
                 if start else now
             )
-            stamp = (head_id, since)
+            stamp = (clock_id, since)
             _DOOR_HOLD_SINCE[key] = stamp
             write_memo = globals().get("_door_hold_memo_put")
             if write_memo is not None:
-                write_memo(key, head_id, since, now)
+                write_memo(key, clock_id, since, now)
         ages[member.name] = (member.state, now - stamp[1])
     return ages
 
@@ -6794,7 +6798,17 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
 # by a member questing on another map, and the run row's own heartbeat is
 # presence, not progress.
 _DOOR_RUN_SQL = (
-    "SELECT id FROM overseer_dungeon_run WHERE leader_name = %s "
+    # AI-REVIEW 2026-11-27 [Codex GPT-6/spec] 2191-active-portal (PR #3316):
+    # The module fills the run row's portal only at completion. While the run
+    # is open, its timeline names the door (see dungeonstall.RUNS_SQL_TIMELINE).
+    "SELECT r.id, (SELECT e.portal FROM overseer_dungeon_run_event e "
+    "WHERE e.run_id = r.id AND e.portal <> _utf8mb4'' COLLATE utf8mb4_unicode_ci "
+    "ORDER BY e.id LIMIT 1) AS portal_keyword "
+    "FROM overseer_dungeon_run r WHERE r.leader_name = %s AND r.map_id = %s "
+    "AND r.ended_at IS NULL ORDER BY r.id DESC LIMIT 1"
+)
+_DOOR_RUN_LEGACY_SQL = (
+    "SELECT id FROM overseer_dungeon_run WHERE leader_name = %s AND map_id = %s "
     "AND ended_at IS NULL ORDER BY id DESC LIMIT 1"
 )
 # Two reads, not a join: the two tables sit in different collation groups
@@ -6805,17 +6819,57 @@ _DOOR_BOSS_SQL = (
 )
 
 
-def _door_run_boss_age(leader: str):
-    """Seconds since the leader's open run last credited a boss, or None
-    when it has no open run or no credit yet. A table this realm cannot
-    answer (1054 or 1146) reads as None, so the clocks run as before."""
+def _door_open_run_id(leader: str, keyword: str) -> int | None:
+    """Find the open run of the door being judged, including alternate entrances."""
+    keyword = keyword.strip().lower()
+    map_id = dungeonpath.PORTAL_MAPS.get(keyword, raidrun.MAPS.get(keyword))
+    if map_id is None:
+        return None
+    args = (leader, map_id)
+    with _connect() as conn, conn.cursor() as cur:
+        # AI-REVIEW 2026-11-27 [nemotron-3.5-super-vl] 4723163393/4723163401/4723163415
+        # (Elder, PR #3316): Only query schema errors use the legacy path.
+        # PyMySQL raises different classes for a missing column and table.
+        # A failed read leaves the clock intact and is logged by the queue pass.
+        try:
+            cur.execute(_DOOR_RUN_SQL, args)
+        except (pymysql.err.OperationalError, pymysql.err.ProgrammingError) as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            try:
+                cur.execute(_DOOR_RUN_LEGACY_SQL, args)
+            except (pymysql.err.OperationalError, pymysql.err.ProgrammingError) as exc:
+                if not (exc.args and exc.args[0] in (1054, 1146)):
+                    raise
+                return None
+        runs = cur.fetchall()
+    if not runs:
+        return None
+    # AI-REVIEW 2026-11-27 [Codex GPT-6/spec] 2191-run-wing (PR #3316):
+    # Independent wings on one map must never inherit each other's clock.
+    run = runs[0]
+    wing = campaignplan.ALTERNATES.get(keyword, keyword)
+    portal = str(run.get("portal_keyword") or "").strip().lower()
+    if portal:
+        if campaignplan.ALTERNATES.get(portal, portal) != wing:
+            return None
+    else:
+        # A map identifies the door only when every entrance is to one wing.
+        wings = {
+            campaignplan.ALTERNATES.get(name, name)
+            for name, value in (*dungeonpath.PORTAL_MAPS.items(), *raidrun.MAPS.items())
+            if value == map_id
+        }
+        if len(wings) != 1:
+            return None
+    return int(run["id"])
+
+
+def _door_run_boss_age(run_id: int) -> int | None:
+    """Seconds since this run last credited a boss, if the read has evidence."""
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(_DOOR_RUN_SQL, (leader,))
-            runs = cur.fetchall()
-            if not runs:
-                return None
-            cur.execute(_DOOR_BOSS_SQL, (int(runs[0]["id"]),))
+            cur.execute(_DOOR_BOSS_SQL, (run_id,))
             rows = cur.fetchall()
         except pymysql.err.MySQLError as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
@@ -6884,13 +6938,13 @@ def _economy_aimable(claimant: str, names, inside=()) -> tuple:
         n for n in names if not _economy_aim_hold(claimant, n, n in inside))
 
 
-def _errand_clock_start(key: tuple, head_id: int, now: float) -> float:
+def _errand_clock_start(key: tuple, clock_id: int, now: float) -> float:
     """When the fresh hold clock `key` (leader, name, state) counts from: now,
-    or for an errand taken up again after a recall under the same queue entry,
+    or for an errand taken up again after a recall under the same clock,
     when the recalled errand began (#2323)."""
     if key[2] != dungeonstall.ERRAND_STATE:
         return now
-    return errandgate.resume_since(now, _ERRAND_SERVED.get(key[:2]), head_id)
+    return errandgate.resume_since(now, _ERRAND_SERVED.get(key[:2]), clock_id)
 
 
 def _members_inside_instance(names: list) -> frozenset:
@@ -6923,7 +6977,7 @@ def _release_instance_economy_aims(names: list) -> list:
     return released
 
 
-def _recall_door_errands(leader: str, ages: dict, head_id: int = 0) -> list:
+def _recall_door_errands(leader: str, ages: dict, clock_id: int) -> list:
     """Hand back the errand of every member whose errand of its own has kept
     the family waiting at the door past dungeonstall.RECALL_SECONDS (#2280).
 
@@ -6935,8 +6989,8 @@ def _recall_door_errands(leader: str, ages: dict, head_id: int = 0) -> list:
     for the stand-down. Returns the names released.
 
     THE STAND-DOWN CLOCK IS KEPT ACROSS THE RECALL (#2323). The errand time
-    served is recorded under queue entry `head_id`, and a member whose clock
-    has reached the stand-down bound is not recalled again: recall after
+    served uses the same `clock_id` as the hold. A member whose clock has
+    reached the stand-down bound is not recalled again: recall after
     recall would put the stand-down off for good."""
     released = []
     for name in dungeonstall.errand_recalls(ages):
@@ -6950,7 +7004,7 @@ def _recall_door_errands(leader: str, ages: dict, head_id: int = 0) -> list:
         now = time.monotonic()
         _ERRAND_RECALLED[name] = now
         _ERRAND_SERVED[(leader, name)] = errandgate.Served(
-            head_id, ages[name][1], now)
+            clock_id, ages[name][1], now)
         released.append(name)
         log.info(
             "door recall: %s had been on an errand of its own (%s) for %d "
@@ -6971,11 +7025,17 @@ def _door_wedge(head: dict, names: list, leader: str):
     A corpse outranks a walk, and a walk outranks a hold: the recorded
     reason names the worst thing wrong at the door.
     """
-    if head.get("status") != campaignqueue.ACTIVE:
-        # A different queue phase is not a door hold. The active job may come
-        # back later, so discard clocks only when this queue entry is no longer
-        # active.
-        for key in [k for k in _DOOR_HOLD_SINCE if k[0] == leader]:
+    status = head.get("status")
+    if status != campaignqueue.ACTIVE:
+        # AI-REVIEW 2026-11-27 [Codex GPT-6/spec] 2191-queued-clock (PR #3316):
+        # A queued replacement waits to be judged until it starts. Its active
+        # pass will keep the clock only if the same run still owns the door.
+        keep_run_clocks = status == campaignqueue.QUEUED
+        obsolete = [
+            key for key, (clock_id, _) in _DOOR_HOLD_SINCE.items()
+            if key[0] == leader and (not keep_run_clocks or clock_id >= 0)
+        ]
+        for key in obsolete:
             _DOOR_HOLD_SINCE.pop(key, None)
             delete_memo = globals().get("_door_hold_memo_delete")
             if delete_memo is not None:
@@ -6988,13 +7048,16 @@ def _door_wedge(head: dict, names: list, leader: str):
         return None
     keyword = str(head.get("keyword") or "")
     head_id = int(head.get("id") or 0)
+    run_id = _door_open_run_id(leader, keyword)
+    # Both tables assign positive IDs independently. Sign separates their clocks.
+    clock_id = -run_id if run_id is not None else head_id
     restarts, members = _door_wedge_evidence(leader, head_id)
-    ages = _door_wedge_ages(leader, members, head_id)
+    ages = _door_wedge_ages(leader, members, clock_id)
     # A run that credits a boss is not wedged (#2181): a party one member
     # short clears the dungeon while that member's hold ages. The hold and
     # death clocks start over at the run's newest boss credit, so a run that
     # then goes a full bound with no credit is still stood down.
-    boss_age = _door_run_boss_age(leader) if ages else None
+    boss_age = _door_run_boss_age(run_id) if ages and run_id is not None else None
     if boss_age is not None:
         ages = {
             name: (state, min(age, boss_age)) for name, (state, age) in ages.items()
@@ -7006,7 +7069,7 @@ def _door_wedge(head: dict, names: list, leader: str):
     if recall is not None and ages:
         # The member's hold clock is NOT restarted (#2323): it ends when the
         # errand state does, and an errand taken up again counts on.
-        for name in recall(leader, ages, head_id):
+        for name in recall(leader, ages, clock_id):
             ages.pop(name, None)
     # A RAID DOOR IS NEVER LEFT BY THE BREAKER, but a member's errand of its
     # own is still handed back there: the recall above is the only bound on it,
@@ -9696,6 +9759,9 @@ class Bridge(discord.Client):
         self._train_walks: dict = {}
         # Members a gear fetch has walking to a meeting mailbox (#2503).
         self._gear_fetch_walks: dict = {}
+        # The gear fetch meetings under way, and when each of today's began.
+        self._gear_fetch_tasks: set = set()
+        self._gear_fetch_starts: list = []
         # WHAT EACH GUILD MASTER WOULD WITHDRAW FOR THE GUILD FUND
         # (guildfund.py), so the guild bank pass walks it to a vault.
         self._fund_wants: dict = {}
@@ -15206,7 +15272,7 @@ class Bridge(discord.Client):
                     self._guild_mail_runs.pop(route.holder, None)
         return written
 
-    async def _gear_routing_once(self) -> None:
+    async def _gear_routing_once(self, fetch: bool = True) -> None:
         """Hand each routed piece to the member who gains most (#2136).
 
         The routing report decides who (gearrouting.plan over gearroutingread's
@@ -15296,6 +15362,7 @@ class Bridge(discord.Client):
         log.info("gear routing: %s", gearroutingexec.summary(result))
         if GEAR_ROUTING_WALKS:
             await self._gear_routing_walks(result, world)
+        await self._gear_fetch_pass(result, fetch)
 
     async def _gear_routing_freeables(self, names: list, free_slots: dict) -> dict:
         """name -> the grey a full member may give away to make room (#2245).
@@ -15376,6 +15443,141 @@ class Bridge(discord.Client):
             routes, own, family_only=False,
             per_day=GEAR_ROUTING_WALKS_PER_DAY,
             per_pass=GEAR_ROUTING_WALKS_PER_PASS)
+
+    async def _gear_fetch_pass(self, result, fetch: bool = True) -> None:
+        """Bring a waiting route's two guild bots together at a mailbox (#2503).
+
+        Runs after `_gear_routing_walks`, so a holder the mail run already
+        walks is busy here and its letter keeps the first say. gearfetch.plan
+        decides the rest from the routes still waiting apart: a family wearer
+        is left to the mail run (no row), two guild bots off the roster each
+        get the module's `walk-to-spawn gameobject:<spawn> ... stay:` row to
+        one mailbox near the wearer, and every route not fetched is a note.
+        Members another pass has on a walk, families under an operator hold,
+        a fight, an instance, another map and a mailbox inside a death-cell
+        avoid disc are refused there. Only walk rows are written: no travel
+        aim, no town slot, nothing granted. A fetch's own re-run of the
+        routing pass (`fetch` False) plans no further fetch.
+        """
+        if not (GEAR_FETCH and fetch):
+            return
+        routes = gearfetch.candidates(result)[:GEAR_FETCH_READS]
+        if not routes:
+            return
+        now = time.monotonic()
+        busy = self._guild_walkers_busy(now)
+        self._gear_fetch_starts = [
+            t for t in getattr(self, "_gear_fetch_starts", [])
+            if now - t < guildroute.DAY_SECONDS
+        ]
+        names = list(dict.fromkeys(n for r in routes for n in (r.holder, r.wearer)))
+        roster_rows = await asyncio.to_thread(_roster_cohort_rows)
+        family_of = {str(r.get("name") or ""): str(r.get("family") or "")
+                     for r in roster_rows}
+        members = gearfetch.members_from(
+            await asyncio.to_thread(_gear_fetch_member_rows, names),
+            roster=set(family_of), family_of=family_of)
+        held = await self._operator_held(
+            {family_of[n] for n in names if family_of.get(n)}, "gearrouting")
+        wearers = list(dict.fromkeys(
+            r.wearer for r in routes
+            if r.wearer in members and not members[r.wearer].roster))
+        mailboxes = gearfetch.mailboxes_from(
+            await asyncio.to_thread(_gear_fetch_mailbox_rows, wearers))
+        discs = gearfetch.disc_tuples(await asyncio.to_thread(_fetch_death_discs))
+        spent = max(len(self._gear_fetch_starts),
+                    (await asyncio.to_thread(_gear_fetch_rows_today)) // 2)
+        plan = gearfetch.plan(
+            routes, members, mailboxes, busy=busy, held_families=held,
+            kept=await asyncio.to_thread(_KEEP.now), discs=discs,
+            running=len(getattr(self, "_gear_fetch_tasks", ())), spent=spent)
+        _log_capped("gear fetch", plan.notes)
+        for fetch in plan.fetches:
+            if fetch.kind == gearfetch.MEET:
+                self._start_gear_fetch(fetch, now)
+
+    def _start_gear_fetch(self, fetch, now: float) -> None:
+        """Hold both members busy, count the fetch and follow it in a task."""
+        for name, _command in fetch.walks:
+            self._gear_fetch_walks[name] = now
+        self._gear_fetch_starts.append(now)
+        log.info("gear fetch: %s", fetch.said)
+        # Followed in its own task, as the mail walks are: the meeting can
+        # take MEET_STAY_SECONDS and the routing pass must not wait on it. The
+        # set keeps a strong reference until it ends, counts the fetches under
+        # way for the planner, and its done callback makes any bug loud.
+        task = asyncio.create_task(self._gear_fetch_meet(fetch))
+        self._gear_fetch_tasks.add(task)
+        task.add_done_callback(self._gear_fetch_task_done)
+
+    def _gear_fetch_task_done(self, task) -> None:
+        """Drop a finished meeting task, and make any bug in it loud."""
+        self._gear_fetch_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("gear fetch: a meeting task failed",
+                      exc_info=(type(exc), exc, exc.__traceback__))
+
+    async def _gear_fetch_meet(self, fetch) -> bool:
+        """Walk both members to the mailbox; once both stand there, run the
+        routing pass once so the trade is written while they are together.
+        True when that pass ran. Both members are given back at the end, on
+        every way out, a cancel included."""
+        try:
+            return await self._gear_fetch_meeting(fetch)
+        finally:
+            for name, _command in fetch.walks:
+                self._gear_fetch_walks.pop(name, None)
+
+    async def _gear_fetch_meeting(self, fetch) -> bool:
+        route = fetch.route
+        try:
+            arrived = await asyncio.wait_for(
+                asyncio.gather(*(self._gear_fetch_walk(fetch, name, command)
+                                 for name, command in fetch.walks)),
+                timeout=gearfetch.MEET_STAY_SECONDS)
+        except asyncio.TimeoutError:
+            arrived = (False,)
+        except Exception:
+            log.exception("gear fetch: following the walks to mailbox %d failed",
+                          fetch.mailbox)
+            arrived = (False,)
+        if not all(arrived):
+            log.info("gear fetch: %s and %s did not both reach mailbox %d; "
+                     "%s (item %d) stays with %s", route.holder, route.wearer,
+                     fetch.mailbox, route.item, route.guid, route.holder)
+            return False
+        log.info("gear fetch: %s and %s stand at mailbox %d; the routing pass "
+                 "runs once for %s (item %d)", route.holder, route.wearer,
+                 fetch.mailbox, route.item, route.guid)
+        try:
+            await self._gear_routing_once(fetch=False)
+        except Exception:
+            log.exception("gear fetch: the routing pass after the meeting failed")
+            return False
+        return True
+
+    async def _gear_fetch_walk(self, fetch, name: str, command: str) -> bool:
+        """One member's walk row to the meeting mailbox; True when it arrived."""
+        row = guildcorps.Row("job", command, "", GEAR_FETCH_SOURCE)
+
+        def insert():
+            return _insert_corps_row(name, row)
+
+        row_id = await asyncio.to_thread(insert)
+        if not row_id:
+            log.info("gear fetch: no walk row was written for %s", name)
+            return False
+        answer, row_id = await self._follow_guild_walk(
+            "gear fetch", name, row_id, gearfetch.MEET_YARDS, insert,
+            "mailbox %d" % fetch.mailbox)
+        if answer.state == guildroute.ARRIVED:
+            return True
+        log.info("gear fetch: walk row %d for %s ended without arriving: %s",
+                 row_id, name, answer.said)
+        return False
 
     async def _walk_route_holders(self, waiting: list, family_names: list,
                                   escort=None, family_only: bool = True,
@@ -23308,7 +23510,8 @@ class Bridge(discord.Client):
         vendor, bank or guild-bank passes.
         """
         await self.wait_until_ready()
-        cycle = float(os.environ.get("GUILD_JOBS_CYCLE_SECONDS", "900"))
+        cycle = float(os.environ.get("GUILD_JOBS_CYCLE_SECONDS",
+                                     str(nowstatus.GUILD_JOBS_DEFAULT_CYCLE_SECONDS)))
         await asyncio.sleep(min(cycle, 420.0))
         while not self.is_closed():
             try:
@@ -38382,6 +38585,15 @@ GEAR_ROUTING_ROOM_WAIT_MINUTES = int(os.environ.get(
 GEAR_ROUTING_WALKS = os.environ.get("GEAR_ROUTING_WALKS", "1") != "0"
 GEAR_ROUTING_WALKS_PER_DAY = int(os.environ.get("GEAR_ROUTING_WALKS_PER_DAY", "30"))
 GEAR_ROUTING_WALKS_PER_PASS = int(os.environ.get("GEAR_ROUTING_WALKS_PER_PASS", "2"))
+# A ROUTE BETWEEN TWO GUILD BOTS THE MAIL RUN LEFT WAITING IS FETCHED (#2503):
+# both walk to one mailbox near the wearer by the module's walk-to-spawn row and
+# the routing pass runs once while they stand together, so the trade is written.
+# Off switch: GEAR_FETCH=0. gearfetch.py bounds it per pass, per day and at once.
+GEAR_FETCH = os.environ.get("GEAR_FETCH", "1") != "0"
+# The `source` of a fetch's walk rows, so the day's count reads only those.
+GEAR_FETCH_SOURCE = "gearfetch"
+# The waiting routes one pass reads members and mailboxes for.
+GEAR_FETCH_READS = 8
 # How many notes one pass logs line by line before it summarises the rest.
 GUILD_ROUTE_NOTE_LINES = 5
 
@@ -38584,6 +38796,75 @@ def _route_walks_today() -> int:
                 "WHERE source LIKE %s AND kind = %s "
                 "AND created_at > NOW() - INTERVAL 1 DAY",
                 (MAIL_WALK_SOURCE + ":%", guildroute.MAIL),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return 0
+            raise
+        row = cur.fetchone()
+        return int((row or {}).get("n") or 0)
+
+
+# A gear fetch's members as the planner reads them (#2503): a fresh snapshot
+# row, with whether the character fights or stands inside an instance.
+_GEAR_FETCH_MEMBER_SQL = (
+    "SELECT name, map_id, instance_id, pos_x, pos_y, in_combat FROM overseer_snapshot "
+    "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND"
+)
+# The mailbox spawns nearest one wearer, with the spawn id a walk-to-spawn row
+# names (`_MAILBOXES_SQL` reads the same spawns without it).
+_GEAR_FETCH_BOXES_SQL = (
+    "SELECT g.guid AS spawn, g.map AS map_id, g.position_x AS x, g.position_y AS y, "
+    "(POW(g.position_x - s.pos_x, 2) + POW(g.position_y - s.pos_y, 2)) AS d2 "
+    "FROM overseer_snapshot s "
+    "JOIN acore_world.gameobject g ON g.map = s.map_id "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND gt.type = %s "
+    "ORDER BY d2 LIMIT 8"
+)
+
+
+def _gear_fetch_member_rows(names: list) -> list:
+    """The fresh snapshot rows of `names`; [] when the table cannot be read."""
+    if not names:
+        return []
+    sql = _GEAR_FETCH_MEMBER_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, list(names))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("gear fetch: member positions unavailable")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _gear_fetch_mailbox_rows(wearers: list) -> list:
+    """The mailbox spawns nearest each wearer on its own map; [] unread."""
+    rows = []
+    with _connect() as conn, conn.cursor() as cur:
+        for name in wearers or ():
+            try:
+                cur.execute(_GEAR_FETCH_BOXES_SQL, (name, travel.MAILBOX_GO_TYPE))
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    log.warning("gear fetch: mailbox spawns unavailable")
+                    return []
+                raise
+            rows.extend(dict(row) for row in cur.fetchall())
+    return rows
+
+
+def _gear_fetch_rows_today() -> int:
+    """Gear fetch walk rows the command log holds for the last 24 hours."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM overseer_command "
+                "WHERE source = %s AND created_at > NOW() - INTERVAL 1 DAY",
+                (GEAR_FETCH_SOURCE,),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
