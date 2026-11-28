@@ -14,9 +14,9 @@
 //   Inventory  bags or bank, 44px cells (/api/client/bags, /api/client/bank)
 //   Activity   every command and the realm's answer (/api/v2/activity)
 
-import { html, notMeasured, pendingRead, state, classVar, iconUrl, sparkline, gold, plural, status } from "../ui.js";
+import { html, raw, notMeasured, pendingRead, state, classVar, iconUrl, sparkline, gold, plural, status } from "../ui.js";
 import {
-  liveQuery, stateLabel, seg, paperdoll, bindTrees, cell, emptyCell,
+  liveQuery, setQuery, stateLabel, seg, paperdoll, bindTrees, cell, emptyCell,
   upgradesHead, upgradesControls, upgradesBody, upgradesFoot, bindUpgrades, coins,
 } from "./_members.js";
 import { mountModels } from "./_model.js";
@@ -63,7 +63,7 @@ function header(m, checkedAt, cam) {
 
 function tabRow(name, tab) {
   const cur = TAB_OF[tab] || tab;
-  return html`<nav class="tabs" aria-label="Profile">${TABS.map(([k, label]) => html`<a href="${href(name, k)}"${k === cur ? html` aria-current="page"` : ""}>${label}</a>`)}</nav>`;
+  return html`<nav class="tabs pf-tabs" aria-label="Profile">${TABS.map(([k, label]) => html`<a href="${href(name, k)}"${k === cur ? html` aria-current="page"` : ""}>${label}</a>`)}</nav>`;
 }
 
 function read(ctx, path) { return ctx.get(path); }
@@ -119,8 +119,12 @@ function levelLine(act, ser) {
   return html`<div class="card"><div class="row mb-between"><span class="dim mb-s">Level, last ${act.days} days</span><span class="muted mb-s">${gained > 0 ? "+" + plural(gained, "level") : "no change"}</span></div>${sparkline(values, { h: 64, fit: true, label })}<div class="row mb-between dim mb-s"><span>${act.days}d ago, L${start ?? "?"}</span><span>now, L${act.level ?? "?"}</span></div><span class="dim mb-s">XP per hour, 24h: ${xpLine(ser)}</span></div>`;
 }
 
+function commandRow(c, attrs) {
+  return html`<div class="pf-cmd"${attrs || ""}><span class="dim mb-s">${c.at ? new Date(c.at * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "time not measured"} | ${c.kind} | ${c.source}</span><span class="pf-cmdtext">${c.said || c.command}</span><span class="${c.status === "error" ? "warn mb-s" : "muted mb-s"}">${c.answer}</span></div>`;
+}
+
 function commandRows(list) {
-  return list.map((c) => html`<div class="pf-cmd"><span class="dim mb-s">${c.at ? new Date(c.at * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "time not measured"} | ${c.kind} | ${c.source}</span><span class="pf-cmdtext">${c.said || c.command}</span><span class="${c.status === "error" ? "warn mb-s" : "muted mb-s"}">${c.answer}</span></div>`);
+  return list.map((c) => commandRow(c));
 }
 
 function family(m, roster) {
@@ -191,8 +195,10 @@ function upgradesTab(ctx, m) {
   const wait = pendingRead(up, 4);
   if (wait) return html`${s}${wait}`;
   const lq = liveQuery();
-  const filter = lq.filter || "all", sort = lq.usort || "slot";
-  return html`${s}<div class="up-panel">${upgradesHead(up.data, "")}${upgradesControls(filter, sort)}<div data-region="upslots">${upgradesBody(up.data, filter, sort)}</div>${upgradesFoot(up.data)}</div>`;
+  // On a phone the tab opens on Upgrade now (#3372), so the first card is
+  // always one the operator can act on; a filter named in the URL wins.
+  const filter = lq.filter || (ctx.isPhone ? "now" : "all"), sort = lq.usort || "slot";
+  return html`${s}<div class="up-panel">${upgradesHead(up.data, "")}${upgradesControls(filter, sort, (up.data.slots || []).length)}<div data-region="upslots">${upgradesBody(up.data, filter, sort)}</div>${upgradesFoot(up.data)}</div>`;
 }
 
 // ---- Quests -------------------------------------------------------------------------------
@@ -210,7 +216,7 @@ const STEP = {
 function chainCard(c, m) {
   return html`<div class="card qs-chain"><span class="row mb-between"><span class="dim mb-s">${m.class} class quest chain: ${c.title}</span>${c.done ? status("best", "Done") : ""}</span>${c.steps.map((s) => {
     const st = STEP[s.state] || STEP.open;
-    const note = s.state === "blocked" ? (m.blocker || "Asked the guild for help.") : s.state === "locked" ? "Opens at level " + s.level + "." : st[2];
+    const note = s.state === "blocked" ? (m.blocker || "blocked, reason not measured") : s.state === "locked" ? "Opens at level " + s.level + "." : st[2];
     return html`<div class="qs-step"><i class="${st[1]}" style="color:${st[0]}" aria-hidden="true"></i><div class="qs-body"><span class="row mb-between"><span class="mb-b">${s.title}</span><span class="mb-s" style="color:${st[0]}">${s.state}</span></span><span class="muted mb-s">${note}</span></div></div>`;
   })}</div>`;
 }
@@ -222,12 +228,34 @@ function questLog(cq) {
   return html`<div class="card qs-log"><span class="row mb-between"><span class="dim mb-s">Quest log</span><span class="muted mb-s">${mem.used} of ${mem.slots} slots</span></span>${qs.length ? qs.map((x) => html`<div class="qs-q"><span class="${x.failed ? "bad" : x.ready ? "ok" : ""}">${x.title} <span class="dim mb-s">L${x.level}</span></span><span class="muted mb-s">${x.ready ? "ready to hand in" : x.failed ? "failed" : (x.objectives || []).map((o) => o.have + "/" + o.need + " " + o.what).join(", ") || x.status}</span></div>`) : notMeasured("the log is empty")}</div>`;
 }
 
+// One line over the two columns (#3372): how full the log is, how much of
+// it is ready to hand in, and where the class chain is stuck, each part
+// only when its read measured it.
+function questSummary(chain, cq) {
+  const parts = [];
+  const mem = cq && cq.member;
+  if (mem) {
+    parts.push("Quest log " + (mem.used ?? "?") + " of " + (mem.slots ?? "?"));
+    const ready = (mem.quests || []).filter((x) => x.ready).length;
+    if (ready) parts.push(ready + " ready to hand in");
+  }
+  for (const c of (chain && chain.chains) || []) {
+    const steps = c.steps || [];
+    const at = steps.findIndex((s) => s.state === "blocked");
+    if (at >= 0) {
+      parts.push("chain step " + (at + 1) + " of " + steps.length + " blocked");
+      break;
+    }
+  }
+  return parts.length ? html`<p class="muted qs-summary">${parts.join(" · ")}</p>` : "";
+}
+
 export function questsTab(ctx, m) {
   const n = q(m.name);
   const chain = read(ctx, "/api/v2/classchain" + n);
   const cq = read(ctx, "/api/client/quests" + n);
   const chains = chain.data ? ((chain.data.chains || []).length ? html`<span class="muted mb-s">${chain.data.line}</span>${chain.data.chains.map((c) => chainCard(c, m))}` : state("empty", "No class quest chain", "The class quest book has no reward chain for this class and race.")) : pendingRead(chain, 2);
-  return html`<div class="pf-grid"><div class="pf-col">${chains}</div><div class="pf-col">${cq.data ? questLog(cq.data) : pendingRead(cq, 2)}</div></div>`;
+  return html`${questSummary(chain.data, cq.data)}<div class="pf-grid"><div class="pf-col qs-chains">${chains}</div><div class="pf-col qs-logcol">${cq.data ? questLog(cq.data) : pendingRead(cq, 2)}</div></div>`;
 }
 
 // ---- Inventory -------------------------------------------------------------------------------
@@ -239,13 +267,22 @@ function invCells(cells) {
 }
 
 // Each bag its own small grid under its name and how full it is, as the game
-// opens them, so a long inventory reads bag by bag.
+// opens them, so a long inventory reads bag by bag. Every bag the read
+// carries is drawn (#3372): a bag whose slots were not read used to be
+// filtered out here while the header still counted the bags beside it.
 function invBags(frame) {
-  const bags = (frame.containers || []).filter((c) => (c.cells || []).length);
+  const bags = frame.containers || [];
   return html`<div class="inv-bags">${bags.map((c) => {
-    const used = c.cells.filter(Boolean).length;
-    return html`<section class="inv-bag" aria-label="${c.name}"><h3 class="inv-bag-head"><span>${c.name}</span><span class="num">${used} of ${c.cells.length}</span></h3><div class="inv-grid">${invCells(c.cells)}</div></section>`;
+    const cells = c.cells || [];
+    const used = cells.filter(Boolean).length;
+    return html`<section class="inv-bag" aria-label="${c.name}"><h3 class="inv-bag-head"><span>${c.name}</span><span class="num">${used} of ${cells.length}</span></h3><div class="inv-grid">${cells.length ? invCells(cells) : html`<span class="dim mb-s">Slots not measured.</span>`}</div></section>`;
   })}</div>`;
+}
+
+// Whether the primary pointer is a finger, asked of the window the app
+// runs in; a harness without one answers no.
+function coarsePointer() {
+  return typeof window !== "undefined" && !!window.matchMedia && !!window.matchMedia("(pointer: coarse)").matches;
 }
 
 export function inventoryTab(ctx, m, tab) {
@@ -255,17 +292,115 @@ export function inventoryTab(ctx, m, tab) {
   const wait = pendingRead(r, 2);
   if (wait) return html`${s}${wait}`;
   const f = r.data;
-  return html`${s}<span class="muted">${bank ? "Bank" : "Bags"}: ${f.used ?? "?"} of ${f.total ?? "?"} slots used | hover or tap an item${!bank && f.money ? " | " + coins(f.money.gold * 10000 + f.money.silver * 100 + f.money.copper) : ""}</span>${f.note ? html`<span class="dim mb-s">${f.note}</span>` : ""}${invBags(f)}`;
+  const lq = liveQuery();
+  // Two short lines (#3372): the slots on their own line, then how to read
+  // the cells and the money. The hint follows the pointer, not the width:
+  // a touch screen is not told to hover, whatever size it is.
+  const hint = coarsePointer() ? "tap an item" : "hover or tap an item";
+  return html`${s}<div class="inv-head"><span class="mb-b">${bank ? "Bank" : "Bags"}: ${f.used ?? "?"} of ${f.total ?? "?"} slots used</span><span class="muted mb-s">${hint}${!bank && f.money ? " | " + coins(f.money.gold * 10000 + f.money.silver * 100 + f.money.copper) : ""}</span></div><label class="ro-filter inv-filter"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><input class="input" type="search" data-bag-filter data-focus="bag-filter" placeholder="Filter items by name" aria-label="Filter items by name" value="${lq.bagq || ""}"></label>${f.note ? html`<span class="dim mb-s">${f.note}</span>` : ""}${invBags(f)}`;
+}
+
+// The bag name filter (#3372): what does not match dims in place, and the
+// text rides in the URL query so a poll's redraw keeps it, the way the
+// upgrades filter keeps its choice. Cells carry their item's name in
+// data-name; an empty slot has none and dims with the rest.
+function bindBagFilter(root) {
+  const input = root.querySelector("[data-bag-filter]");
+  if (!input) return;
+  const apply = () => {
+    const needle = input.value.trim().toLowerCase();
+    root.querySelectorAll(".inv-grid .icell").forEach((c) => {
+      const name = (c.getAttribute("data-name") || "").toLowerCase();
+      c.classList.toggle("inv-dim", !!needle && !name.includes(needle));
+    });
+  };
+  input.addEventListener("input", () => {
+    setQuery({ bagq: input.value || "" });
+    apply();
+  });
+  apply();
 }
 
 // ---- Activity ---------------------------------------------------------------------------------
+
+const ACTIVITY_CAP = 25;
+
+// The activity rows (#3372): a heading for each day, the first draw capped
+// at ACTIVITY_CAP with the rest kept in the page for the show more button,
+// and each error marked so the filter can keep only the errors.
+function activityRows(cmds, showAll, errorsOnly) {
+  const out = [];
+  let day = null, shown = 0;
+  for (const c of cmds) {
+    if (errorsOnly && c.status !== "error") continue;
+    const d = c.at ? new Date(c.at * 1000).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : "Time not measured";
+    shown += 1;
+    const capped = !showAll && shown > ACTIVITY_CAP;
+    // The heading is drawn with the day's first visible row, so a day
+    // whose rows all sit past the cap never opens with an orphan heading.
+    if (!capped && d !== day) {
+      day = d;
+      out.push(html`<div class="pf-day" data-act-day>${d}</div>`);
+    }
+    let attrs = " data-act-row";
+    if (c.status === "error") attrs += ' data-error="1"';
+    if (capped) attrs += ' data-capped="1" hidden';
+    out.push(commandRow(c, raw(attrs)));
+  }
+  return out;
+}
 
 function activityTab(ctx, m) {
   const act = read(ctx, "/api/v2/activity" + q(m.name));
   const wait = pendingRead(act, 3);
   if (wait) return wait;
   const cmds = act.data.commands || [];
-  return html`<div class="card pf-activity">${cmds.length ? commandRows(cmds) : notMeasured("no commands recorded")}</div><p class="dim mb-s">The newest ${cmds.length} commands the bridge gave ${m.name}, with the realm's answer. Aura reads are left out.</p>`;
+  const lq = liveQuery();
+  const errorsOnly = lq.aerr === "1", showAll = lq.amore === "1";
+  const errors = cmds.filter((c) => c.status === "error").length;
+  const capped = !showAll && (errorsOnly ? errors : cmds.length) > ACTIVITY_CAP;
+  const tools = cmds.length ? html`<div class="row pf-act-tools"><span class="mb-b">${plural(cmds.length, "command")}, ${plural(errors, "error")}</span><div class="seg" role="group" aria-label="Filter commands"><button type="button" data-act-filter="all" aria-pressed="${errorsOnly ? "false" : "true"}">All</button><button type="button" data-act-filter="errors" aria-pressed="${errorsOnly ? "true" : "false"}">Errors only (${errors})</button></div>${capped ? html`<button type="button" class="btn btn-secondary" data-act-more>Show more commands</button>` : ""}</div>` : "";
+  const drawn = cmds.length ? activityRows(cmds, showAll, errorsOnly) : "";
+  const card = !cmds.length ? notMeasured("no commands recorded") : drawn.length ? drawn : notMeasured("no errors recorded");
+  return html`<p class="dim mb-s">The newest ${cmds.length} commands the bridge gave ${m.name}, with the realm's answer. Aura reads are left out.</p>${tools}<div class="card pf-activity">${card}</div>`;
+}
+
+// The activity tools (#3372): errors only keeps the rows the realm refused,
+// show more uncaps the draw. Both choices ride in the URL query so a poll's
+// redraw keeps them, and both are applied to the rows already on the page;
+// a day heading hides when every row under it does.
+function bindActivity(root) {
+  const rows = () => Array.from(root.querySelectorAll("[data-act-row]"));
+  const fixDays = () => {
+    root.querySelectorAll("[data-act-day]").forEach((h) => {
+      let n = h.nextElementSibling, any = false;
+      while (n && !n.hasAttribute("data-act-day")) {
+        if (n.hasAttribute("data-act-row") && !n.hidden) any = true;
+        n = n.nextElementSibling;
+      }
+      h.hidden = !any;
+    });
+  };
+  root.querySelectorAll("[data-act-filter]").forEach((b) => b.addEventListener("click", () => {
+    const errorsOnly = b.getAttribute("data-act-filter") === "errors";
+    setQuery({ aerr: errorsOnly ? "1" : "" });
+    root.querySelectorAll("[data-act-filter]").forEach((x) => x.setAttribute("aria-pressed", String((x.getAttribute("data-act-filter") === "errors") === errorsOnly)));
+    rows().forEach((r) => {
+      r.hidden = (errorsOnly && !r.hasAttribute("data-error")) || r.hasAttribute("data-capped");
+    });
+    fixDays();
+  }));
+  const more = root.querySelector("[data-act-more]");
+  if (more) more.addEventListener("click", () => {
+    setQuery({ amore: "1" });
+    const errorsOnly = !!root.querySelector("[data-act-filter='errors'][aria-pressed='true']");
+    rows().forEach((r) => {
+      r.removeAttribute("data-capped");
+      r.hidden = errorsOnly && !r.hasAttribute("data-error");
+    });
+    more.hidden = true;
+    fixDays();
+  });
 }
 
 // ---- the view --------------------------------------------------------------------------------
@@ -309,6 +444,8 @@ export default {
       const up = ctx.get("/api/v2/upgrades" + q(ctx.params.name)).data;
       if (up) bindUpgrades(main, up);
     }
+    if (ctx.params.tab === "bags" || ctx.params.tab === "bank") bindBagFilter(main);
+    if (ctx.params.tab === "activity") bindActivity(main);
   },
 };
 
