@@ -339,16 +339,17 @@ class WorldRows(unittest.TestCase):
 
         self.assertIn("Required item 3110 x12 (Tunnel Rat Ear)", ticket)
         self.assertIn(
-            "creature entries 1172, 1173, 1174, 1175, 1176, 1177, 1202", ticket
-        )
-        self.assertIn(
-            "The take was refused because no living creature linked to the quest "
-            "matched within the 20-yard arrival radius at that time.",
+            "dropped by creature entries 1172, 1173, 1174, 1175, 1176, 1177, 1202",
             ticket,
         )
         self.assertIn(
-            "This explains the ledger reason, but the stored rows do not distinguish "
-            "a missing, distant, dead, or otherwise unavailable creature.",
+            "At that take, the quest command found no live creature giver within "
+            "its 20-yard arrival radius.",
+            ticket,
+        )
+        self.assertIn(
+            "The creature entries listed above are required-item drop sources, "
+            "not evidence of which creature starts the quest.",
             ticket,
         )
 
@@ -410,15 +411,88 @@ class WorldRows(unittest.TestCase):
         self.assertIn("gameobject loot entries 2742", ticket)
         self.assertIn("Zone: Teldrassil", ticket)
         self.assertIn(
-            "The take was refused because no living creature linked to the quest "
-            "matched within the 20-yard arrival radius at that time.",
+            "At that take, the quest command found no live creature giver within "
+            "its 20-yard arrival radius.",
+            ticket,
+        )
+        self.assertNotIn(
+            "The creature entries listed above are required-item drop sources, "
+            "not evidence of which creature starts the quest.",
+            ticket,
+        )
+
+    def test_dead_fields_rows_explain_the_take_refusal_without_guessing_live_state(
+        self,
+    ):
+        # Values come from the ticket's supplied world rows, shaped by
+        # questcatalogue.QUESTS_SQL, ITEM_NAMES_SQL, and DROP_SQL. The ledger
+        # refusal is written by bridge._record_quest_broken and read through
+        # questtickets.BROKEN_SQL; counts use OBJECTIVES_SQL's row shape. The
+        # mod-overseer/src/mod_overseer.cpp::QuestCreatureInReach checks for a
+        # living creature within its 20-yard arrival radius. This fixture does
+        # not invent that creature's live location.
+        row = quest_row(
+            quest=437,
+            title="The Dead Fields",
+            level=14,
+            min_level=10,
+            sort=130,
+            item1=3622,
+            item_count1=1,
+        )
+        catalogue = self.catalogue(
+            row,
+            {
+                qc.ITEM_NAMES_SQL.format(ids="3622"): [
+                    {"entry": 3622, "name": "Essence of Nightlash"}
+                ],
+                qc.DROP_SQL.format(ids="3622"): [{"item": 3622, "entry": 1983}],
+                qc.REWARD_SQL.format(ids="3622"): [],
+                qc.VENDOR_SQL.format(ids="3622"): [],
+            },
+        )
+        reason = qt.NO_GIVER_IN_REACH
+        ticket = qt.body(
+            437,
+            catalogue[0],
+            [
+                {
+                    "quest": 437,
+                    "guid": 7,
+                    "character_name": "Quester A",
+                    "state": "broken",
+                    "reason": reason,
+                    "ticket": None,
+                }
+            ],
+            [
+                {
+                    "guid": 7,
+                    **{"mobcount%d" % i: 0 for i in range(1, 5)},
+                    **{"itemcount%d" % i: 0 for i in range(1, 7)},
+                }
+            ],
+            "",
+        )
+
+        self.assertIn("Zone: Silverpine Forest", ticket)
+        self.assertIn("QuestLevel: 14; MinLevel: 10", ticket)
+        self.assertIn("Required item 3622 x1 (Essence of Nightlash)", ticket)
+        self.assertIn("dropped by creature entries 1983", ticket)
+        self.assertIn("Reason: " + reason, ticket)
+        self.assertIn("Last objective counts: all zero", ticket)
+        self.assertIn(
+            "At that take, the quest command found no live creature giver within "
+            "its 20-yard arrival radius. The stored rows explain the refusal but "
+            "do not identify why the lookup found no giver.",
             ticket,
         )
         self.assertIn(
-            "This explains the ledger reason, but the stored rows do not distinguish "
-            "a missing, distant, dead, or otherwise unavailable creature.",
+            "The creature entries listed above are required-item drop sources, "
+            "not evidence of which creature starts the quest.",
             ticket,
         )
+        self.assertNotIn("stored rows confirm the creature relation", ticket)
 
 
 if __name__ == "__main__":
