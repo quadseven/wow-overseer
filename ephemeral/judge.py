@@ -8,13 +8,14 @@ Three verdicts, never two:
   step never fired, a query timed out, the guard refused, the seed handoff is
   missing). INVALID never counts as a pass and never closes anything.
 
-What the judge may write, in total: `overseer_command` rows in the world's own
-database (an operator's order, through `GuardedConnection.insert_command`) and
-one ConfigMap named `eph-result-<run-id>` in its own namespace. Every read goes
-through the same guard the seed uses (loopback MySQL only, ephemeral namespace,
-one marker row), and every observation is re-checked as a single SELECT against
-the world's live schema before it runs. A job goes in as a command row, never a
-direct roster write (measured: a roster UPDATE has no effect).
+The judge writes `overseer_command` rows for ordinary acts, named cast members'
+operator guards for `travel_guard`, at most one tagged Molten Core order in the
+world's campaign queue for `raid_order`, and one ConfigMap named
+`eph-result-<run-id>` in its own namespace. Database access goes through the
+seed guard (loopback MySQL, ephemeral namespace, one marker row). The guard
+locks that row before reading the campaign queue and holds the lock through
+the write's commit or rollback. Every observation is re-checked as a single
+SELECT against the world's live schema before it runs.
 
 Seams: `Judge` takes the world, the clock and the log as arguments, so the
 whole verdict logic runs in unit tests with no database and no cluster.
@@ -39,6 +40,15 @@ from .sqlgen import SeedError
 PASS, FAIL, INVALID = "PASS", "FAIL", "INVALID"
 POLL_SECONDS = 10
 CREDIT_DB, CREDIT_TABLE = "acore_characters", "log_encounter"
+_MASK_BOSSES = frozenset(
+    boss
+    for boss, (map_name, _) in gamedata.INSTANCE_ENCOUNTERS.items()
+    if map_name in gamedata.ENCOUNTER_MASK_MAPS
+)
+_DATA_SAVE_SQL = "SELECT data FROM instance WHERE id = @instance_id AND map = @map_id"
+_MASK_SAVE_SQL = (
+    "SELECT completedEncounters FROM instance WHERE id = @instance_id AND map = @map_id"
+)
 QUERY_TIMEOUT_SECONDS = 30
 # The world's port opens before the family has logged in (measured: one to two
 # minutes later), so `start` preconditions are polled for up to this long.
@@ -69,7 +79,7 @@ class QueryTimeout(Exception):
 
 
 class GuardedWorldDb:
-    """The judge's only door to the database: reads, and queued orders."""
+    """The judge's only door to the database: reads and guarded scenario acts."""
 
     def __init__(self, guarded, schema):
         if not isinstance(guarded, guard.GuardedConnection):
@@ -102,6 +112,15 @@ class GuardedWorldDb:
 
     def insert_command(self, target, kind, text):
         return self._g.insert_command(target, kind, text)
+
+    def write_travel_guard(self, target, enabled, *, expected=None):
+        return self._g.write_travel_guard(target, enabled, expected=expected)
+
+    def enqueue_molten_core_order(self, family):
+        return self._g.enqueue_molten_core_order(family)
+
+    def write_quest_aim(self, target, quest):
+        return self._g.write_quest_aim(target, quest)
 
 
 # -- expectations and rendering --------------------------------------------------
@@ -261,6 +280,8 @@ def _run_bound_problems(bare, maps, alias=None, sole=True):
 def _encounter_done(rows, boss):
     """Read the selected encounter slots from the pinned core's instance save."""
     map_name, slots = gamedata.INSTANCE_ENCOUNTERS[boss]
+    if map_name in gamedata.ENCOUNTER_MASK_MAPS:
+        return _encounter_mask_done(rows, map_name)
     if len(rows) != 1 or len(rows[0]) != 1 or not isinstance(rows[0][0], str):
         raise JudgeError(f"expected one {map_name} instance save")
     save = rows[0][0]
@@ -287,6 +308,18 @@ def _encounter_done(rows, boss):
         raise JudgeError("malformed Molten Core instance save")
     selected = [states[slot] for slot in slots]
     return "3" in selected, f"{boss} state={' '.join(selected)}"
+
+
+def _encounter_mask_done(rows, map_name):
+    """Read the core's completed-encounter mask for an instance with no boss save."""
+    if len(rows) != 1 or len(rows[0]) != 1:
+        raise JudgeError(f"expected one {map_name} instance row")
+    mask = rows[0][0]
+    if isinstance(mask, str) and re.fullmatch(r"[0-9]+", mask):
+        mask = int(mask)
+    if type(mask) is not int or not 0 <= mask < 1 << 32:
+        raise JudgeError(f"malformed {map_name} completed-encounter mask")
+    return mask != 0, f"completedEncounters={mask}"
 
 
 class Judge:
@@ -320,6 +353,7 @@ class Judge:
         self.arm = arm
         self.schema = schema or dbschema.Schema.load()
         self.records = {}
+        self._guard_aims = {}
         self.act_rows = []
 
     # -- entry --
@@ -435,7 +469,7 @@ class Judge:
         if duration is None:
             raise JudgeError("decree has no valid duration")
         rendered = self._render(observes, variables)
-        steps = self._plan_acts(observes)
+        steps = self._plan_acts(observes, duration)
         self.observes, self.rendered = observes, rendered
         return duration, steps
 
@@ -462,7 +496,9 @@ class Judge:
                         f"observation {name}: needs a positive instance ID for {alias}"
                     )
                 sql = render_sql(
-                    "SELECT data FROM instance WHERE id = @instance_id AND map = @map_id",
+                    _MASK_SAVE_SQL
+                    if o["encounter"]["boss"] in _MASK_BOSSES
+                    else _DATA_SAVE_SQL,
                     {
                         "instance_id": instance_id,
                         "map_id": map_id,
@@ -480,17 +516,24 @@ class Judge:
         """The measured window: fire due acts, sample continuous observations."""
         pending = list(steps)
         while True:
-            elapsed = self.clock() - started
+            final_sample = self.clock() - started >= duration
             for step in list(pending):
-                if self._due(step, elapsed):
-                    self._fire(step, elapsed)
+                if self._due(step, started):
+                    self._fire(step, started)
                     pending.remove(step)
             for name, o in self.observes.items():
                 if o.get("when") == "continuous":
                     self._observe(name, started)
-            if elapsed >= duration:
+            if final_sample:
                 return
-            self.sleep(min(self.poll, duration - elapsed))
+            elapsed = self.clock() - started
+            next_deadline = min(
+                (row["by_s"] for row, _ in pending if "by_s" in row),
+                default=duration,
+            )
+            self.sleep(
+                max(0, min(self.poll, duration - elapsed, next_deadline - elapsed))
+            )
 
     def _invalid_reasons(self):
         why = []
@@ -600,29 +643,68 @@ class Judge:
         }.get(r["status"], r["status"])
 
     # -- acts --
-    def _plan_acts(self, observes):
+    def _plan_acts(self, observes, duration):
         steps = []
         for i, cmd in enumerate(acts.act_commands(self.decree)):
-            if cmd["kind"] not in guard.COMMAND_KINDS:
-                raise JudgeError(
-                    f"act step {i}: command kind {cmd['kind']!r} is not allowed"
-                )
+            kind = cmd["kind"]
+            payload_field = {
+                acts.TRAVEL_GUARD: "guard_enabled",
+                acts.QUEST_AIM: "quest_id",
+            }.get(kind)
+            if payload_field is not None and payload_field not in cmd:
+                payload_field = None
+            if kind not in guard.COMMAND_KINDS and not (
+                payload_field or cmd.get(acts.RAID_ORDER)
+            ):
+                raise JudgeError(f"act step {i}: command kind {kind!r} is not allowed")
             if "when" in cmd and cmd["when"] not in observes:
                 raise JudgeError(
                     f"act step {i}: waits for unknown observation {cmd['when']!r}"
                 )
-            targets = self._targets(cmd["who"], i)
+            who = cmd["who"]
+            targets = self._act_targets(cmd, i)
+            if payload_field and not self._is_named_target(who, targets):
+                raise JudgeError(f"act step {i}: {kind} needs one named cast member")
             at = lint.duration_seconds(cmd["at"]) if "at" in cmd else None
             if "at" in cmd and at is None:
                 raise JudgeError(f"act step {i}: bad time {cmd['at']!r}")
             row = {
-                "index": i, "who": cmd["who"], "targets": targets, "kind": cmd["kind"],
+                "index": i, "who": who, "targets": targets, "kind": cmd["kind"],
                 "text": cmd["text"], "fired": False,
             }  # fmt: skip
+            if payload_field:
+                row[payload_field] = cmd[payload_field]
+            if "by" in cmd:
+                deadline = lint.duration_seconds(cmd["by"])
+                if at is not None or deadline is None:
+                    raise JudgeError(
+                        f"act step {i}: bad conditional deadline {cmd['by']!r}"
+                    )
+                if deadline > duration:
+                    raise JudgeError(
+                        f"act step {i}: deadline exceeds the decree duration"
+                    )
+                row["by_s"] = deadline
             row["at" if "at" in cmd else "when"] = cmd.get("at", cmd.get("when"))
             self.act_rows.append(row)
             steps.append((row, at))
         return steps
+
+    def _is_named_target(self, who, targets):
+        return targets == [who] and any(
+            member["who"] == who for member in self.handoff.get("members", [])
+        )
+
+    def _act_targets(self, cmd, i):
+        if cmd.get(acts.RAID_ORDER):
+            family = cmd["who"]
+            members = self.handoff.get("members") or []
+            if self.decree.get("world", {}).get("bridge") != "on":
+                raise JudgeError(f"act step {i}: raid order needs the headless bridge")
+            if [m["name"] for m in members if m["who"] == family] != [family]:
+                raise JudgeError(f"act step {i}: raid order needs one named cast head")
+            return [family]
+        return self._targets(cmd["who"], i)
 
     def _targets(self, who, i):
         members = self.handoff.get("members") or []
@@ -636,19 +718,70 @@ class Judge:
             raise JudgeError(f"act step {i}: {who!r} is not in the seeded cast")
         return names
 
-    def _due(self, step, elapsed):
+    def _due(self, step, started):
         row, at = step
+        elapsed = self.clock() - started
         if at is not None:
             return elapsed >= at
-        rec = self._evaluate(row["when"])
-        return rec["status"] == "held"
+        deadline = row.get("by_s")
+        if deadline is None:
+            return self._evaluate(row["when"])["status"] == "held"
+        if elapsed <= deadline:
+            held = self._evaluate(row["when"])["status"] == "held"
+            elapsed = self.clock() - started
+            if held and elapsed <= deadline:
+                return True
+            if elapsed < deadline:
+                return False
+        raise JudgeError(
+            f"act step {row['index']}: {row['when']} did not hold by {deadline}s"
+        )
 
-    def _fire(self, step, elapsed):
+    def _fire(self, step, started):
         row, _ = step
-        for name in row["targets"]:
-            self.world.insert_command(name, row["kind"], row["text"])
+        deadline = row.get("by_s")
+        elapsed = self.clock() - started
+        if deadline is not None and elapsed > deadline:
+            raise JudgeError(f"act step {row['index']} could not start by {deadline}s")
+        if "guard_enabled" in row:
+            self._fire_travel_guard(row)
+        elif "quest_id" in row:
+            try:
+                self.world.write_quest_aim(row["who"], row["quest_id"])
+            except guard.GuardError as exc:
+                raise JudgeError(f"quest aim for {row['who']}: {exc}") from exc
+        elif row["kind"] == acts.RAID_ORDER:
+            self.world.enqueue_molten_core_order(row["targets"][0])
+        else:
+            for name in row["targets"]:
+                self.world.insert_command(name, row["kind"], row["text"])
         row["fired"] = True
+        if deadline is not None:
+            elapsed = self.clock() - started
         row["fired_s"] = int(elapsed)
+        if deadline is not None and elapsed > deadline:
+            raise JudgeError(f"act step {row['index']} finished after {deadline}s")
+
+    def _fire_travel_guard(self, row):
+        name = row["who"]
+        enabled = row["guard_enabled"]
+        expected = self._guard_aims.get(name)
+        if enabled and expected is not None:
+            raise JudgeError(f"{name} already has a guard from this run")
+        if not enabled and expected is None:
+            raise JudgeError(f"{name} has no guard from this run to clear")
+        try:
+            aim = self.world.write_travel_guard(name, enabled, expected=expected)
+        except guard.GuardError as exc:
+            operation = "set" if enabled else "clear"
+            row["error"] = f"could not {operation} travel guard for {name}: {exc}"
+            raise JudgeError(row["error"]) from exc
+        if enabled:
+            self._guard_aims[name] = aim
+        else:
+            del self._guard_aims[name]
+        row["text"] = aim
+        row["fired_at"] = self.world.db_now()
 
     # -- observations --
     def _evaluate(self, name):
