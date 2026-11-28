@@ -1,11 +1,10 @@
-"""A roster family member with Riding and no mount buys one between runs (#2642).
+"""A roster family member learns a carried mount between runs (#2642).
 
 `mountbuy.py` and `guildjobs.mount_step` serve guild members off the roster
-whose purses carry purchase orders. A roster family member has no purchase
-order and plans only in the gap between dungeon runs (familyclass.py). After
-Riding is held (family_riding_step, #2625), `family_mount_step` plans the
-member's mount step in that same gap, keeping `FAMILY_RIDING_FLOAT` over the
-price, with the same idle, ground, follower and cooldown holds.
+whose purses carry purchase orders. The roster path uses the same mount
+decision in the gap between dungeon runs (familyclass.py), but can only use a
+carried mount. It keeps `FAMILY_RIDING_FLOAT` over the price when reporting why
+a purchase waits.
 """
 
 from __future__ import annotations
@@ -42,6 +41,7 @@ def _load_bridge():
 bridge = _load_bridge()
 
 FACTS = mountbuy.Facts(False, STOCK)
+CARRIED = guildjobs.Carried(9001, 2414, 1, 15, 5, name="Reins of the Pinto")
 
 
 def mount_seat(**over):
@@ -59,16 +59,20 @@ class WhoGetsAMountWalk(unittest.TestCase):
     def step(self, member, facts=FACTS, recent=()):
         return guildjobs.family_mount_step(member, facts, list(recent))
 
-    def test_a_family_member_with_riding_and_no_mount_walks_for_one(self):
-        step, note = self.step(mount_seat())
-        self.assertEqual("", note)
-        self.assertIsNotNone(step)
-        self.assertEqual(mountbuy.ACTION, step.action)
-        self.assertEqual("buy", step.walk.kind)
-        self.assertEqual("walk-to-vendor item:2414 max:5000", step.walk.command)
+    def test_a_buy_is_never_planned_as_a_vendor_walk(self):
+        # The module refuses walk-to-vendor for a roster character, so a walk
+        # row would only error on every cooldown and never buy a mount.
+        m = mount_seat()
+        step, note = self.step(m)
+        self.assertIsNone(step)
+        self.assertIn("waits to buy a mount", note)
+        self.assertIn(m.name, note)
+        self.assertIn("no roster character to a vendor", note)
+        self.assertNotIn("saves for a mount", note)
         self.assertEqual(
-            [("buy", "entry:2414 count:1 max:10000"), ("cast", "use entry:2414")],
-            [(r.kind, r.command) for r in step.rows],
+            "%s waits to buy a mount: the module walks no roster character to a vendor"
+            % m.name,
+            note,
         )
 
     def test_the_mount_leaves_the_family_float(self):
@@ -77,11 +81,12 @@ class WhoGetsAMountWalk(unittest.TestCase):
         self.assertIsNone(step)
         self.assertIn("saves for a mount", note)
 
-    def test_enough_for_mount_and_float_walks(self):
+    def test_enough_for_mount_and_float_waits_for_a_roster_route(self):
         exact = mount_seat(money=PINTO.price + guildjobs.FAMILY_RIDING_FLOAT)
-        step, _ = self.step(exact)
-        self.assertIsNotNone(step)
-        self.assertEqual(mountbuy.ACTION, step.action)
+        step, note = self.step(exact)
+        self.assertIsNone(step)
+        self.assertIn("waits to buy a mount", note)
+        self.assertNotIn("saves for a mount", note)
 
     def test_a_carried_mount_is_used_without_gold_or_walking(self):
         held = guildjobs.Carried(9001, 2414, 1, 15, 5, name="Reins of the Pinto")
@@ -91,13 +96,13 @@ class WhoGetsAMountWalk(unittest.TestCase):
         self.assertIsNone(step.walk)
         self.assertEqual(["use entry:2414"], [r.command for r in step.rows])
 
-    def test_full_bags_make_room_within_the_family_walk_cap(self):
+    def test_full_bags_plan_no_make_room_step_for_a_refused_walk(self):
         junk = guildjobs.Carried(guid=11, entry=900, count=1, quality=0, sell_price=50)
         m = mount_seat(free_slots=0, bag_slots=16, carried=(junk,))
         step, note = self.step(m)
-        self.assertEqual("", note)
-        self.assertEqual(guildjobs.ROOM_ACTION, step.action)
-        self.assertEqual(["guid:11"], [r.command for r in step.rows])
+        self.assertIsNone(step)
+        self.assertIn("waits to buy a mount", note)
+        self.assertIn("no roster character to a vendor", note)
 
 
 class WhenFamilyMountIsHeld(unittest.TestCase):
@@ -112,8 +117,11 @@ class WhenFamilyMountIsHeld(unittest.TestCase):
         for over in (dict(online=False), dict(alive=False), dict(in_combat=True)):
             self.assertIsNone(self.step(mount_seat(**over)), over)
 
-    def test_not_walking_while_following_its_leader(self):
-        self.assertIsNone(self.step(mount_seat(follows=True)))
+    def test_a_follower_without_a_carried_mount_says_nothing(self):
+        for money in (PINTO.price, 20 * GOLD):
+            with self.subTest(money=money):
+                m = mount_seat(follows=True, money=money)
+                self.assertEqual(guildjobs.family_mount_step(m, FACTS, []), (None, ""))
 
     def test_a_follower_carrying_a_mount_still_uses_it_where_it_stands(self):
         held = guildjobs.Carried(9001, 2414, 1, 15, 5, name="Reins of the Pinto")
@@ -127,10 +135,9 @@ class WhenFamilyMountIsHeld(unittest.TestCase):
         self.assertIsNone(self.step(mount_seat(map_id=None)))
 
     def test_not_twice_inside_the_mount_cooldown(self):
-        self.assertIsNone(self.step(mount_seat(), recent=[ago(30, mountbuy.ACTION)]))
-        self.assertIsNotNone(
-            self.step(mount_seat(), recent=[ago(600, mountbuy.ACTION)])
-        )
+        held = mount_seat(carried=(CARRIED,))
+        self.assertIsNone(self.step(held, recent=[ago(30, mountbuy.ACTION)]))
+        self.assertIsNotNone(self.step(held, recent=[ago(600, mountbuy.ACTION)]))
 
 
 class InTheFamilyPlan(unittest.TestCase):
@@ -146,13 +153,15 @@ class InTheFamilyPlan(unittest.TestCase):
             far_slots=None,
         )
 
-    def test_an_idle_family_member_with_riding_and_no_mount_gets_mount_walk(self):
-        plan = self.plan([mount_seat()], mounts={"Grugg": FACTS})
+    def test_an_idle_family_member_carrying_a_mount_gets_the_use_step(self):
+        plan = self.plan([mount_seat(carried=(CARRIED,))], mounts={"Grugg": FACTS})
         self.assertEqual([s.action for s in plan.steps], [mountbuy.ACTION])
         self.assertEqual([s.holder for s in plan.steps], ["Grugg"])
 
-    def test_saving_for_journeyman_still_buys_the_mount_now(self):
-        m = mount_seat(level=60, skills={RIDING: (75, 75)}, money=20 * GOLD)
+    def test_saving_for_journeyman_still_uses_the_mount_now(self):
+        m = mount_seat(
+            level=60, skills={RIDING: (75, 75)}, money=20 * GOLD, carried=(CARRIED,)
+        )
         plan = self.plan([m], mounts={"Grugg": FACTS})
         self.assertEqual([s.action for s in plan.steps], [mountbuy.ACTION])
 
@@ -171,13 +180,19 @@ class InTheFamilyPlan(unittest.TestCase):
         plan = self.plan([m], mounts={"Grugg": FACTS})
         self.assertEqual([s.action for s in plan.steps], [classquest.ACTION])
 
-    def test_busy_drive_holds_the_mount_walk(self):
-        plan = self.plan([mount_seat()], mounts={"Grugg": FACTS}, busy={"Grugg"})
+    def test_busy_drive_holds_the_mount_step(self):
+        plan = self.plan(
+            [mount_seat(carried=(CARRIED,))], mounts={"Grugg": FACTS}, busy={"Grugg"}
+        )
         self.assertEqual(plan.steps, ())
 
-    def test_family_switch_off_holds_the_mount_walk(self):
+    def test_a_family_member_to_buy_a_mount_gets_no_plan_step(self):
+        plan = self.plan([mount_seat()], mounts={"Grugg": FACTS})
+        self.assertEqual(plan.steps, ())
+
+    def test_family_switch_off_holds_the_mount_step(self):
         with mock.patch.dict(os.environ, {familyclass.ENV_SWITCH: "off"}):
-            plan = self.plan([mount_seat()], mounts={"Grugg": FACTS})
+            plan = self.plan([mount_seat(carried=(CARRIED,))], mounts={"Grugg": FACTS})
         self.assertEqual(plan.steps, ())
 
 
@@ -211,7 +226,7 @@ class BridgeFamilyMountWiring(unittest.IsolatedAsyncioTestCase):
         guild_member = seat(
             name="Mace", role=guildjobs.RAIDER, skills={}, level=60, money=0
         )
-        fam = mount_seat()
+        fam = mount_seat(carried=(CARRIED,))
         seen_members = []
 
         def fake_mounts(members):
@@ -251,7 +266,7 @@ class BridgeFamilyMountWiring(unittest.IsolatedAsyncioTestCase):
         guild_member = seat(
             name="Mace", role=guildjobs.RAIDER, skills={}, level=60, money=0
         )
-        fam = mount_seat()
+        fam = mount_seat(carried=(CARRIED,))
         facts = dict(
             masters={"Cave": "Mace"},
             crafters={},
@@ -262,25 +277,34 @@ class BridgeFamilyMountWiring(unittest.IsolatedAsyncioTestCase):
             family_members=[fam],
         )
         this = _bridge_stub(facts)
+        conn = mock.MagicMock()
+        cur = conn.__enter__.return_value.cursor.return_value.__enter__.return_value
         with mock.patch.multiple(
             bridge,
+            _connect=lambda: conn,
             _kept_with_bank_policy=lambda *args: {},
             _with_purses_and_reserves=lambda members, *args: members,
             _guild_campaign_door=lambda *args: "",
-            _family_class_state=lambda _facts: (
-                [],
-                {fam.name: "its family has an active dungeon run"},
-            ),
+            _fetch_queue_roster=lambda: [{"name": fam.name, "family": fam.name}],
             _family_danger=lambda *args: {},
-            _fetch_mount_facts=lambda *args: {},
+            _fetch_mount_facts=lambda *args: {fam.name: FACTS},
             _job_mail_commands=lambda *args: {},
             _job_leveling=lambda *args: None,
             _keep_class_plan=lambda *args: None,
         ):
-            plan = await bridge.Bridge._plan_guild_jobs(
-                this, [guild_member], facts, set(), 100.0, False
-            )
-        self.assertEqual(plan.steps, ())
+            for hold in ("dungeon", "errand"):
+                with self.subTest(hold=hold):
+                    cur.fetchall.return_value = (
+                        [{"leader_name": fam.name}] if hold == "dungeon" else []
+                    )
+                    errands = {fam.name} if hold == "errand" else set()
+                    with mock.patch.object(
+                        bridge, "_errand_names", return_value=errands
+                    ):
+                        plan = await bridge.Bridge._plan_guild_jobs(
+                            this, [guild_member], facts, set(), 100.0, False
+                        )
+                    self.assertEqual(plan.steps, ())
 
 
 if __name__ == "__main__":
