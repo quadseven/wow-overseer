@@ -4,16 +4,17 @@ The ticket's world rows name two required items and their creature droppers.
 This fixture checks that the planner hunts each missing item and hands in the
 quest once complete. Quest and loot row shapes follow classquest.QUESTS_SQL
 and classquest.LOOT_SQL; spawn and giver shapes follow classquest.SPAWNS_SQL
-and classquest.GIVERS_SQL; item counters follow questers.LOG_SQL. Spawn
-levels, positions, GUIDs and giver rows are synthetic because the ticket did
-not include them.
+and classquest.GIVERS_SQL; item counters follow questers.LOG_SQL and are read
+through members_from_rows. Spawn levels, positions, GUIDs and giver rows are
+synthetic because the ticket did not include them, so this proves the planner
+path when those creatures have eligible spawns, not the live realm's spawns.
 """
 
 import unittest
 
 import classquest
 import questers
-from test_questers import giver, mirra, quest, spawn, world
+from test_questers import giver, quest, spawn, world
 
 HILLSBRAD = 267
 QUEST = 496
@@ -58,54 +59,79 @@ def elixir_world():
     )
 
 
-def holder(**overrides):
-    values = dict(
-        name="QuestTester",
-        level=22,
-        zone_id=HILLSBRAD,
-        x=0.0,
-        y=0.0,
-        quest_log={QUEST: questers.STATUS_INCOMPLETE},
-        quest_progress={QUEST: 0},
-        quest_item_objectives={QUEST: {GRAY_BEAR_TONGUE: 0, CREEPER_ICHOR: 0}},
-    )
-    values.update(overrides)
-    return mirra(**values)
+def holder(status=questers.STATUS_INCOMPLETE, tongues=0, ichor=0):
+    """A quester read from MEMBERS_SQL and LOG_SQL shaped rows."""
+    member_row = {
+        "guid": 1,
+        "name": "QuestTester",
+        "class_id": 1,
+        "race": 2,
+        "level": 22,
+        "online": 1,
+        "map_id": 0,
+        "saved_zone": HILLSBRAD,
+        "pos_x": 0.0,
+        "pos_y": 0.0,
+        "zone_id": HILLSBRAD,
+        "health": 100,
+        "has_corpse": 0,
+    }
+    log_row = {
+        "guid": 1,
+        "quest": QUEST,
+        "status": status,
+        "progress": tongues + ichor,
+        "item1": GRAY_BEAR_TONGUE,
+        "itemcount1": tongues,
+        "item2": CREEPER_ICHOR,
+        "itemcount2": ichor,
+    }
+    log_row.update({"npc%d" % i: 0 for i in range(1, 5)})
+    log_row.update({"mobcount%d" % i: 0 for i in range(1, 5)})
+    return questers.members_from_rows([member_row], [log_row], [])[0]
 
 
 class ElixirOfSuffering(unittest.TestCase):
     def test_it_hunts_each_missing_item_and_hands_in_the_complete_quest(self):
         cat = elixir_world()
+        elixir = cat.quest(QUEST)
+        self.assertEqual(elixir.items, ((GRAY_BEAR_TONGUE, 10), (CREEPER_ICHOR, 1)))
+        self.assertEqual(
+            set(elixir.drops),
+            {
+                *((GRAY_BEAR_TONGUE, entry) for entry in GRAY_BEAR_DROPPERS),
+                *((CREEPER_ICHOR, entry) for entry in CREEPER_DROPPERS),
+            },
+        )
 
-        first = questers.plan(cat, holder(), questers.Clock(), 0.0)
+        first_holder = holder()
+        self.assertEqual(
+            first_holder.quest_item_objectives[QUEST],
+            {GRAY_BEAR_TONGUE: 0, CREEPER_ICHOR: 0},
+        )
+        first = questers.plan(cat, first_holder, questers.Clock(), 0.0)
         self.assertEqual((first.move.kind, first.move.quest), (classquest.HUNT, QUEST))
         self.assertIn(first.move.spot.entry, GRAY_BEAR_DROPPERS)
-        first_step = questers.step_for(holder(), first.move, 0, cat.quest(QUEST))
+        first_step = questers.step_for(first_holder, first.move, 0, elixir)
         self.assertIn("item:3476 count:10", first_step.rows[0].command)
 
-        second_holder = holder(
-            quest_progress={QUEST: 10},
-            quest_item_objectives={QUEST: {GRAY_BEAR_TONGUE: 10, CREEPER_ICHOR: 0}},
-        )
+        second_holder = holder(tongues=10)
+        self.assertEqual(second_holder.quest_progress[QUEST], 10)
         second = questers.plan(cat, second_holder, questers.Clock(), 0.0)
         self.assertEqual(
             (second.move.kind, second.move.quest), (classquest.HUNT, QUEST)
         )
         self.assertIn(second.move.spot.entry, CREEPER_DROPPERS)
-        second_step = questers.step_for(second_holder, second.move, 0, cat.quest(QUEST))
+        second_step = questers.step_for(second_holder, second.move, 0, elixir)
         self.assertIn("item:3477 count:1", second_step.rows[0].command)
 
-        complete_holder = holder(
-            quest_log={QUEST: questers.STATUS_COMPLETE},
-            quest_progress={QUEST: 11},
-            quest_item_objectives={QUEST: {GRAY_BEAR_TONGUE: 10, CREEPER_ICHOR: 1}},
-        )
+        complete_holder = holder(status=questers.STATUS_COMPLETE, tongues=10, ichor=1)
         handin = questers.plan(cat, complete_holder, questers.Clock(), 0.0)
         self.assertEqual(
             (handin.move.kind, handin.move.quest), (classquest.TURN_IN, QUEST)
         )
 
-    def test_two_hours_without_item_progress_keeps_the_generic_stall_reason(self):
+    def test_zero_progress_is_a_generic_stall_even_when_drop_rows_exist(self):
         cat = elixir_world()
         member = holder()
         clock = questers.Clock()
@@ -119,6 +145,12 @@ class ElixirOfSuffering(unittest.TestCase):
             [(broken.quest, broken.reason) for broken in plan.broken],
             [(QUEST, questers.STALLED)],
         )
+        # STALLED reports unchanged counters over two hours. The fixture still
+        # has the required items' drop rows, so this reason does not say the
+        # quest has no source; the ticket supplies no live spawn or refusal rows
+        # that would explain why its questers made no progress.
+        self.assertEqual(len(cat.quest(QUEST).drops), 8)
+        self.assertNotEqual(plan.broken[0].reason, questers.STALLED_UNSOURCED)
 
 
 if __name__ == "__main__":
