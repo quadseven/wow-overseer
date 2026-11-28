@@ -265,5 +265,151 @@ class TheEconomyView(unittest.TestCase):
         self.assertEqual(by["Runs"]["href"], "#/runs/424")
 
 
+def purse(name, percent, total):
+    return {
+        "name": name,
+        "class": "Warrior",
+        "present": True,
+        "money": {"total": total},
+        "room": {"percent": percent, "tone": "warn" if percent >= 85 else ""},
+        "capacity": {"used": 10, "slots": 16},
+        "containers": [],
+        "guild": "Cave",
+    }
+
+
+def gold_payload(members):
+    return {
+        "members": members,
+        "sides": [
+            {
+                "family": "Grug",
+                "guild": "Cave",
+                "names": [m["name"] for m in members],
+            }
+        ],
+        "family": {
+            "money": {"total": 140100},
+            "vendor": {"total": 300},
+            "present": len(members),
+        },
+        "saved_note": "Saved.",
+    }
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class TheGoldTabOrder(unittest.TestCase):
+    def draw(self, payload):
+        got = render(
+            "const c = ctx('gold', {}, {'/api/wealth': %s});\n"
+            "console.log(JSON.stringify(V.render(c).s));" % json.dumps(payload)
+        )
+        return got
+
+    def test_totals_first_then_the_worst_bags_then_the_grid(self):
+        html = self.draw(
+            gold_payload(
+                [
+                    purse("Grug", 92, 50000),
+                    purse("Bork", 40, 90000),
+                    purse("Ugga", 88, 100),
+                ]
+            )
+        )
+        self.assertLess(
+            html.index('class="eco-totals"'), html.index("Bags needing attention")
+        )
+        self.assertLess(
+            html.index("Bags needing attention"), html.index('class="eco-bags"')
+        )
+        attention = html[
+            html.index("Bags needing attention") : html.index("Junk waiting")
+        ]
+        self.assertLess(attention.index("Grug"), attention.index("Ugga"))
+        self.assertNotIn("Bork", attention)
+
+    def test_the_vendor_block_is_titled_by_the_junk_not_a_route(self):
+        html = self.draw(gold_payload([purse("Grug", 40, 100)]))
+        self.assertIn("Junk waiting for a vendor", html)
+        self.assertNotIn("Vendor route", html)
+
+    def test_the_rich_list_caps_at_five_with_the_rest_folded(self):
+        members = [purse("M%d" % i, 10, (7 - i) * 10000) for i in range(7)]
+        html = self.draw(gold_payload(members))
+        rich = html[html.index("Purses, richest first") :]
+        self.assertIn("2 more purses", rich)
+        self.assertLess(rich.index("2 more purses"), rich.index("M6"))
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class TheAuctionCards(unittest.TestCase):
+    def draw(self, listing):
+        wealth = {"auctions": {"listings": [listing], "any": True, "tracked": True}}
+        got = render(
+            "const c = ctx('auction', {}, {'/api/wealth': {family: {}, auctions: %s}});\n"
+            "console.log(JSON.stringify(V.render(c).s));"
+            % json.dumps(wealth["auctions"])
+        )
+        return got[got.index("eco-auc-cards") :]
+
+    def listing(self, expires_in):
+        import time
+
+        return {
+            "item": {
+                "entry": 2589,
+                "name": "Linen Cloth",
+                "quality": 1,
+                "icon": "inv_fabric_linen_01",
+                "count": 20,
+            },
+            "owner": "Grug",
+            "has_bid": True,
+            "start": {"total": 100},
+            "bid": {"total": 150},
+            "buyout_label": "2g",
+            "buyout": {"total": 20000},
+            "expires_at": time.time() + expires_in,
+        }
+
+    def test_the_buyout_leads_the_card_and_the_seller_links(self):
+        cards = self.draw(self.listing(7200))
+        self.assertIn('class="eco-gold eco-auc-buy"', cards)
+        self.assertIn(">2g 00s<", cards)
+        self.assertIn('href="#/m/Grug"', cards)
+
+    def test_time_left_under_an_hour_warns(self):
+        cards = self.draw(self.listing(1800))
+        self.assertIn('data-gt="warn"', cards)
+        cards = self.draw(self.listing(7200))
+        self.assertNotIn('data-gt="warn"', cards)
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class TheTradesSections(unittest.TestCase):
+    def test_anchor_row_and_sections_two_to_six_behind_folds(self):
+        trade = {
+            "skill": 197,
+            "name": "tailoring",
+            "held": True,
+            "holders": [{"who": "Og", "value": 150}],
+            "assigned": ["Og"],
+            "missing": [],
+            "missing_count": 0,
+            "trainer_line": "trained",
+        }
+        payload = {"family": "Grug", "line": "Grug", "trades": [trade]}
+        got = render(
+            "console.log(JSON.stringify(V.render(ctx('trades', {}, {'/api/trades': %s})).s));"
+            % json.dumps(payload)
+        )
+        self.assertIn('class="eco-anchors"', got)
+        for n in ("02", "03", "04", "05", "06"):
+            self.assertIn('data-jump="trades-%s"' % n, got)
+            self.assertIn('data-fold="trades|%s"' % n, got)
+            self.assertIn('id="trades-%s"' % n, got)
+        self.assertIn('class="eco-hierarchy"', got)
+
+
 if __name__ == "__main__":
     unittest.main()
