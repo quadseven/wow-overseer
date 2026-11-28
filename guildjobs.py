@@ -8242,7 +8242,7 @@ def refused_spawns(name, recent) -> frozenset:
     return frozenset(refused_marks(name, recent))
 
 
-def productive_entries(name, recent, minutes) -> dict:
+def reached_hunt_entries(name, recent, minutes) -> dict:
     """creature entry -> minutes since the member's newest hunt of it that made
     a kill, within `minutes`: a pack that gave kills is reachable."""
     out = {}
@@ -8252,33 +8252,30 @@ def productive_entries(name, recent, minutes) -> dict:
     return out
 
 
-# A member's hunts in a row at one pack that killed and left the stall clock
-# running unmoved stop restarting it (wow-overseer#2188). One or two are the
-# ground being worked (a full bag, a slow drop); a run of them is a pack that
-# does not give the quest what it asks. Loot is no evidence: the module counts
-# every item looted, grey and vendor trash included, and lists only notable
-# entries, so a pack that drops greys but not the quest item looted something
-# every time. The quest's own counters are the evidence, and Hunts.observe already
-# restarts the clock when they move.
-BARREN_HUNT_ROWS = 3
-
-
-def barren_hunt_rows(name, recent) -> int:
-    """How many of the member's newest hunts that made a kill were at one
-    creature, in a row, newest first: the count stops at the first kill row of
-    another creature (a rerolled pack starts its own count)."""
-    kills = sorted(
-        (r for r in recent or () if r.name == name and r.entry and r.kills > 0),
-        key=lambda r: r.age_minutes,
-    )
-    if not kills:
+def _quest_loot_row(name, quest, entry, recent) -> int:
+    """ID of the newest recent class hunt that looted an objective drop."""
+    wanted = {item for item, creature in quest.drops if creature == entry}
+    if not wanted:
         return 0
-    count = 0
-    for r in kills:
-        if r.entry != kills[0].entry:
-            break
-        count += 1
-    return count
+
+    newest = 0
+    for row in recent or ():
+        if (
+            row.name != name
+            or row.action != classquest.ACTION
+            or row.entry != entry
+            or row.status not in ("applied", "unchanged")
+            or row.row_id <= newest
+            or row.age_minutes >= classquest.HUNT_STALL_MINUTES
+            or _before_epoch(row)
+        ):
+            continue
+        # The read keeps only the head of result; read a complete loot array
+        # even when the rest was cut. loot_count includes all loot (#2188).
+        found = re.search(r'"loot_items":\[((?:\d+,)*\d+)\]', row.result)
+        if found and any(int(item) in wanted for item in found[1].split(",")):
+            newest = row.row_id
+    return newest
 
 
 def class_avoid(m, book, recent, hunts=None, now=0.0) -> tuple:
@@ -8293,7 +8290,7 @@ def class_avoid(m, book, recent, hunts=None, now=0.0) -> tuple:
     avoid, off = hunts.state(m.name, now) if hunts else ({}, frozenset())
     marks = refused_marks(m.name, recent)
     if marks and book is not None:
-        killed = productive_entries(m.name, recent, classquest.SPAWN_REFUSED_MINUTES)
+        killed = reached_hunt_entries(m.name, recent, classquest.SPAWN_REFUSED_MINUTES)
         entries = classquest.spawn_entries(book)
         marks = {
             g: age
@@ -8938,21 +8935,18 @@ def _class_move(m, book, recent, hunts, now):
     """(move or None, blocked sentences): classquest.next_move, with a hunt
     that has stalled sent to another pack, or given up (HUNT_STALL_MINUTES).
 
-    Before the first reroll, a hunt that killed can restart the stall clock.
-    After BARREN_HUNT_ROWS at one pack the clock runs and the pack is rerolled
-    or the quest given up. Hunts.observe restarts the clock when the quest's
-    counters move."""
-    if (
-        hunts
-        and productive_entries(m.name, recent, classquest.HUNT_STALL_MINUTES)
-        and barren_hunt_rows(m.name, recent) < BARREN_HUNT_ROWS
-    ):
-        hunts.productive(m.name, now)
+    The quest's counters and verified drops advance the clock. Kills alone
+    show the pack is reachable (class_avoid)."""
     m = with_walls(m, recent)
     avoid, off = class_avoid(m, book, recent, hunts, now)
     move, blocked = classquest.next_move(book, m, avoid, off)
     if not hunts or move is None or move.kind not in (classquest.HUNT, classquest.USE):
         return move, blocked
+    loot_row = (
+        _quest_loot_row(m.name, book.quests[move.quest], move.spot.entry, recent)
+        if move.kind == classquest.HUNT
+        else 0
+    )
     verdict = hunts.observe(
         m.name,
         move.quest,
@@ -8960,6 +8954,7 @@ def _class_move(m, book, recent, hunts, now):
         move.spot,
         now,
         failed_class_walks(m.name, recent),
+        loot_row=loot_row,
     )
     if verdict:
         avoid, off = class_avoid(m, book, recent, hunts, now)
