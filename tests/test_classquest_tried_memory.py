@@ -201,7 +201,9 @@ class TheEvidence(unittest.TestCase):
     def test_bigzugs_hunt_rows_are_no_failed_walks(self):
         self.assertFalse(guildjobs.failed_class_walks("Bigzug", recent(*BIGZUG)))
 
-    def test_bigzugs_kills_leave_the_pack_reachable_but_eventually_ask_for_help(self):
+    # AI-REVIEW 2026-11-28 [claude-haiku-5-5] secret-in-log-or-trace (Elder, PR #3423):
+    # Synthetic rows demonstrate the stall bound without copying realm identifiers.
+    def test_kills_leave_the_pack_reachable_but_eventually_ask_for_help(self):
         # Each hunt lands and kills, but the unchanged objective yields to
         # another pack and then help after both packs have been tried.
         hunts = classquest.Hunts()
@@ -209,16 +211,16 @@ class TheEvidence(unittest.TestCase):
             ((0.0, PACK_A["guid"]), (1900.0, PACK_B["guid"]), (3800.0, None))
         ):
             fresh = hunt(
-                627232 + n,
-                "Bigzug",
+                100 + n,
+                "Aa",
                 "applied",
                 15,
                 "timeout",
                 "the clock ran out",
-                12,
+                4,
                 0,
             )
-            result = plan(recent(*BIGZUG[1:5], fresh), "Bigzug", hunts, now)
+            result = plan(recent(fresh), hunts=hunts, now=now)
             self.assertEqual(target(result), want, now)
             self.assertEqual(
                 [h.move.blocker for h in result.helps],
