@@ -350,15 +350,18 @@ class AWideRedrawLeavesThePicturesInThePage(unittest.TestCase):
         self.assertFalse(got["stale"])
 
     def test_hear_works_on_a_picture_kept_across_a_redraw(self):
+        # The featured family's tile carries Hear (the rail thumbs do not),
+        # and Grug is featured here: nothing is staged, so the first
+        # streamed family is.
         got = run(
             """
             await draw(ctx("clears Ragefire"));
-            const video = slot("Zugling").querySelector("video");
+            const video = slot("Grugling").querySelector("video");
             await draw(ctx("walks to Deadmines"));
-            const hear = main.querySelector('[data-hear="Zugling"]');
+            const hear = main.querySelector('[data-hear="Grugling"]');
             hear.fire("click");
             return {
-              kept: slot("Zugling").querySelector("video") === video,
+              kept: slot("Grugling").querySelector("video") === video,
               muted: video.muted,
               pressed: hear.getAttribute("aria-pressed"),
               others: videos().filter((v) => v !== video).every((v) => v.muted === true),
