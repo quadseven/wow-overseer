@@ -98,6 +98,30 @@ class CliTest(unittest.TestCase):
         self.assertEqual(seen["control"], "auto")
         self.assertEqual(seen["control_history"], "h.json")
 
+    def test_withdraw_writes_one_request_and_a_repeat_says_so(self):
+        import tempfile
+        from unittest import mock
+
+        from eph_fakes import FakeCluster, make_cfg
+
+        from ephemeral import kube
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        cluster = FakeCluster()
+        k = kube.Kubectl("wow-ephemeral", runner=cluster)
+        with mock.patch(
+            "ephemeral.__main__._runner", lambda a: (make_cfg(tmp.name), k, None)
+        ):
+            code, out = self.run_cli("withdraw", "abc123")
+            self.assertEqual((code, out.strip()), (0, "abc123: requested"))
+            code, out = self.run_cli("withdraw", "abc123")
+            self.assertEqual((code, out.strip()), (0, "abc123: already requested"))
+            code, out = self.run_cli("withdraw", "NOPE")
+            self.assertEqual(code, 2)
+        req = cluster.objs[("configmaps", "wow-ephemeral", "eph-withdraw-abc123")]
+        self.assertEqual(req["metadata"]["labels"], {"eph/withdraw": "abc123"})
+
     def test_example_config_loads_once_filled_in(self):
         import json
 

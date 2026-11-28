@@ -17,6 +17,9 @@ JOB_LABEL_BATCH = "eph/batch"
 JOB_LABEL_CLASS = "eph/class"
 JOB_LABEL_DECREE = "eph/decree"
 JOB_LABEL_REALM = "eph/realm"
+JOB_LABEL_RUN = "eph/run"
+LABEL_WITHDRAW = "eph/withdraw"
+BATCH_RE = re.compile(r"^[a-f0-9]{6}$")
 LEASE_NAME = "eph-dispatcher"
 TEMPLATE_CM = "eph-world-template"
 
@@ -35,6 +38,11 @@ def result_name(rid):
 
 def run_cm_name(rid):
     return f"eph-run-{rid}"
+
+
+def withdraw_name(batch):
+    """The request ConfigMap `eph withdraw` writes and the dispatcher reads."""
+    return f"eph-withdraw-{batch}"
 
 
 def parse_run(rid):
