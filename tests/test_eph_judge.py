@@ -12,7 +12,7 @@ import unittest
 import uuid
 from unittest import mock
 
-from ephemeral import dbschema, guard, judge, lint
+from ephemeral import anchors, dbschema, guard, judge, lint
 from ephemeral.miniyaml import loads
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -62,6 +62,7 @@ class FakeWorld:
         self.answers = []  # (fragment, fn(now) -> rows | Exception)
         self.selects = []
         self.commands = []
+        self.raid_orders = []
 
     def answer(self, fragment, rows):
         fn = rows if callable(rows) else (lambda _now, r=rows: r)
@@ -83,6 +84,10 @@ class FakeWorld:
     def insert_command(self, target, kind, text):
         self.commands.append((self.clock.now, target, kind, text))
         return len(self.commands)
+
+    def enqueue_molten_core_order(self, family):
+        self.raid_orders.append((self.clock.now, family))
+        return len(self.raid_orders)
 
 
 def guzzler_world(
@@ -319,6 +324,99 @@ class MoltenCoreEncounterTest(unittest.TestCase):
                 result, _ = self.run_with_save("majordomo-reflect-hold", end)
                 self.assertEqual(result["verdict"], "INVALID", result["reasons"])
                 self.assertIn("malformed Molten Core", " ".join(result["reasons"]))
+
+
+class RazorfenDownsEncounterTest(unittest.TestCase):
+    """Razorfen Downs keeps no boss states, so credit is the core's encounter mask."""
+
+    @staticmethod
+    def decree():
+        path = (
+            ROOT
+            / "data"
+            / "decrees"
+            / "razorfen-downs-exits-and-restarts-together.yaml"
+        )
+        decree = loads(path.read_text(encoding="utf-8"))
+        decree["duration"] = "2m"
+        keep = {"exactly-five-family-members-start-inside-rfd", "encounter-credited"}
+        decree["observe"] = [o for o in decree["observe"] if o["name"] in keep] + [
+            {
+                "name": "no-exit-hearth-was-used",
+                "role": "check",
+                "when": "end",
+                "sql": "SELECT id FROM overseer_dungeon_run_event WHERE kind = 'exit_hearth'",
+                "expect": {"rows": 0},
+            }
+        ]
+        return decree
+
+    def run_with_mask(self, mask, *, decree=None):
+        clock = Clock()
+        world = FakeWorld(clock)
+        world.answer("map_id = 129 AND instance_id = 11", [(5,)])
+        world.answer("FROM instance WHERE id = 11 AND map = 129", mask)
+        world.answer("overseer_dungeon_run_event", [])
+        handoff = {**HANDOFF, "variables": {**HANDOFF["variables"], "rfd": 11}}
+        result = run(decree or self.decree(), world, clock, handoff=handoff)
+        return result, world
+
+    def test_the_shipped_decree_lints_clean(self):
+        findings = lint.lint_document(self.decree())
+        self.assertFalse([f for f in findings if f.level == "error"], findings)
+
+    def test_a_credited_bit_in_the_fresh_instance_is_the_evidence(self):
+        result, world = self.run_with_mask(lambda now: [(8 if now >= 10 else 0,)])
+        self.assertEqual(result["verdict"], "PASS", result["reasons"])
+        self.assertEqual(named(result, "encounter-credited")["status"], "held")
+        self.assertIn(
+            (
+                0.0,
+                "SELECT completedEncounters FROM instance WHERE id = 11 AND map = 129",
+            ),
+            world.selects,
+        )
+        self.assertFalse(any("log_encounter" in sql for _, sql in world.selects))
+
+    def test_no_credited_bit_is_invalid(self):
+        result, world = self.run_with_mask([(0,)])
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+        self.assertEqual(named(result, "encounter-credited")["status"], "violated")
+        self.assertTrue(world.commands)
+
+    def test_a_mask_set_before_the_first_act_is_invalid(self):
+        result, world = self.run_with_mask([(1,)])
+        self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+        self.assertIn("already complete", " ".join(result["reasons"]))
+        self.assertFalse(world.commands)
+
+    def test_a_missing_or_malformed_mask_does_not_count(self):
+        for mask in ([], [(None,)], [(-1,)], [(1 << 32,)], [("3 0",)], [(1,), (1,)]):
+            with self.subTest(mask=mask):
+                result, world = self.run_with_mask(mask)
+                self.assertEqual(result["verdict"], "INVALID", result["reasons"])
+                self.assertFalse(world.commands)
+
+    def test_lint_refuses_the_selector_on_another_map(self):
+        decree = self.decree()
+        decree["arrange"] = [
+            {
+                "instance": {
+                    "map": "Blackrock Depths",
+                    "as": "rfd",
+                    "bind": "family:grug",
+                }
+            }
+            if "instance" in step
+            else step
+            for step in decree["arrange"]
+        ]
+        self.assertTrue(
+            any(
+                f.level == "error" and ".encounter" in str(f)
+                for f in lint.lint_document(decree)
+            )
+        )
 
 
 class VerdictTest(unittest.TestCase):
@@ -895,6 +993,103 @@ class TimeoutTest(unittest.TestCase):
         run(GUZZLER, world, clock)
         self.assertGreaterEqual(clock.now, 20 * 60)
         self.assertLess(clock.now, 20 * 60 + 11)
+
+
+class RaidOrderActTest(unittest.TestCase):
+    def setUp(self):
+        self.clock = Clock()
+        self.world = guzzler_world(self.clock)
+        self.decree = copy.deepcopy(GUZZLER)
+        self.decree["world"]["bridge"] = "on"
+        self.decree["cast"][0]["who"] = "Grug"
+        self.decree["act"] = [{"at": "10s", "raid_order": {"family": "Grug"}}]
+        self.handoff = copy.deepcopy(HANDOFF)
+        self.handoff["members"][0]["who"] = "Grug"
+
+    def lint_errors(self):
+        return [
+            str(finding)
+            for finding in lint.lint_document(self.decree, anchors.Anchors({}), SCHEMA)
+            if finding.level == "error" and finding.path.startswith("decree.act")
+        ]
+
+    def test_named_family_uses_campaign_queue_at_the_scheduled_time(self):
+        self.assertEqual(self.lint_errors(), [])
+        result = run(self.decree, self.world, self.clock, handoff=self.handoff)
+        self.assertEqual(result["verdict"], "PASS", result["reasons"])
+        self.assertEqual(self.world.raid_orders, [(10, "Grug")])
+        self.assertEqual(self.world.commands, [])
+
+    def test_raid_order_requires_a_bridge_and_one_named_cast_family(self):
+        for bridge, family in (("off", "Grug"), ("on", "Ugga"), ("on", "family:grug")):
+            with self.subTest(bridge=bridge, family=family):
+                self.decree["world"]["bridge"] = bridge
+                self.decree["act"][0]["raid_order"]["family"] = family
+                self.assertTrue(self.lint_errors())
+
+    def test_two_raid_orders_are_rejected(self):
+        self.decree["act"] *= 2
+        self.assertIn("one raid order", "\n".join(self.lint_errors()))
+
+    def test_family_selected_only_by_group_never_gets_a_queue_order(self):
+        result = run(self.decree, self.world, self.clock)
+        self.assertEqual(result["verdict"], "INVALID")
+        self.assertEqual(self.world.raid_orders, [])
+
+    def test_command_kind_cannot_take_the_typed_queue_path(self):
+        self.decree["act"] = [
+            {
+                "at": "0s",
+                "command": {"who": "Grug", "kind": "raid_order", "text": "moltencore"},
+            }
+        ]
+        result = run(self.decree, self.world, self.clock, handoff=self.handoff)
+        self.assertEqual(result["verdict"], "INVALID")
+        self.assertEqual(self.world.raid_orders, [])
+
+    def test_rehearsal_distinguishes_refused_accepted_and_unconsumed_orders(self):
+        decree_file = ROOT / "data/decrees/molten-core-order-refuses-unavailable.yaml"
+        decree = loads(decree_file.read_text(encoding="utf-8"))
+        self.handoff["members"][1].update(who="Ugga", cast_index=1)
+        self.handoff["variables"]["cast1"] = 2
+        scenarios = (
+            (
+                "PASS",
+                "wow-overseer INFO queue: Grug's family: withheld: Molten Core refused: "
+                "1 of 40 approved members unavailable: Ugga (level 49; needs 50)",
+                0,
+            ),
+            (
+                "FAIL",
+                "wow-overseer INFO raid: Grug's family ordered into moltencore - "
+                "2 seats written in 1 groups, 2 job row(s) of 2.",
+                2,
+            ),
+            ("INVALID", "", 0),
+        )
+        for verdict, log, jobs_written in scenarios:
+            with self.subTest(verdict=verdict):
+                clock = Clock()
+                world = FakeWorld(clock)
+                world.answer("AND online = 1", [(1,), (2,)])
+                world.answer("JOIN guild_member", [(2,)])
+                world.answer("status IN ('queued', 'active')", [(0,)])
+                world.answer("status IN ('pending', 'claimed', 'verifying')", [(0,)])
+                world.answer(
+                    "AND written_at >= ",
+                    lambda _, w=world, jobs=jobs_written: [
+                        (2 if w.raid_orders and jobs else 0,)
+                    ],
+                )
+                world.answer(
+                    "runs_wanted = 1", lambda _, w=world: [(len(w.raid_orders),)]
+                )
+                world.answer("c.source = 'overseer:queue'", [(jobs_written,)])
+                world.answer("started_at IS NULL", [(int(jobs_written == 0),)])
+                result = run(decree, world, clock, log=log, handoff=self.handoff)
+                self.assertEqual(result["verdict"], verdict, result["reasons"])
+                self.assertEqual(world.raid_orders, [(0, "Grug")])
+                self.assertEqual(world.commands, [])
 
 
 class SafetyTest(unittest.TestCase):
