@@ -5,9 +5,12 @@ row (kind `job`) is applied by the module within seconds with no bridge, while
 a direct UPDATE of `overseer_roster.job` showed no effect. So a `roster` step
 is shorthand for a command of kind `job`. A `travel_guard` step sets or clears
 only the named cast member's operator guard through the dedicated world guard.
+A typed raid order goes to the bridge's campaign queue to exercise its
+eligibility checks.
 """
 
 TRAVEL_GUARD = "travel_guard"
+RAID_ORDER = "raid_order"
 
 
 def act_commands(decree):
@@ -31,6 +34,17 @@ def act_commands(decree):
                     "kind": TRAVEL_GUARD,
                     "text": "",
                     "guard_enabled": g["enabled"],
+                }
+            )
+        elif RAID_ORDER in step:
+            family = step[RAID_ORDER]["family"]
+            out.append(
+                {
+                    **when,
+                    "who": family,
+                    "kind": RAID_ORDER,
+                    "text": "moltencore",
+                    RAID_ORDER: True,
                 }
             )
         else:

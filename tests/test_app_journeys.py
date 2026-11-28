@@ -129,7 +129,7 @@ class TheSection(unittest.TestCase):
         self.assertIn("wowhead", m)
         t = text_of(m)
         self.assertIn("Ugga traded it to Grog.", t)
-        self.assertIn("Sold to a vendor by Grog for 4g 45s.", t)
+        self.assertIn("Grog sold it to a vendor for 4g 45s.", t)
         self.assertLess(m.index("Ugga won it"), m.index("Ugga traded it"))
 
     def test_a_flag_is_one_plain_line_in_the_warning_tone(self):
@@ -154,6 +154,43 @@ class TheSection(unittest.TestCase):
     def test_an_empty_record_says_so_and_a_pending_read_is_a_skeleton(self):
         self.assertIn("No epic yet.", draw(ready()))
         self.assertNotIn("No epic yet.", draw({"loading": True}))
+
+
+@needs_node
+class ThePeopleLine(unittest.TestCase):
+    def test_the_head_names_the_people_and_the_end_state(self):
+        t = text_of(draw(ready(SOLD)))
+        self.assertIn("Ugga, via Grog, Sold", t)
+        t = text_of(draw(ready(COUNCIL)))
+        self.assertIn("Zug, In bags", t)
+
+    def test_flagged_journeys_sort_first_and_are_counted(self):
+        m = draw(ready(COUNCIL, SOLD))
+        self.assertLess(m.index("Ugga won it"), m.index("Zug won it"))
+        self.assertIn("2 journeys", text_of(m))
+        self.assertIn("1 needs a look", text_of(m))
+
+    def test_the_filter_says_how_many_and_for_whom(self):
+        m = draw(ready(SOLD, COUNCIL), "Grog")
+        self.assertIn("1 journey for Grog", text_of(m))
+        self.assertIn('class="input ej-who"', m)
+
+    def test_the_council_summary_carries_its_reason(self):
+        m = draw(ready(COUNCIL))
+        summary = m[m.index("<summary>") : m.index("</summary>")]
+        self.assertIn("picked Zug", summary)
+        self.assertIn("decided by heuristic", summary)
+        self.assertIn("the biggest upgrade", summary)
+
+    def test_an_ending_the_last_step_already_told_is_not_told_twice(self):
+        m = draw(ready(SOLD))
+        self.assertNotIn('class="ej-ending"', m)
+        self.assertNotIn("Sold to a vendor by Grog", text_of(m))
+
+    def test_an_ending_that_adds_the_hedge_stays(self):
+        m = draw(ready(COUNCIL))
+        self.assertIn('class="ej-ending"', m)
+        self.assertIn("In Zug's bags, as far as the record shows.", text_of(m))
 
 
 class ThePhone(unittest.TestCase):
