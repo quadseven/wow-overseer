@@ -1526,7 +1526,16 @@ class TheDoorWedgeReads(unittest.TestCase):
     HEAD = {"id": 7, "keyword": "maraudon-orange", "status": "active"}
     boss_age = None
 
-    def judge(self, evidence, clock, jobs_of=None, *, memo_store=None, positions=None):
+    def judge(
+        self,
+        evidence,
+        clock,
+        jobs_of=None,
+        *,
+        memo_store=None,
+        positions=None,
+        run_id=12345,
+    ):
         self.asked = []
         self.holds = {}
         self.memos = {} if memo_store is None else memo_store
@@ -1584,7 +1593,8 @@ class TheDoorWedgeReads(unittest.TestCase):
                 ),
                 "_memo_job": lambda fn, *args: fn(*args),
                 "_fetch_positions": lambda names: positions or {},
-                "_door_run_boss_age": lambda leader: self.boss_age,
+                "_door_open_run_id": lambda leader, keyword: run_id,
+                "_door_run_boss_age": lambda run_id: self.boss_age,
             },
         )
         return ns["_door_wedge"]
@@ -1708,7 +1718,8 @@ class TheDoorWedgeReads(unittest.TestCase):
                 ),
                 "_memo_job": lambda fn, *args: fn(*args),
                 "_fetch_positions": lambda names: positions,
-                "_door_run_boss_age": lambda leader: self.boss_age,
+                "_door_open_run_id": lambda leader, keyword: 12345,
+                "_door_run_boss_age": lambda run_id: self.boss_age,
             },
         )
         judge = ns["_door_wedge"]
@@ -1768,15 +1779,29 @@ class TheDoorWedgeReads(unittest.TestCase):
         self.assertIn("Tork", got.why)
 
     def test_a_new_head_starts_new_clocks(self):
-        """A hold timed under one queue entry must not hang the next entry
-        for the same door: the entry is the attempt being judged."""
+        """A hold timed before a run opens belongs to the queue entry."""
+        clock = [1000.0]
+        judge = self.judge(
+            (0, (self.member("Uzza", "on an errand of its own"),)), clock, run_id=None
+        )
+        self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
+        clock[0] += stall.HOLD_SECONDS + 1
+        self.assertIsNone(judge(dict(self.HEAD, id=8), ["Zug", "Uzza"], "Zug"))
+
+    def test_a_new_head_for_the_same_run_keeps_the_clock(self):
+        """A hold timed under one queue entry persists for the next entry
+        if it is the same run: the run is the attempt being judged."""
         clock = [1000.0]
         judge = self.judge(
             (0, (self.member("Uzza", "on an errand of its own"),)), clock
         )
         self.assertIsNone(judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug"))
         clock[0] += stall.HOLD_SECONDS + 1
-        self.assertIsNone(judge(dict(self.HEAD, id=8), ["Zug", "Uzza"], "Zug"))
+        # Same run (run_id=12345 from mock): the clock persists and the wedge fires.
+        got = judge(dict(self.HEAD, id=8), ["Zug", "Uzza"], "Zug")
+        self.assertIsNotNone(got)
+        self.assertIn("Uzza", got.why)
+        self.assertIn("errand of its own", got.why)
 
     # --- #2181: a run that credits a boss is not wedged ---------------------
 
@@ -1820,7 +1845,7 @@ class TheDoorWedgeReads(unittest.TestCase):
     def test_hold_clocks_are_cleared_on_a_pass_that_does_not_judge_the_family(self):
         clock = [1000.0]
         judge = self.judge(
-            (0, (self.member("Uzza", "on an errand of its own"),)), clock
+            (0, (self.member("Uzza", "on an errand of its own"),)), clock, run_id=None
         )
         judge(dict(self.HEAD), ["Zug", "Uzza"], "Zug")
         self.assertTrue(self.holds)
@@ -1861,6 +1886,21 @@ class TheDoorWedgeReads(unittest.TestCase):
         got = restarted(dict(self.HEAD), ["Zug", "Tork"], "Zug")
         self.assertIsNotNone(got)
         self.assertTrue(got.regroup)
+
+    def test_a_legacy_memo_ages_a_queue_but_never_an_unproven_open_run(self):
+        clock = [1000.0 + stall.HOLD_SECONDS]
+        evidence = (0, (self.member("Tork", stall.CATCH_UP_UNREACHABLE_STATE),))
+        for run_id in (None, 12345):
+            with self.subTest(run_id=run_id):
+                memos = {
+                    ("door_wedge_hold", '["Zug","Tork"]'): ({"head_id": 7}, 1000.0)
+                }
+                judge = self.judge(evidence, clock, memo_store=memos, run_id=run_id)
+                verdict = judge(dict(self.HEAD), ["Zug", "Tork"], "Zug")
+                if run_id is None:
+                    self.assertIsNotNone(verdict)
+                else:
+                    self.assertIsNone(verdict)
 
     def test_the_boss_read_is_the_open_runs_own_boss_rows(self):
         def sql(name):
@@ -2378,7 +2418,8 @@ class TheErrandARunWaitsOn(unittest.TestCase):
             "_ERRAND_RECALLED": recalled,
             "_ERRAND_SERVED": {},
             "errandgate": errandgate,
-            "_door_run_boss_age": lambda leader: None,
+            "_door_run_boss_age": lambda run_id: None,
+            "_door_open_run_id": lambda leader, keyword: 12345,
             "_current_travel_npc": current,
             "_is_economy_aim": lambda aim: aim in ("vendor", "banker"),
             "_release_trade_errand": release,
