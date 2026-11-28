@@ -344,10 +344,9 @@ class TheUsesAreReadFromTheWorld(unittest.TestCase):
         self.assertIn("ConditionTypeOrReference = 31", classquest.USE_ITEMS_SQL)
         self.assertIn("spelltrigger_1 = 0", classquest.USE_ITEMS_SQL)
 
-    def test_the_chest_read_matches_only_type_three_loot_objects(self):
-        # Item 3418 and loot entry 1673 are the ticket's world rows. The
-        # template rows exercise the SQL result shape from CHEST_SQL; the
-        # non-chest rows are decoys because Data1 has type-specific meanings.
+        # Item 3418 and loot Entry 1673 come from the ticket. The object
+        # templates are independent fixtures: type 3 uses Data1 as the loot
+        # entry, while the other types make Data1 decoys.
         db = sqlite3.connect(":memory:")
         db.row_factory = sqlite3.Row
         db.execute("ATTACH DATABASE ':memory:' AS acore_world")
@@ -366,11 +365,9 @@ class TheUsesAreReadFromTheWorld(unittest.TestCase):
             "INSERT INTO acore_world.gameobject_template VALUES (?, ?, ?)",
             [(90003, 3, 1673), (90004, 5, 1673), (90005, 10, 1673)],
         )
-
         rows = [
             dict(row) for row in db.execute(classquest.CHEST_SQL.format(items="3418"))
         ]
-
         db.close()
         self.assertEqual(rows, [{"item": 3418, "entry": 90003}])
 
