@@ -159,8 +159,9 @@ def decide(now, last_recall_at, aim_kind, inside_instance: bool = False) -> Verd
 
 @dataclass(frozen=True)
 class Served:
-    """The errand time a member had served when it was recalled: under which
-    queue entry, how many seconds, and when the recall was."""
+    """The errand time a member had served when recalled, with the owning
+    door clock's identity in `head_id`. The bridge uses signed run IDs and
+    queue IDs in separate ranges."""
 
     head_id: int
     seconds: float
@@ -176,7 +177,7 @@ def resume_since(
     """When a member's fresh errand clock is counted from.
 
     `now` for a member with no recall behind it. For one recalled under the
-    same queue entry inside `window`, when the recalled errand began, so an
+    same door clock inside `window`, when the recalled errand began, so an
     errand taken up again goes on counting toward the stand-down."""
     now = float(now)
     if served is None or int(served.head_id) != int(head_id):
