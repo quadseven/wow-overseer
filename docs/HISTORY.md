@@ -33,9 +33,9 @@ build here reads any of them (`.dockerignore` drops the directory):
   were written here, and the tests apply them to the pinned fork in order.
 - `0022`: Sulfuron priests first, two assigned Dark Mending interrupters and
   one healer on the Living Bomb carrier (#2108). Not yet in the realm tree.
-- `0023`: Prune guild advertisements from `ai_playerbot_texts` (rows 741 and
-  743 plus any other `suggest_something` guild ad) (#1640). Not yet in the
-  realm tree.
+- `0023`: Prune four known guild advertisements from `ai_playerbot_texts`
+  by matching the full `suggest_something` utterances (#1640). The realm
+  port is pending.
 
 Realm patches are applied only from the infrastructure repo's tree,
 `production/docker/azerothcore-playerbots/patches/`. The Majordomo series
