@@ -99,9 +99,9 @@ ALREADY_IN_LOG_NOTE = (
 )
 STALLED_REASON = "its objectives did not move for 2 hours of play"
 STALLED_NOTE = (
-    "The stored reason records one quester's two hours without objective progress. "
-    "The world rows list required objectives and their spawn counts, so it does not "
-    "establish that the quest cannot be finished; they do not record why that attempt stalled."
+    "The stored reason says a quester made no objective progress for two hours. "
+    "These rows list the required objectives and their spawn counts, but do not "
+    "identify why that attempt stalled or establish that the quest cannot be finished."
 )
 TICKET_SQL = (
     "SELECT ticket FROM overseer_quest_ledger "

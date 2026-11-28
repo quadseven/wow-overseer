@@ -416,16 +416,16 @@ class WorldRows(unittest.TestCase):
     def test_mindless_ones_rows_explain_the_stored_stall_without_claiming_a_defect(
         self,
     ):
-        # The quest row mirrors questcatalogue.QUESTS_SQL and its spawn counts
-        # mirror questcatalogue.SPAWN_COUNTS_SQL. The ledger reason is produced
-        # by questers.failures and written by bridge._record_quest_broken via
-        # questers.BROKEN_SQL; objective counters mirror questers.LOG_SQL.
+        # Supplied quest and spawn-count values use questcatalogue.QUESTS_SQL
+        # and SPAWN_COUNTS_SQL. The ledger reason is produced by questers.failures
+        # and written by bridge._record_quest_broken via questers.BROKEN_SQL;
+        # objective counters use the questers.LOG_SQL row shape. The ticket does
+        # not supply the quest sort/zone, so the fixture leaves it unspecified.
         row = quest_row(
             quest=364,
             title="The Mindless Ones",
             level=2,
             min_level=1,
-            sort=85,
             objective1=1501,
             objective_count1=5,
             objective2=1502,
@@ -468,10 +468,10 @@ class WorldRows(unittest.TestCase):
         self.assertEqual(text.count("Last objective counts: all zero"), 3)
         self.assertEqual(
             text.count(
-                "The stored reason records one quester's two hours without objective "
-                "progress. The world rows list required objectives and their spawn "
-                "counts, so it does not establish that the quest cannot be finished; "
-                "they do not record why that attempt stalled."
+                "The stored reason says a quester made no objective progress for two "
+                "hours. These rows list the required objectives and their spawn "
+                "counts, but do not identify why that attempt stalled or establish "
+                "that the quest cannot be finished."
             ),
             1,
         )
