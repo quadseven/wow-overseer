@@ -1,8 +1,15 @@
 /* The family board (#/now/family/:f). Shared pieces come from now.css. */
 
 .accent { color: var(--color-accent-300); }
+.fam-verdict { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; margin-top: 12px; border-radius: 8px; background: var(--color-surface); }
+.fam-verdict p { margin: 0; }
+.fam-verdict.is-stalled { box-shadow: inset 0 0 0 1px var(--warn-line); }
+.fv-word { font-size: var(--fs-4); font-weight: 700; line-height: 1.2; }
+.fv-bar { display: block; height: 6px; border-radius: 3px; background: var(--color-neutral-800); overflow: hidden; }
+.fv-fill { display: block; height: 100%; background: var(--warn); }
 .spread { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-.fam-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; align-items: start; }
+.fam-needs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; align-items: start; }
+.fam-rows { display: flex; flex-direction: column; }
 .fam-card { gap: 8px; }
 .travel-danger { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .travel-danger h2, .travel-danger p { margin: 0; }
@@ -10,14 +17,21 @@
 .danger-zones { list-style: none; margin: 0; padding: 0; }
 .danger-zones li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; padding: 10px 0; border-bottom: 1px solid var(--color-neutral-800); overflow-wrap: anywhere; }
 .danger-zones li > :last-child { grid-column: 1 / -1; }
-.fam-members { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 170px), 1fr)); gap: 8px; }
+.fam-members { display: grid; grid-template-columns: 1fr; gap: 8px; }
 .fam-member {
-  display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; min-height: 44px; border-radius: 8px;
+  display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; min-height: 52px; border-radius: 8px;
   background: var(--color-surface); text-decoration: none; color: var(--color-text);
 }
+.fam-member.is-stuck { box-shadow: inset 0 0 0 1px var(--warn-line); }
+.fam-name { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.fam-hp { display: flex; gap: 8px; align-items: center; }
+.fam-hp .mbar { flex: 1; }
 .fam-member:hover { background: var(--color-neutral-900); color: var(--color-text); }
 .buff { display: flex; gap: 10px; align-items: center; }
-.buff i { color: var(--color-accent-300); }
+.buff-missing { margin-top: -4px; }
+.fam-pick { overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+.fam-pick::-webkit-scrollbar { display: none; }
+.fam-pick > a { white-space: nowrap; }
 .meter-tabs { align-self: flex-start; }
 .meter-tabs > a { font-size: var(--fs-1); }
 .mrow { display: grid; grid-template-columns: 72px minmax(0, 1fr) 64px; gap: 8px; align-items: center; min-height: 32px; }
@@ -37,6 +51,7 @@
 .qwho.q-has, .qwho.q-done { background: var(--color-neutral-900); box-shadow: inset 0 0 0 1px var(--color-neutral-700); }
 .qwho.q-done { box-shadow: inset 0 0 0 1px var(--ok); }
 .qwho.q-helping { color: var(--color-neutral-400); box-shadow: inset 0 0 0 1px var(--color-neutral-700); border-style: dashed; }
+.qdot { width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; flex: none; }
 @media (max-width: 759.98px) { .qwhos { width: 100%; justify-content: flex-start; flex-wrap: wrap; } }
 .tag.bond-warn { box-shadow: inset 0 0 0 1px var(--warn-line); color: var(--warn); }
 .tag.bond-accent { box-shadow: inset 0 0 0 1px var(--color-accent-700); color: var(--color-accent-300); }
