@@ -55,7 +55,7 @@ function mates(arm, gg, roster) {
   if (!rows.length) return state("empty", "No guildmates to show", "The family guilds have no other members in the world's save.");
   return html`<div class="gm-grid">${rows.map((m) => {
     const w = m.weakest;
-    return html`<a class="card gm-card" href="${"#/m/" + encodeURIComponent(m.name) + "/gear"}"><span class="row gm-top"><span class="mname" style="color:${classVar(m.class)}">${m.name}</span><span class="dim mb-s">L${m.level} ${m.class} | ${m.guild}</span></span>${strip(m)}<span class="dim mb-s">iLvl ${Math.round(m.avg_item_level)} | ${m.worn} of ${m.of} worn${w ? " | weakest " + (SLOT_WORDS[w.slot] || w.slot) + " at " + w.item_level : ""}${r.has(m.name) && r.get(m.name).stuck ? " | stuck" : ""}</span></a>`;
+    return html`<a class="card gm-card" id="${"armory-" + m.name}" href="${"#/m/" + encodeURIComponent(m.name) + "/gear"}"><span class="row gm-top"><span class="mname" style="color:${classVar(m.class)}">${m.name}</span><span class="dim mb-s">L${m.level} ${m.class} | ${m.guild}</span></span>${strip(m)}<span class="dim mb-s">iLvl ${Math.round(m.avg_item_level)} | ${m.worn} of ${m.of} worn${w ? " | weakest " + (SLOT_WORDS[w.slot] || w.slot) + " at " + w.item_level : ""}${r.has(m.name) && r.get(m.name).stuck ? " | stuck" : ""}</span></a>`;
   })}</div>`;
 }
 
@@ -70,13 +70,26 @@ function paperdollTab(ctx) {
   const a = arm.data;
   const by = byName(a.members || []);
   const order = pairOrder(a);
+  const guildOf = {};
+  (a.sides || []).forEach((s) => (s.names || []).forEach((n) => { guildOf[n] = s.guild; }));
   const pairs = (a.pairs || []).map((p) => {
     const left = by.get(p.left), right = by.get(p.right);
     const role = roleWord((left && left.party_role) || (right && right.party_role) || p.role);
-    const card = (m, name) => (m ? paperdoll(m, a.doll) : html`<div class="card pd pd-none">${a.no_counterpart || "no one in this role on this side"}${name ? " (" + name + ")" : ""}</div>`);
-    return html`<section class="pd-pair"><h2 class="mb-kick">${role}</h2><div class="pd-row hscroll">${card(left)}${card(right)}</div></section>`;
+    const card = (m, name) => {
+      const inner = m ? paperdoll(m, a.doll) : html`<div class="card pd pd-none">${a.no_counterpart || "no one in this role on this side"}${name ? " (" + name + ")" : ""}</div>`;
+      const g = (m && m.guild) || guildOf[name] || "";
+      return html`<div class="pd-slot">${g ? html`<span class="mb-kick pd-slot-guild">${g}</span>` : ""}${inner}</div>`;
+    };
+    return html`<section class="pd-pair"><h2 class="mb-kick">${role}</h2><div class="pd-row">${card(left, p.left)}${card(right, p.right)}</div></section>`;
   });
-  const jump = html`<nav class="pd-jump" aria-label="Jump to a member">${order.map((n) => {
+  // The jump bar reaches the guildmates too, not just the paired families:
+  // their cards below carry the same armory- ids the jump handler scrolls to.
+  const fam = familyNames(a);
+  const mateNames = membersOf(ctx.get("/api/guildgear").data)
+    .filter((m) => !fam.has(m.name) && !order.includes(m.name))
+    .sort((x, y) => x.avg_item_level - y.avg_item_level || x.name.localeCompare(y.name))
+    .map((m) => m.name);
+  const jump = html`<nav class="pd-jump" aria-label="Jump to a member">${order.concat(mateNames).map((n) => {
     const m = by.get(n);
     return html`<button type="button" class="btn btn-secondary" data-jump="${n}" style="color:${classVar(m && m.class)}">${n}</button>`;
   })}</nav>`;
@@ -102,6 +115,21 @@ function defaultName(roster) {
   return first && first.length ? first[0] : "";
 }
 
+// Every member in the gear read, across both guilds.
+function membersOf(gg) {
+  return ((gg && gg.guilds) || []).flatMap((g) => g.members || []);
+}
+
+// The next member with problems, walking the flagged list in the table's
+// own worst-first order: after the member on screen, or the first flagged
+// member when this one is not flagged. Null when nobody follows.
+function nextProblem(gg, name) {
+  const rows = membersOf(gg).filter((m) => (m.flags || []).length).sort(worstFirst);
+  const i = rows.findIndex((m) => m.name === name);
+  if (i >= 0) return rows[i + 1] || null;
+  return rows[0] || null;
+}
+
 function upgradesTab(ctx) {
   const roster = ctx.get("/api/v2/roster");
   const name = ctx.query.name || "";
@@ -118,7 +146,12 @@ function upgradesTab(ctx) {
   if (wait) return html`${top}${wait}`;
   const q = liveQuery();
   const filter = q.filter || "all", sort = q.usort || "slot";
-  return html`${top}<div class="up-panel">${upgradesHead(up.data, roster.data ? picker(roster.data, name) : "")}${upgradesControls(filter, sort)}<div data-region="upslots">${upgradesBody(up.data, filter, sort)}</div>${upgradesFoot(up.data)}</div>`;
+  const gg = ctx.get("/api/guildgear");
+  const nxt = nextProblem(gg.data, name);
+  const walk = nxt
+    ? html`<p class="mb-s gt-walk"><a href="${"#/members/gear/upgrades?name=" + encodeURIComponent(nxt.name)}">Next member with problems: ${nxt.name}</a> <span class="dim">(${(nxt.flags || []).join(", ")})</span></p>`
+    : gg.error ? html`<p class="mb-s dim">Next member with problems not measured: the gear read did not answer.</p>` : "";
+  return html`${top}<div class="up-panel">${upgradesHead(up.data, roster.data ? picker(roster.data, name) : "")}${upgradesControls(filter, sort)}<div data-region="upslots">${upgradesBody(up.data, filter, sort)}</div>${upgradesFoot(up.data)}</div>${walk}`;
 }
 
 // ---- Table -------------------------------------------------------------------------
@@ -151,10 +184,35 @@ function worstFirst(a, b) {
   return (!a.flags.length - !b.flags.length) || (a.weapon - b.weapon) || (b.empty - a.empty) || (a.avg_item_level - b.avg_item_level) || a.name.localeCompare(b.name);
 }
 
+// Grey or white pieces worn at level 50 or more, counted off the quality
+// strip the read already carries: quality 0 is poor (grey), 1 is common
+// (white). Below 50 the same pieces are ordinary levelling gear.
+function greyWhite(m) {
+  if ((m.level || 0) < 50) return 0;
+  return (m.strip || []).filter((c) => c.quality === 0 || c.quality === 1).length;
+}
+
+// The problems the triage chips filter on. Every one is computable from the
+// gear read today; wrong armour and dead stats are not, until the server
+// flags grow them.
+const PROBLEMS = [
+  ["", "All"], ["empty", "Empty slots"], ["weapon", "No weapon"],
+  ["grey", "Grey or white at 50+"], ["flagged", "Flagged"],
+];
+
+function problemHit(m, prob) {
+  if (prob === "empty") return m.empty > 0;
+  if (prob === "weapon") return !m.weapon;
+  if (prob === "grey") return greyWhite(m) > 0;
+  if (prob === "flagged") return (m.flags || []).length > 0;
+  return true;
+}
+
 function tableRows(gg, roster, q) {
   const r = byName((roster && roster.members) || []);
   const guild = (q.guild || "").toLowerCase();
-  let rows = ((gg && gg.guilds) || []).flatMap((g) => g.members || []).filter((m) => !guild || (m.guild || "").toLowerCase() === guild)
+  let rows = membersOf(gg).filter((m) => !guild || (m.guild || "").toLowerCase() === guild)
+    .filter((m) => problemHit(m, q.prob || ""))
     .map((m) => Object.assign({}, m, { _r: r.get(m.name), _state: stateOf(r.get(m.name) || m) }));
   const sort = q.sort || "";
   const col = COLS.find((c) => c[0] === sort.replace(/^-/, ""));
@@ -179,13 +237,33 @@ function gearTable(rows, q, at) {
   return html`<div class="card gt-table"><table class="table"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
 }
 
+// The strip said in words, for under the strip itself: how much is empty
+// and what the weakest worn piece is.
+function stripText(m) {
+  const parts = [];
+  if (m.empty) parts.push(m.empty + " empty");
+  if (m.weakest) parts.push("weakest " + (SLOT_WORDS[m.weakest.slot] || m.weakest.slot) + " at item level " + m.weakest.item_level);
+  return parts.join(", ");
+}
+
 function gearCards(rows, at) {
-  return html`<div class="gt-cards">${rows.map((m) => html`<a class="card gt-card" href="${"#/m/" + encodeURIComponent(m.name) + "/gear"}"><span class="row gm-top"><span class="mname" style="color:${classVar(m.class)}">${m.name}</span>${stateCell(m, at)}</span><span class="dim mb-s">L${m.level} ${m.class} | ${roleWord(m.role)} | iLvl ${m.avg_item_level} | ${m.worn} worn | <span class="${m.empty ? "warn" : ""}">${m.empty} empty</span>${m.weapon ? "" : html` | <span class="bad">no weapon</span>`}</span><span class="muted mb-s">Weakest: ${weakText(m)} | ${m.gold ? m.gold.text : notMeasured()}</span></a>`)}</div>`;
+  return html`<div class="gt-cards">${rows.map((m) => {
+    const grey = greyWhite(m);
+    const flagged = (m.flags || []).length > 0;
+    const href = flagged ? "#/members/gear/upgrades?name=" + encodeURIComponent(m.name) : "#/m/" + encodeURIComponent(m.name) + "/gear";
+    const tags = (m.flags || []).map((f) => html`<span class="${"tag " + (f === "no weapon" ? "tag-bad" : "tag-warn")}">${f}</span>`);
+    if (grey) tags.push(html`<span class="tag tag-warn">${grey} grey or white at 50+</span>`);
+    return html`<a class="card gt-card" href="${href}"><span class="row gm-top"><span class="mname" style="color:${classVar(m.class)}">${m.name}</span>${stateCell(m, at)}</span><span class="dim mb-s">L${m.level} ${m.class}, ${roleWord(m.role)}, ${m.guild}</span><span class="mb-s">iLvl ${m.avg_item_level}, ${m.worn} of ${m.worn + m.empty} worn${m.empty ? html`, <span class="${m.empty >= 6 ? "warn" : ""}">${m.empty} empty</span>` : ""}${m.weapon ? "" : html`, <span class="bad">no weapon</span>`}</span>${strip(m)}<span class="muted mb-s">${stripText(m)}</span>${tags.length ? html`<span class="row gt-tags">${tags}</span>` : ""}</a>`;
+  })}</div>`;
 }
 
 function tableBody(gg, roster, q) {
   const rows = tableRows(gg, roster, q);
-  if (!rows.length) return state("empty", "No members in this guild", "The guild gear read listed nobody for it.");
+  if (!rows.length) {
+    return q.prob
+      ? state("empty", "No members with this problem", q.guild ? "Nobody in this guild in the gear read matches the problem picked." : "Nobody in the gear read matches the problem picked.")
+      : state("empty", "No members in this guild", "The guild gear read listed nobody for it.");
+  }
   const at = roster && roster.checked_at;
   return html`${gearTable(rows, q, at)}${gearCards(rows, at)}`;
 }
@@ -195,38 +273,77 @@ function guildChips(q) {
   return html`<div class="row"><div class="row" role="group" aria-label="Guild">${[["", guilds().length === 2 ? "Both guilds" : "All guilds"]].concat(guilds().map((x) => [x.slug, x.name])).map(([k, label]) => html`<button type="button" class="chip" data-guild="${k}" aria-pressed="${g === k ? "true" : "false"}">${label}</button>`)}</div><span class="dim mb-s gt-note">${gearNote(q)}</span></div>`;
 }
 
+// The sorts the card list offers, as the query values the table already
+// understands: no sort is worst first, a bare key is low to high, a dashed
+// key is high to low.
+const TRIAGE_SORTS = [
+  ["", "Worst first"], ["ilvl", "Item level, low first"],
+  ["-empty", "Most empty slots"], ["level", "Level, low first"],
+];
+
+function sortWord(sort) {
+  const cur = gearSort({ sort });
+  const col = COLS.find((c) => c[0] === cur.key);
+  return (col ? col[1] : sort) + (cur.dir === "asc" ? ", low first" : ", high first");
+}
+
+// The cards' own sort control: on a phone the table header that sorts is
+// display:none, so without this the list cannot be sorted at all. A sort
+// the select does not offer (set from a table header) rides as one extra
+// option so the control never claims a sort the rows are not in.
+function sortSelect(q) {
+  const cur = q.sort || "";
+  const offered = TRIAGE_SORTS.some(([k]) => k === cur);
+  const extra = offered ? "" : html`<option value="${cur}" selected>${sortWord(cur)}</option>`;
+  return html`<label class="gt-sort"><span class="sr-only">Sort gear</span><select class="input" data-gselect aria-label="Sort gear">${extra}${TRIAGE_SORTS.map(([k, label]) => html`<option value="${k}"${k === cur ? raw(" selected") : ""}>${label}</option>`)}</select></label>`;
+}
+
+function problemChips(q) {
+  const cur = q.prob || "";
+  return html`<div class="row gt-probs" role="group" aria-label="Problem">${PROBLEMS.map(([k, label]) => html`<button type="button" class="chip" data-prob="${k}" aria-pressed="${cur === k ? "true" : "false"}">${label}</button>`)}</div>`;
+}
+
 function tableTab(ctx) {
   const gg = ctx.get("/api/guildgear");
   const top = html`${head("Members", "every guild member, worst first")}${sectionTabs("gear")}${gearSeg("table")}`;
   const wait = pendingRead(gg, 4);
   if (wait) return html`${top}${wait}`;
   const q = liveQuery();
-  return html`${top}<div class="gt-wrap">${guildChips(q)}<div data-region="gtable">${tableBody(gg.data, ctx.get("/api/v2/roster").data, q)}</div></div>`;
+  return html`${top}<div class="gt-wrap">${guildChips(q)}<div class="row gt-controls">${sortSelect(q)}${problemChips(q)}</div><div data-region="gtable">${tableBody(gg.data, ctx.get("/api/v2/roster").data, q)}</div></div>`;
 }
 
 function bindTable(main, ctx) {
   const wrap = main.querySelector(".gt-wrap");
   if (!wrap) return;
   const region = wrap.querySelector("[data-region=gtable]");
+  const redraw = (next) => {
+    region.innerHTML = tableBody(ctx.get("/api/guildgear").data, ctx.get("/api/v2/roster").data, next).s;
+    wrap.querySelectorAll("[data-guild]").forEach((c) => c.setAttribute("aria-pressed", String(c.getAttribute("data-guild") === (next.guild || ""))));
+    wrap.querySelectorAll("[data-prob]").forEach((c) => c.setAttribute("aria-pressed", String((c.getAttribute("data-prob") || "") === (next.prob || ""))));
+    const note = wrap.querySelector(".gt-note");
+    if (note) note.innerHTML = gearNote(next).s;
+    const sel = wrap.querySelector("[data-gselect]");
+    if (sel && TRIAGE_SORTS.some(([k]) => k === (next.sort || ""))) sel.value = next.sort || "";
+  };
   wrap.addEventListener("click", (e) => {
-    const b = e.target.closest("[data-gsort], [data-guild], [data-gworst]");
+    const b = e.target.closest("[data-gsort], [data-guild], [data-gworst], [data-prob]");
     if (!b) return;
     const q = liveQuery();
     let next;
     if (b.hasAttribute("data-guild")) next = setQuery({ guild: b.getAttribute("data-guild") });
+    else if (b.hasAttribute("data-prob")) next = setQuery({ prob: b.getAttribute("data-prob") });
     else if (b.hasAttribute("data-gworst")) next = setQuery({ sort: "" });
     else {
       const n = flipSort(gearSort(q), b.getAttribute("data-gsort"), "asc");
       next = setQuery({ sort: (n.dir === "desc" ? "-" : "") + n.key });
     }
-    region.innerHTML = tableBody(ctx.get("/api/guildgear").data, ctx.get("/api/v2/roster").data, next).s;
-    wrap.querySelectorAll("[data-guild]").forEach((c) => c.setAttribute("aria-pressed", String(c.getAttribute("data-guild") === (next.guild || ""))));
-    const note = wrap.querySelector(".gt-note");
-    if (note) note.innerHTML = gearNote(next).s;
+    redraw(next);
     const focus = b.hasAttribute("data-gsort") ? region.querySelector('[data-gsort="' + b.getAttribute("data-gsort") + '"]')
       : b.hasAttribute("data-gworst") ? region.querySelector("[data-gsort]") : null;
     if (focus) focus.focus({ preventScroll: true });
   });
+  const sel = wrap.querySelector("[data-gselect]");
+  if (sel) sel.addEventListener("change", () => redraw(setQuery({ sort: sel.value })));
 }
 
 // ---- the view ------------------------------------------------------------------------
@@ -235,7 +352,7 @@ export default {
   css: ["views/members.css"],
   reads(ctx) {
     if (ctx.params.tab === "upgrades") {
-      return ctx.query.name ? ["/api/v2/upgrades?name=" + encodeURIComponent(ctx.query.name), "/api/v2/roster"] : ["/api/v2/roster"];
+      return ctx.query.name ? ["/api/v2/upgrades?name=" + encodeURIComponent(ctx.query.name), "/api/v2/roster", "/api/guildgear"] : ["/api/v2/roster"];
     }
     if (ctx.params.tab === "table") return ["/api/guildgear", "/api/v2/roster"];
     return ["/api/armory", "/api/guildgear", "/api/v2/roster"];
