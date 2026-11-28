@@ -214,6 +214,111 @@ class TheQuestsView(unittest.TestCase):
         reads, _ = self.page()
         self.assertEqual(reads, ["/api/v2/questers", "/api/v2/quests"])
 
+    def test_broken_and_taken_chips_at_the_top_open_the_filtered_catalogue(self):
+        _, html = self.page()
+        # The counts come from the read's own totals (the fixture catalogue
+        # holds 1 broken and 1 taken), and each chip is one tap to the
+        # catalogue already filtered to that set.
+        self.assertIn('href="#/quests?status=broken"', html)
+        self.assertIn('href="#/quests?status=taken"', html)
+        self.assertIn("Broken · 1", html)
+        self.assertIn("Taken · 1", html)
+        # The chips sit above the parties: the door is at the top of the page.
+        self.assertLess(html.index("Broken · 1"), html.index("Quester parties"))
+
+    def test_shortcut_activation_filters_and_moves_focus_to_the_catalogue(self):
+        initial = "#/quests?faction=horde&sort=title&q=other"
+        got = run(
+            "views/quests.js",
+            r"""
+const reads = %s;
+const entries = [location.hash];
+const effects = [];
+const frames = [];
+window.requestAnimationFrame = (callback) => frames.push(callback);
+const catalogue = {
+  focus(options) { effects.push(["focus", options.preventScroll]); },
+  scrollIntoView(options) { effects.push(["scroll", options.block]); }
+};
+const shortcuts = {};
+const elements = {
+  ".qs-chips": shortcuts,
+  ".qs-catalogue": catalogue,
+  "[data-region=catalogue]": {addEventListener() {}},
+};
+const main = {querySelector: (selector) => elements[selector] || null};
+function navigate(href) {
+  location.hash = href;
+  const c = ctx({}, {}, reads);
+  c.hash = href;
+  const rendered = V.render(c).s;
+  V.after(main, c);
+  effects.push(["router", "top"]);
+  frames.splice(0).forEach((callback) => callback());
+  return rendered;
+}
+const markup = navigate(location.hash);
+let rendered = markup;
+effects.length = 0;
+function activate(status, options = {}) {
+  const href = Array.from(markup.matchAll(/<a class="qs-chip" href="([^"]+)">/g),
+    (match) => match[1]).find((url) => url.endsWith("status=" + status));
+  if (!href) throw Error("The rendered shortcut has no destination");
+  const link = {getAttribute: (attribute) => attribute === "href" ? href : null};
+  const event = {
+    button: 0,
+    defaultPrevented: false,
+    preventDefault() { this.defaultPrevented = true; },
+    target: {closest: (selector) => selector === "a.qs-chip" ? link : null},
+    ...options,
+  };
+  if (shortcuts.onclick) shortcuts.onclick(event);
+  if (!event.defaultPrevented && !event.ctrlKey && !event.metaKey &&
+      event.button === 0 && href !== location.hash) {
+    entries.push(href);
+    rendered = navigate(href);
+  }
+  return {href, prevented: event.defaultPrevented, hash: location.hash, rendered};
+}
+const modified = [activate("broken", {ctrlKey: true}), activate("broken", {metaKey: true}),
+  activate("broken", {button: 1})];
+const broken = activate("broken");
+const taken = activate("taken", {detail: 0});
+const same = activate("taken", {detail: 0});
+const back = navigate(entries[1]);
+console.log(JSON.stringify({markup, entries, modified, broken, taken, same, back, effects}));
+"""
+            % json.dumps(READS),
+            initial,
+        )
+        for modified in got["modified"]:
+            self.assertEqual(modified["href"], "#/quests?status=broken")
+            self.assertFalse(modified["prevented"])
+            self.assertEqual(modified["hash"], initial)
+            self.assertEqual(modified["rendered"], got["markup"])
+        broken, taken, same = (got[key] for key in ("broken", "taken", "same"))
+        for state in (broken, taken, same):
+            self.assertEqual(state["hash"], state["href"])
+            self.assertIn("1 of 6 quests", state["rendered"])
+        self.assertFalse(broken["prevented"])
+        self.assertFalse(taken["prevented"])
+        self.assertTrue(same["prevented"])
+        self.assertIn("Webwood Venom", broken["rendered"])
+        self.assertIn('<option value="broken" selected>', broken["rendered"])
+        self.assertIn('<option value="attempts" selected>', broken["rendered"])
+        self.assertIn("The Forgotten Pools", taken["rendered"])
+        self.assertIn('<option value="taken" selected>', taken["rendered"])
+        self.assertIn('<option value="broken" selected>', got["back"])
+        self.assertEqual(got["entries"], [initial, broken["href"], taken["href"]])
+        self.assertIn('class="qs-catalogue" tabindex="-1"', got["markup"])
+        router = [["router", "top"]]
+        catalogue = [["focus", True], ["scroll", "start"]]
+        self.assertEqual(got["effects"], (router + catalogue) * 2 + catalogue + router)
+
+    def test_a_line_under_the_parties_head_says_what_the_parties_are(self):
+        _, html = self.page()
+        self.assertIn("proving every quest can be played", html)
+
     def test_the_parties_draw_every_quester_the_server_lists(self):
         _, html = self.page()
         names = [m["name"] for m in QUESTERS["questers"]]
@@ -248,6 +353,61 @@ class TheQuestsView(unittest.TestCase):
         grakk = grakk[: grakk.index('class="card qs-quester"')]
         self.assertIn("zone not measured", grakk)
         self.assertIn("no quest on", grakk)
+
+    def test_a_quester_card_says_online_or_offline_and_its_all_time_counts(self):
+        chars = [dict(r, online=0) if r["name"] == "Mirra" else r for r in CHARACTERS]
+        questers = v2quests.build_questers(
+            chars, LOG, COUNTS, {q.id: q.title for q in CATALOGUE}
+        )
+        reads = dict(READS, **{"/api/v2/questers": questers})
+        got = run(
+            "views/quests.js",
+            "console.log(JSON.stringify(V.render(ctx({}, {}, %s)).s));"
+            % json.dumps(reads),
+        )
+
+        def card(name):
+            seg = got[got.index('href="#/m/%s/quests"' % name) :]
+            return seg[: seg.index('class="card qs-quester"')]
+
+        # The header carries the online word, so an offline quester no
+        # longer looks identical to a questing one.
+        self.assertIn('qs-on">online', card("Tharn"))
+        self.assertIn(">offline<", card("Mirra"))
+        # Taken and abandoned join completed and broken in the footer,
+        # labelled all time (Tharn's ledger rows name neither, so both
+        # read as the server's counted zero).
+        tharn = card("Tharn")
+        self.assertIn("All time", tharn)
+        self.assertIn("4 completed", tharn)
+        self.assertIn("1 broken", tharn)
+        self.assertIn("0 taken", tharn)
+        self.assertIn("0 abandoned", tharn)
+
+    def test_a_long_log_opens_from_the_card(self):
+        log = [
+            {"guid": GUIDS["Tharn"], "quest": qid, "status": questlog.INCOMPLETE}
+            for qid in (456, 457, 788, 792, 835)
+        ]
+        questers = v2quests.build_questers(
+            CHARACTERS, log, COUNTS, {q.id: q.title for q in CATALOGUE}
+        )
+        reads = dict(READS, **{"/api/v2/questers": questers})
+        got = run(
+            "views/quests.js",
+            "console.log(JSON.stringify(V.render(ctx({}, {}, %s)).s));"
+            % json.dumps(reads),
+        )
+        tharn = got[got.index('href="#/m/Tharn/quests"') :]
+        tharn = tharn[: tharn.index('class="card qs-quester"')]
+        # Three quests show; the rest sit behind a real disclosure, not a
+        # plain "+N more" span that cannot be tapped.
+        self.assertIn("The Balance of Nature", tharn)
+        self.assertIn("Cutting Teeth", tharn)
+        self.assertIn("<details", tharn)
+        self.assertIn("Show all 5 current quests", tharn)
+        self.assertIn("Securing the Lines", tharn)
+        self.assertNotIn(" more</span>", tharn)
 
     def test_coverage_counts_each_faction_and_zone(self):
         _, html = self.page()
@@ -288,7 +448,31 @@ class TheQuestsView(unittest.TestCase):
         )
         self.assertIn('class="qs-bar-ok" style="width:40.00%"', got)
         self.assertIn('class="qs-bar-bad" style="width:20.00%"', got)
-        self.assertIn('class="qs-bar-none" style="width:40.00%"', got)
+        # Not reached draws no segment: the track left behind the drawn
+        # segments is the not reached share, however the totals disagree.
+        self.assertNotIn("qs-bar-none", got)
+
+    def test_not_reached_is_the_track_and_zone_rows_read_on_one_line(self):
+        _, html = self.page()
+        # No segment is drawn for not reached anywhere on the page; the
+        # counts line still states the number once.
+        self.assertNotIn("qs-bar-none", html)
+        self.assertIn("1 not reached", html)
+        # A zone row: the name and its done and broken counts on one line,
+        # the bar under them.
+        zone = html[html.index('href="#/quests?zone=Durotar"') :]
+        zone = zone[: zone.index("</li>")]
+        self.assertIn("1 completed", zone)
+        self.assertIn("0 broken", zone)
+        self.assertIn('class="qs-bar"', zone)
+        # The faction cards say why their totals overlap.
+        self.assertIn("Both sides quests count in each", html)
+
+    def test_the_coverage_bar_is_12px(self):
+        css = (APP / "views" / "quests.css").read_text(encoding="utf-8")
+        seg = css[css.index(".qs-bar {") :]
+        seg = seg[: seg.index("}")]
+        self.assertIn("height: 12px", seg)
 
     def test_the_catalogue_lists_every_quest(self):
         _, html = self.page()
@@ -298,9 +482,14 @@ class TheQuestsView(unittest.TestCase):
             self.assertIn('href="#/quests/%d"' % q["id"], html)
         for word in ("Completed", "Broken", "Taken", "Abandoned", "Not reached"):
             self.assertIn(word, html)
-        # The zone and side read as words, never as an area id or a key.
-        self.assertIn("L4 | Teldrassil | Alliance", html)
-        self.assertIn("L14 | The Barrens | Both sides", html)
+        # The zone and side read as words, never as an area id or a key,
+        # and the card's facts are labelled, not buried in a pipe line.
+        self.assertIn("Level 4", html)
+        self.assertIn("Teldrassil", html)
+        self.assertIn("Level 14", html)
+        self.assertIn("The Barrens", html)
+        self.assertIn("Both sides", html)
+        self.assertNotIn(" | ", html)
         self.assertIn("qs-table", html)
         self.assertIn("qs-qcards", html)
 
@@ -335,6 +524,79 @@ class TheQuestsView(unittest.TestCase):
             self.assertEqual(got, ids, label)
             self.assertIn("%d of 6 quests" % len(ids), html, label)
 
+    def test_broken_defaults_to_most_attempts_first_and_sort_reorders(self):
+        # Two more broken quests whose attempt counts (5 and 1) bracket the
+        # fixture's broken quest (2), so each sort orders them differently.
+        cat = CATALOGUE + (
+            catalogue_quest(900, "Zebra Broken", qc.HORDE, DUROTAR, 20),
+            catalogue_quest(901, "Alpha Broken", qc.HORDE, DUROTAR, 30),
+        )
+        attempted = dict(ATTEMPTED)
+        attempted[900] = [ql.BROKEN] * 5
+        attempted[901] = [ql.BROKEN]
+        reads = {
+            "/api/v2/questers": QUESTERS,
+            "/api/v2/quests": quests_payload(cat, attempted),
+        }
+
+        def order(query, hash_):
+            # Positions inside the catalogue cards alone: the same titles
+            # appear earlier on the page in a quester's log.
+            got = run(
+                "views/quests.js",
+                "console.log(JSON.stringify(V.render(ctx({}, %s, %s)).s));"
+                % (json.dumps(query), json.dumps(reads)),
+                hash_,
+            )
+            cards = got[got.index('class="qs-qcards"') :]
+            return {
+                t: cards.index(t)
+                for t in ("Webwood Venom", "Zebra Broken", "Alpha Broken")
+            }
+
+        # Broken with no sort chosen: most attempts first. Zebra has 5
+        # attempts, Webwood 2, Alpha 1.
+        pos = order({"status": "broken"}, "#/quests?status=broken")
+        self.assertLess(pos["Zebra Broken"], pos["Webwood Venom"])
+        self.assertLess(pos["Webwood Venom"], pos["Alpha Broken"])
+        # Server order is the order the read itself lists them (the
+        # payload's own order: Webwood, Zebra, Alpha).
+        pos = order(
+            {"status": "broken", "sort": "server"},
+            "#/quests?status=broken&sort=server",
+        )
+        self.assertLess(pos["Webwood Venom"], pos["Zebra Broken"])
+        self.assertLess(pos["Zebra Broken"], pos["Alpha Broken"])
+        # Title sorts alphabetically; level sorts low to high (4, 20, 30).
+        pos = order(
+            {"status": "broken", "sort": "title"},
+            "#/quests?status=broken&sort=title",
+        )
+        self.assertLess(pos["Alpha Broken"], pos["Webwood Venom"])
+        self.assertLess(pos["Webwood Venom"], pos["Zebra Broken"])
+        pos = order(
+            {"status": "broken", "sort": "level"},
+            "#/quests?status=broken&sort=level",
+        )
+        self.assertLess(pos["Webwood Venom"], pos["Zebra Broken"])
+        self.assertLess(pos["Zebra Broken"], pos["Alpha Broken"])
+
+    def test_the_sort_falls_back_and_the_select_shows_the_order_in_use(self):
+        got = run(
+            "views/quests.js",
+            "console.log(JSON.stringify([M.filters({}).sort,"
+            " M.filters({status: 'broken'}).sort,"
+            " M.filters({sort: 'title'}).sort,"
+            " M.filters({sort: 'bogus'}).sort]));",
+        )
+        self.assertEqual(got, ["server", "attempts", "title", "server"])
+        _, html = self.page({"status": "broken"}, "#/quests?status=broken")
+        sel = html[html.index('id="qs-sort"') :]
+        sel = sel[: sel.index("</select>")]
+        self.assertIn('<option value="attempts" selected>', sel)
+        self.assertIn("Server order", sel)
+        self.assertIn("Most attempts", sel)
+
     def test_search_skips_the_fields_the_server_did_not_send(self):
         got = run(
             "views/quests.js",
@@ -343,6 +605,34 @@ class TheQuestsView(unittest.TestCase):
             "console.log(JSON.stringify([hit('undefined'), hit('null'), hit('lost'), hit('1')]));",
         )
         self.assertEqual(got, [False, False, True, True])
+
+    def test_a_card_with_no_attempts_count_says_not_measured_never_zero(self):
+        quests = json.loads(json.dumps(QUESTS))
+        for x in quests["quests"]:
+            if x["id"] == 792:
+                x["attempts"] = None
+        reads = dict(READS, **{"/api/v2/quests": quests})
+        got = run(
+            "views/quests.js",
+            "console.log(JSON.stringify(V.render(ctx({}, {}, %s)).s));"
+            % json.dumps(reads),
+        )
+        card = got[got.index('class="card qs-qcard" href="#/quests/792"') :]
+        card = card[: card.index("</a>")]
+        self.assertIn("attempts not measured", card)
+        self.assertNotIn("0 attempts", card)
+        # A counted quest still reads as a count beside it.
+        self.assertIn("2 attempts", got)
+
+    def test_the_card_meta_and_status_tag_read_at_14px(self):
+        css = (APP / "views" / "quests.css").read_text(encoding="utf-8")
+
+        def rule(selector):
+            seg = css[css.index(selector) :]
+            return seg[: seg.index("}")]
+
+        self.assertIn("font-size: var(--fs-2)", rule(".qs-meta {"))
+        self.assertIn("font-size: var(--fs-2)", rule(".qs-qcard .status {"))
 
     def test_a_filter_that_matches_nothing_says_so_and_offers_a_clear(self):
         _, html = self.page(
@@ -358,6 +648,39 @@ class TheQuestsView(unittest.TestCase):
         self.assertIn("Durotar", zone_select)
         self.assertIn("The Barrens", zone_select)
         self.assertNotIn("Teldrassil", zone_select)
+
+    def test_a_phone_pages_forty_at_a_time(self):
+        many = many_quests()
+        got = run(
+            "views/quests.js",
+            "const reads = %s;\n"
+            "console.log(JSON.stringify(V.render(ctx({}, {}, reads)).s));"
+            % json.dumps({"/api/v2/questers": QUESTERS, "/api/v2/quests": many}),
+        )
+        self.assertIn("250 of 250 quests, the first 40 shown", got)
+        self.assertIn("Show 40 more", got)
+        self.assertIn('href="#/quests/40"', got)
+        self.assertNotIn('href="#/quests/41"', got)
+
+    def test_the_count_and_active_filters_stick_with_a_clear(self):
+        _, html = self.page(
+            {"faction": "horde", "lvl": "1-9"},
+            "#/quests?faction=horde&lvl=1-9",
+        )
+        self.assertIn('class="qs-sticky"', html)
+        sticky = html[html.index('class="qs-sticky"') :]
+        sticky = sticky[: sticky.index('class="qs-qcards"')]
+        # The line names the filters in words and carries the count, and a
+        # Clear filters button is there while matches are on screen, not
+        # only on the empty state.
+        self.assertIn("Horde", sticky)
+        self.assertIn("levels 1 to 9", sticky)
+        self.assertIn("3 of 6 quests", sticky)
+        self.assertIn("data-clear", sticky)
+        self.assertIn("Clear filters", sticky)
+        # With nothing filtered there is nothing to clear.
+        _, plain = self.page()
+        self.assertNotIn("Clear filters", plain)
 
     def test_a_long_catalogue_grows_on_request(self):
         many = many_quests()
@@ -395,13 +718,13 @@ class TheQuestsView(unittest.TestCase):
             % json.dumps({"/api/v2/quests": many}),
         )
         second, third = got
-        self.assertIn("250 of 250 quests, the first 200 shown", second)
-        self.assertIn("Show 50 more", second)
-        self.assertIn('href="#/quests/200"', second)
-        self.assertNotIn('href="#/quests/201"', second)
-        self.assertIn("250 of 250 quests</p>", third)
-        self.assertIn('href="#/quests/250"', third)
-        self.assertNotIn("data-more", third)
+        self.assertIn("250 of 250 quests, the first 80 shown", second)
+        self.assertIn("Show 40 more", second)
+        self.assertIn('href="#/quests/80"', second)
+        self.assertNotIn('href="#/quests/81"', second)
+        self.assertIn("250 of 250 quests, the first 120 shown", third)
+        self.assertIn('href="#/quests/120"', third)
+        self.assertIn("data-more", third)
 
     def test_a_zone_or_side_with_markup_stays_text(self):
         odd = catalogue_quest(1, "Odd", 'horde"><b>', DUROTAR, 1)
@@ -536,8 +859,8 @@ class TheQuestsView(unittest.TestCase):
             "console.log(JSON.stringify(region().innerHTML));"
             % json.dumps({"/api/v2/quests": many}),
         )
-        self.assertIn("250 of 250 quests, the first 200 shown", got)
-        self.assertIn("Show 50 more", got)
+        self.assertIn("250 of 250 quests, the first 80 shown", got)
+        self.assertIn("Show 40 more", got)
 
     def test_one_click_grows_the_list_once_however_the_two_redraws_alternate(self):
         many = many_quests()
@@ -590,7 +913,7 @@ class TheQuestsView(unittest.TestCase):
         )
         for _, handlers, rows, said, more in got["where"]:
             self.assertEqual(handlers, 1)
-            self.assertEqual(rows, 100)
+            self.assertEqual(rows, 40)
             # The count line is drawn by the same call as the rows, so the two
             # can never disagree, whatever ran before this one.
             self.assertEqual(said, rows)
@@ -601,9 +924,9 @@ class TheQuestsView(unittest.TestCase):
         # land on it, so the stamp may only change on the second step.
         self.assertEqual([w[0] for w in got["where"]], [1, 2, 3, 4])
         # A Show more rewrites that region's contents in place: same region,
-        # one handler, and the list grown by one step and then by all of it.
-        self.assertEqual(got["first"], [4, 1, 200, 200, True])
-        self.assertEqual(got["second"], [4, 1, 250, 0, False])
+        # one handler, and the list grown by one phone step at a time.
+        self.assertEqual(got["first"], [4, 1, 80, 80, True])
+        self.assertEqual(got["second"], [4, 1, 120, 120, True])
 
     def test_a_quest_read_with_no_entry_yet_shows_skeletons(self):
         # The cache can answer a read it has never started with nothing at
