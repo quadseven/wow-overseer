@@ -486,6 +486,9 @@ class TheBridgeHandsTheQuesterItsRoom(unittest.TestCase):
 
 class TheCatalogueReadsGameobjectObjectiveSpawns(unittest.TestCase):
     def test_negative_objective_entries_are_in_the_object_spawn_read(self):
+        # Quest and objective values mirror #3267's World rows. The ticket gives
+        # spawn counts, not GUIDs or coordinates; those and the giver rows here
+        # are synthetic inputs for the catalogue read.
         quest = row(
             498,
             "The Rescue",

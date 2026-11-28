@@ -24,14 +24,14 @@ WORG_ENTRIES = (1765, 1766, 1923, 12431)
 WILD_GIVER, WILD_CHEST = 9002, 9003
 
 
-def chest_spawn(guid, entry, x, y, map_id=0, name="Wardrobe"):
+def chest_spawn(guid, entry, x, y, map_id=0):
     return {
         "guid": guid,
         "entry": entry,
         "map_id": map_id,
         "x": x,
         "y": y,
-        "name": name,
+        "name": "Wardrobe",
         "rank": 0,
         "level": 0,
         "z": 5.0,
@@ -81,6 +81,13 @@ def wild_hearts_world(spawn_droppers=True, spawn_chest=False):
     )
 
 
+def rescue_object_spawn(guid, entry, x):
+    """A synthetic spawn row for testing a quest objective walk."""
+    row = chest_spawn(guid, entry, x, 0.0)
+    row["name"] = "Locked ball and chain"
+    return row
+
+
 def rescue_world(spawned=True):
     rescue = quest(RESCUE, HILLSBRAD, 22, min_level=17, title="The Rescue")
     rescue.update(
@@ -93,10 +100,12 @@ def rescue_world(spawned=True):
         giver(RESCUE, "start", 9004, 9005, 0.0, 0.0, name="Quest giver"),
         giver(RESCUE, "end", 9004, 9005, 0.0, 0.0, name="Quest giver"),
     ]
+    # The ticket's world-row snapshot gives objective entries and spawn counts,
+    # but not spawn GUIDs, coordinates, or giver rows. Those rows are test-only.
     object_rows = (
         [
-            chest_spawn(9991, 1721, 100.0, 0.0, name="Locked ball and chain"),
-            chest_spawn(9992, 1722, 200.0, 0.0, name="Locked ball and chain"),
+            rescue_object_spawn(9991, 1721, 100.0),
+            rescue_object_spawn(9992, 1722, 200.0),
         ]
         if spawned
         else []
@@ -442,7 +451,7 @@ class AChestThatOpenedNothingIsLeftForAWhile(unittest.TestCase):
 
 
 class TheRescueWorksGameobjectObjectives(unittest.TestCase):
-    def test_the_fixture_has_the_two_world_objectives_and_spawns(self):
+    def test_the_fixture_has_world_objectives_and_test_spawns(self):
         rescue = rescue_world().quest(RESCUE)
         self.assertEqual(rescue.objects, ((1721, 1), (1722, 1)))
         self.assertEqual(
@@ -524,6 +533,8 @@ class TheRescueWorksGameobjectObjectives(unittest.TestCase):
         )
 
     def test_log_rows_keep_each_gameobject_objective_counter(self):
+        # QUEST_STATUS_SQL reads these fields from character_queststatus. The
+        # partial counts below are a test case, not a live character row.
         _log, _progress, objectives, _items, _done = questers._logs_by_guid(
             [
                 {
