@@ -111,7 +111,7 @@ def run(decree, world, clock, log="", handoff=HANDOFF, poll=10):
         decree,
         world,
         handoff,
-        log_text=lambda: log,
+        log_text=log if callable(log) else lambda: log,
         clock=clock.monotonic,
         sleep=clock.sleep,
         poll=poll,
@@ -123,6 +123,140 @@ def run(decree, world, clock, log="", handoff=HANDOFF, poll=10):
 
 def named(result, name):
     return next(a for a in result["assertions"] if a["name"] == name)
+
+
+class ChosenQuestProofTest(unittest.TestCase):
+    def test_hand_in_distinguishes_arms_and_reissue_has_a_full_window(self):
+        decree = loads(
+            (ROOT / "data/decrees/aimed-quest-complete-handin.yaml").read_text()
+        )
+        handoff = {
+            "variables": {"cast": "2, 1", "cast0": 2, "cast1": 1},
+            "members": [
+                {**member, "who": member["name"], "cast_index": index}
+                for index, member in enumerate(reversed(HANDOFF["members"]))
+            ],
+        }
+        selected = (
+            "overseer: 'Grug' now working quest 233 (Mail) - picked from its own log"
+        )
+        reissued = "overseer: 'Grug' was already on quest 233 (Mail) - re-issuing for the new errand"
+        handed_in = (
+            "overseer: 'Ugga' handed chosen quest 783 (Threat) in to 'Marshal McBride'"
+        )
+        for observed, fixed, verdict in (
+            (10, False, "FAIL"),
+            (300, True, "PASS"),
+            (301, True, "INVALID"),
+        ):
+            with self.subTest(observed=observed, fixed=fixed):
+                clock = Clock()
+                world = FakeWorld(clock)
+                aims = []
+
+                def write_quest_aim(who, quest, *, aims=aims, clock=clock):
+                    aims.append((int(clock.now), who, quest))
+
+                def log(*, aims=aims, clock=clock, observed=observed, fixed=fixed):
+                    lines = [selected] if clock.now >= observed else []
+                    if len(aims) == 2:
+                        lines.append(reissued)
+                    if fixed and aims and clock.now >= 30:
+                        lines.append(handed_in)
+                    return "\n".join(lines)
+
+                world.write_quest_aim = write_quest_aim
+                world.answer("FROM characters c JOIN overseer_roster", [(2,)])
+                world.answer("FROM character_queststatus WHERE", [(1,)])
+                world.answer(
+                    "FROM character_queststatus_rewarded",
+                    lambda now, fixed=fixed: [(int(fixed and now >= 30),)],
+                )
+                world.answer("creature_questender", [(1,)])
+                world.answer("FROM overseer_command", [(2,)])
+                world.answer("FROM overseer_event", [(int(fixed),)])
+                world.answer("FROM overseer_roster WHERE", [(int(fixed),)])
+                result = run(decree, world, clock, log=log, handoff=handoff, poll=11)
+                self.assertEqual(result["verdict"], verdict, result["reasons"])
+                self.assertTrue(aims, result["reasons"])
+                self.assertEqual(aims[0], (0, "Ugga", 783))
+                if verdict == "INVALID":
+                    self.assertEqual(len(aims), 1)
+                    self.assertIn("did not hold by 300s", result["reasons"][0])
+                else:
+                    self.assertEqual(
+                        aims[1], (11 if observed == 10 else 300, "Grug", 233)
+                    )
+                    self.assertGreaterEqual(result["elapsed_s"] - aims[1][0], 1800)
+
+
+class ActDeadlineTest(unittest.TestCase):
+    def test_a_deadline_beyond_the_window_is_refused_before_any_write(self):
+        clock = Clock()
+        world = guzzler_world(clock)
+        decree = copy.deepcopy(GUZZLER)
+        decree["duration"] = "59s"
+        decree["act"][1]["by"] = "60s"
+
+        result = run(decree, world, clock)
+
+        self.assertEqual(result["verdict"], "INVALID")
+        self.assertIn("exceeds the decree duration", result["reasons"][0])
+        self.assertFalse(world.commands)
+
+    def test_read_and_order_must_finish_within_the_bound(self):
+        for read_delay, order_delay, verdict in (
+            (0, 0, "PASS"),
+            (1, 0, "INVALID"),
+            (0, 1, "INVALID"),
+        ):
+            with self.subTest(read_delay=read_delay, order_delay=order_delay):
+                clock = Clock()
+                world = guzzler_world(clock)
+                world.answers = [
+                    (fragment, fn)
+                    for fragment, fn in world.answers
+                    if fragment != "'Plugger Spazzring'"
+                ]
+                decree = copy.deepcopy(GUZZLER)
+                decree["act"][1]["by"] = "60s"
+                decree["act"][1]["roster"]["who"] = "Grug"
+
+                def witness(now, *, clock=clock, read_delay=read_delay):
+                    if now < 60:
+                        return [(0,)]
+                    clock.sleep(read_delay)
+                    return [(1,)]
+
+                record = world.insert_command
+
+                def insert_command(
+                    target,
+                    kind,
+                    text,
+                    *,
+                    clock=clock,
+                    order_delay=order_delay,
+                    record=record,
+                ):
+                    if text == "quest":
+                        clock.sleep(order_delay)
+                    return record(target, kind, text)
+
+                world.answer("'Plugger Spazzring'", witness)
+                world.insert_command = insert_command
+                result = run(decree, world, clock, poll=11)
+                self.assertEqual(result["verdict"], verdict, result["reasons"])
+                orders = [write for write in world.commands if write[3] == "quest"]
+                if read_delay:
+                    self.assertFalse(orders)
+                    self.assertIn("did not hold by 60s", result["reasons"][0])
+                else:
+                    fired_s = 60 + order_delay
+                    self.assertEqual(orders, [(fired_s, "Grug", "job", "quest")])
+                    self.assertEqual(result["acts"][1]["fired_s"], fired_s)
+                    if order_delay:
+                        self.assertIn("finished after 60s", result["reasons"][0])
 
 
 class MagmusEncounterTest(unittest.TestCase):
