@@ -38,6 +38,8 @@ KALIMDOR, EASTERN = 1, 0
 ORC_TROLL_MASK = 130
 
 ROD, SALVE, TOME = 15917, 15826, 6785
+FEL_CONE = 3418
+FEL_CONE_BUSH = 1673
 
 
 def qrow(qid, title, **over):
@@ -93,6 +95,7 @@ GAZELLE["entry"] = 12296
 DEER = spawn(36566, 12298, 7269.77, 27.9562, "Sickly Deer")
 ALANNDARIAN = dict(spawn(37312, 3702, 6557.88, 472.97, "Alanndarian Nightsong"))
 BOOKS = spawn(26767, 83763, -8957.04, -432.748, "Stolen Books", EASTERN)
+FEL_CONE_BUSH_SPAWN = spawn(16730, FEL_CONE_BUSH, 2000.0, -5000.0, "Fel Cone", KALIMDOR)
 
 
 def giver(quest, role, sp):
@@ -351,6 +354,39 @@ class TheUsesAreReadFromTheWorld(unittest.TestCase):
         self.assertEqual(b.use_entries(), ([3099, 3107, 3126], []))
         self.assertEqual(tome_book().use_entries(), ([], [83763]))
         self.assertEqual(tome_book().watch_items(), [TOME])
+
+    def test_seek_redemption_finds_fel_cones_on_fel_cone_bush(self):
+        # Quest 489 "Seek Redemption!" requires 3 Fel Cones (item 3418) which
+        # come from gameobject 1673 (Fel Cone bush). The bush is a gathering
+        # node (type 10), not a chest (type 3), so the query must not filter
+        # by gameobject type.
+        bush_spawn = FEL_CONE_BUSH_SPAWN
+        quest_rows = [
+            qrow(
+                489,
+                "Seek Redemption!",
+                sort=12,
+                min_level=4,
+                item1=FEL_CONE,
+                item_count1=3,
+            )
+        ]
+        b = classquest.build(
+            quest_rows=quest_rows,
+            giver_rows=[],
+            spawn_rows=[],
+            loot_rows=[],
+            chest_rows=[{"item": FEL_CONE, "entry": FEL_CONE_BUSH}],
+            object_rows=[bush_spawn],
+        )
+        quest = b.quests[489]
+        self.assertEqual(len(quest.uses), 1)
+        use = quest.uses[0]
+        self.assertEqual(use.verb, classquest.USE_OBJECT)
+        self.assertEqual(use.item, FEL_CONE)
+        self.assertEqual(use.count, 3)
+        self.assertEqual(use.targets, (FEL_CONE_BUSH,))
+        self.assertEqual([s.guid for s in use.spots], [bush_spawn["guid"]])
 
 
 class TheUseMove(unittest.TestCase):
