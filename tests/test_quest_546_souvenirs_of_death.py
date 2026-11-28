@@ -167,6 +167,10 @@ class CanFinishSouvenirsOfDeath(unittest.TestCase):
         )
         self.assertEqual(reason, questers.STALLED)
         self.assertNotEqual(reason, questers.STALLED_UNSOURCED)
+        self.assertEqual(
+            questers.LEDGER_STALLED,
+            questers.ledger_state("broken", reason),
+        )
 
 
 if __name__ == "__main__":
