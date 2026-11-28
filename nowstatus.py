@@ -96,6 +96,11 @@ KEEP_HOURS = 6
 SAME_STEP_SECONDS = 900
 # A step older than this no longer describes what the character is doing now.
 FRESH_SECONDS = 600
+# Guild jobs sleep this long after each pass. Keep an idle roster's last
+# observed class hold visible through that interval and one pass's grace.
+GUILD_JOBS_DEFAULT_CYCLE_SECONDS = 900
+CLASS_HOLD_HISTORY_SECONDS = GUILD_JOBS_DEFAULT_CYCLE_SECONDS + FRESH_SECONDS
+CLASS_QUEST_HELD = "class_quest_held"
 SHEET_STEPS = 5
 
 # ----------------------------------------------------------------- the log tap --
@@ -125,7 +130,7 @@ _RULES = (
     (
         re.compile(r"^guild class quest: (?P<s>\w+) held: (?P<why>.+)$"),
         "character",
-        "class_quest_held",
+        CLASS_QUEST_HELD,
         lambda m: ("Waiting for a class quest", m["why"]),
     ),
     (
@@ -765,6 +770,21 @@ def idle_reading(now: dict, in_run, level, last_level_at, now_at) -> dict:
     else:
         return out
     return dict(out, doing=doing, waiting="", for_s=held, line=line, known=True)
+
+
+def idle_class_hold(now: dict, facts: dict | None, now_at: int | None) -> dict:
+    """Show the last observed reason while a seat has no current activity."""
+    if now.get("doing") != "Idle" or not now_at:
+        return now
+    for step in (facts or {}).get("steps") or ():
+        if step.get("kind") == CLASS_QUEST_HELD and step.get("waiting"):
+            age = now_at - int(step.get("last_at") or 0)
+            if 0 <= age <= CLASS_HOLD_HISTORY_SECONDS:
+                reason = reword(step["waiting"]).rstrip(".")
+                line = f"Last class quest hold: {reason}."
+                return dict(now, doing=line, line=line, waiting="", known=True)
+            break
+    return now
 
 
 # The waiting text for a walk that keeps ending and restarting. apiv2/members.py

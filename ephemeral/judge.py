@@ -39,6 +39,15 @@ from .sqlgen import SeedError
 PASS, FAIL, INVALID = "PASS", "FAIL", "INVALID"
 POLL_SECONDS = 10
 CREDIT_DB, CREDIT_TABLE = "acore_characters", "log_encounter"
+_MASK_BOSSES = frozenset(
+    boss
+    for boss, (map_name, _) in gamedata.INSTANCE_ENCOUNTERS.items()
+    if map_name in gamedata.ENCOUNTER_MASK_MAPS
+)
+_DATA_SAVE_SQL = "SELECT data FROM instance WHERE id = @instance_id AND map = @map_id"
+_MASK_SAVE_SQL = (
+    "SELECT completedEncounters FROM instance WHERE id = @instance_id AND map = @map_id"
+)
 QUERY_TIMEOUT_SECONDS = 30
 # The world's port opens before the family has logged in (measured: one to two
 # minutes later), so `start` preconditions are polled for up to this long.
@@ -264,6 +273,8 @@ def _run_bound_problems(bare, maps, alias=None, sole=True):
 def _encounter_done(rows, boss):
     """Read the selected encounter slots from the pinned core's instance save."""
     map_name, slots = gamedata.INSTANCE_ENCOUNTERS[boss]
+    if map_name in gamedata.ENCOUNTER_MASK_MAPS:
+        return _encounter_mask_done(rows, map_name)
     if len(rows) != 1 or len(rows[0]) != 1 or not isinstance(rows[0][0], str):
         raise JudgeError(f"expected one {map_name} instance save")
     save = rows[0][0]
@@ -290,6 +301,18 @@ def _encounter_done(rows, boss):
         raise JudgeError("malformed Molten Core instance save")
     selected = [states[slot] for slot in slots]
     return "3" in selected, f"{boss} state={' '.join(selected)}"
+
+
+def _encounter_mask_done(rows, map_name):
+    """Read the core's completed-encounter mask for an instance with no boss save."""
+    if len(rows) != 1 or len(rows[0]) != 1:
+        raise JudgeError(f"expected one {map_name} instance row")
+    mask = rows[0][0]
+    if isinstance(mask, str) and re.fullmatch(r"[0-9]+", mask):
+        mask = int(mask)
+    if type(mask) is not int or not 0 <= mask < 1 << 32:
+        raise JudgeError(f"malformed {map_name} completed-encounter mask")
+    return mask != 0, f"completedEncounters={mask}"
 
 
 class Judge:
@@ -466,7 +489,9 @@ class Judge:
                         f"observation {name}: needs a positive instance ID for {alias}"
                     )
                 sql = render_sql(
-                    "SELECT data FROM instance WHERE id = @instance_id AND map = @map_id",
+                    _MASK_SAVE_SQL
+                    if o["encounter"]["boss"] in _MASK_BOSSES
+                    else _DATA_SAVE_SQL,
                     {
                         "instance_id": instance_id,
                         "map_id": map_id,
