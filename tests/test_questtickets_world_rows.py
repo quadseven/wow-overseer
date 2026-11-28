@@ -169,8 +169,9 @@ class WorldRows(unittest.TestCase):
     def test_investigate_the_camp_ticket_explains_its_stall(self):
         # This quest_template row mirrors the ticket's world rows: quest 201,
         # level 32, MinLevel 28, Stranglethorn Vale, no objective columns. Its
-        # ledger reason is written by bridge._record_quest_broken; the
-        # producer path is covered in test_quest_201_investigate_the_camp.
+        # ledger reason is written by bridge._record_quest_broken; the bridge
+        # handing it a STALLED row is covered in test_questers_bridge's
+        # test_a_stalled_quest_is_recorded_broken_with_its_reason_and_dropped.
         world_row = quest_row(
             201, title="Investigate the Camp", level=32, min_level=28, sort=33
         )
