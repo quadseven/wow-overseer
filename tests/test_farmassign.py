@@ -56,13 +56,13 @@ def guild(members=None, posts=None):
     return (tuple(members or ()), tuple(posts or ()))
 
 
-HERBALIST = member("Hebus", skills={HERBALISM: (200, 300)}, map_id=KALIMDOR)
+HERBALIST = member("Hebus", skills={HERBALISM: (200, 300)}, map_id=EASTERN_KINGDOMS)
 HERBALIST_POST = post("Hebus", "herbalist", HERBALISM, 200, 300)
 
-ALCHEMIST = member("Oden", skills={ALCHEMY: (300, 375)}, map_id=KALIMDOR)
+ALCHEMIST = member("Oden", skills={ALCHEMY: (300, 375)}, map_id=EASTERN_KINGDOMS)
 ALCHEMIST_POST = post("Oden", "alchemist", ALCHEMY, 300, 375)
 
-HOLDER = member("Behodiir", carried=(held(1, DREAMFOIL, 9),), map_id=KALIMDOR)
+HOLDER = member("Behodiir", carried=(held(1, DREAMFOIL, 9),), map_id=EASTERN_KINGDOMS)
 
 MINER = member("Grug", skills={MINING: (200, 300)}, map_id=EASTERN_KINGDOMS)
 MINER_POST = post("Grug", "miner", MINING, 200, 300)
@@ -123,7 +123,7 @@ class TheAssignments(unittest.TestCase):
             [deficit(DREAMFOIL, "Dreamfoil", 5)], members, posts, busy={"Hebus"}
         )
         self.assertEqual(plan.tasks, ())
-        self.assertIn("no herbalism is free to farm Dreamfoil", plan.notes[0])
+        self.assertIn("no herbalism on map 0 is free to farm Dreamfoil", plan.notes[0])
 
     def test_multiple_deficits_are_assigned_in_entry_order(self):
         members, posts = guild(
@@ -139,6 +139,19 @@ class TheAssignments(unittest.TestCase):
         )
         self.assertEqual([t.material for t in plan.tasks], [ELEMENTAL_EARTH, DREAMFOIL])
         self.assertEqual([t.bot for t in plan.tasks], ["Grug", "Hebus"])
+
+    def test_a_gatherer_on_a_different_map_is_not_assigned(self):
+        """A gatherer on Kalimdor is not assigned to farm Dreamfoil on Eastern Kingdoms."""
+        kalimdor_herbalist = member(
+            "KalimdorHerb", skills={HERBALISM: (200, 300)}, map_id=KALIMDOR
+        )
+        kalimdor_post = post("KalimdorHerb", "herbalist", HERBALISM, 200, 300)
+        members, posts = guild(
+            [kalimdor_herbalist, ALCHEMIST], [kalimdor_post, ALCHEMIST_POST]
+        )
+        plan = fa.assign([deficit(DREAMFOIL, "Dreamfoil", 5)], members, posts)
+        self.assertEqual(plan.tasks, ())
+        self.assertIn("no herbalism on map 0 is free to farm Dreamfoil", plan.notes[0])
 
 
 def standing_task(bot="Hebus", baseline=()):
@@ -180,7 +193,10 @@ class TheMailSteps(unittest.TestCase):
 
     def test_the_task_remembers_the_gatherers_own_stock(self):
         hebus = member(
-            "Hebus", skills={HERBALISM: (200, 300)}, carried=(held(4, DREAMFOIL, 9),)
+            "Hebus",
+            skills={HERBALISM: (200, 300)},
+            carried=(held(4, DREAMFOIL, 9),),
+            map_id=EASTERN_KINGDOMS,
         )
         members, posts = guild([hebus, ALCHEMIST], [HERBALIST_POST, ALCHEMIST_POST])
         plan = fa.assign([deficit(DREAMFOIL, "Dreamfoil", 5)], members, posts)
@@ -418,7 +434,7 @@ class TheBridgeAssignment(unittest.TestCase):
         for name in self.PASS:
             if name in ns:
                 setattr(me, name, types.MethodType(ns[name], me))
-        hebus = member("Hebus", skills={HERBALISM: (250, 300)})
+        hebus = member("Hebus", skills={HERBALISM: (250, 300)}, map_id=EASTERN_KINGDOMS)
         facts = types.SimpleNamespace(
             guild="Cave", members=(hebus,), posts=(HERBALIST_POST,)
         )

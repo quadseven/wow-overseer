@@ -153,12 +153,12 @@ class TheGatherersAndCrafters(unittest.TestCase):
         for zone in STARTING:
             m = corps_member("Elfa", zone, skills={186: (50, 75)})
             self.assertEqual(
-                [x.name for x in farmassign._online_gatherers([post], [m], 186, set())],
+                [x.name for x in farmassign._online_gatherers([post], [m], 186, set(), m.map_id)],
                 ["Elfa"],
                 zone,
             )
         far = corps_member("Elfa", HELLFIRE, skills={186: (50, 75)})
-        self.assertEqual(farmassign._online_gatherers([post], [far], 186, set()), [])
+        self.assertEqual(farmassign._online_gatherers([post], [far], 186, set(), far.map_id), [])
 
 
 def jobs_member(zone, **kw):

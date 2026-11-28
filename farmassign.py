@@ -211,9 +211,9 @@ def source_for(action, key) -> str:
     return "%s:%s:%d" % (SOURCE, action, int(key))
 
 
-def _online_gatherers(posts, members, skill, busy) -> list:
+def _online_gatherers(posts, members, skill, busy, map_id=None) -> list:
     """Online, non-family, non-expansion members holding a post in `skill`,
-    best skill first."""
+    best skill first. If `map_id` is given, only members on that map."""
     by_name = {m.name: m for m in members or ()}
     out = []
     for p in posts or ():
@@ -224,14 +224,16 @@ def _online_gatherers(posts, members, skill, busy) -> list:
             continue
         if classic.stands_outside(m):
             continue
+        if map_id is not None and getattr(m, "map_id", None) != map_id:
+            continue
         out.append(m)
     out.sort(key=lambda m: (-int(m.skill(skill)[0]), m.name))
     return out
 
 
-def _gatherer_for(posts, members, skill, busy):
-    """The best free gatherer for `skill`, or None."""
-    cands = _online_gatherers(posts, members, skill, busy)
+def _gatherer_for(posts, members, skill, busy, map_id=None):
+    """The best free gatherer for `skill` on `map_id`, or None."""
+    cands = _online_gatherers(posts, members, skill, busy, map_id)
     return cands[0] if cands else None
 
 
@@ -484,9 +486,12 @@ def assign(
         if material is None:
             notes.append("no farmed source is known for %s (%d)" % (d.name, d.entry))
             continue
-        gatherer = _gatherer_for(posts, members, material.skill, busy)
+        gatherer = _gatherer_for(posts, members, material.skill, busy, material.map_id)
         if gatherer is None:
-            notes.append("no %s is free to farm %s" % (material.skill_name, d.name))
+            notes.append(
+                "no %s on map %d is free to farm %s"
+                % (material.skill_name, material.map_id, d.name)
+            )
             continue
         busy.add(gatherer.name)
         tasks.append(_new_task(gatherer, material))
