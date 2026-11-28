@@ -84,6 +84,9 @@ function bagCard(m) {
 <span class="eco-meta">${m.capacity ? m.capacity.used + " of " + m.capacity.slots + " slots" : notMeasured()} | ${grey ? "greys worth " + gold(grey) : "no greys"} | ${bagsWorn(m)}</span></a>`;
 }
 
+// The junk each member is carrying for a vendor. Titled by the junk, not a
+// route: which town the next vendor trip stops in is not measured, and the
+// note inside says so.
 function vendorRoute(members) {
   const rows = [];
   members.forEach((m) => {
@@ -93,7 +96,20 @@ function vendorRoute(members) {
   const body = rows.length
     ? rows.map(({ m, pile }) => html`<div class="eco-route"><span>${member({ name: m.name, cls: m.class })}</span><span>${pile.count} of junk</span><span class="muted">${sentence(pile.route)}${pile.blocker ? html` <span class="warn">${sentence("held: " + pile.blocker)}</span>` : ""}</span></div>`)
     : html`<div class="eco-route-empty muted">Nobody is carrying junk for a vendor right now.</div>`;
-  return html`<div class="card eco-list"><div class="eco-list-title">Vendor route</div>${body}<div class="eco-note">Which town the next vendor trip stops in is not measured.</div></div>`;
+  return html`<div class="card eco-list"><div class="eco-list-title">Junk waiting for a vendor</div>${body}<div class="eco-note">Which town the next vendor trip stops in is not measured.</div></div>`;
+}
+
+// The bags that need a vendor first: at least 85 per cent full, worst first.
+// The full grid sits behind a fold below; this list is the tab's answer.
+const ATTENTION_PCT = 85;
+
+function attentionList(members) {
+  const rows = members
+    .filter((m) => m.present && m.room && pct(m.room.percent) >= ATTENTION_PCT)
+    .slice()
+    .sort((a, b) => pct(b.room.percent) - pct(a.room.percent));
+  if (!rows.length) return "";
+  return html`<div class="card eco-list"><div class="eco-list-title">Bags needing attention</div>${rows.map((m) => html`<a class="eco-rich" href="${memberHref(m.name, "bags")}"><span class="eco-name" style="color:${classVar(m.class)}">${m.name}</span>${bar(m.room.percent, "warn")}<span class="num">${pct(m.room.percent)}% full</span></a>`)}</div>`;
 }
 
 function sideTotal(p, side) {
@@ -111,19 +127,28 @@ function totals(p) {
   return html`<div class="eco-totals">${cards.map((c) => html`<div class="card"><span class="eco-k">${c.label}</span><span class="eco-v">${c.value}</span><span class="eco-meta">${c.sub}</span></div>`)}</div>`;
 }
 
+const RICH_SHOWN = 5;
+
 function richList(members) {
   const withMoney = members.filter((m) => m.money);
   const top = Math.max(1, ...withMoney.map((m) => m.money.total));
   const rows = withMoney.slice().sort((a, b) => b.money.total - a.money.total);
-  return html`<div class="card eco-list"><div class="eco-list-title">Purses, richest first</div>${rows.map((m) => html`<a class="eco-rich" href="${memberHref(m.name)}"><span><span class="eco-name" style="color:${classVar(m.class)}">${m.name}</span> <span class="muted">${m.guild || ""}</span></span>${bar((100 * m.money.total) / top, "gold")}<span class="num">${gold(m.money.total)}</span></a>`)}</div>`;
+  const row = (m) => html`<a class="eco-rich" href="${memberHref(m.name)}"><span><span class="eco-name" style="color:${classVar(m.class)}">${m.name}</span> <span class="muted">${m.guild || ""}</span></span>${bar((100 * m.money.total) / top, "gold")}<span class="num">${gold(m.money.total)}</span></a>`;
+  const rest = rows.length > RICH_SHOWN
+    ? fold("rich|more", plural(rows.length - RICH_SHOWN, "more purse"), html`${rows.slice(RICH_SHOWN).map(row)}`)
+    : "";
+  return html`<div class="card eco-list"><div class="eco-list-title">Purses, richest first</div>${rows.slice(0, RICH_SHOWN).map(row)}${rest}</div>`;
 }
 
+// Totals first, then the bags that need attention, then the junk, and only
+// then the full grid of bags, behind a fold: the tab answers its question
+// before it inventories.
 function goldTab(p) {
   const order = [];
   (p.sides || []).forEach((s) => s.names.forEach((n) => order.push(n)));
   const byName = new Map(p.members.map((m) => [m.name, m]));
   const members = order.map((n) => byName.get(n)).filter(Boolean).concat(p.members.filter((m) => !order.includes(m.name)));
-  return html`<div class="eco-bags">${members.map(bagCard)}</div>${vendorRoute(members)}${totals(p)}${richList(members)}
+  return html`${totals(p)}${attentionList(members)}${vendorRoute(members)}${fold("bags|all", "All bags", html`<div class="eco-bags">${members.map(bagCard)}</div>`)}${richList(members)}
 <p class="eco-note">${p.saved_note || ""}</p>`;
 }
 
@@ -145,6 +170,15 @@ function ticketSentence(s) {
   return html`${s.before}<a href="${t.url}" target="_blank" rel="noopener">${t.label}</a>${s.after}`;
 }
 
+// The time left on a phone card, as a tag: it warns under an hour, when a
+// listing can still be acted on, and says ended once it has.
+function leftTag(r) {
+  if (!r.expires_at) return notMeasured();
+  const secs = Number(r.expires_at) - Date.now() / 1000;
+  if (secs <= 0) return html`<span class="tag eco-auc-left">ended</span>`;
+  return html`<span class="tag eco-auc-left" data-gt="${secs < 3600 ? "warn" : "dim"}">${duration(secs)} left</span>`;
+}
+
 function auctionTab(a) {
   const rows = a.listings || [];
   const foot = html`<p class="eco-note">Listings by family characters only. Market prices from the auction bot are not shown as ours.${a.tracked ? "" : " " + a.caveat}</p>`;
@@ -156,7 +190,7 @@ function auctionTab(a) {
   const seller = (r) => (r.owner ? html`<a href="${memberHref(r.owner)}">${r.owner}</a>` : notMeasured("unknown"));
   return html`<div class="card eco-auc-table"><table class="table"><thead><tr><th>Item</th><th>Qty</th><th>Seller</th><th>Bid</th><th>Buyout</th><th>Left</th></tr></thead><tbody>
 ${rows.map((r) => html`<tr><td>${itemOf(r.item)}</td><td class="num">${r.item.count || 1}</td><td>${seller(r)}</td><td>${bidOf(r)}</td><td>${buyoutOf(r)}</td><td class="muted">${left(r.expires_at)}</td></tr>`)}</tbody></table></div>
-<div class="eco-auc-cards">${rows.map((r) => html`<div class="card"><div class="eco-line">${itemOf(r.item)}<span class="muted">x${r.item.count || 1}</span><span class="eco-meta">${left(r.expires_at)}</span></div><span class="eco-meta">${r.owner || "seller unknown"} | bid ${bidOf(r)} | buyout ${buyoutOf(r)}</span></div>`)}</div>${foot}`;
+<div class="eco-auc-cards">${rows.map((r) => html`<div class="card eco-auc-card"><div class="eco-line">${itemOf(r.item)}<span class="muted">x${r.item.count || 1}</span>${r.buyout_label ? html`<span class="eco-gold eco-auc-buy">${gold(r.buyout.total)}</span>` : html`<span class="muted">no buyout</span>`}</div><div class="eco-line"><span class="eco-meta">Bid ${bidOf(r)}</span>${leftTag(r)}</div><div class="eco-line"><span class="eco-meta">Seller</span>${seller(r)}</div></div>`)}</div>${foot}`;
 }
 
 // ---- trades -----------------------------------------------------------------
@@ -219,34 +253,31 @@ function hundred(fam, ctx, get) {
   if (!g) return state("unmeasured", "The hundred per cent is not measured on this server.");
   const q = ctx.query;
   const who = (g.people || []).map((p) => chipLink(p.label, ecoHref("trades", { family: fam.family.toLowerCase(), who: p.key, open: q.open || "" }), (q.who || "") === p.key));
-  return html`<section class="section">${sectionHead("01", "The hundred per cent")}
+  return html`<section class="section" id="trades-01">${sectionHead("01", "The hundred per cent")}
 <p class="eco-sub">${sentence(g.empty_note || g.line)}</p>
 <div class="eco-chips" role="group" aria-label="Whose crafts">${who}</div>
 <div class="eco-profs">${(g.professions || []).map((prof) => profCard(fam, prof, ctx, get))}</div></section>`;
 }
 
-function branches(g) {
+function branchesBody(g) {
   const rows = (g && g.specs) || [];
-  if (!rows.length) return html`<section class="section">${sectionHead("02", "Who takes which branch")}${state("empty", "No branch is planned for this family.")}</section>`;
-  return html`<section class="section">${sectionHead("02", "Who takes which branch")}
-<div class="card eco-list">${rows.map((s) => html`<div class="eco-pair"><span class="eco-trade-s">${s.label}<span class="muted">${s.profession}</span></span><div class="eco-pair-body">${s.holder ? html`<span>${member({ name: s.holder })} takes it.</span>` : ""}<span>${sentence(s.line)}</span>${s.why ? fold("spec|" + s.spec, "Why", html`<p class="eco-why">${s.why}</p>`) : ""}</div></div>`)}</div></section>`;
+  if (!rows.length) return state("empty", "No branch is planned for this family.");
+  return html`<div class="card eco-list">${rows.map((s) => html`<div class="eco-pair"><span class="eco-trade-s">${s.label}<span class="muted">${s.profession}</span></span><div class="eco-pair-body">${s.holder ? html`<span>${member({ name: s.holder })} takes it.</span>` : ""}<span>${sentence(s.line)}</span>${s.why ? fold("spec|" + s.spec, "Why", html`<p class="eco-why">${s.why}</p>`) : ""}</div></div>`)}</div>`;
 }
 
-function ladder(g) {
+function ladderBody(g) {
   const rows = (g && g.hierarchy) || [];
-  return html`<section class="section">${sectionHead("03", "The order of crafters")}
-<p class="eco-sub muted">Who takes which specialization first: the family at the top, then the slots nobody fills.</p>
+  return html`<p class="eco-sub muted">Who takes which specialization first: the family at the top, then the slots nobody fills.</p>
 <div class="card eco-list">${rows.map((r) => html`<div class="eco-rung"><span class="muted num">${r.rank}</span><span class="eco-trade-s">${r.label}<span class="muted">${r.profession}</span></span><span>${r.holder ? member({ name: r.holder }) : html`<span class="muted">open slot</span>`}</span><span class="num">${plural(r.unlocks || 0, "craft")}</span></div>`)}</div>
-${g ? fold("ladder|how", "How this is ordered, and what cannot be asked", html`<p class="eco-why">${sentence(g.order)}</p><p class="eco-why warn">${sentence(g.limit_line)}</p><p class="eco-why">${sentence(g.grant_line)}</p>`) : ""}</section>`;
+${g ? fold("ladder|how", "How this is ordered, and what cannot be asked", html`<p class="eco-why">${sentence(g.order)}</p><p class="eco-why warn">${sentence(g.limit_line)}</p><p class="eco-why">${sentence(g.grant_line)}</p>`) : ""}`;
 }
 
-function nobody(fam) {
+function nobodyBody(fam) {
   const gaps = fam.gaps || [];
   const lines = Array.from(new Set(gaps.map((x) => String(x.line || "").replace(/^[^:]+:\s*/, "")).filter(Boolean)));
-  const body = gaps.length
+  return gaps.length
     ? html`<div class="eco-chips">${gaps.map((x) => html`<span class="tag tag-warn eco-gap">${cap(x.name)}</span>`)}<span class="eco-sub muted">Nobody in the guild holds these, so nothing they make can come from inside it.</span></div>${lines.map((l) => html`<p class="eco-why">${sentence(l)}</p>`)}`
     : html`<p class="eco-sub">Every trade has somebody in the guild who holds it.</p>`;
-  return html`<section class="section">${sectionHead("04", "What nobody holds")}${body}</section>`;
 }
 
 function missingRecipe(r) {
@@ -265,10 +296,9 @@ function crafterHierarchy(t) {
   return html`<div class="eco-hierarchy"><span class="eco-meta">New recipes go to:</span> ${ordered.map((h) => chip(h, assigned.has(h.who)))}<span class="eco-meta muted">- first copy to the master, duplicates fan out.</span></div>`;
 }
 
-function needs(fam) {
+function needsBody(fam) {
   const rows = (fam.trades || []).filter((t) => t.held);
-  return html`<section class="section">${sectionHead("05", "What each trade still needs")}
-<div class="card eco-list">${rows.map((t) => html`<div class="eco-pair"><span class="eco-trade-s">${cap(t.name)}</span><div class="eco-pair-body">${crafterHierarchy(t)}<span>${t.missing_count ? sentence(t.missing_head) : "Everything the recipe items list is known."}</span><span class="eco-meta">${sentence(t.trainer_line)}</span>${(t.missing || []).length ? fold("need|" + fam.family + "|" + t.skill, plural(t.missing.length, "recipe") + " to find", html`${t.missing.map(missingRecipe)}`) : ""}</div></div>`)}</div></section>`;
+  return html`<div class="card eco-list">${rows.map((t) => html`<div class="eco-pair"><span class="eco-trade-s">${cap(t.name)}</span><div class="eco-pair-body">${crafterHierarchy(t)}<span>${t.missing_count ? sentence(t.missing_head) : "Everything the recipe items list is known."}</span><span class="eco-meta">${sentence(t.trainer_line)}</span>${(t.missing || []).length ? fold("need|" + fam.family + "|" + t.skill, plural(t.missing.length, "recipe") + " to find", html`${t.missing.map(missingRecipe)}`) : ""}</div></div>`)}</div>`;
 }
 
 function dungeonCard(d) {
@@ -276,15 +306,38 @@ function dungeonCard(d) {
 ${(d.recipes || []).map((r) => html`<div class="eco-recipe">${itemOf(r)}<span class="eco-meta">${(r.chips || []).map((c) => c.text).join(" | ")}</span></div>`)}</div>`;
 }
 
-function rare(fam) {
+function rareBody(fam) {
   const d = fam.dungeons;
-  if (!d) return html`<section class="section">${sectionHead("06", "Rare recipes by dungeon")}${state("unmeasured", "Dungeon recipes are not measured on this server.")}</section>`;
+  if (!d) return state("unmeasured", "Dungeon recipes are not measured on this server.");
   const list = d.dungeons || [];
   const rest = list.length > DUNGEONS_SHOWN
     ? fold("dungeons|" + fam.family, plural(list.length - DUNGEONS_SHOWN, "more dungeon"), html`<div class="eco-dungeons">${list.slice(DUNGEONS_SHOWN).map(dungeonCard)}</div>`)
     : "";
-  return html`<section class="section">${sectionHead("06", "Rare recipes by dungeon")}<p class="eco-sub">${sentence(d.line)}</p>
-<div class="eco-dungeons">${list.slice(0, DUNGEONS_SHOWN).map(dungeonCard)}</div>${rest}</section>`;
+  return html`<p class="eco-sub">${sentence(d.line)}</p>
+<div class="eco-dungeons">${list.slice(0, DUNGEONS_SHOWN).map(dungeonCard)}</div>${rest}`;
+}
+
+// The six trades sections: a sticky anchor row jumps to each, and sections
+// 02 to 06 start folded on a phone (open on a wide screen), so the tab is
+// one screen of choices before it is six screens of scroll. A fold the
+// reader opened or shut keeps its state across redraws, like every fold.
+const TRADE_SECTIONS = [
+  ["01", "The hundred per cent"],
+  ["02", "Who takes which branch"],
+  ["03", "The order of crafters"],
+  ["04", "What nobody holds"],
+  ["05", "What each trade still needs"],
+  ["06", "Rare recipes by dungeon"],
+];
+
+function anchors() {
+  return html`<nav class="eco-anchors" aria-label="Trades sections">${TRADE_SECTIONS.map(([n, label]) => html`<button type="button" class="chip eco-jump" data-jump="trades-${n}">${label}</button>`)}</nav>`;
+}
+
+function sectionFold(num, title, body, isPhone) {
+  const key = "trades|" + num;
+  const open = folds.has(key) ? folds.get(key) : !isPhone;
+  return html`<details class="eco-fold eco-secfold" data-fold="${key}" id="trades-${num}"${open ? raw(" open") : ""}><summary><span class="eco-sectitle"><span class="idx">${num}</span>${title}</span></summary><div class="eco-secbody">${body}</div></details>`;
 }
 
 function tradesTab(p, ctx, get) {
@@ -294,7 +347,7 @@ function tradesTab(p, ctx, get) {
     ? html`<div class="eco-chips" role="group" aria-label="Family">${fams.map((f) => chipLink(f.heading || f.family, ecoHref("trades", { family: String(f.family).toLowerCase() }), f === fam))}</div>`
     : "";
   return html`<div class="eco-head"><span class="eco-headline">${sentence(fam.line)}</span>${pick}<span class="eco-sub">${sentence(fam.guild_line)}</span><span class="eco-meta">${fam.coverage}</span></div>
-${hundred(fam, ctx, get)}${branches(fam.goal)}${ladder(fam.goal)}${nobody(fam)}${needs(fam)}${rare(fam)}`;
+${anchors()}${hundred(fam, ctx, get)}${sectionFold("02", "Who takes which branch", branchesBody(fam.goal), ctx.isPhone)}${sectionFold("03", "The order of crafters", ladderBody(fam.goal), ctx.isPhone)}${sectionFold("04", "What nobody holds", nobodyBody(fam), ctx.isPhone)}${sectionFold("05", "What each trade still needs", needsBody(fam), ctx.isPhone)}${sectionFold("06", "Rare recipes by dungeon", rareBody(fam), ctx.isPhone)}`;
 }
 
 // ---- skill levels -------------------------------------------------------------
@@ -404,6 +457,17 @@ export default {
   after(main) {
     main.querySelectorAll("details[data-fold]").forEach((d) => {
       d.addEventListener("toggle", () => folds.set(d.getAttribute("data-fold"), d.open));
+    });
+    main.querySelectorAll("[data-jump]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const t = main.querySelector("#" + b.getAttribute("data-jump"));
+        if (!t) return;
+        if (t.tagName === "DETAILS" && !t.open) {
+          t.open = true;
+          folds.set(t.getAttribute("data-fold"), true);
+        }
+        t.scrollIntoView();
+      });
     });
   },
 };
