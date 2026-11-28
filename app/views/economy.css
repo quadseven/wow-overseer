@@ -8,7 +8,7 @@
 
 .eco { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .eco .accent { color: var(--color-accent-300); }
-.eco-gold { color: var(--eco-gold); font-variant-numeric: tabular-nums; }
+.eco-gold { color: var(--eco-gold); font-weight: 500; font-variant-numeric: tabular-nums; }
 .eco-name { font-weight: 500; }
 .eco-line { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .eco-meta { font-size: var(--fs-1); color: var(--color-neutral-400); text-wrap: pretty; }
@@ -37,6 +37,9 @@
 .eco-route { display: grid; grid-template-columns: 110px minmax(0, 0.8fr) minmax(0, 1.6fr); gap: 10px; padding: 9px 14px; font-size: var(--fs-2); box-shadow: 0 -1px 0 var(--color-neutral-900); }
 .eco-route-empty { padding: 9px 14px; font-size: var(--fs-2); }
 .eco-totals { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); }
+@media (max-width: 759.98px) {
+  .eco-totals { grid-template-columns: 1fr 1fr; }
+}
 .eco-totals .card { gap: 2px; }
 .eco-k { font-size: var(--fs-1); color: var(--color-neutral-400); }
 .eco-v { font-size: var(--fs-4); font-weight: 500; }
@@ -52,6 +55,13 @@
 .eco-auc-table { padding: 4px 6px; max-width: 980px; }
 .eco-auc-cards { display: none; flex-direction: column; gap: 8px; }
 .eco-auc-cards .card { padding: 10px 12px; gap: 3px; }
+/* The buyout is the card's number: money treatment at reading size. The
+   time left is a tag, warning under an hour; the tones are named here
+   because the economy stylesheet stands alone. */
+.eco-auc-buy { font-size: var(--fs-3); }
+.eco-auc-left[data-gt="warn"] { color: var(--warn); }
+.eco-auc-left[data-gt="dim"] { color: var(--color-neutral-400); }
+.eco-auc-card a { display: inline-flex; align-items: center; min-height: 44px; }
 @media (max-width: 759.98px) {
   .eco-auc-table { display: none; }
   .eco-auc-cards { display: flex; }
@@ -59,6 +69,17 @@
 }
 
 /* ---- trades ---- */
+/* The anchor row sticks under the tab row; its buttons open the section
+   they jump to when it starts folded. Sections 02 to 06 are folds whose
+   summary carries the section head's shape. */
+.eco-anchors {
+  position: sticky; top: 44px; z-index: 3; background: var(--color-bg);
+  display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 0;
+}
+.eco-jump { min-height: 44px; padding: 0 12px; font: inherit; cursor: pointer; }
+.eco-sectitle { display: inline-flex; gap: 10px; align-items: baseline; font-size: var(--fs-3); font-weight: 500; color: var(--color-text); margin-right: auto; }
+.eco-sectitle .idx { font-size: var(--fs-1); color: var(--color-accent-300); font-variant-numeric: tabular-nums; }
+.eco-secbody { display: flex; flex-direction: column; gap: 10px; padding-top: 10px; }
 .eco-head { display: flex; flex-direction: column; gap: 8px; }
 .eco-headline { font-size: var(--fs-3); font-weight: 500; text-wrap: pretty; }
 .eco-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }

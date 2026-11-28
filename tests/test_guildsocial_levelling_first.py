@@ -17,7 +17,7 @@ the gear need ranking within each tier. They use the public seam, plan_pass.
 import unittest
 
 import guildsocial as gs
-from test_guildsocial import ROGUE, MAGE, WARLOCK, mate, plan
+from test_guildsocial import HOLY, MAGE, PRIEST, ROGUE, WARLOCK, mate, plan
 
 BLOOD = "Combat"
 
@@ -73,6 +73,20 @@ class TheAskerOrder(unittest.TestCase):
         out = plan([self.seat, other, self.old], needs=needs)
         self.assertEqual(askers(out), ["Ewan", "Bree"])
 
+    def test_an_approved_healer_seat_asks_before_a_same_level_damage_seat(self):
+        healer = mate("Faye", 20, PRIEST, target_tree="Discipline")
+        damage = mate("Ewan", 20, PRIEST, target_tree="Shadow", talent_spells=HOLY)
+        needs = {
+            "Faye": [need("Faye", "deadmines", 1.0)],
+            "Ewan": [need("Ewan", "deadmines", 6.0)],
+        }
+        for switch, expected in (("on", ["Faye", "Ewan"]), ("off", ["Ewan", "Faye"])):
+            with (
+                self.subTest(switch=switch),
+                unittest_env(gs.SEATS_LEVEL_FIRST_ENV, switch),
+            ):
+                self.assertEqual(askers(plan([damage, healer], needs=needs)), expected)
+
     def test_the_switch_off_restores_the_old_order(self):
         with unittest_env(gs.SEATS_LEVEL_FIRST_ENV, "off"):
             out = plan([self.old, self.seat, self.plain], needs=self.needs)
@@ -80,7 +94,7 @@ class TheAskerOrder(unittest.TestCase):
 
     def test_the_gate_is_the_orders_level_50(self):
         self.assertEqual(gs.ORDER_LEVEL_GATE, 50)
-        at_gate = mate("Fynn", 50, MAGE, target_tree="Fire")
+        at_gate = mate("Fynn", 50, PRIEST, target_tree="Holy")
         out = plan(
             [at_gate, self.plain],
             needs={

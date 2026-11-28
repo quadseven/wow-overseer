@@ -26,7 +26,7 @@ BOOK = armory.TalentBook.load(str(HERE))
 ITEMS = armory.ItemBook.load(str(HERE))
 FIRST = family.roster()[0]
 
-WARRIOR, PRIEST = 1, 5
+WARRIOR, HUNTER, PRIEST = 1, 3, 5
 
 # Real rows out of the live world database, verbatim, so the numbers below
 # are the numbers a person would check against the game.
@@ -838,6 +838,65 @@ class TheModelTest(unittest.TestCase):
         model = armory.viewer_model(char(), rows)
         self.assertEqual(model["items"], [[1, 1170], [20, 9575], [21, 20379]])
 
+    def test_a_weapon_in_the_main_hand_wins_over_the_ranged_one(self):
+        """THE MODEL HOLDS ONE WEAPON, AND IT WAS THE WRONG ONE (#3364).
+        The viewer draws a single held weapon and takes the last one in
+        the list; the list is in doll order, and doll order puts the
+        ranged slot after the hands, so a character wearing a mace and a
+        rifle was drawn holding the rifle. When the main hand holds a
+        drawn item, the ranged pair is sent neither as an item nor as an
+        asset."""
+        rows = [
+            worn(15, IRONPATCH, displayid=20379, inventory_type=17),
+            worn(17, SCOUTING_BELT, displayid=4427, inventory_type=26),
+        ]
+        model = armory.viewer_model(char(), rows)
+        self.assertEqual(model["items"], [[21, 20379]])
+        self.assertEqual([a["slot"] for a in model["assets"]], ["main hand"])
+
+    def test_a_wand_in_the_ranged_slot_is_dropped_like_a_rifle(self):
+        """The drop is by viewer slot, not by weapon kind: a wand (25) is
+        a ranged pair exactly as a gun (26) and a bow (15) are, and it
+        goes the same way when the main hand holds a drawn item."""
+        rows = [
+            worn(15, IRONPATCH, displayid=20379, inventory_type=17),
+            worn(17, SCOUTING_BELT, displayid=6130, inventory_type=25),
+        ]
+        model = armory.viewer_model(char(), rows)
+        self.assertEqual(model["items"], [[21, 20379]])
+        self.assertEqual([a["slot"] for a in model["assets"]], ["main hand"])
+
+    def test_a_shield_in_the_off_hand_wins_over_the_ranged_one(self):
+        """The off hand counts as a hand: a character drawn with a shield
+        on the arm is not also drawn holding the rifle on the back."""
+        rows = [
+            worn(16, SCOUTING_BELT, displayid=3127, inventory_type=14),
+            worn(17, SCOUTING_BELT, displayid=4427, inventory_type=26),
+        ]
+        model = armory.viewer_model(char(), rows)
+        self.assertEqual(model["items"], [[22, 3127]])
+        self.assertEqual([a["slot"] for a in model["assets"]], ["off hand"])
+
+    def test_a_ranged_weapon_with_both_hands_empty_is_still_sent(self):
+        """The rule fires only when a hand holds a drawn item. A character
+        whose only weapon is a bow is drawn holding the bow."""
+        rows = [worn(17, SCOUTING_BELT, displayid=5527, inventory_type=15)]
+        model = armory.viewer_model(char(), rows)
+        self.assertEqual(model["items"], [[15, 5527]])
+        self.assertEqual([a["slot"] for a in model["assets"]], ["ranged"])
+
+    def test_a_hunter_keeps_the_ranged_weapon_beside_the_melee_one(self):
+        """Hunters are the exception: the ranged weapon is the weapon a
+        hunter fights with, so both pairs are sent and the viewer draws
+        the ranged one, as it does today."""
+        rows = [
+            worn(15, IRONPATCH, displayid=20379, inventory_type=17),
+            worn(17, SCOUTING_BELT, displayid=4427, inventory_type=26),
+        ]
+        model = armory.viewer_model(char(**{"class": HUNTER}), rows)
+        self.assertEqual(model["items"], [[21, 20379], [26, 4427]])
+        self.assertEqual([a["slot"] for a in model["assets"]], ["main hand", "ranged"])
+
     def test_an_item_with_no_display_is_skipped_not_sent_as_zero(self):
         rows = [
             worn(0, SCOUTING_BELT, displayid=None, inventory_type=1),
@@ -869,7 +928,11 @@ class TheModelTest(unittest.TestCase):
 
         One worn piece in every drawn doll slot at once, and the whole list
         read back, so a slot that stops being sent fails HERE rather than on
-        a screenshot."""
+        a screenshot.
+
+        The ranged slot is not in this list: since #3364 what reaches the
+        viewer from it depends on the hands, and the held-weapon tests
+        above are its coverage."""
         kinds = [
             (0, 1),
             (2, 3),
@@ -883,7 +946,6 @@ class TheModelTest(unittest.TestCase):
             (14, 16),
             (15, 13),
             (16, 14),
-            (17, 15),
             (18, 19),
         ]
         rows = [
@@ -905,7 +967,6 @@ class TheModelTest(unittest.TestCase):
                 [16, 914],
                 [21, 915],
                 [22, 916],
-                [15, 917],
                 [19, 918],
             ],
         )

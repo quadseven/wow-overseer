@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 
 from . import anchors as anchors_mod
+from .acts import QUEST_AIM, RAID_ORDER, TRAVEL_GUARD
 from . import dbschema, gamedata
 from .miniyaml import YamlError, loads
 
@@ -66,6 +67,7 @@ _EXPECT_SCALAR = re.compile(r"^(=|!=|<>|<=|>=|<|>) -?\d+(\.\d+)?$")
 _EXPECT_ROWS = re.compile(r"^(>=|<=|>|<|=)?\s*\d+$")
 _JOB = re.compile(r"^[a-z ]+(:[a-z0-9_-]+)?$")
 _ALIAS = re.compile(r"^[a-z][a-z0-9_]*$")
+_ACT_KINDS = ("roster", "command", TRAVEL_GUARD, RAID_ORDER, QUEST_AIM)
 
 
 @dataclass(frozen=True)
@@ -817,8 +819,15 @@ def _arrange_instance(lint, path, v, whos, aliases):
 def _arrange_group(lint, path, v, whos):
     if not lint.keys(path, v, ("members", "leader"), ("members", "leader")):
         return
+    members = v["members"]
+    selectors = members if isinstance(members, list) else [members]
     lint.ensure(
-        v["members"] in whos, f"{path}.members", "schema", "must name a cast member"
+        bool(selectors)
+        and all(isinstance(who, str) and who in whos for who in selectors)
+        and len(set(selectors)) == len(selectors),
+        f"{path}.members",
+        "schema",
+        "must name one or more distinct cast entries",
     )
     lint.ensure(
         bool(_NAME.match(str(v["leader"]))),
@@ -881,14 +890,21 @@ def _act(lint, doc, whos, names):
     bridge_on = (
         isinstance(doc.get("world"), dict) and doc["world"].get("bridge") == "on"
     )
+    lint.ensure(
+        sum(isinstance(step, dict) and RAID_ORDER in step for step in act) <= 1,
+        "decree.act",
+        "schema",
+        "may contain at most one raid order",
+    )
+    duration = duration_seconds(doc.get("duration"))
     for i, step in enumerate(act):
         path = f"decree.act[{i}]"
-        if lint.keys(path, step, ("at", "when", "roster", "command"), ()):
-            _act_step(lint, path, step, whos, names, bridge_on)
+        if lint.keys(path, step, ("at", "when", "by", *_ACT_KINDS), ()):
+            _act_step(lint, path, step, whos, names, bridge_on, duration)
     _walk_auction(lint, doc, "act", act)
 
 
-def _act_step(lint, path, step, whos, names, bridge_on):
+def _act_step(lint, path, step, whos, names, bridge_on, duration):
     lint.ensure(
         ("at" in step) != ("when" in step),
         path,
@@ -909,16 +925,87 @@ def _act_step(lint, path, step, whos, names, bridge_on):
             "schema",
             "must name an observation in observe",
         )
+    if "by" in step:
+        deadline = duration_seconds(step["by"])
+        lint.ensure(
+            "when" in step and deadline is not None,
+            f"{path}.by",
+            "schema",
+            "must be a deadline such as 5m on a conditional act",
+        )
+        if deadline is not None and duration is not None:
+            lint.ensure(
+                deadline <= duration,
+                f"{path}.by",
+                "schema",
+                "deadline exceeds the decree duration",
+            )
     lint.ensure(
-        ("roster" in step) != ("command" in step),
+        sum(key in step for key in _ACT_KINDS) == 1,
         path,
         "schema",
-        "needs exactly one of roster or command",
+        "needs exactly one of roster, command, travel_guard, raid_order or quest_aim",
     )
     if "roster" in step:
         _act_roster(lint, f"{path}.roster", step["roster"], whos)
     if "command" in step:
         _act_command(lint, f"{path}.command", step["command"], whos)
+    if TRAVEL_GUARD in step:
+        _act_travel_guard(lint, f"{path}.{TRAVEL_GUARD}", step[TRAVEL_GUARD], whos)
+    if RAID_ORDER in step:
+        _act_raid_order(lint, f"{path}.{RAID_ORDER}", step[RAID_ORDER], whos, bridge_on)
+    if QUEST_AIM in step:
+        _act_quest_aim(lint, f"{path}.{QUEST_AIM}", step[QUEST_AIM], whos)
+
+
+def _act_quest_aim(lint, path, aim, whos):
+    fields = ("who", "quest")
+    if not lint.keys(path, aim, fields, fields):
+        return
+    who, quest = aim["who"], aim["quest"]
+    lint.ensure(
+        isinstance(who, str) and _NAME.fullmatch(who) and who in whos,
+        f"{path}.who",
+        "schema",
+        "must be a named cast entry",
+    )
+    lint.ensure(
+        _is_int(quest) and 0 < quest <= 0xFFFFFFFF,
+        f"{path}.quest",
+        "schema",
+        "must be a positive unsigned quest ID",
+    )
+
+
+def _act_travel_guard(lint, path, aim, whos):
+    fields = ("who", "enabled")
+    if not lint.keys(path, aim, fields, fields):
+        return
+    who = aim["who"]
+    lint.ensure(
+        isinstance(who, str) and _NAME.fullmatch(who) and who in whos,
+        f"{path}.who",
+        "schema",
+        "must be a named cast entry",
+    )
+    lint.ensure(
+        isinstance(aim["enabled"], bool),
+        f"{path}.enabled",
+        "schema",
+        "must be true or false",
+    )
+
+
+def _act_raid_order(lint, path, order, whos, bridge_on):
+    lint.ensure(bridge_on, path, "schema", 'requires world.bridge: "on"')
+    if lint.keys(path, order, ("family",), ("family",)):
+        family = order["family"]
+        lint.ensure(
+            isinstance(family, str) and _NAME.fullmatch(family) and family in whos,
+            f"{path}.family",
+            "schema",
+            "must name one cast family head explicitly",
+        )
 
 
 def _act_roster(lint, path, r, whos):

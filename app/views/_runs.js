@@ -32,17 +32,31 @@ export function stateTag(r) {
   return html`<span class="tag g-run-tag" data-gt="${s.tone}"><i class="${s.icon}" aria-hidden="true"></i>${s.text}</span>`;
 }
 
-export function pips(r, cls) {
+// Where a run is, by the one field that says so (`run_state`), with the raw
+// row state standing in for reads that carry only it.
+export function isInside(r) {
+  return (r.run_state || r.state || "") === "inside";
+}
+
+export function pips(r, cls, opts) {
   const total = Number(r.bosses_total) || 0;
   if (!total) return "";
   const done = Number(r.bosses_done) || 0;
   const wiped = runState(r).tone === "bad";
+  const key = r.run_state || r.state || "";
+  // A finished card (`short`) marks every boss left up in the bad tone, so
+  // a partial finish does not read cleaner than a live struggle. An
+  // `unknown` bar (a count the record does not account for) marks none of
+  // them: no segment claims a kill.
+  const short = Boolean(opts && opts.short) && done < total && key !== "inside" && key !== "queued";
+  const unknown = Boolean(opts && opts.unknown);
   const cells = [];
   for (let i = 0; i < total; i++) {
-    const kind = i < done ? "done" : wiped && i === done ? "fail" : "";
+    const kind = unknown ? "unknown" : i < done ? "done" : short ? "fail" : wiped && i === done ? "fail" : "";
     cells.push(html`<span class="${kind}"></span>`);
   }
-  return html`<div class="g-pips ${cls || ""}" role="img" aria-label="${done + " of " + total + " bosses down"}">${cells}</div>`;
+  const label = (opts && opts.label) || done + " of " + total + " bosses down";
+  return html`<div class="g-pips ${cls || ""}" role="img" aria-label="${label}">${cells}</div>`;
 }
 
 // A run's seats in the order a group reads: tank, healer, then damage, and
@@ -94,7 +108,7 @@ export function runCard(r, opts) {
   const meta = [bossText(r), o.done ? "" : inside(r)].filter(Boolean).join(" | ");
   return html`<div class="card g-run-card stretch-card">
 <div class="g-run-top"><a class="g-run-name stretch-link" href="${runHref(r)}" data-run="${r.id}">${r.place || "A dungeon"} <span class="muted">#${r.id}${when}</span></a>${stateTag(r)}</div>
-${o.done ? "" : pips(r)}
+${pips(r, "", o.done ? { short: true } : null)}
 ${o.done && cause(r) ? html`<span class="g-run-cause">${cause(r)}</span>` : ""}
 <span class="g-run-meta">${meta}</span>
 ${seatChips(r)}

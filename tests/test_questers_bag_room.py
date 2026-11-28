@@ -204,6 +204,9 @@ class AHuntRefusedForBagRoomWaitsOnTheSale(unittest.TestCase):
         )
         self.assertFalse(questers.bags_full_hunt("Mirra", [other]))
 
+    def test_the_wait_is_long_enough_to_keep_a_day_under_ten_asks(self):
+        self.assertLess(24 * 60 / questers.BAG_HUNT_RETRY_MINUTES, 10)
+
 
 if __name__ == "__main__":
     unittest.main()
