@@ -284,6 +284,7 @@ class EveryQuestInReach(unittest.TestCase):
 # Durotar for questers of 14 to 22, who had done or broken every quest a
 # creature there gives, and still held two that an item starts).
 DUROTAR = 14
+TIRISFAL = 85
 
 
 def item_started(qid, entry=4881):
