@@ -714,5 +714,145 @@ class ReviewFixesTest(Base):
         )
 
 
+class CleanupTest(Base):
+    """Withdrawn batches, a queue age limit and orphaned run inputs (#3407)."""
+
+    def request(self, batch):
+        self.c.put("configmaps", "wow-ephemeral", f"eph-withdraw-{batch}", {
+            "metadata": {"labels": {"eph/withdraw": batch}}, "data": {"batch": batch}})  # fmt: skip
+
+    def run_cm(self, rid):
+        self.c.put("configmaps", "wow-ephemeral", f"eph-run-{rid}", {
+            "metadata": {"labels": {"eph/run": rid}}, "data": {}})  # fmt: skip
+
+    def has(self, plural, name):
+        return (plural, "wow-ephemeral", name) in self.c.objs
+
+    def reasons(self, rid):
+        cm = self.c.objs[("configmaps", "wow-ephemeral", f"eph-result-{rid}")]
+        return json.loads(cm["data"]["result.json"])["reasons"]
+
+    def test_a_withdrawn_batch_loses_its_suspended_jobs_with_an_invalid_result_each(
+        self,
+    ):
+        self.add("aaa001-c1", "control")
+        self.add("aaa001-c2", "control")
+        self.add("bbb002-c1", "control")
+        self.request("aaa001")
+        self.tick()
+        for rid in ("aaa001-c1", "aaa001-c2"):
+            self.assertFalse(self.has("jobs", f"eph-{rid}"))
+            cm = self.c.objs[("configmaps", "wow-ephemeral", f"eph-result-{rid}")]
+            self.assertEqual(cm["metadata"]["labels"]["eph/verdict"], "INVALID")
+            self.assertIn("withdrawn", self.reasons(rid)[0])
+        self.assertTrue(self.has("jobs", "eph-bbb002-c1"))
+        self.assertFalse(self.has("configmaps", "eph-result-bbb002-c1"))
+        self.assertFalse(self.has("configmaps", "eph-withdraw-aaa001"))
+
+    def test_a_withdrawal_leaves_a_running_job_of_the_batch_alone(self):
+        self.add("aaa003-c1", "control", suspend=False, started=-60)
+        self.add("aaa003-c2", "control")
+        self.request("aaa003")
+        self.tick()
+        self.assertTrue(self.has("jobs", "eph-aaa003-c1"))
+        self.assertFalse(self.has("jobs", "eph-aaa003-c2"))
+
+    def test_a_withdrawn_job_keeps_its_place_when_the_result_cannot_be_written(self):
+        self.add("aaa004-c1", "control")
+        self.request("aaa004")
+        self.c.fail["eph-result-aaa004-c1"] = 1
+        self.tick()
+        self.assertTrue(self.has("jobs", "eph-aaa004-c1"))
+        self.assertTrue(self.has("configmaps", "eph-withdraw-aaa004"))
+
+    def test_a_request_with_a_malformed_batch_id_removes_nothing(self):
+        self.add("aaa005-c1", "control")
+        self.request("not-a-batch")
+        self.tick()
+        self.assertTrue(self.has("jobs", "eph-aaa005-c1"))
+        self.assertFalse(self.has("configmaps", "eph-result-aaa005-c1"))
+
+    def test_a_job_older_than_the_queue_limit_is_removed_with_an_invalid_result(self):
+        self.cfg.queue_max_age_seconds = 3600
+        self.add("aaa006-c1", "control", age=2 * 3600)
+        self.add("aaa007-c1", "control", age=600)
+        self.c.node_stats.clear()  # nothing may start, so only the age rule acts
+        self.tick()
+        self.assertFalse(self.has("jobs", "eph-aaa006-c1"))
+        self.assertIn("queue_max_age_seconds", self.reasons("aaa006-c1")[0])
+        self.assertTrue(self.has("jobs", "eph-aaa007-c1"))
+        self.assertFalse(self.has("configmaps", "eph-result-aaa007-c1"))
+
+    def test_the_queue_limit_defaults_to_a_day_and_spares_a_running_job(self):
+        self.assertEqual(self.cfg.queue_max_age_seconds, 24 * 3600)
+        self.add("aaa008-c1", "control", suspend=False, started=-60, age=3 * 86400)
+        self.tick()
+        self.assertTrue(self.has("jobs", "eph-aaa008-c1"))
+
+    def test_a_run_configmap_with_no_job_and_a_result_is_deleted(self):
+        self.run_cm("aaa009-c1")
+        self.result("aaa009-c1", "PASS")
+        self.tick()
+        self.assertFalse(self.has("configmaps", "eph-run-aaa009-c1"))
+        self.assertTrue(self.has("configmaps", "eph-result-aaa009-c1"))
+
+    def test_a_run_configmap_whose_job_exists_or_has_no_result_is_kept(self):
+        self.add("aaa010-c1", "control", suspend=False, finished="Complete")
+        self.run_cm("aaa010-c1")
+        self.result("aaa010-c1", "PASS")
+        self.run_cm("aaa011-c1")  # no Job, but no result either
+        self.tick()
+        self.assertTrue(self.has("configmaps", "eph-run-aaa010-c1"))
+        self.assertTrue(self.has("configmaps", "eph-run-aaa011-c1"))
+
+    def test_a_withdrawn_batch_leaves_no_run_configmap_in_one_pass(self):
+        self.add("aaa012-c1", "control")
+        self.run_cm("aaa012-c1")
+        self.request("aaa012")
+        self.tick()
+        self.assertFalse(self.has("jobs", "eph-aaa012-c1"))
+        self.assertFalse(self.has("configmaps", "eph-run-aaa012-c1"))
+
+    def test_every_cluster_call_stays_inside_the_declared_dispatcher_rules(self):
+        self.add("aaa013-c1", "control")
+        self.add("aaa014-c1", "control", age=3 * 86400)
+        self.add("aaa015-c1", "control", suspend=False, started=-60)
+        self.run_cm("aaa016-c1")
+        self.result("aaa016-c1", "FAIL")
+        self.request("aaa013")
+        self.tick()
+        plural = {
+            "Job": "jobs",
+            "ConfigMap": "configmaps",
+            "Lease": "leases.coordination.k8s.io",
+        }
+        used = set()
+        for argv, text in self.c.calls:
+            a = argv[1:]
+            while a and a[0] in ("--kubeconfig", "-n"):
+                a = a[2:]
+            verb, rest = a[0], a[1:]
+            if verb in ("create", "replace"):
+                used.add(
+                    (
+                        {"replace": "update"}.get(verb, verb),
+                        plural[json.loads(text)["kind"]],
+                    )
+                )
+            elif verb == "get" and rest[0] == "--raw":
+                used.add(("get", "nodes/proxy"))
+            elif verb == "get":
+                named = len(rest) > 1 and not rest[1].startswith("-")
+                used.add(("get" if named else "list", rest[0]))
+            else:
+                used.add((verb, rest[0]))
+        self.assertLessEqual(used, dispatch.DISPATCHER_RULES)
+        self.assertIn(("delete", "configmaps"), used)
+        self.assertEqual(
+            {r for v, r in dispatch.DISPATCHER_RULES if v == "delete"},
+            {"jobs", "configmaps"},
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
