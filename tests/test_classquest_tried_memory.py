@@ -50,13 +50,34 @@ def walk(rid, name, guid, status, age, outcome, reason, retryable=True):
     )
 
 
-def hunt(rid, name, status, age, outcome, reason, kills, loot, retry="later"):
+def hunt(
+    rid,
+    name,
+    status,
+    age,
+    outcome,
+    reason,
+    kills,
+    loot,
+    retry="later",
+    *,
+    entry=3130,
+    loot_items=(),
+):
     body = {"outcome": outcome, "reason": reason, "retry": retry}
-    body.update(entry=3130, count=5, item=6486, kills=kills, pulls=27, loot_count=loot)
+    body.update(
+        entry=entry,
+        count=5,
+        item=6486,
+        kills=kills,
+        pulls=27,
+        loot_count=loot,
+        loot_items=loot_items,
+    )
     return row(
         rid,
         name,
-        "hunt-spawn creature:3130 item:6486 count:5 max:480",
+        "hunt-spawn creature:%d item:6486 count:5 max:480" % entry,
         status,
         age,
         body,
@@ -180,20 +201,31 @@ class TheEvidence(unittest.TestCase):
     def test_bigzugs_hunt_rows_are_no_failed_walks(self):
         self.assertFalse(guildjobs.failed_class_walks("Bigzug", recent(*BIGZUG)))
 
-    def test_bigzug_is_never_stalled_while_his_hunt_kills(self):
-        # His hunts ended on the clock with kills and no loot; the kills keep
-        # the pack and the hunt clock off the packs (the hunt row is 15 minutes
-        # old at every pass here).
-        fresh = (
-            hunt(
-                627232, "Bigzug", "applied", 15, "timeout", "the clock ran out", 12, 0
-            ),
-        )
+    # AI-REVIEW 2026-11-28 [claude-haiku-5-5] secret-in-log-or-trace (Elder, PR #3423):
+    # Synthetic rows demonstrate the stall bound without copying realm identifiers.
+    def test_kills_leave_the_pack_reachable_but_eventually_ask_for_help(self):
+        # Each hunt lands and kills, but the unchanged objective yields to
+        # another pack and then help after both packs have been tried.
         hunts = classquest.Hunts()
-        for now in (0.0, 1900.0, 3800.0, 5700.0):
-            result = plan(recent(*BIGZUG[1:5], *fresh), "Bigzug", hunts, now)
-            self.assertEqual(result.helps, ())
-            self.assertIsNotNone(target(result), now)
+        for n, (now, want) in enumerate(
+            ((0.0, PACK_A["guid"]), (1900.0, PACK_B["guid"]), (3800.0, None))
+        ):
+            fresh = hunt(
+                100 + n,
+                "Aa",
+                "applied",
+                15,
+                "timeout",
+                "the clock ran out",
+                4,
+                0,
+            )
+            result = plan(recent(fresh), hunts=hunts, now=now)
+            self.assertEqual(target(result), want, now)
+            self.assertEqual(
+                [h.move.blocker for h in result.helps],
+                [classquest.STALLED] if want is None else [],
+            )
 
     def test_a_timeout_that_killed_is_no_mark_on_the_pack(self):
         rows = recent(
@@ -235,7 +267,10 @@ class TheEvidence(unittest.TestCase):
         )
         tried = hunts.get("Aa").tried
         self.assertTrue(tried)
-        hunts.productive("Aa", 100.0)
+        rows = recent(
+            hunt(11, "Aa", "applied", 1, "timeout", "the clock ran out", 4, 0)
+        )
+        guildjobs._class_move(m, two_packs(), rows, hunts, 100.0)
         self.assertEqual(hunts.get("Aa").since, 0.0)
         self.assertEqual(hunts.state(m.name, 101.0), ({1498: tried}, frozenset()))
 
