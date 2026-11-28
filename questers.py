@@ -356,19 +356,24 @@ GONE = "no such spawn in the world"
 COMPLETE_HAND_IN = "it is complete; hand it in"
 # A take or a hand-in the world refused this many times in a day is broken.
 FAILS_BEFORE_BROKEN = 3
-# A HUNT THAT NEVER KILLS IS LEFT (#2188). The spawn a quester hunts is the
-# nearest one it has not left, so a creature that cannot be killed (144 pulls
-# and no kill; no living one within reach) stayed the nearest and the same
-# `hunt-spawn` row was written again and again: 34 rows in 16 hours for one
-# quester on the dev realm. FRUITLESS_HUNTS such rows inside FRUITLESS_MINUTES
-# leave that creature entry for that long, after which it is tried once more;
-# a quest with no other creature to hunt then runs its stall clock, so a quest
-# nobody can work is given up as a stalled one is.
+# A HUNT THAT MAKES NO QUEST PROGRESS IS LEFT (#2188). The spawn a quester
+# hunts is the nearest one it has not left, so a creature that cannot be
+# killed (144 pulls and no kill; no living one within reach) stayed the nearest
+# and the same `hunt-spawn` row was written again and again: 34 rows in 16
+# hours for one quester on the dev realm. Item hunts with kills but no target
+# item can repeat the same way. After FRUITLESS_HUNTS such rows inside
+# FRUITLESS_MINUTES, the creature entry is left for that long and then tried
+# once more. A quest with no other creature to hunt then runs its stall clock,
+# so a quest nobody can work is given up as a stalled one is.
 FRUITLESS_HUNT = "fruitless"
+UNPRODUCTIVE_HUNT = "unproductive"
 KILLING_HUNT = "killing"
 NO_CREATURE_IN_REACH = "no living creature of the entry within reach"
 FRUITLESS_HUNTS = 3
 FRUITLESS_MINUTES = 120
+# The module caps the distinct entries in a hunt result at 32; a full list
+# cannot prove that an absent target item was not looted.
+HUNT_LOOT_ENTRIES_LIMIT = 32
 # A chest use the module read back as `unchanged` (the cast went off and
 # nothing reached the quest log) was written again every pass: eight rows in
 # forty-five minutes for one quester at one chest, each a walk back to it.
@@ -1122,7 +1127,7 @@ class Attempt:
     # rule instead of being reported as could-not.
     retryable: bool = True
     # The creature entry of a `hunt-spawn` row, 0 for any other row, and how
-    # the hunt ended (FRUITLESS_HUNT / KILLING_HUNT, "" for any other end).
+    # the hunt ended (FRUITLESS_HUNT, UNPRODUCTIVE_HUNT, KILLING_HUNT or "").
     hunt_entry: int = 0
     hunt_end: str = ""
 
@@ -1177,14 +1182,25 @@ def _use_entry(command) -> int:
 
 def _hunt_end(row) -> str:
     """How a `hunt-spawn` row ended: FRUITLESS_HUNT when the module's clock ran
-    out with no kill or no creature of the entry stood within reach, KILLING_HUNT
-    when it killed, "" for any other row or end (a full bag, a held character, a
-    refused verb: none says the creature is the trouble)."""
+    out with no kill or no creature of the entry stood within reach,
+    UNPRODUCTIVE_HUNT when an item hunt killed but did not loot its target,
+    KILLING_HUNT when it looted its target or killed for a kill objective, and
+    "" for any other row or end (a full bag, a held character, a refused verb:
+    none says the creature is the trouble)."""
     if not classhunt.is_hunt_row(row.get("command")):
         return ""
     result = str(row.get("result") or "")
     status = str(row.get("status") or "")
     kills = re.search(r'"kills":(\d+)', result)
+    item = re.search(r"\bitem:(\d+)\b", str(row.get("command") or ""))
+    loot_items = re.search(r'"loot_items":\[([0-9,]*)\]', result)
+    if item and loot_items:
+        entries = [int(value) for value in loot_items.group(1).split(",") if value]
+        looted = set(entries)
+        if int(item.group(1)) in looted:
+            return KILLING_HUNT
+        if kills and int(kills.group(1)) > 0 and len(entries) < HUNT_LOOT_ENTRIES_LIMIT:
+            return UNPRODUCTIVE_HUNT
     if kills and int(kills.group(1)) > 0:
         return KILLING_HUNT
     if status == "unchanged" and kills:
@@ -1207,19 +1223,24 @@ def _spawn_named(command, recent) -> tuple:
 
 def fruitless_entries(name, tried) -> frozenset:
     """The creature entries this quester leaves for now: FRUITLESS_HUNTS hunt
-    rows of the entry ended without a kill inside FRUITLESS_MINUTES, with no
-    killing hunt of the entry since (#2188)."""
-    newest_kill = {}
+    rows of the entry ended without a kill or the targeted quest item inside
+    FRUITLESS_MINUTES, with no productive hunt of the entry since (#2188)."""
+    newest_productive = {}
     for a in tried or ():
         if a.name == name and a.hunt_entry and a.hunt_end == KILLING_HUNT:
-            newest_kill[a.hunt_entry] = min(
-                a.age_minutes, newest_kill.get(a.hunt_entry, a.age_minutes)
+            newest_productive[a.hunt_entry] = min(
+                a.age_minutes,
+                newest_productive.get(a.hunt_entry, a.age_minutes),
             )
     empty = {}
     for a in tried or ():
-        if a.name != name or not a.hunt_entry or a.hunt_end != FRUITLESS_HUNT:
+        if (
+            a.name != name
+            or not a.hunt_entry
+            or a.hunt_end not in (FRUITLESS_HUNT, UNPRODUCTIVE_HUNT)
+        ):
             continue
-        if a.age_minutes < FRUITLESS_MINUTES and a.age_minutes < newest_kill.get(
+        if a.age_minutes < FRUITLESS_MINUTES and a.age_minutes < newest_productive.get(
             a.hunt_entry, 10**9
         ):
             empty[a.hunt_entry] = empty.get(a.hunt_entry, 0) + 1
