@@ -57,6 +57,10 @@
 .qs-levels .input { width: 5.5em; }
 /* The count and the active filters stay on screen while the catalogue scrolls. */
 .qs-sticky { position: sticky; top: 44px; z-index: 3; background: var(--color-bg); display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; padding: 6px 0; }
+@media (max-width: 759.98px) {
+  .qs-catalogue { scroll-margin-top: calc(60px + env(safe-area-inset-top)); }
+  .qs-sticky { top: calc(60px + env(safe-area-inset-top)); }
+}
 .qs-sticky p { margin: 0; }
 .qs-active { font-size: var(--fs-2); font-weight: 500; }
 .qs-clear { min-height: 44px; }

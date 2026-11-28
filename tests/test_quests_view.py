@@ -226,6 +226,95 @@ class TheQuestsView(unittest.TestCase):
         # The chips sit above the parties: the door is at the top of the page.
         self.assertLess(html.index("Broken · 1"), html.index("Quester parties"))
 
+    def test_shortcut_activation_filters_and_moves_focus_to_the_catalogue(self):
+        initial = "#/quests?faction=horde&sort=title&q=other"
+        got = run(
+            "views/quests.js",
+            r"""
+const reads = %s;
+const entries = [location.hash];
+const effects = [];
+const frames = [];
+window.requestAnimationFrame = (callback) => frames.push(callback);
+const catalogue = {
+  focus(options) { effects.push(["focus", options.preventScroll]); },
+  scrollIntoView(options) { effects.push(["scroll", options.block]); }
+};
+const shortcuts = {};
+const elements = {
+  ".qs-chips": shortcuts,
+  ".qs-catalogue": catalogue,
+  "[data-region=catalogue]": {addEventListener() {}},
+};
+const main = {querySelector: (selector) => elements[selector] || null};
+function navigate(href) {
+  location.hash = href;
+  const c = ctx({}, {}, reads);
+  c.hash = href;
+  const rendered = V.render(c).s;
+  V.after(main, c);
+  effects.push(["router", "top"]);
+  frames.splice(0).forEach((callback) => callback());
+  return rendered;
+}
+const markup = navigate(location.hash);
+let rendered = markup;
+effects.length = 0;
+function activate(status, options = {}) {
+  const href = Array.from(markup.matchAll(/<a class="qs-chip" href="([^"]+)">/g),
+    (match) => match[1]).find((url) => url.endsWith("status=" + status));
+  if (!href) throw Error("The rendered shortcut has no destination");
+  const link = {getAttribute: (attribute) => attribute === "href" ? href : null};
+  const event = {
+    button: 0,
+    defaultPrevented: false,
+    preventDefault() { this.defaultPrevented = true; },
+    target: {closest: (selector) => selector === "a.qs-chip" ? link : null},
+    ...options,
+  };
+  if (shortcuts.onclick) shortcuts.onclick(event);
+  if (!event.defaultPrevented && !event.ctrlKey && !event.metaKey &&
+      event.button === 0 && href !== location.hash) {
+    entries.push(href);
+    rendered = navigate(href);
+  }
+  return {href, prevented: event.defaultPrevented, hash: location.hash, rendered};
+}
+const modified = [activate("broken", {ctrlKey: true}), activate("broken", {metaKey: true}),
+  activate("broken", {button: 1})];
+const broken = activate("broken");
+const taken = activate("taken", {detail: 0});
+const same = activate("taken", {detail: 0});
+const back = navigate(entries[1]);
+console.log(JSON.stringify({markup, entries, modified, broken, taken, same, back, effects}));
+"""
+            % json.dumps(READS),
+            initial,
+        )
+        for modified in got["modified"]:
+            self.assertEqual(modified["href"], "#/quests?status=broken")
+            self.assertFalse(modified["prevented"])
+            self.assertEqual(modified["hash"], initial)
+            self.assertEqual(modified["rendered"], got["markup"])
+        broken, taken, same = (got[key] for key in ("broken", "taken", "same"))
+        for state in (broken, taken, same):
+            self.assertEqual(state["hash"], state["href"])
+            self.assertIn("1 of 6 quests", state["rendered"])
+        self.assertFalse(broken["prevented"])
+        self.assertFalse(taken["prevented"])
+        self.assertTrue(same["prevented"])
+        self.assertIn("Webwood Venom", broken["rendered"])
+        self.assertIn('<option value="broken" selected>', broken["rendered"])
+        self.assertIn('<option value="attempts" selected>', broken["rendered"])
+        self.assertIn("The Forgotten Pools", taken["rendered"])
+        self.assertIn('<option value="taken" selected>', taken["rendered"])
+        self.assertIn('<option value="broken" selected>', got["back"])
+        self.assertEqual(got["entries"], [initial, broken["href"], taken["href"]])
+        self.assertIn('class="qs-catalogue" tabindex="-1"', got["markup"])
+        router = [["router", "top"]]
+        catalogue = [["focus", True], ["scroll", "start"]]
+        self.assertEqual(got["effects"], (router + catalogue) * 2 + catalogue + router)
+
     def test_a_line_under_the_parties_head_says_what_the_parties_are(self):
         _, html = self.page()
         self.assertIn("proving every quest can be played", html)

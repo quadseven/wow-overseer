@@ -49,6 +49,7 @@ import { since } from "../models/time.js";
 
 const QUESTERS = "/api/v2/questers";
 const QUESTS = "/api/v2/quests";
+const SEP = " \u00b7 ";
 const questPath = (id) => QUESTS + "/" + encodeURIComponent(id);
 
 // A quest's status: [label, icon, colour class, bar class]. The status
@@ -257,8 +258,7 @@ function sorted(list, sort) {
   return list;
 }
 
-// The active filters in words, for the sticky line: "Broken · Horde ·
-// levels 10 to 20". Empty when nothing is filtered.
+// The sticky line names every active filter. Empty when nothing is filtered.
 function filterWords(f) {
   const parts = [];
   if (f.status) parts.push(STATUS[f.status][0]);
@@ -282,7 +282,7 @@ export function catalogueBody(data, q) {
   const n = limitFor(q);
   const more = match.length > n ? html`<button type="button" class="btn btn-secondary qs-more" data-more>Show ${Math.min(step(), match.length - n)} more</button>` : "";
   const words = filterWords(f);
-  const active = words.length ? html`<span class="qs-active">${words.join(" · ")}</span><button type="button" class="btn btn-ghost qs-clear" data-clear>Clear filters</button>` : "";
+  const active = words.length ? html`<span class="qs-active">${words.join(SEP)}</span><button type="button" class="btn btn-ghost qs-clear" data-clear>Clear filters</button>` : "";
   return html`<div class="qs-sticky"><p class="dim qs-s" data-region="count">${match.length.toLocaleString("en-US")} of ${all.length.toLocaleString("en-US")} quests${match.length > n ? ", the first " + n + " shown" : ""}</p>${active}</div>${rows(match.slice(0, n), q)}${more}`;
 }
 
@@ -354,8 +354,15 @@ function summary(data) {
 function chips(data) {
   const t = data.totals || {};
   if (num(t.quests) === null) return "";
-  const chip = (status, label) => html`<a class="qs-chip" href="${build(["quests"], { status })}">${label} · ${count(t[status])}</a>`;
+  const chip = (status, label) => html`<a class="qs-chip" href="${build(["quests"], { status })}">${label}${SEP}${count(t[status])}</a>`;
   return html`<div class="qs-chips">${chip("broken", "Broken")}${chip("taken", "Taken")}</div>`;
+}
+
+let catalogueShortcut = "";
+
+function focusCatalogue(catalogue) {
+  catalogue.focus({ preventScroll: true });
+  catalogue.scrollIntoView({ block: "start" });
 }
 
 export default {
@@ -372,7 +379,7 @@ export default {
     const wait = pendingRead(quests, 4);
     const cover = wait || (ok ? coverage(quests.data) : state("unmeasured", "Quests not measured", "The quests read answered with no catalogue."));
     const cat = ok ? html`${controls(quests.data, q)}<div data-region="catalogue">${catalogueBody(quests.data, q)}</div>` : wait || "";
-    return html`<div class="qs">${pageHead("Quests", ok ? summary(quests.data) : "")}${ok ? chips(quests.data) : ""}${sectionHead("", "Quester parties")}<p class="dim qs-s qs-parties-note">Two dedicated parties proving every quest can be played, one per guild.</p>${parties(ctx.get(QUESTERS))}${sectionHead("", "Coverage")}${cover}${sectionHead("", "Catalogue")}<div class="qs-catalogue">${cat}</div></div>`;
+    return html`<div class="qs">${pageHead("Quests", ok ? summary(quests.data) : "")}${ok ? chips(quests.data) : ""}${sectionHead("", "Quester parties")}<p class="dim qs-s qs-parties-note">Two dedicated parties proving every quest can be played, one per guild.</p>${parties(ctx.get(QUESTERS))}${sectionHead("", "Coverage")}${cover}${sectionHead("", "Catalogue")}<section class="qs-catalogue" tabindex="-1" id="quest-catalogue" aria-label="Quest catalogue">${cat}</section></div>`;
   },
   after(main, ctx) {
     if (ctx.params.id) return;
@@ -411,6 +418,30 @@ export default {
       const el = focus && main.querySelector("#" + focus);
       if (el) el.focus({ preventScroll: true });
     };
+    // Keep the link's native hash navigation, so the router redraws and
+    // records the visit. Rebinding a shortcut replaces its old handler.
+    const shortcuts = main.querySelector(".qs-chips");
+    if (shortcuts) shortcuts.onclick = (event) => {
+      if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const link = event.target.closest("a.qs-chip");
+      const href = link && link.getAttribute("href");
+      if (!href) return;
+      if (location.hash === href) {
+        event.preventDefault();
+        focusCatalogue(main.querySelector(".qs-catalogue"));
+      } else {
+        catalogueShortcut = href;
+      }
+    };
+    if (catalogueShortcut && ctx.hash === catalogueShortcut) {
+      const href = catalogueShortcut;
+      catalogueShortcut = "";
+      // The router resets scroll and focus after drawing a new hash.
+      window.requestAnimationFrame(() => {
+        const current = main.querySelector(".qs-catalogue");
+        if (current && location.hash === href) focusCatalogue(current);
+      });
+    }
     on("qs-faction", "change", () => redrawAll(setQuery({ faction: val("qs-faction"), zone: "" }), "qs-faction"));
     region.addEventListener("click", (e) => {
       if (e.target.closest("[data-more]")) {
