@@ -87,6 +87,20 @@ SCRIPTED_EVENT_NOTE = (
     "The world rows list no required item or creature/object objectives, "
     "so the stored reason is the only evidence of how it completes: a scripted event."
 )
+# questers.STALLED and questers.NO_OBJECTIVES. A stall on a quest with no
+# objective rows is explained from those rows: no counter could move.
+STALLED_REASON = "its objectives did not move for 2 hours of play"
+NO_OBJECTIVES_REASON = (
+    "the world rows define no required creature, item, or object objective "
+    "a quester can work"
+)
+NO_OBJECTIVES_NOTE = (
+    "The world rows list no required item or creature/object objectives, so "
+    "no objective counter could move: the quester pass now names such a quest "
+    "'" + NO_OBJECTIVES_REASON + "' and drops it. No quester can finish it "
+    "with the hunt, loot, use and hand-in moves questers make, and the stored "
+    "rows name no other way it completes."
+)
 # The stored take reason from questers._giver_failure and the module's
 # QuestErrandRefusal. The module uses different reasons for an object
 # starter and for a quest without a starter relation.
@@ -324,6 +338,20 @@ def _world_rows(info) -> list[str]:
     return lines + [""]
 
 
+def _no_objectives_note(info, rows) -> str:
+    """The note explaining stored reasons on a quest with no objective rows:
+    a scripted event, or a stall (or its NO_OBJECTIVES successor). "" when
+    the quest has objective rows or no stored reason needs one."""
+    if info is None or getattr(info, "items", ()) or getattr(info, "objectives", ()):
+        return ""
+    reasons = [str(row.get("reason") or "") for row in rows or ()]
+    if SCRIPTED_EVENT_REASON in reasons:
+        return SCRIPTED_EVENT_NOTE
+    if any(r == NO_OBJECTIVES_REASON or r.startswith(STALLED_REASON) for r in reasons):
+        return NO_OBJECTIVES_NOTE
+    return ""
+
+
 def body(quest: int, info, rows, objectives, site: str) -> str:
     """The issue body. `site` is the site's public base; without one the
     Quests page is named by its route, since no host may be guessed."""
@@ -348,25 +376,19 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
     lines.extend(_world_rows(info))
     no_giver_in_reach = False
     already_in_log = False
-    scripted_event = False
     for row in rows:
         name = str(row.get("character_name") or "")
         reason = str(row.get("reason") or "no reason recorded")
         no_giver_in_reach |= reason == NO_GIVER_IN_REACH
         already_in_log |= reason.endswith(": " + ALREADY_IN_LOG_REFUSAL)
-        scripted_event |= reason == SCRIPTED_EVENT_REASON
         lines += [
             "- Quester: %s (%s)" % (name, party_of(name)),
             "  - Reason: %s" % reason,
             "  - Last objective counts: %s" % _objectives(counts.get(int(row["guid"]))),
         ]
-    if (
-        scripted_event
-        and info is not None
-        and not getattr(info, "items", ())
-        and not getattr(info, "objectives", ())
-    ):
-        lines += ["", SCRIPTED_EVENT_NOTE]
+    note = _no_objectives_note(info, rows)
+    if note:
+        lines += ["", note]
     if no_giver_in_reach:
         note = (
             "At that take, the quest command found no live creature giver within "
