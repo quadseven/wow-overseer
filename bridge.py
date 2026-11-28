@@ -20522,17 +20522,36 @@ class Bridge(discord.Client):
     async def _quester_ledger(self, m, plan, held: dict, ledger: dict, mono: float) -> None:
         """Hold what this pass found broken in `held` (the bridge memo's quest
         id -> reason for this quester), and write each held quest the ledger
-        does not say is broken into the ledger."""
+        does not say is broken. A durable finding replaces a transient ledger
+        reason, which describes one quester's attempt rather than the world."""
         for b in plan.broken:
-            if b.quest not in held:
+            prior = held.get(b.quest)
+            durable = (
+                questers.ledger_state("broken", b.ledger_reason)
+                == questers.LEDGER_BROKEN
+            )
+            replace_transient = (
+                prior is not None
+                and questers.ledger_state("broken", prior) == questers.LEDGER_STALLED
+                and durable
+            )
+            if prior is None or replace_transient:
                 log.info("questers: %s found %s (quest %d) broken: %s",
                          m.name, b.title or b.quest, b.quest, b.reason)
-            held.setdefault(b.quest, b.ledger_reason)
+                held[b.quest] = b.ledger_reason
         for qid, reason in sorted(held.items()):
-            if (questers.ledger_says_broken(ledger.get((m.name, qid)))
-                    or mono < self._quester_unledgered):
-                continue
+            old = ledger.get((m.name, qid))
             found = next((b for b in plan.broken if b.quest == qid), None)
+            refresh_transient = (
+                old == questers.LEDGER_STALLED
+                and found is not None
+                and questers.ledger_state("broken", found.ledger_reason)
+                == questers.LEDGER_BROKEN
+            )
+            if (questers.ledger_says_broken(old) and not refresh_transient) or (
+                mono < self._quester_unledgered
+            ):
+                continue
             if not await asyncio.to_thread(_record_quest_broken, found or questers.Broken(
                     m.name, qid, "", reason, held=qid in m.quest_log)):
                 # No ledger yet (#923): asked again in an hour, not every pass.
