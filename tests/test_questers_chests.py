@@ -20,6 +20,8 @@ WILD_HEARTS, WORG_HEART = 429, 3164
 WORG_ENTRIES = (1765, 1766, 1923, 12431)
 # Fixture-only entries: the ticket does not include the giver or spawn rows.
 WILD_GIVER, WILD_CHEST = 9002, 9003
+SEEK_REDEMPTION, FEL_CONE, FEL_CONE_OBJECT = 489, 3418, 90003
+TELDRASSIL = 141
 
 
 def chest_spawn(guid, entry, x, y, map_id=0):
@@ -79,6 +81,67 @@ def wild_hearts_world(spawn_droppers=True, spawn_chest=False):
     )
 
 
+def redemption_world():
+    # The ticket supplies quest 489's item 3418 and gameobject loot Entry
+    # 1673. The row shapes below mirror questers.QUESTS_SQL,
+    # classquest.CHEST_SQL and OBJECT_SPAWNS_SQL through bridge._quester_catalogue;
+    # the object entry and spawn are synthetic fixture inputs.
+    redemption = quest(
+        SEEK_REDEMPTION,
+        188,
+        7,
+        min_level=4,
+        prev=488,
+        title="Seek Redemption!",
+    )
+    redemption.update(item1=FEL_CONE, item_count1=3)
+    giver_rows = [
+        giver(
+            SEEK_REDEMPTION,
+            "start",
+            90010,
+            90011,
+            300.0,
+            0.0,
+            map_id=1,
+            name="Quest giver",
+        ),
+        giver(
+            SEEK_REDEMPTION,
+            "end",
+            90012,
+            90011,
+            300.0,
+            0.0,
+            map_id=1,
+            name="Quest giver",
+        ),
+    ]
+    return questers.catalogue(
+        [redemption],
+        giver_rows,
+        [],
+        [],
+        [{"quest": SEEK_REDEMPTION, "kind": "creature", "entry": 90011}],
+        [{"quest": SEEK_REDEMPTION, "kind": "creature", "entry": 90011}],
+        chest_rows=[{"item": FEL_CONE, "entry": FEL_CONE_OBJECT}],
+        object_rows=[chest_spawn(90013, FEL_CONE_OBJECT, 330.0, 0.0, map_id=1)],
+    )
+
+
+def redemption_member(**over):
+    base = dict(
+        level=7,
+        zone_id=TELDRASSIL,
+        map_id=1,
+        x=300.0,
+        y=0.0,
+        quests_done=frozenset({488}),
+    )
+    base.update(over)
+    return mirra(**base)
+
+
 def holder(**kw):
     base = dict(
         level=12,
@@ -95,6 +158,51 @@ def holder(**kw):
 
 
 class TheCatalogueReadsTheChest(unittest.TestCase):
+    def test_seek_redemption_can_be_taken_worked_and_turned_in(self):
+        cat = redemption_world()
+        member = redemption_member()
+        self.assertIn(
+            SEEK_REDEMPTION,
+            questers.in_reach(cat, member, TELDRASSIL),
+        )
+
+        take = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual(
+            (take.move.kind, take.move.quest), (classquest.TAKE, SEEK_REDEMPTION)
+        )
+
+        holder = redemption_member(
+            quest_log={SEEK_REDEMPTION: questers.STATUS_INCOMPLETE},
+            quest_item_objectives={SEEK_REDEMPTION: {FEL_CONE: 0}},
+        )
+        work = questers.plan(cat, holder, questers.Clock(), 0.0)
+        self.assertEqual(
+            (work.move.kind, work.move.quest), (classquest.USE, SEEK_REDEMPTION)
+        )
+        self.assertEqual(work.move.spot.entry, FEL_CONE_OBJECT)
+        step = questers.step_for(holder, work.move, 0, cat.quest(SEEK_REDEMPTION))
+        self.assertEqual(step.rows[0].command, "use-gameobject %d" % FEL_CONE_OBJECT)
+
+        completed = redemption_member(
+            quest_log={SEEK_REDEMPTION: questers.STATUS_COMPLETE},
+            quest_progress={SEEK_REDEMPTION: 3},
+            quest_item_objectives={SEEK_REDEMPTION: {FEL_CONE: 3}},
+        )
+        hand_in = questers.plan(cat, completed, questers.Clock(), 0.0)
+        self.assertEqual(
+            (hand_in.move.kind, hand_in.move.quest),
+            (classquest.TURN_IN, SEEK_REDEMPTION),
+        )
+        reason = questers._broken_reason(
+            cat.quest(SEEK_REDEMPTION),
+            cat.facts[SEEK_REDEMPTION],
+            questers.STATUS_INCOMPLETE,
+            questers.STALL_SECONDS,
+            frozenset(),
+            {},
+        )
+        self.assertEqual(reason, questers.STALLED)
+
     def test_a_required_item_no_creature_drops_is_a_chest_use(self):
         quest64 = heirloom_world().quest(64)
         (use,) = quest64.uses
