@@ -431,7 +431,6 @@ class Quest222WorgenInTheWoods(unittest.TestCase):
 
 
 QUEST = 364
-TIRISFAL = 85
 MAP = 0
 ZOMBIE = 1501
 GHOUL = 1502
@@ -440,13 +439,14 @@ WARRIOR = 1
 
 
 def mindless_ones_catalogue():
-    # Quest fields and objectives mirror questers.QUESTS_SQL; spawn rows mirror
-    # classquest.SPAWNS_SQL. The ticket supplies the objective IDs, counts,
-    # quest level, minimum level and map spawn counts. Coordinates, spawn levels
-    # and the ender are planner scaffolding because that snapshot omits them.
+    # The ticket supplies the quest level, minimum level, objective IDs, counts,
+    # and that each objective has spawns on the quest's map. These rows use the
+    # questers.QUESTS_SQL and classquest.SPAWNS_SQL shapes. The map, position,
+    # unknown spawn level, and negative spawn IDs are planner-only scaffolding;
+    # the ticket does not include spawn rows, quest starters, or quest enders.
     row = quest(
         QUEST,
-        TIRISFAL,
+        0,
         2,
         min_level=1,
         kill=ZOMBIE,
@@ -456,45 +456,20 @@ def mindless_ones_catalogue():
     row["npc2"] = GHOUL
     row["npc_count2"] = 5
     spawns = [
-        spawn(
-            150100 + i,
-            ZOMBIE,
-            float(i * 10),
-            0,
-            level=2,
-            map_id=MAP,
-            name="Mindless Zombie",
-        )
-        for i in range(28)
-    ] + [
-        spawn(
-            150200 + i,
-            GHOUL,
-            float(i * 10),
-            20,
-            level=2,
-            map_id=MAP,
-            name="Wretched Ghoul",
-        )
-        for i in range(35)
+        spawn(-1, ZOMBIE, 0, 0, level=0, map_id=MAP, name="Mindless Zombie"),
+        spawn(-101, GHOUL, 0, 0, level=0, map_id=MAP, name="Wretched Ghoul"),
     ]
-    return questers.catalogue(
-        [row],
-        [
-            giver(QUEST, "start", 36401, 1500, 0, 0, map_id=MAP),
-            giver(QUEST, "end", 36402, 1500, 0, 0, map_id=MAP),
-        ],
-        spawns,
-        [],
-        [{"quest": QUEST, "kind": "creature", "entry": 1500}],
-        [{"quest": QUEST, "kind": "creature", "entry": 1500}],
-    )
+    # Build only the planner's Book. The quest's zone and its starter/ender
+    # relations are absent from the ticket, so this scenario does not invent
+    # them or claim the result proves a complete live-world route.
+    book = classquest.build([row], [], spawns, [], every=True)
+    return questers.Catalogue(book, {QUEST: questers.Facts(zone=0, level=2)})
 
 
-def mindless_ones_holder(counts, status=questers.STATUS_INCOMPLETE):
-    # This row shape mirrors questers.LOG_SQL and members_from_rows; the world
-    # writes the underlying character_queststatus counters.
-    row = {"guid": 7, "quest": QUEST, "status": status}
+def mindless_ones_holder(counts):
+    # This row shape mirrors questers.LOG_SQL and members_from_rows. GUID 0 is
+    # a test sentinel; the database writes the underlying quest counters.
+    row = {"guid": 0, "quest": QUEST, "status": questers.STATUS_INCOMPLETE}
     for i, entry in enumerate((ZOMBIE, GHOUL, 0, 0), start=1):
         row["npc%d" % i] = entry
         row["mobcount%d" % i] = counts.get(entry, 0)
@@ -503,7 +478,7 @@ def mindless_ones_holder(counts, status=questers.STATUS_INCOMPLETE):
         row["itemcount%d" % i] = 0
     row["progress"] = sum(counts.values())
     member = {
-        "guid": 7,
+        "guid": 0,
         "name": "Quester A",
         "level": 2,
         "race": UNDEAD,
@@ -512,20 +487,19 @@ def mindless_ones_holder(counts, status=questers.STATUS_INCOMPLETE):
         "map_id": MAP,
         "pos_x": 500.0,
         "pos_y": 0.0,
-        "zone_id": TIRISFAL,
+        "zone_id": 0,
     }
     return questers.members_from_rows([member], [row], [])[0]
 
 
 class Quest364MindlessOnes(unittest.TestCase):
-    def test_both_objectives_are_hunted_and_the_quest_can_be_handed_in(self):
+    def test_both_reported_objectives_are_hunted(self):
         cat = mindless_ones_catalogue()
         counts = {ZOMBIE: 0, GHOUL: 0}
-        clock = questers.Clock()
 
         for _ in range(10):
             member = mindless_ones_holder(counts)
-            move = questers.plan(cat, member, clock, 0.0).move
+            move = questers._hunt(cat, member, frozenset(), frozenset())
             self.assertEqual((move.kind, move.quest), (classquest.HUNT, QUEST))
             step = questers.step_for(member, move, 0, cat.quest(QUEST))
             self.assertEqual(
@@ -536,12 +510,6 @@ class Quest364MindlessOnes(unittest.TestCase):
             counts[move.spot.entry] += 1
 
         self.assertEqual(counts, {ZOMBIE: 5, GHOUL: 5})
-        member = mindless_ones_holder(counts, questers.STATUS_COMPLETE)
-        plan = questers.plan(cat, member, clock, 0.0)
-        self.assertEqual((plan.move.kind, plan.move.quest), (classquest.TURN_IN, QUEST))
-        self.assertEqual(plan.broken, ())
-        step = questers.step_for(member, plan.move, 0, cat.quest(QUEST))
-        self.assertEqual(step.rows[0].command, "turnin quest:364")
 
     def test_the_stored_stall_is_retried_while_its_objectives_are_actionable(self):
         cat = mindless_ones_catalogue()
@@ -564,6 +532,6 @@ class Quest364MindlessOnes(unittest.TestCase):
 
         broken = questers.known_broken(member.name, held, ledger)
         self.assertEqual(broken, frozenset())
-        move = questers.plan(cat, member, questers.Clock(), 0.0, broken).move
+        move = questers._hunt(cat, member, broken, frozenset())
         self.assertEqual((move.kind, move.quest), (classquest.HUNT, QUEST))
         self.assertIn(move.spot.entry, (ZOMBIE, GHOUL))
