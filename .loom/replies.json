@@ -1,0 +1,7 @@
+[
+  {
+    "thread": "PRRT_kwDOUg1iIc69Be_d",
+    "reply": "Fixed. The quest 547 (Humbert's Sword) reason in questers.py no longer hard-codes that creatures 2344, 2345, 2346, 14275 'have no spawns in Hillsbrad Foothills'. The condition now also requires 3693 not in quest.droppable (item 3693 has no spawn-capable dropper), so the reason only fires when the spawn table read by the catalogue supports it. The wording now states the item drops from those creatures but none of them has a spawn. Tests in tests/test_questers.py assert the reason mentions item 3693 and creature 2344 without claiming 'no spawns', and that item 3693 is droppable only when a dropper spawns. Changed in questers.py:2025-2035.",
+    "resolve": true
+  }
+]

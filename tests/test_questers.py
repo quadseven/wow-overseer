@@ -2747,6 +2747,40 @@ class Quest547HumbertsSword(unittest.TestCase):
         reason = broken[0].reason
         self.assertIn("3693", reason, "reason should mention item 3693")
         self.assertIn("2344", reason, "reason should mention creature 2344")
+        self.assertNotIn(
+            "no spawns", reason, "reason must not claim spawn state it does not read"
+        )
+
+    def test_quest_547_droppable_reflects_dropper_spawn(self):
+        q = quest(
+            HUMBERTS_SWORD,
+            HILLSBRAD_FOOTHILLS,
+            HILLSBRAD_LEVEL,
+            min_level=HILLSBRAD_MIN_LEVEL,
+            title="Humbert's Sword",
+        )
+        q.update(item1=HUMBERTS_SWORD_ITEM, item_count1=1)
+        loot = [
+            {"item": HUMBERTS_SWORD_ITEM, "entry": e} for e in HUMBERTS_SWORD_DROPPERS
+        ]
+        # With no spawns the item is not droppable: the code must not claim a
+        # spawn state it has not read.
+        cat_no_spawn = humberts_sword_world()
+        self.assertNotIn(
+            HUMBERTS_SWORD_ITEM, cat_no_spawn.quest(HUMBERTS_SWORD).droppable
+        )
+        # With one dropper spawned the item is droppable: the "no spawn" reason
+        # must not fire for that world.
+        cat_spawn = world(
+            extra_quests=[q],
+            extra_givers=[
+                giver(HUMBERTS_SWORD, "start", 20000, 2000, 0, 0),
+                giver(HUMBERTS_SWORD, "end", 20001, 2001, 400, 0),
+            ],
+            extra_spawns=[spawn(9001, 2344, 10, 0, level=30, map_id=0)],
+            extra_loot=loot,
+        )
+        self.assertIn(HUMBERTS_SWORD_ITEM, cat_spawn.quest(HUMBERTS_SWORD).droppable)
 
 
 if __name__ == "__main__":

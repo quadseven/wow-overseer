@@ -2027,10 +2027,11 @@ def _broken_reason(
         and status == STATUS_INCOMPLETE
         and (3693, 1) in quest.items
         and played >= STALL_SECONDS
+        and 3693 not in quest.droppable
     ):
         return (
-            "Humbert's Sword (quest 547) requires Humbert's Sword (item 3693) from "
-            "creatures 2344, 2345, 2346, 14275 which have no spawns in Hillsbrad Foothills"
+            "Humbert's Sword (quest 547) requires Humbert's Sword (item 3693), "
+            "which creatures 2344, 2345, 2346, 14275 drop, but none of them has a spawn"
         )
     missing = _ender_missing(quest, facts, gone, object_gone)
     # An incomplete quest one of whose enders is an object with no static
