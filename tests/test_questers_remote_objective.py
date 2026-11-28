@@ -2,10 +2,20 @@
 
 import unittest
 
+import classhunt
 import classquest
 import guildjobs
 import questers
-from test_questers import DUROTAR, REDRIDGE, giver, mirra, quest, spawn
+from test_questers import (
+    DUROTAR,
+    REDRIDGE,
+    ended,
+    giver,
+    mirra,
+    quest,
+    spawn,
+    started,
+)
 
 DUSKWOOD = 10
 DUN_MOROGH = 1
@@ -428,3 +438,82 @@ class Quest222WorgenInTheWoods(unittest.TestCase):
 
         self.assertEqual(plan.broken, ())
         self.assertEqual((plan.move.kind, plan.move.quest), (classquest.TAKE, 222))
+
+
+class DownTheCoast(unittest.TestCase):
+    def test_quester_hunts_both_objectives_and_can_hand_in_quest_536(self):
+        # The quest and counter fields mirror questers.QUESTS_SQL and LOG_SQL;
+        # the spawn fields mirror classquest.SPAWNS_SQL. The brief supplies
+        # map counts but no coordinates, so these same-map positions are a
+        # fixture for planner behavior, not a claim about live placement.
+        coast = quest(
+            536,
+            267,
+            30,
+            min_level=25,
+            kill=2377,
+            count=10,
+            title="Down the Coast",
+        )
+        coast.update(npc2=2376, npc_count2=10)
+        objective_spawns = [
+            spawn(
+                13000 + offset,
+                entry,
+                x_base + offset * 2,
+                0,
+                level=30,
+                name=name,
+            )
+            for entry, x_base, name in (
+                (2377, 100, "Torn Fin Tidehunter"),
+                (2376, 1000, "Torn Fin Oracle"),
+            )
+            for offset in range(20)
+        ]
+        cat = questers.catalogue(
+            [coast],
+            [
+                giver(536, "start", 9536, 9536, 0, 0),
+                giver(536, "end", 9536, 9536, 0, 0),
+            ],
+            objective_spawns,
+            [],
+            [started(536, 9536)],
+            [ended(536, 9536)],
+        )
+        member = mirra(
+            level=30,
+            map_id=0,
+            zone_id=267,
+            quest_log={536: questers.STATUS_INCOMPLETE},
+            quest_progress={536: 0},
+            quest_objectives={536: {2377: 0, 2376: 0}},
+        )
+        clock = questers.Clock()
+
+        for entry in (2377, 2376):
+            move = questers.plan(cat, member, clock, 0.0).move
+            self.assertEqual(
+                (move.kind, move.quest, move.spot.entry),
+                (classquest.HUNT, 536, entry),
+            )
+            step = questers.step_for(member, move, 0, cat.quest(536))
+            (row,) = [r for r in step.rows if r.kind == "job"]
+            self.assertEqual(
+                row.command,
+                "hunt-spawn creature:%d count:10 max:%d"
+                % (entry, classhunt.MAX_SECONDS),
+            )
+            objectives = dict(member.quest_objectives[536])
+            objectives[entry] = 10
+            member = questers.Member(
+                **{
+                    **member.__dict__,
+                    "quest_objectives": {536: objectives},
+                    "quest_progress": {536: sum(objectives.values())},
+                }
+            )
+
+        move = questers.plan(cat, member, clock, 0.0).move
+        self.assertEqual((move.kind, move.quest), (classquest.TURN_IN, 536))
