@@ -2628,6 +2628,18 @@ class ASummonedObjectEnder(unittest.TestCase):
             (classquest.HUNT, 133, 604),
         )
 
+    def test_ghoulish_effigy_ledger_stall_does_not_hold_it_broken(self):
+        # The ticket's ledger reason for quest 133 is the stall clock's
+        # STALLED, written by BROKEN_SQL as state 'broken' (questers.py
+        # `_broken_reason`): one quester's two hours, not a world fact. It
+        # reads LEDGER_STALLED, so a quester without the memo's stall takes
+        # and hunts quest 133 again (the test above).
+        state = questers.ledger_state("broken", questers.STALLED)
+        ledger = {("Durga", 133): state}
+
+        self.assertEqual(questers.LEDGER_STALLED, state)
+        self.assertEqual(frozenset(), questers.known_broken("Durga", {}, ledger))
+
     def test_digging_through_the_ooze_hunts_the_bag_drop_and_turns_in(self):
         ooze = quest(470, 11, 24, min_level=19, title="Digging Through the Ooze")
         ooze.update(
