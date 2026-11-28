@@ -292,6 +292,43 @@ PINS = {
     ),
     (
         "aimed-quest-complete-handin",
+        "leader-selected-quest-from-own-log",
+    ): Pin(
+        writers=(
+            module(
+                "INFO",
+                "overseer: '{}' now working quest {} ({}) - picked from its own "
+                "log, nothing chosen and nothing in it serves the youngest",
+                "Grug",
+                233,
+                "Coldridge Valley Mail Delivery",
+            ),
+            module(
+                "INFO",
+                "overseer: '{}' now working quest {} ({}) - picked from its own "
+                "log because '{}' (level {}, the youngest) {} it and {} other "
+                "member(s) have already finished it",
+                "Grug",
+                233,
+                "Coldridge Valley Mail Delivery",
+                "Ugga",
+                42,
+                "also holds",
+                1,
+            ),
+        ),
+        ignores=(
+            module(
+                "INFO",
+                "overseer: '{}' now working quest {} ({}) - chosen by the council",
+                "Grug",
+                233,
+                "Coldridge Valley Mail Delivery",
+            ),
+        ),
+    ),
+    (
+        "aimed-quest-complete-handin",
         "the-complete-quest-was-handed-in-to-its-taker",
     ): Pin(
         writers=(
@@ -330,6 +367,14 @@ PINS = {
                 "Ugga",
                 783,
                 "A Threat Within",
+            ),
+            module(
+                "INFO",
+                "overseer: '{}' was already on quest {} ({}) by its own choice - "
+                "re-issuing for the new errand so the objective pointer resets",
+                "Grug",
+                233,
+                "Coldridge Valley Mail Delivery",
             ),
         ),
     ),
