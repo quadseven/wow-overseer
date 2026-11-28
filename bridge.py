@@ -6572,13 +6572,13 @@ def _job_story(names: list) -> str:
 #
 # dungeonstall's third shape. The reads are the watch's own evidence: the
 # leader's steps in overseer_now_step (the fold the Watch tab prints) and the
-# member states the module publishes in its intent book. The hold and death
-# clocks are kept here, keyed by the queue entry being judged: a hold timed
-# under one entry must not hang the next entry for the same door.
+# member states the module publishes in its intent book. Hold and death clocks
+# belong to the matching open run, or to the queue entry before a run opens.
 
 # The member-state words the wedge judges are named inside _door_wedge.
 
-# (leader, member) -> (queue head id, monotonic first seen). The same clock is
+# AI-REVIEW 2026-11-27 [Codex GPT-6/standards] 2191-clock-memo (PR #3316):
+# (leader, member) -> (clock id, monotonic first seen). The same clock is
 # stored in overseer_bridge_memo as a wall timestamp so a pod restart cannot
 # start the stand-down bound over.
 _DOOR_HOLD_SINCE: dict = {}
@@ -6593,10 +6593,11 @@ def _door_hold_subject(key: tuple[str, str]) -> str:
     return json.dumps(key, separators=(",", ":"))
 
 
-def _door_hold_memo_put(key: tuple[str, str], head_id: int,
+def _door_hold_memo_put(key: tuple[str, str], clock_id: int,
                         since: float, now: float) -> None:
     wall_now = time.time()
-    value = {"head_id": int(head_id)}
+    # Keep the stored field readable by a bridge rolled back to queue clocks.
+    value = {"head_id": int(clock_id)}
     args = (
         DOOR_HOLD_MEMO_KIND,
         _door_hold_subject(key),
@@ -6634,12 +6635,14 @@ def _restore_door_hold_memos(now: float) -> None:
             if not isinstance(pair, list) or len(pair) != 2:
                 raise ValueError("memo subject is not a leader/member pair")
             key = (str(pair[0]), str(pair[1]))
-            head_id = int(value["head_id"])
+            # A legacy memo carries queue evidence only. An open run gets its
+            # own observation window when first seen on this version.
+            clock_id = int(value["head_id"])
             since = min(now, float(since_wall) - offset)
             if now - since > DOOR_HOLD_MEMO_SECONDS:
                 _door_hold_memo_delete(key)
                 continue
-            _DOOR_HOLD_SINCE.setdefault(key, (head_id, since))
+            _DOOR_HOLD_SINCE.setdefault(key, (clock_id, since))
         except (KeyError, TypeError, ValueError):
             log.exception("bridge memo: invalid door-wedge hold memo for %s", subject)
     _DOOR_HOLD_MEMO_READ_AT = now
@@ -6720,12 +6723,13 @@ def _door_wedge_member_recovered(leader: str, member: str, positions: dict) -> b
     return distance_sq <= DOOR_HOLD_RECOVER_YARDS ** 2
 
 
-def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
+def _door_wedge_ages(leader: str, members, clock_id: int) -> dict:
     """name -> (state, seconds in the active hold) for wedged members.
 
     The clock belongs to the leader/member pair, not the published state. A
     transient state flip leaves the family just as split, so it does not stop
-    the clock. A different queue entry starts a new one.
+    the clock. An open run keeps it across queue entries. Before a run opens,
+    the queue entry owns the clock.
 
     The states are the module's member-state words (MemberStateWord):
     "dead", and the holds with no errand of the member's own choosing at
@@ -6774,17 +6778,17 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
             continue
         key = (leader, member.name)
         stamp = _DOOR_HOLD_SINCE.get(key)
-        if stamp is None or stamp[0] != head_id:
+        if stamp is None or stamp[0] != clock_id:
             start = globals().get("_errand_clock_start")
             since = (
-                start((leader, member.name, member.state), head_id, now)
+                start((leader, member.name, member.state), clock_id, now)
                 if start else now
             )
-            stamp = (head_id, since)
+            stamp = (clock_id, since)
             _DOOR_HOLD_SINCE[key] = stamp
             write_memo = globals().get("_door_hold_memo_put")
             if write_memo is not None:
-                write_memo(key, head_id, since, now)
+                write_memo(key, clock_id, since, now)
         ages[member.name] = (member.state, now - stamp[1])
     return ages
 
@@ -6794,7 +6798,17 @@ def _door_wedge_ages(leader: str, members, head_id: int) -> dict:
 # by a member questing on another map, and the run row's own heartbeat is
 # presence, not progress.
 _DOOR_RUN_SQL = (
-    "SELECT id FROM overseer_dungeon_run WHERE leader_name = %s "
+    # AI-REVIEW 2026-11-27 [Codex GPT-6/spec] 2191-active-portal (PR #3316):
+    # The module fills the run row's portal only at completion. While the run
+    # is open, its timeline names the door (see dungeonstall.RUNS_SQL_TIMELINE).
+    "SELECT r.id, (SELECT e.portal FROM overseer_dungeon_run_event e "
+    "WHERE e.run_id = r.id AND e.portal <> _utf8mb4'' COLLATE utf8mb4_unicode_ci "
+    "ORDER BY e.id LIMIT 1) AS portal_keyword "
+    "FROM overseer_dungeon_run r WHERE r.leader_name = %s AND r.map_id = %s "
+    "AND r.ended_at IS NULL ORDER BY r.id DESC LIMIT 1"
+)
+_DOOR_RUN_LEGACY_SQL = (
+    "SELECT id FROM overseer_dungeon_run WHERE leader_name = %s AND map_id = %s "
     "AND ended_at IS NULL ORDER BY id DESC LIMIT 1"
 )
 # Two reads, not a join: the two tables sit in different collation groups
@@ -6805,17 +6819,57 @@ _DOOR_BOSS_SQL = (
 )
 
 
-def _door_run_boss_age(leader: str):
-    """Seconds since the leader's open run last credited a boss, or None
-    when it has no open run or no credit yet. A table this realm cannot
-    answer (1054 or 1146) reads as None, so the clocks run as before."""
+def _door_open_run_id(leader: str, keyword: str) -> int | None:
+    """Find the open run of the door being judged, including alternate entrances."""
+    keyword = keyword.strip().lower()
+    map_id = dungeonpath.PORTAL_MAPS.get(keyword, raidrun.MAPS.get(keyword))
+    if map_id is None:
+        return None
+    args = (leader, map_id)
+    with _connect() as conn, conn.cursor() as cur:
+        # AI-REVIEW 2026-11-27 [nemotron-3.5-super-vl] 4723163393/4723163401/4723163415
+        # (Elder, PR #3316): Only query schema errors use the legacy path.
+        # PyMySQL raises different classes for a missing column and table.
+        # A failed read leaves the clock intact and is logged by the queue pass.
+        try:
+            cur.execute(_DOOR_RUN_SQL, args)
+        except (pymysql.err.OperationalError, pymysql.err.ProgrammingError) as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            try:
+                cur.execute(_DOOR_RUN_LEGACY_SQL, args)
+            except (pymysql.err.OperationalError, pymysql.err.ProgrammingError) as exc:
+                if not (exc.args and exc.args[0] in (1054, 1146)):
+                    raise
+                return None
+        runs = cur.fetchall()
+    if not runs:
+        return None
+    # AI-REVIEW 2026-11-27 [Codex GPT-6/spec] 2191-run-wing (PR #3316):
+    # Independent wings on one map must never inherit each other's clock.
+    run = runs[0]
+    wing = campaignplan.ALTERNATES.get(keyword, keyword)
+    portal = str(run.get("portal_keyword") or "").strip().lower()
+    if portal:
+        if campaignplan.ALTERNATES.get(portal, portal) != wing:
+            return None
+    else:
+        # A map identifies the door only when every entrance is to one wing.
+        wings = {
+            campaignplan.ALTERNATES.get(name, name)
+            for name, value in (*dungeonpath.PORTAL_MAPS.items(), *raidrun.MAPS.items())
+            if value == map_id
+        }
+        if len(wings) != 1:
+            return None
+    return int(run["id"])
+
+
+def _door_run_boss_age(run_id: int) -> int | None:
+    """Seconds since this run last credited a boss, if the read has evidence."""
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(_DOOR_RUN_SQL, (leader,))
-            runs = cur.fetchall()
-            if not runs:
-                return None
-            cur.execute(_DOOR_BOSS_SQL, (int(runs[0]["id"]),))
+            cur.execute(_DOOR_BOSS_SQL, (run_id,))
             rows = cur.fetchall()
         except pymysql.err.MySQLError as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
@@ -6884,13 +6938,13 @@ def _economy_aimable(claimant: str, names, inside=()) -> tuple:
         n for n in names if not _economy_aim_hold(claimant, n, n in inside))
 
 
-def _errand_clock_start(key: tuple, head_id: int, now: float) -> float:
+def _errand_clock_start(key: tuple, clock_id: int, now: float) -> float:
     """When the fresh hold clock `key` (leader, name, state) counts from: now,
-    or for an errand taken up again after a recall under the same queue entry,
+    or for an errand taken up again after a recall under the same clock,
     when the recalled errand began (#2323)."""
     if key[2] != dungeonstall.ERRAND_STATE:
         return now
-    return errandgate.resume_since(now, _ERRAND_SERVED.get(key[:2]), head_id)
+    return errandgate.resume_since(now, _ERRAND_SERVED.get(key[:2]), clock_id)
 
 
 def _members_inside_instance(names: list) -> frozenset:
@@ -6923,7 +6977,7 @@ def _release_instance_economy_aims(names: list) -> list:
     return released
 
 
-def _recall_door_errands(leader: str, ages: dict, head_id: int = 0) -> list:
+def _recall_door_errands(leader: str, ages: dict, clock_id: int) -> list:
     """Hand back the errand of every member whose errand of its own has kept
     the family waiting at the door past dungeonstall.RECALL_SECONDS (#2280).
 
@@ -6935,8 +6989,8 @@ def _recall_door_errands(leader: str, ages: dict, head_id: int = 0) -> list:
     for the stand-down. Returns the names released.
 
     THE STAND-DOWN CLOCK IS KEPT ACROSS THE RECALL (#2323). The errand time
-    served is recorded under queue entry `head_id`, and a member whose clock
-    has reached the stand-down bound is not recalled again: recall after
+    served uses the same `clock_id` as the hold. A member whose clock has
+    reached the stand-down bound is not recalled again: recall after
     recall would put the stand-down off for good."""
     released = []
     for name in dungeonstall.errand_recalls(ages):
@@ -6950,7 +7004,7 @@ def _recall_door_errands(leader: str, ages: dict, head_id: int = 0) -> list:
         now = time.monotonic()
         _ERRAND_RECALLED[name] = now
         _ERRAND_SERVED[(leader, name)] = errandgate.Served(
-            head_id, ages[name][1], now)
+            clock_id, ages[name][1], now)
         released.append(name)
         log.info(
             "door recall: %s had been on an errand of its own (%s) for %d "
@@ -6971,11 +7025,17 @@ def _door_wedge(head: dict, names: list, leader: str):
     A corpse outranks a walk, and a walk outranks a hold: the recorded
     reason names the worst thing wrong at the door.
     """
-    if head.get("status") != campaignqueue.ACTIVE:
-        # A different queue phase is not a door hold. The active job may come
-        # back later, so discard clocks only when this queue entry is no longer
-        # active.
-        for key in [k for k in _DOOR_HOLD_SINCE if k[0] == leader]:
+    status = head.get("status")
+    if status != campaignqueue.ACTIVE:
+        # AI-REVIEW 2026-11-27 [Codex GPT-6/spec] 2191-queued-clock (PR #3316):
+        # A queued replacement waits to be judged until it starts. Its active
+        # pass will keep the clock only if the same run still owns the door.
+        keep_run_clocks = status == campaignqueue.QUEUED
+        obsolete = [
+            key for key, (clock_id, _) in _DOOR_HOLD_SINCE.items()
+            if key[0] == leader and (not keep_run_clocks or clock_id >= 0)
+        ]
+        for key in obsolete:
             _DOOR_HOLD_SINCE.pop(key, None)
             delete_memo = globals().get("_door_hold_memo_delete")
             if delete_memo is not None:
@@ -6988,13 +7048,16 @@ def _door_wedge(head: dict, names: list, leader: str):
         return None
     keyword = str(head.get("keyword") or "")
     head_id = int(head.get("id") or 0)
+    run_id = _door_open_run_id(leader, keyword)
+    # Both tables assign positive IDs independently. Sign separates their clocks.
+    clock_id = -run_id if run_id is not None else head_id
     restarts, members = _door_wedge_evidence(leader, head_id)
-    ages = _door_wedge_ages(leader, members, head_id)
+    ages = _door_wedge_ages(leader, members, clock_id)
     # A run that credits a boss is not wedged (#2181): a party one member
     # short clears the dungeon while that member's hold ages. The hold and
     # death clocks start over at the run's newest boss credit, so a run that
     # then goes a full bound with no credit is still stood down.
-    boss_age = _door_run_boss_age(leader) if ages else None
+    boss_age = _door_run_boss_age(run_id) if ages and run_id is not None else None
     if boss_age is not None:
         ages = {
             name: (state, min(age, boss_age)) for name, (state, age) in ages.items()
@@ -7006,7 +7069,7 @@ def _door_wedge(head: dict, names: list, leader: str):
     if recall is not None and ages:
         # The member's hold clock is NOT restarted (#2323): it ends when the
         # errand state does, and an errand taken up again counts on.
-        for name in recall(leader, ages, head_id):
+        for name in recall(leader, ages, clock_id):
             ages.pop(name, None)
     # A RAID DOOR IS NEVER LEFT BY THE BREAKER, but a member's errand of its
     # own is still handed back there: the recall above is the only bound on it,
@@ -23447,7 +23510,8 @@ class Bridge(discord.Client):
         vendor, bank or guild-bank passes.
         """
         await self.wait_until_ready()
-        cycle = float(os.environ.get("GUILD_JOBS_CYCLE_SECONDS", "900"))
+        cycle = float(os.environ.get("GUILD_JOBS_CYCLE_SECONDS",
+                                     str(nowstatus.GUILD_JOBS_DEFAULT_CYCLE_SECONDS)))
         await asyncio.sleep(min(cycle, 420.0))
         while not self.is_closed():
             try:

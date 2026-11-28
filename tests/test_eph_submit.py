@@ -1,5 +1,6 @@
 """eph submit: suspended Jobs only, honest refusals, nothing created on a refusal."""
 
+import base64
 import io
 import json
 import pathlib
@@ -44,6 +45,16 @@ class Base(unittest.TestCase):
             }
         self.gh = ghx.Gh(self.fake_gh)
         self.decree = pathlib.Path(self.tmp.name) / "d.yaml"
+        self.dist(OLD, "Overseer.RequireClient", "Overseer.Raid.RequireHeadClient")
+
+    def dist(self, pin, *keys):
+        """Serve the module dist at `pin` with `keys` as documented defaults."""
+        text = "".join(f"#{key} = 1\n" for key in keys)
+        path = f"repos/quadseven/mod-overseer/contents/conf/mod_overseer.conf.dist?ref={pin}"
+        self.fake_gh.answers[("GET", path)] = {
+            "encoding": "base64",
+            "content": base64.b64encode(text.encode()).decode(),
+        }
 
     def clock(self):
         self.t = getattr(self, "t", 1000.0) + 1
@@ -160,6 +171,20 @@ class ControlAutoTest(Base):
             c["data"]
             for c in self.cluster.of("configmaps", "wow-ephemeral")
             if c["metadata"].get("labels", {}).get("eph/run") == run
+        )
+
+    def test_auto_without_an_inventory_reads_the_entry_pin_dist(self):
+        self.dist(OLD, "Overseer.RequireClient")
+        record = self.auto()
+        keys = confmerge.parse(
+            self.inputs(record, "control")["overseer.overrides.conf"]
+        )
+        self.assertNotIn("Overseer.Raid.RequireHeadClient", keys)
+        self.assertIn(
+            "Overseer.Raid.RequireHeadClient",
+            confmerge.parse(
+                self.inputs(record, "treatment")["overseer.overrides.conf"]
+            ),
         )
 
     def test_selected_control_uses_its_inventory_and_treatment_keeps_its_bytes(self):
@@ -485,6 +510,84 @@ class SubmitTest(Base):
         keys = confmerge.parse(self._conf("-c1", "playerbots"))
         self.assertNotIn("AiPlayerbot.Enabled", keys)
         self.assertIn("AiPlayerbot.MaxRandomBots", keys)
+
+    def test_a_control_dist_that_predates_a_baseline_key_loses_it_on_the_control_arm_only(
+        self,
+    ):
+        self.dist(OLD, "Overseer.RequireClient", "Overseer.HeadlessRoster")
+        rec = self.submit(**CONTROL)
+        for suffix in ("-c1", "-c2", "-c3"):
+            keys = confmerge.parse(self._conf(suffix))
+            self.assertNotIn("Overseer.Raid.RequireHeadClient", keys)
+            self.assertIn("Overseer.RequireClient", keys)
+        for suffix in ("-t1", "-t2", "-t3"):
+            self.assertIn(
+                "Overseer.Raid.RequireHeadClient", confmerge.parse(self._conf(suffix))
+            )
+        delta = [d for d in rec["fidelity_deltas"] if "baseline keys dropped" in d]
+        self.assertEqual(len(delta), 1)
+        self.assertIn("Overseer.Raid.RequireHeadClient", delta[0])
+        self.assertNotIn("Overseer.RequireClient,", delta[0])
+        self.assertIn(OLD, delta[0])
+
+    def test_a_dist_that_has_every_baseline_key_drops_nothing(self):
+        rec = self.submit(**CONTROL)
+        self.assertFalse(
+            any("baseline keys dropped" in d for d in rec["fidelity_deltas"])
+        )
+        self.assertIn(
+            "Overseer.Raid.RequireHeadClient", confmerge.parse(self._conf("-c1"))
+        )
+
+    def test_a_decree_config_key_missing_from_the_control_dist_is_kept(self):
+        # Not a baseline key, so it is never dropped here: seed-conf keeps refusing it.
+        decree = CHECKED.replace(
+            "config: {}", 'config: {Overseer.HeadlessRoster: "Grug,Zug"}'
+        )
+        self.dist(OLD, "Overseer.RequireClient")
+        rec = self.submit(decree, **CONTROL)
+        keys = confmerge.parse(self._conf("-c1"))
+        self.assertIn("Overseer.HeadlessRoster", keys)
+        self.assertNotIn("Overseer.Raid.RequireHeadClient", keys)
+        delta = [d for d in rec["fidelity_deltas"] if "baseline keys dropped" in d]
+        self.assertNotIn("HeadlessRoster", delta[0])
+
+    def test_an_unreadable_dist_refuses_and_names_the_pin(self):
+        del self.fake_gh.answers[
+            (
+                "GET",
+                f"repos/quadseven/mod-overseer/contents/conf/mod_overseer.conf.dist?ref={OLD}",
+            )
+        ]
+        with self.assertRaisesRegex(submit.SubmitError, f"control pin {OLD}"):
+            self.submit(**CONTROL)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_a_dist_answer_without_content_refuses(self):
+        path = f"repos/quadseven/mod-overseer/contents/conf/mod_overseer.conf.dist?ref={OLD}"
+        self.fake_gh.answers[("GET", path)] = {"type": "dir"}
+        with self.assertRaisesRegex(submit.SubmitError, f"control pin {OLD}"):
+            self.submit(**CONTROL)
+        self.assertEqual(self.cluster.of("jobs"), [])
+
+    def test_a_key_already_named_by_drop_keys_is_not_dropped_twice(self):
+        self.dist(OLD, "Overseer.RequireClient")
+        rec = self.submit(
+            control_drop_keys="Overseer.Raid.RequireHeadClient", **CONTROL
+        )
+        self.assertFalse(
+            any("baseline keys dropped" in d for d in rec["fidelity_deltas"])
+        )
+        self.assertNotIn(
+            "Overseer.Raid.RequireHeadClient", confmerge.parse(self._conf("-c1"))
+        )
+
+    def test_the_treatment_arm_alone_reads_no_dist(self):
+        self.dist(OLD, "Overseer.RequireClient")
+        self.submit(arm="treatment")
+        self.assertFalse(
+            any("contents/conf" in " ".join(argv) for argv, _ in self.fake_gh.calls)
+        )
 
     def test_a_malformed_drop_key_is_refused_and_creates_nothing(self):
         for bad in ("Overseer.X;DROP", "", "Overseer.A,,B", "has space"):

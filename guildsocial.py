@@ -79,6 +79,7 @@ import gearupgrades
 import guildrun
 import guildsaid
 import jev
+import raidroles
 import recap
 
 ENV_SWITCH = "GUILD_SOCIAL"
@@ -117,8 +118,9 @@ NEW_ASKS_PER_PASS = 2
 # guilds' open asks averaged 3.0 and 3.3 (every slot always taken); 337 of 883
 # asks came from members at 50 or more and formed 7 runs (2.1 percent), 297 came
 # from raid seats under 50 and formed 75 (25.3 percent). A seat that has levels
-# to gain is asked for first, any other member under the gate next, and the gear
-# need ranks within a tier as before. SEATS_LEVEL_FIRST=off restores the old order.
+# to gain asks before other members under the gate, with approved healer seats
+# first within that group. Gear need ranks within a tier as before.
+# SEATS_LEVEL_FIRST=off restores the old order.
 SEATS_LEVEL_FIRST_ENV = "SEATS_LEVEL_FIRST"
 # The Molten Core order's gate: every seat at 50 or more.
 ORDER_LEVEL_GATE = 50
@@ -1816,17 +1818,26 @@ def _best_askers(board: _Board, guild: str, barred: set, asked: set) -> list:
 
 
 def _asker_tier(member: guildrun.Member, environ=None) -> int:
-    """0 for an approved raid seat under ORDER_LEVEL_GATE, 1 for any other
-    member under it, 2 for the rest; always 0 with SEATS_LEVEL_FIRST off, so
-    the need alone ranks. An approved seat carries its plan tree
-    (guildrun.levelling_seats reads it the same way)."""
+    """Rank under-level healers, other raid seats, then other members.
+
+    Use the approved tree for raid seats and put members at the gate last.
+    With SEATS_LEVEL_FIRST off, every member shares a tier.
+    """
     env = os.environ if environ is None else environ
     raw = str(env.get(SEATS_LEVEL_FIRST_ENV, "") or "").strip().lower()
     if raw in ("off", "0", "false", "no"):
         return 0
     if int(member.level) >= ORDER_LEVEL_GATE:
+        return 3
+    if not member.target_tree:
         return 2
-    return 0 if member.target_tree else 1
+    return (
+        0
+        if raidroles.fits_seat(
+            member.class_id, member.target_tree, raidroles.SEAT_HEALER
+        )
+        else 1
+    )
 
 
 def _turn_order(guilds, asks: list) -> list:

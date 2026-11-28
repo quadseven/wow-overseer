@@ -47,18 +47,46 @@ export function stallText(agenda) {
 }
 
 // A family's campaign from its queue: the entry being worked and the next.
+// A family can be mid campaign with nothing left in its queue, and then the
+// agenda's own reading is the only one that knows: campaign_state says
+// running, off the leader's counter, while the queue entries are empty.
+// That reading is the fallback, so the block never reports a running
+// campaign as nothing queued. With neither source showing a campaign there
+// is none to draw, and the block says so about the queue only.
 export function campaign(agenda) {
   const q = agenda && agenda.queue;
   const entries = (q && q.entries) || [];
-  if (!entries.length) return null;
+  if (!entries.length) return runningCampaign(agenda);
   const i = Math.max(0, entries.findIndex((e) => e.status === "active"));
   const cur = entries[i];
   const next = entries[i + 1];
   return {
     name: cur.place,
-    step: (cur.status !== "active" ? "starting" : q.done === null || q.done === undefined ? null : q.done + " of " + cur.runs + " done"),
+    step: cur.status !== "active" ? "starting" : stepOf(q.done, cur.runs),
     next: next ? next.place + ", " + next.runs + " runs" : null,
     line: q.line || "",
+  };
+}
+
+// A campaign's progress in words, or null when its count was not read.
+function stepOf(done, runs) {
+  if (done === null || done === undefined || runs === null || runs === undefined) return null;
+  return done + " of " + runs + " done";
+}
+
+// The campaign the agenda's counter is counting, when the queue holds no
+// entry for it: its progress is the counter's done of its wanted, and
+// nothing is queued after it. The fallback takes both halves of the
+// agenda's reading, the state word and the counter; either one missing,
+// or a state other than running, is no campaign to show.
+function runningCampaign(agenda) {
+  if (!agenda || agenda.campaign_state !== "running" || !agenda.campaign) return null;
+  const c = agenda.campaign;
+  return {
+    name: "Dungeon campaign",
+    step: stepOf(c.done, c.wanted),
+    next: null,
+    line: "",
   };
 }
 
