@@ -497,11 +497,13 @@ a.np-row:hover { background: var(--color-neutral-900); color: var(--color-text);
 .wm-svg { width: 100%; height: 100%; display: block; }
 .wm-zone { stroke: #4a3820; stroke-width: 1.1; stroke-linejoin: round; }
 .wm-zone:hover { fill: #e6d29c; }
-.wm-zl { font-family: var(--font-map); font-style: italic; fill: #4a3216; stroke: #e8d9b0; paint-order: stroke; letter-spacing: .02em; }
+.wm-zl { font-family: var(--font-map); fill: #4a3216; stroke: #e8d9b0; paint-order: stroke; letter-spacing: .02em; }
 .wm-zl.city { font-style: normal; font-weight: 700; fill: #3a1d08; }
 .wm-dl { font-family: var(--font-map); font-weight: 700; fill: #fff6dc; stroke: #1a1208; paint-order: stroke; }
 .wm-labels { pointer-events: none; }
 .wm-dot { cursor: pointer; }
+.wm-cluster { cursor: pointer; }
+.wm-cluster-n { font-family: var(--font-map); font-weight: 700; fill: #f3e6c4; pointer-events: none; }
 .wm-dot:focus-visible { outline: 2px solid var(--color-accent); }
 .wm-title {
   position: absolute; left: 10px; top: 10px; display: flex; flex-direction: column; gap: 2px; padding: 6px 10px;
@@ -517,8 +519,8 @@ a.np-row:hover { background: var(--color-neutral-900); color: var(--color-text);
 }
 .wm-btn:hover { background: rgba(40, 28, 12, .9); }
 .wm-legend {
-  position: absolute; left: 10px; bottom: 10px; right: 10px; display: flex; gap: 4px 10px; flex-wrap: wrap; width: fit-content;
-  padding: 6px 10px; border-radius: 8px; background: rgba(20, 14, 6, .78); color: #f3e6c4; font-size: 12px; pointer-events: none;
+  position: absolute; left: 10px; bottom: 10px; right: 10px; display: flex; gap: 4px 10px; flex-wrap: nowrap; white-space: nowrap; overflow: hidden; width: fit-content; max-width: calc(100% - 20px);
+  padding: 6px 10px; border-radius: 8px; background: rgba(20, 14, 6, .78); color: #f3e6c4; font-size: 11px; pointer-events: none;
 }
 .wm-legend > span { display: flex; gap: 5px; align-items: center; }
 .wm-key { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid #1a1208; }
