@@ -87,6 +87,15 @@ SCRIPTED_EVENT_NOTE = (
     "The world rows list no required item or creature/object objectives, "
     "so the stored reason is the only evidence of how it completes: a scripted event."
 )
+STALL_REASON = "its objectives did not move for 2 hours of play"
+STALL_SUMMARY = (
+    "One quester's objectives did not move for 2 hours of play. That stall "
+    "does not establish that the quest cannot be finished."
+)
+STALL_REASON_NOTE = (
+    "The stored stall reason records one quester's attempt; it does not show "
+    "that the quest cannot be finished."
+)
 # The stored take reason from questers._giver_failure and the module's
 # QuestErrandRefusal. The module uses different reasons for an object
 # starter and for a quest without a starter relation.
@@ -256,9 +265,24 @@ def _objectives(row) -> str:
     )
 
 
-def title(quest: int, info) -> str:
-    return "Quest %d is broken: %s" % (
+def _has_stall(rows) -> bool:
+    return any(_is_stall_reason(str(row.get("reason") or "")) for row in rows or ())
+
+
+def _is_stall_reason(reason: str) -> bool:
+    return reason == STALL_REASON or reason.startswith(STALL_REASON + ";")
+
+
+def _stall_only(rows) -> bool:
+    reasons = [str(row.get("reason") or "") for row in rows or ()]
+    return bool(reasons) and all(_is_stall_reason(reason) for reason in reasons)
+
+
+def title(quest: int, info, rows=()) -> str:
+    state = "stalled" if _stall_only(rows) else "is broken"
+    return "Quest %d %s: %s" % (
         quest,
+        state,
         info.title if info else "not in the catalogue",
     )
 
@@ -327,16 +351,31 @@ def _world_rows(info) -> list[str]:
 def body(quest: int, info, rows, objectives, site: str) -> str:
     """The issue body. `site` is the site's public base; without one the
     Quests page is named by its route, since no host may be guessed."""
+    rows = list(rows or ())
     counts = {int(r["guid"]): r for r in objectives or ()}
+    stalled = _has_stall(rows)
+    stall_only = _stall_only(rows)
+    why = (
+        STALL_SUMMARY
+        if stall_only
+        else (
+            "The questers found this quest cannot be finished, and a broken quest "
+            "stays broken until a ticket reaches someone who can fix it."
+        )
+    )
+    what = (
+        "Check this stalled attempt against the world rows and fix any confirmed blocker."
+        if stall_only
+        else "Find out why this quest cannot be finished, and fix it."
+    )
     lines = [
         "## Why",
         "",
-        "The questers found this quest cannot be finished, and a broken quest "
-        "stays broken until a ticket reaches someone who can fix it.",
+        why,
         "",
         "## What",
         "",
-        "Find out why this quest cannot be finished, and fix it.",
+        what,
         "",
         "- Quest: %d, %s" % (quest, info.title if info else "not in the catalogue"),
         "- Zone: %s" % (info.zone_name if info and info.zone_name else "not measured"),
@@ -386,6 +425,8 @@ def body(quest: int, info, rows, objectives, site: str) -> str:
         ]
     if already_in_log:
         lines += ["", ALREADY_IN_LOG_NOTE]
+    if stalled:
+        lines += ["", STALL_REASON_NOTE]
     lines += [
         "",
         "## Acceptance criteria",
@@ -495,7 +536,7 @@ def run(
         text = body(quest, info, rows, store.objectives(quest), site)
         store.take(quest, FILING)
         try:
-            number = client.file(title(quest, info), text)
+            number = client.file(title(quest, info, rows), text)
         except Exception as exc:
             if not _is_timeout(exc):
                 store.release(quest)
