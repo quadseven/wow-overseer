@@ -21,6 +21,7 @@ import { parse } from "../../router.js";
 import * as member from "../member.js";
 import * as economy from "../economy.js";
 import { bindTrees } from "../_members.js";
+import { bindMarkSeen } from "../gearchanges.js";
 import { roster as rosterModel } from "../../models/roster.js";
 import { mountModels } from "../_model.js";
 import { ACTIONS } from "./streams.js";
@@ -137,7 +138,10 @@ function drawBody() {
   const inner = o.pair ? compare.compareHtml(o.pair, peek, rosterNames(), classOf) : PANELS[o.kind].draw(ctxOf(o), m);
   o.body.innerHTML = html`<div class="np-content">${inner}</div>`.s;
   bindTrees(o.body);
-  if (o.kind === "gear" && !o.pair) mountModels(o.body);
+  if (o.kind === "gear" && !o.pair) {
+    mountModels(o.body);
+    bindMarkSeen(o.body, fetchAll);
+  }
   restoreFocus(o.body, focusAt);
 }
 
