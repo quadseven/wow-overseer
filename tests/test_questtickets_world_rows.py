@@ -166,6 +166,57 @@ class WorldRows(unittest.TestCase):
             text,
         )
 
+    def test_investigate_the_camp_ticket_explains_its_stall(self):
+        # This quest_template row mirrors the ticket's world rows: quest 201,
+        # level 32, MinLevel 28, Stranglethorn Vale, no objective columns. Its
+        # ledger reason is written by bridge._record_quest_broken; the
+        # producer path is covered in test_quest_201_investigate_the_camp.
+        world_row = quest_row(
+            201, title="Investigate the Camp", level=32, min_level=28, sort=33
+        )
+        info = self.catalogue(world_row, {})[0]
+        self.assertEqual((info.items, info.objectives), ((), ()))
+        rows = [
+            {
+                "quest": 201,
+                "guid": guid,
+                "character_name": "Quester %d" % guid,
+                "state": "broken",
+                "reason": questers.STALLED,
+            }
+            for guid in (7, 8)
+        ]
+
+        text = qt.body(201, info, rows, [], "")
+
+        self.assertIn("- Quest: 201, Investigate the Camp", text)
+        self.assertIn("- Zone: Stranglethorn Vale", text)
+        self.assertIn("- QuestLevel: 32; MinLevel: 28", text)
+        self.assertIn("- No required item or creature/object rows.", text)
+        self.assertEqual(text.count("Reason: " + questers.STALLED), 2)
+        self.assertIn(qt.NO_OBJECTIVES_NOTE, text)
+        self.assertIn(questers.NO_OBJECTIVES, qt.NO_OBJECTIVES_NOTE)
+        self.assertNotIn(qt.SCRIPTED_EVENT_NOTE, text)
+
+    def test_a_stall_with_objective_rows_gets_no_missing_objectives_note(self):
+        row = quest_row(item1=1262, item_count1=1)
+        info = self.catalogue(
+            row,
+            {
+                qc.ITEM_NAMES_SQL.format(ids="1262"): [
+                    {"entry": 1262, "name": "Finely Woven Cloak"}
+                ],
+                qc.DROP_SQL.format(ids="1262"): [{"item": 1262, "entry": 40}],
+            },
+        )[0]
+        stall = {"quest": 116, "guid": 7, "reason": questers.STALLED}
+        self.assertNotIn(qt.NO_OBJECTIVES_NOTE, qt.body(116, info, [stall], [], ""))
+
+    def test_the_stored_reasons_match_the_quester_pass(self):
+        self.assertEqual(qt.STALLED_REASON, questers.STALLED)
+        self.assertEqual(qt.NO_OBJECTIVES_REASON, questers.NO_OBJECTIVES)
+        self.assertEqual(qt.SCRIPTED_EVENT_REASON, questers.SCRIPTED_EVENT)
+
     def test_quest_start_item_is_a_source_for_its_required_item(self):
         row = quest_row(item1=1353, item_count1=1, provided_item=1353)
         catalogue = self.catalogue(
